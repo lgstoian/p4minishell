@@ -24,6 +24,7 @@ set(HOST_TEST_SRCS
     "${HOST_TEST_DIR}/test_history_file.c"
     "${HOST_TEST_DIR}/test_shell_parser.c"
     "${HOST_TEST_DIR}/test_clipboard.c"
+    "${HOST_TEST_DIR}/test_editor.c"
     # Production sources that are hardware-free by construction (see each
     # file's @hard-rule): compiled directly so the lane exercises the real
     # code rather than a copy or a stub.
@@ -37,6 +38,11 @@ set(HOST_TEST_SRCS
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/font/theme.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/clock/clock_core.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/clock/clock_timer.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/editor/editor_doc.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/editor/editor_spell.c"
+    # Host-lane backing for the two storage-backed spellchecker calls (the
+    # lane has no SD card). Never part of the firmware image.
+    "host_spell_storage.c"
 )
 
 idf_component_register(
@@ -53,6 +59,7 @@ idf_component_register(
         "../../../components/header"
         "../../../components/font"
         "../../../components/clock"
+        "../../../components/editor"
     REQUIRES
         unity
         strutil
@@ -61,5 +68,6 @@ idf_component_register(
         gfx
         filetype
         markdown
+        p4heap
         esp_timer
 )

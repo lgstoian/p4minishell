@@ -9,7 +9,7 @@
   ],
   "phase": 1,
   "target": "linux",
-  "expected_cases": 132,
+  "expected_cases": 177,
   "components": [
     "strutil",
     "json",
@@ -21,12 +21,14 @@
     "shell",
     "header",
     "font",
-    "clock"
+    "clock",
+    "editor"
   ],
   "tests": [
     "test_ansi_format.c",
     "test_clipboard.c",
     "test_clock.c",
+    "test_editor.c",
     "test_filetype.c",
     "test_gfx.c",
     "test_header.c",
@@ -63,7 +65,6 @@
     "test_crypt.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_csv.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_db.c": "data store: REQUIRES storage + board_bsp for its on-disk backend",
-    "test_editor.c": "UI model lives in LVGL-coupled translation units (editor_view.c, tui_fonts.c, header.c)",
     "test_epub.c": "networking/radio: REQUIRES ESP-Hosted C6 transport (no emulated radio)",
     "test_error_strings.c": "batch: batch.c REQUIRES shell (display/LVGL), storage and board_bsp",
     "test_findstr.c": "command layer: components/command REQUIRES shell, storage, USB and display",

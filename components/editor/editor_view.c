@@ -34,6 +34,7 @@
 #include "html.h"
 #include "shell.h"
 #include "modal.h"
+#include "lvgl.h"
 #include "esp_lvgl_port.h"
 #include "esp_log.h"
 #include "p4minishell_config.h"
@@ -2645,74 +2646,6 @@ bool editor_view_handle_usb_key(uint8_t key_code, uint8_t modifiers, char ascii)
     return true;
 }
 
-/** One row of the on-screen keyboard nav/edit command tables. */
-typedef struct {
-    const char *label;
-    editor_key_t key;
-} editor_osk_entry_t;
-
-/** Every named action label on the editor Nav/User pages. The single source
- * for OSK buttons, the `keyboard_test.py` page screenshots, and unit tests. */
-static const editor_osk_entry_t k_editor_osk_actions[] = {
-    {"Tab", EDITOR_KEY_TAB},
-    {"Del", EDITOR_KEY_DELETE},
-    {"Ins", EDITOR_KEY_OVERWRITE},
-    {"Home", EDITOR_KEY_HOME},
-    {"End", EDITOR_KEY_END},
-    {"PgUp", EDITOR_KEY_PAGE_UP},
-    {"PgDn", EDITOR_KEY_PAGE_DOWN},
-    {"Save", EDITOR_KEY_SAVE},
-    {"SaveAs", EDITOR_KEY_SAVE_AS},
-    {"Open", EDITOR_KEY_OPEN},
-    {"Find", EDITOR_KEY_FIND},
-    {"Replace", EDITOR_KEY_REPLACE},
-    {"Rep", EDITOR_KEY_REPLACE},
-    {"ReplAll", EDITOR_KEY_REPLACE_ALL},
-    {"All", EDITOR_KEY_REPLACE_ALL},
-    {"Case", EDITOR_KEY_CASE_TOGGLE},
-    {"Goto", EDITOR_KEY_GOTO_LINE},
-    {"Undo", EDITOR_KEY_UNDO},
-    {"Redo", EDITOR_KEY_REDO},
-    {"Next", EDITOR_KEY_FIND_NEXT},
-    {"Preview", EDITOR_KEY_PREVIEW},
-    {"Prev", EDITOR_KEY_PREVIEW},
-    {"Copy", EDITOR_KEY_COPY},
-    {"Cut", EDITOR_KEY_CUT},
-    {"Paste", EDITOR_KEY_PASTE},
-    {"SelAll", EDITOR_KEY_SELECT_ALL},
-    {"WordL", EDITOR_KEY_WORD_LEFT},
-    {"WordR", EDITOR_KEY_WORD_RIGHT},
-    {"DocTop", EDITOR_KEY_DOC_HOME},
-    {"DocBot", EDITOR_KEY_DOC_END},
-    {"DelLine", EDITOR_KEY_DELETE_LINE},
-    {"DelEOL", EDITOR_KEY_DELETE_EOL},
-    {"Quit", EDITOR_KEY_QUIT},
-    {"Exit", EDITOR_KEY_QUIT},
-    {"Comment", EDITOR_KEY_COMMENT},
-    {"Match", EDITOR_KEY_MATCH_JUMP},
-    {"Wrap", EDITOR_KEY_WRAP_TOGGLE},
-    {"Focus", EDITOR_KEY_FOCUS_TOGGLE},
-    {"Spell", EDITOR_KEY_SPELL_TOGGLE},
-    {"AddWord", EDITOR_KEY_SPELL_ADD},
-    {"Reload", EDITOR_KEY_RELOAD},
-};
-
-bool editor_osk_key_from_label(const char *label, editor_key_t *out)
-{
-    size_t i;
-
-    if (label == NULL || out == NULL) {
-        return false;
-    }
-    for (i = 0; i < sizeof(k_editor_osk_actions) / sizeof(k_editor_osk_actions[0]); i++) {
-        if (strcmp(label, k_editor_osk_actions[i].label) == 0) {
-            *out = k_editor_osk_actions[i].key;
-            return true;
-        }
-    }
-    return false;
-}
-
 bool editor_view_handle_osk(const char *label)
 {
     if (label == NULL) {
@@ -2764,9 +2697,9 @@ bool editor_view_handle_osk(const char *label)
         return true;
     }
 
-    /* Named action labels from the editor Nav/Edit OSK pages (single table
-     * above). LVGL symbols and mode buttons are handled by their own branches;
-     * everything else here runs the mapped editor key. */
+    /* Named action labels from the editor Nav/Edit OSK pages (one table, in
+     * editor_doc.c). LVGL symbols and mode buttons are handled by their own
+     * branches; everything else here runs the mapped editor key. */
     {
         editor_key_t mapped = EDITOR_KEY_NONE;
 

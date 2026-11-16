@@ -185,7 +185,7 @@ typedef struct {
      * Opaque undo/redo ring storage. Sized for two rings of
      * P4_CONFIG_EDITOR_UNDO_DEPTH snapshot descriptors (each ~72 bytes of
      * metadata; the document bytes themselves live on the heap). Owned by
-     * editor.c; never touched outside this module.
+     * editor_doc.c; never touched outside this module.
      */
     unsigned char undo_storage[P4_CONFIG_EDITOR_UNDO_DEPTH * 2 * 80];
 } editor_doc_t;

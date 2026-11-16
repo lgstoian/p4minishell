@@ -11,13 +11,20 @@
  * (tap to move the caret, drag to select) and OSK/USB keys into the document.
  * The view is modal: while open it owns the transcript region and the input
  * row becomes a status bar.
+ *
+ * This header deliberately includes no LVGL header: the document model and the
+ * pure OSK label table (editor_doc.c) are compiled for the host unit-test lane,
+ * and the tests include this file for editor_osk_key_from_label().
  */
 
 #ifndef P4MINISHELL_EDITOR_VIEW_H
 #define P4MINISHELL_EDITOR_VIEW_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
 #include "editor.h"
-#include "lvgl.h"
 
 #ifdef __cplusplus
 extern "C" {

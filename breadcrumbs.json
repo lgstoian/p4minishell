@@ -43,8 +43,6 @@
     "components/board_caps/include/board_caps.h": "module=board_caps :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
     "components/boot/boot.c": "module=boot :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
     "components/boot/boot.h": "module=boot :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
-    "components/browser/include/browser.h": "module=browser :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_browser_cache.c :: rules=ai-context.md#module-layering-rules",
-    "components/browser/src/browser_cache.c": "module=browser :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_browser_cache.c :: rules=ai-context.md#module-layering-rules",
     "components/c6ota/c6ota.c": "module=c6ota :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
     "components/c6ota/c6ota.h": "module=c6ota :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules",
     "components/camera/include/camera.h": "module=camera :: layer=leaf :: domain=media :: status=stable :: rules=ai-context.md#module-layering-rules",
@@ -86,7 +84,6 @@
     "components/command/crypt_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/csv_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/db_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
-    "components/command/download_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/edit_record_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/epub_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/export_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
@@ -109,12 +106,10 @@
     "components/command/pkg_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/plot_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/power_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
-    "components/command/rss_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/screen_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/security_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/security_commands.h": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/serial_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
-    "components/command/store_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/sync_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/sync_commands.h": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/tui_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
@@ -127,8 +122,12 @@
     "components/display/display.h": "module=display :: layer=leaf :: domain=ui :: status=stable :: rules=ai-context.md#module-layering-rules",
     "components/editor/editor.c": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
     "components/editor/editor.h": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
+    "components/editor/editor_doc.c": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
+    "components/editor/editor_doc_internal.h": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
     "components/editor/editor_spell.c": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
     "components/editor/editor_spell.h": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
+    "components/editor/editor_spell_internal.h": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
+    "components/editor/editor_spell_sd.c": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
     "components/editor/editor_view.c": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
     "components/editor/editor_view.h": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
     "components/epub/epub.c": "module=epub :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_epub.c :: rules=ai-context.md#module-layering-rules",
@@ -165,8 +164,6 @@
     "components/header/header_status.h": "module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules",
     "components/imagefmt/imagefmt.c": "module=imagefmt :: layer=leaf :: domain=media :: status=stable :: rules=ai-context.md#image-support-rules",
     "components/imagefmt/include/imagefmt.h": "module=imagefmt :: layer=leaf :: domain=media :: status=stable :: rules=ai-context.md#image-support-rules",
-    "components/imgdec/imgdec.c": "module=imgdec :: layer=leaf :: domain=media :: status=stable :: tests=test/main/test_imgdec.c :: rules=ai-context.md#image-support-rules",
-    "components/imgdec/imgdec.h": "module=imgdec :: layer=leaf :: domain=media :: status=stable :: tests=test/main/test_imgdec.c :: rules=ai-context.md#image-support-rules",
     "components/imu/include/accel_gyro_bmi270.h": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
     "components/imu/include/bmi2.h": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
     "components/imu/include/bmi270.h": "module=imu :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
@@ -213,8 +210,6 @@
     "components/markdown/css.h": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
     "components/markdown/dom.c": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
     "components/markdown/dom.h": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
-    "components/markdown/dom_arena.c": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
-    "components/markdown/dom_arena.h": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
     "components/markdown/dom_render.c": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
     "components/markdown/dom_render.h": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
     "components/markdown/html.h": "module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules",
@@ -268,12 +263,9 @@
     "components/portal/portal_internal.h": "module=portal :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_portal.c :: rules=ai-context.md#module-layering-rules",
     "components/power_monitor/include/power_monitor.h": "module=power_monitor :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_power.c,test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
     "components/power_monitor/power_monitor.c": "module=power_monitor :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_power.c,test/main/test_hardware.c :: rules=ai-context.md#module-layering-rules",
-    "components/rss/include/rss.h": "module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules",
-    "components/rss/include/rss_store.h": "module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules",
-    "components/rss/src/rss_fetch.c": "module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules",
-    "components/rss/src/rss_opml.c": "module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules",
-    "components/rss/src/rss_parser.c": "module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules",
-    "components/rss/src/rss_store.c": "module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules",
+    "components/rss/include/rss.h": "module=rss :: layer=leaf :: domain=net :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/rss/src/rss_fetch.c": "module=rss :: layer=leaf :: domain=net :: status=stable :: rules=ai-context.md#module-layering-rules",
+    "components/rss/src/rss_parser.c": "module=rss :: layer=leaf :: domain=net :: status=stable :: rules=ai-context.md#module-layering-rules",
     "components/shell/locale.c": "module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules",
     "components/shell/locale.h": "module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules",
     "components/shell/shell.c": "module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules",
@@ -557,27 +549,6 @@
       "status": "stable",
       "tests": []
     },
-    "browser": {
-      "domain": "ui",
-      "header": "components/browser/include/browser.h",
-      "layer": "leaf",
-      "path": "components/browser",
-      "provides": "PSRAM image cache and rendered-page back/forward cache for the browser",
-      "requires": [
-        "tui",
-        "markdown",
-        "p4heap",
-        "PRIV_REQUIRES",
-        "freertos"
-      ],
-      "rules": [
-        "ai-context.md#module-layering-rules"
-      ],
-      "status": "stable",
-      "tests": [
-        "test/main/test_browser_cache.c"
-      ]
-    },
     "c6ota": {
       "domain": "platform",
       "header": "components/c6ota/c6ota.h",
@@ -738,7 +709,6 @@
         "font",
         "header",
         "imagefmt",
-        "imgdec",
         "keyboard",
         "markdown",
         "filetype",
@@ -775,9 +745,7 @@
         "json",
         "jsengine",
         "rss",
-        "mcp",
-        "browser",
-        "zip"
+        "mcp"
       ],
       "rules": [
         "ai-context.md#module-layering-rules"
@@ -986,25 +954,6 @@
       "status": "stable",
       "tests": []
     },
-    "imgdec": {
-      "domain": "media",
-      "header": "components/imgdec/imgdec.h",
-      "layer": "leaf",
-      "path": "components/imgdec",
-      "provides": "the ONE PNG + JPEG decoder (LodePNG / TJpgDec, the libs LVGL already compiles)",
-      "requires": [
-        "lvgl__lvgl",
-        "p4heap",
-        "esp_hw_support"
-      ],
-      "rules": [
-        "ai-context.md#image-support-rules"
-      ],
-      "status": "stable",
-      "tests": [
-        "test/main/test_imgdec.c"
-      ]
-    },
     "imu": {
       "domain": "platform",
       "header": "components/imu/include/imu.h",
@@ -1209,7 +1158,6 @@
         "filetype",
         "font",
         "gfx",
-        "imgdec",
         "p4heap",
         "strutil"
       ],
@@ -1349,8 +1297,6 @@
       "requires": [
         "networking",
         "json",
-        "storage",
-        "clock",
         "PRIV_REQUIRES",
         "expat"
       ],
@@ -1358,9 +1304,7 @@
         "ai-context.md#module-layering-rules"
       ],
       "status": "stable",
-      "tests": [
-        "test/main/test_rss_store.c"
-      ]
+      "tests": []
     },
     "shell": {
       "domain": "core",
