@@ -39,10 +39,39 @@ def sh(dev, cmd, sleep_s=1.5):
 
 
 def shot(dev, name, out_dir):
+    """Capture a frame, retrying until two consecutive frames are identical.
+
+    A modal or a scroll can be mid-render when the first frame is taken; two
+    identical frames mean the surface has settled, so the recorded shot is not
+    an animation artifact.
+    """
     bmp = dev.screenshot()
+    for _ in range(3):
+        time.sleep(0.35)
+        nxt = dev.screenshot()
+        if nxt.data == bmp.data:
+            break
+        bmp = nxt
     path = os.path.join(out_dir, name + ".png")
     bmp.save_png(path)
     print("  saved %s (%dx%d)" % (path, bmp.width, bmp.height))
+
+
+def wait_quiet(dev, quiet_s=2.0, timeout_s=20.0):
+    """Block until the console has been silent for `quiet_s` seconds.
+
+    Boot runs AUTOEXEC and starts background tasks (Wi-Fi, RSS, chat); any of
+    them can print a line seconds after the prompt appears. Clearing the
+    screen before they are done leaves their line in every capture.
+    """
+    start = time.time()
+    last = start
+    while time.time() - start < timeout_s:
+        chunk = dev.read_for(0.25)
+        if chunk:
+            last = time.time()
+        elif time.time() - last >= quiet_s:
+            return
 
 
 def prelude(dev):
@@ -60,8 +89,7 @@ def prelude(dev):
     sh(dev, "cursor block blink 0", 1.0)
     sh(dev, "theme set default", 1.0)
     sh(dev, "wifi disconnect", 2.0)
-    time.sleep(2.0)
-    dev.read_for(1.0)
+    wait_quiet(dev)
     sh(dev, "cls", 1.0)
 
 
@@ -78,7 +106,10 @@ def state_shell_help(dev, out):
 
 def state_shell_dir(dev, out):
     sh(dev, "cls")
-    sh(dev, "dir", 2.0)
+    # `dir` on the root lists HISTORY.TXT and DEBUG.LOG, whose size and mtime
+    # change on every run (the free-space line too), so the frame could never
+    # be pixel-stable. APPS/ holds release files with fixed metadata.
+    sh(dev, "dir /b APPS", 2.0)
     shot(dev, "shell-dir", out)
 
 
@@ -110,7 +141,9 @@ def state_modal_list(dev, out):
 
 def state_editor_editing(dev, out):
     sh(dev, "cls")
-    dev.send("edit CONFIG.SYS")
+    # A release app file has fixed content; CONFIG.SYS is rewritten at boot
+    # (ensure+apply), so its rendered text is not stable across runs.
+    dev.send("edit APPS/WEB.BAT")
     time.sleep(3.0)
     shot(dev, "editor-editing", out)
     dev.send("\\q")
