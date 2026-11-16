@@ -39,6 +39,7 @@
 #include <sys/stat.h>
 #include "esp_err.h"
 #include "esp_vfs_fat.h"
+#include "storage_path.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -148,28 +149,12 @@ void shell_command_sd_mount(void);
 
 /* ========================================================================
  * PATH RESOLUTION AND CONVERSION
- * ======================================================================== */
-
-/**
- * Resolve an SD-rooted path without applying the current working directory.
- * Accepts `sd:/...`, `/sdcard/...`, absolute, and SD-root-relative inputs.
- */
-esp_err_t shell_sd_resolve_path(const char *input, char *output, size_t output_size);
-
-/**
- * Resolve a path relative to the shell current working directory, collapsing
- * `.` and `..` segments. Produces an absolute path under the SD mount point.
- */
-esp_err_t shell_fs_resolve_path(const char *input, char *output, size_t output_size);
-
-/**
- * Resolve a destination path that may be relative to the source file's
- * directory, which is the DOS behavior for `ren` and `move`.
- */
-esp_err_t shell_resolve_target_from_source(const char *source_path,
-                                           const char *target_input,
-                                           char *target_path,
-                                           size_t target_path_size);
+ * ========================================================================
+ * shell_sd_resolve_path(), shell_fs_resolve_path(),
+ * shell_resolve_target_from_source(), shell_path_has_directory_component(),
+ * shell_path_has_extension(), shell_get_cwd() and storage_set_cwd() live in
+ * storage_path.h (hardware-free, no FATFS/VFS include). They are included
+ * through this header so existing callers are unchanged. */
 
 /** stat() wrapper mapping errno onto esp_err_t. */
 esp_err_t shell_sd_stat_path(const char *path, struct stat *st);
@@ -186,12 +171,6 @@ esp_err_t shell_sd_fresult_to_esp_err(FRESULT result);
  */
 esp_err_t shell_sd_vfs_to_fatfs_path(const char *vfs_path, char *fatfs_path, size_t fatfs_path_size);
 
-/** true when the path contains a `/` or `\` directory separator. */
-bool shell_path_has_directory_component(const char *path);
-
-/** Case-insensitive check for a trailing file extension such as ".bat". */
-bool shell_path_has_extension(const char *path, const char *extension);
-
 /* ========================================================================
  * FORMATTING AND MATCHING
  * ======================================================================== */
@@ -207,19 +186,8 @@ bool shell_wildcard_match(const char *pattern, const char *name);
 
 /* ========================================================================
  * CURRENT WORKING DIRECTORY
- * ======================================================================== */
-
-/**
- * Get the shell current working directory as an absolute VFS path.
- * @return Static string owned by this module (do not free).
- */
-const char *shell_get_cwd(void);
-
-/**
- * Replace the shell current working directory.
- * @param absolute_path  Absolute VFS path under the SD mount point.
- */
-void storage_set_cwd(const char *absolute_path);
+ * ========================================================================
+ * shell_get_cwd() / storage_set_cwd() live in storage_path.h. */
 
 /** Print the current working directory in DOS form (`\` for the root). */
 void shell_fs_print_cwd(void);
@@ -448,36 +416,8 @@ typedef enum {
     STORAGE_VOLUME_COUNT = 5,
 } storage_volume_t;
 
-/** USB MSC volume operations, owned by the usb component and registered by
- *  main.c at boot (the storage layer never includes usb headers, keeping the
- *  dependency direction one-way). Every hook is NULL-checked; without
- *  registration USB volumes report unavailable. */
-typedef struct {
-    /** True when a device is attached in the slot (0-based). */
-    bool (*is_connected)(int slot);
-    /** True when the slot is VFS-mounted. */
-    bool (*is_mounted)(int slot);
-    /** Mount the slot's device (no-op when already mounted/absent). */
-    void (*mount)(int slot);
-    /** Geometry for `disk list`; false when unknown. */
-    bool (*get_geometry)(int slot, uint32_t *sector_size_out,
-                         uint32_t *sector_count_out, char *label_out,
-                         size_t label_size);
-    /** VFS base path for the slot (e.g. "/usb0"); NULL when unmounted. */
-    const char *(*base_path)(int slot);
-} storage_usb_ops_t;
-
-/**
- * Register the USB MSC operations table. Called once from app_main;
- * passing NULL clears it (USB volumes report unavailable).
- */
-void storage_register_usb_ops(const storage_usb_ops_t *ops);
-
-/** Drive letter for a USB slot (`u:`/`v:`/`w:`/`x`), or '\0' when out of range. */
-char storage_usb_drive_letter(int slot);
-
-/** USB slot for a drive letter (`u`/`v`/`w:`/`x:`, case-insensitive), or -1. */
-int storage_usb_slot_for_drive(char letter);
+/* USB MSC operations table + registration + drive/slot mapping live in
+ * storage_path.h (hardware-free). */
 
 /**
  * Classify an already-resolved VFS path by volume (`/usbN/...` → USBn,

@@ -33,6 +33,8 @@ set(P4_BOARD "jc1060p470c" CACHE STRING "Board profile whose headers are staged"
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/config)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../../boards/${P4_BOARD}/board_config.h
                ${CMAKE_BINARY_DIR}/config/board_config.h COPYONLY)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../../boards/${P4_BOARD}/board_identity.h
+               ${CMAKE_BINARY_DIR}/config/board_identity.h COPYONLY)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../../p4minishell_config.h
                ${CMAKE_BINARY_DIR}/config/p4minishell_config.h COPYONLY)
 

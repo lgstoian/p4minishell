@@ -77,6 +77,9 @@ include(${CMAKE_SOURCE_DIR}/boards/${P4_BOARD}/board_bsp/extra_dirs.cmake)
 
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/config)
 configure_file(${CMAKE_SOURCE_DIR}/boards/${P4_BOARD}/board_config.h ${CMAKE_BINARY_DIR}/config/board_config.h COPYONLY)
+# Identity strings live in their own header (no driver includes); stage it
+# beside the config so board_config.h can include it.
+configure_file(${CMAKE_SOURCE_DIR}/boards/${P4_BOARD}/board_identity.h ${CMAKE_BINARY_DIR}/config/board_identity.h COPYONLY)
 
 # Layer the board-specific sdkconfig defaults on top of the repository ones.
 # The per-board file carries board-only ESP-IDF options (e.g. ESP-Hosted SDIO

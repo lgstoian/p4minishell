@@ -448,8 +448,25 @@ int batch_bg_alloc(void);
 /** Bind a task handle to a claimed slot (called once by the new task). */
 void batch_bg_bind(int slot);
 
-/** Release a slot (called when the bg task exits). */
+/** Release a slot (called when the bg task exits).
+ *
+ *  Releasing runs the cross-module cleanup hooks registered with
+ *  batch_register_bg_cleanup_ops() (named mutexes held by the job, service
+ *  records pointing at the slot) in registration order, then frees the
+ *  job-private environment overlay. The hooks are optional: a build that does
+ *  not link those modules (the host unit-test lane) simply has none. */
 void batch_bg_release(int slot);
+
+/** Cross-module cleanup hooks invoked by batch_bg_release(). Both members are
+ *  optional; NULL is a valid "this module is not linked" state, not a stub. */
+typedef struct {
+    void (*release_sync)(int slot);    /**< sync.c: force-release owned mutexes. */
+    void (*release_service)(int slot); /**< svc.c: clear service records. */
+} batch_bg_cleanup_ops_t;
+
+/** Install (or clear, with NULL) the release cleanup hooks. Called once by
+ *  batch_init(); the modules' tables are process-global and boot-lived. */
+void batch_register_bg_cleanup_ops(const batch_bg_cleanup_ops_t *ops);
 
 /** Request cooperative stop of a slot (checked per batch line). */
 void batch_bg_request_kill(int slot);

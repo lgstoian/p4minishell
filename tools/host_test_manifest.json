@@ -5,11 +5,21 @@
     "host) or in 'excluded' with a reason (on-target only).",
     "test/host/main/host_main.c and 'expected_cases' are generated from this",
     "file by tools/host_gen_runner.py; tools/host_unit_run.py --static verifies",
-    "that they are up to date."
+    "that they are up to date.",
+    "'prelude' names init functions the generated app_main calls before",
+    "UNITY_BEGIN (same init the firmware does). A bare string is a void",
+    "function; use {\"name\", \"returns\", \"comment\"} to declare the return type."
   ],
   "phase": 1,
   "target": "linux",
-  "expected_cases": 132,
+  "expected_cases": 175,
+  "prelude": [
+    {
+      "name": "batch_env_pool_init",
+      "returns": "bool",
+      "comment": "batch_init() allocates the variable pool on the board; the host runner needs the same table for set/get/setlocal"
+    }
+  ],
   "components": [
     "strutil",
     "json",
@@ -21,15 +31,19 @@
     "shell",
     "header",
     "font",
-    "clock"
+    "clock",
+    "storage",
+    "batch"
   ],
   "tests": [
     "test_ansi_format.c",
+    "test_calc.c",
     "test_clipboard.c",
     "test_clock.c",
     "test_filetype.c",
     "test_gfx.c",
     "test_header.c",
+    "test_himem.c",
     "test_history_file.c",
     "test_history_search.c",
     "test_html.c",
@@ -53,7 +67,6 @@
     "test_breadcrumb.c": "command layer: the breadcrumb formatter lives in components/command",
     "test_browser.c": "command layer: REQUIRES storage, display and networking at link time",
     "test_browser_cache.c": "command layer: REQUIRES storage, display and networking at link time",
-    "test_calc.c": "batch: batch.c REQUIRES shell (display/LVGL), storage and board_bsp",
     "test_cas.c": "cas: REQUIRES storage and batch (mbedtls is host-capable, storage is not)",
     "test_certs.c": "certs: REQUIRES mbedtls and storage (mbedtls is host-capable, storage is not)",
     "test_chat.c": "networking/radio: REQUIRES ESP-Hosted C6 transport (no emulated radio)",
@@ -69,7 +82,6 @@
     "test_findstr.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_gfind.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_hardware.c": "command layer: components/command REQUIRES shell, storage, USB and display",
-    "test_himem.c": "batch: batch.c REQUIRES shell (display/LVGL), storage and board_bsp",
     "test_httpget.c": "networking/radio: REQUIRES ESP-Hosted C6 transport (no emulated radio)",
     "test_imgdec.c": "UI model lives in LVGL-coupled translation units (editor_view.c, tui_fonts.c, header.c)",
     "test_import.c": "command layer: components/command REQUIRES shell, storage, USB and display",
@@ -102,6 +114,6 @@
     "test_userial.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_wifi_state.c": "networking/radio: REQUIRES ESP-Hosted C6 transport (no emulated radio)",
     "test_shell_prompt.c": "prompt/title/key-wait still live in shell.c; move that block to shell_core.c first",
-    "test_shell_debug_log.c": "debug log + shell_record_* still in shell.c and schedule transcript flushes (view glue)"
+    "test_shell_debug_log.c": "the ring is host-capable now, but the suite also drives shell_command_debug() (display/disk verbs in shell.c)"
   }
 }

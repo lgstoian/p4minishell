@@ -38,13 +38,13 @@
 
 #include "batch.h"
 #include "batch_env_internal.h"
+#include "error_strings.h"
 #include "shell.h"
-#include "storage.h"
+#include "storage_path.h"
 #include "clock.h"
-#include "board_config.h"
+#include "board_identity.h"
 #include "p4minishell_config.h"
 #include "esp_random.h"
-#include "esp_mac.h"
 #include "p4heap.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -72,6 +72,16 @@
 /** Command pipeline hooks registered by command_init() (used by
  *  batch_run_nested() below and by batch_boot_execute_command() in batch.c). */
 batch_command_ops_t s_command_ops;
+
+/* Cross-module slot-release hooks, installed by batch_init() (batch.c links
+ * sync.c and svc.c). NULL on the host unit-test lane, where those modules are
+ * not part of the link and there is no table to clean up. */
+static const batch_bg_cleanup_ops_t *s_bg_cleanup_ops;
+
+void batch_register_bg_cleanup_ops(const batch_bg_cleanup_ops_t *ops)
+{
+    s_bg_cleanup_ops = ops;
+}
 
 /* ========================================================================
  * ENVIRONMENT CORE
@@ -243,10 +253,8 @@ static const char *const s_virtual_names[SHELL_ENV_VIRTUAL_NAME_COUNT] = {
     "RANDOM", "TIME", "VERSION", "BOARD", "SERIAL",
 };
 
-/* Lazily-filled scratch for %SERIAL% (MAC-derived, valid for the boot). */
-static char s_virtual_serial[20];
-static bool s_virtual_serial_ready = false;
-
+/* %SERIAL% is MAC-derived on the board and documented "unknown" on the host;
+ * the accessor owns the one-time read and its cache. */
 static bool shell_env_name_is_virtual(const char *normalized)
 {
     int i;
@@ -289,18 +297,7 @@ static bool shell_env_virtual_value(const char *normalized, char *buf, size_t bu
         return true;
     }
     if (strcmp(normalized, "SERIAL") == 0) {
-        if (!s_virtual_serial_ready) {
-            uint8_t mac[6] = {0};
-            if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
-                snprintf(s_virtual_serial, sizeof(s_virtual_serial),
-                         "%02X%02X%02X%02X%02X%02X",
-                         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-            } else {
-                s_virtual_serial[0] = '\0';
-            }
-            s_virtual_serial_ready = true;
-        }
-        snprintf(buf, buf_size, "%s", s_virtual_serial);
+        snprintf(buf, buf_size, "%s", board_identity_serial());
         return true;
     }
     return false;
@@ -627,72 +624,32 @@ bool shell_env_effective(const char *normalized, char *value_out, size_t value_s
 }
 
 /* ========================================================================
- * ALIAS EXPANSION
- * ========================================================================
- * The alias table itself lives in batch.c (with the `alias` / `unalias`
- * commands and their SD persistence); this is only the prompt-time
- * first-word expansion, which needs the shared variable/context state above.
- */
+ * ERRORLEVEL
+ * ======================================================================== */
 
-bool batch_alias_expand_command(const char *command, char *out, size_t out_size)
+int batch_get_errorlevel(void)
 {
-    char first_word[SHELL_ALIAS_NAME_BYTES];
-    const char *cursor;
-    const char *rest;
-    size_t first_len = 0;
-    size_t value_len;
-    size_t rest_len;
-    const char *value;
-    size_t pos = 0;
+    return s_errorlevel;
+}
 
-    if (command == NULL || out == NULL || out_size == 0) {
-        return false;
+void batch_set_errorlevel(int level)
+{
+    s_errorlevel = level;
+    if (level == 0) {
+        s_last_errorcode = ERR_BASE_OK;
+    } else if (s_last_errorcode == ERR_BASE_OK || s_last_errorcode == ERR_BASE_ERROR) {
+        s_last_errorcode = (level == 2) ? ERR_BASE_USAGE : ERR_BASE_ERROR;
     }
-    /* DOSKEY macros expand only at the interactive prompt, never inside a
-     * batch file, so an alias cannot shadow a batch verb. */
-    if (s_active_batch_frame != NULL) {
-        return false;
-    }
+}
 
-    cursor = command;
-    while (*cursor == ' ' || *cursor == '\t') {
-        cursor++;
-    }
-    while (*cursor != '\0' && *cursor != ' ' && *cursor != '\t' &&
-           first_len + 1 < sizeof(first_word)) {
-        first_word[first_len++] = *cursor;
-        cursor++;
-    }
-    first_word[first_len] = '\0';
-    if (first_len == 0) {
-        return false;
-    }
+void batch_set_errorcode(int code)
+{
+    s_last_errorcode = code;
+}
 
-    value = shell_alias_get(first_word);
-    if (value == NULL) {
-        return false;
-    }
-
-    rest = cursor;
-    while (*rest == ' ' || *rest == '\t') {
-        rest++;
-    }
-    value_len = strlen(value);
-    rest_len = strlen(rest);
-
-    if (value_len + (rest_len > 0 ? rest_len + 1 : 0) + 1 > out_size) {
-        return false;
-    }
-
-    memcpy(out, value, value_len);
-    pos = value_len;
-    if (rest_len > 0) {
-        out[pos++] = ' ';
-        memcpy(out + pos, rest, rest_len);
-        pos += rest_len;
-    }
-    out[pos] = '\0';
-    return true;
+int batch_get_errorcode(void)
+{
+    return s_last_errorcode;
 }
 
 /* ========================================================================
@@ -1048,18 +1005,7 @@ static const char *shell_expand_named_value(const char *token, char *errorlevel_
         return pseudo_buf;
     }
     if (shell_text_equals_ignore_case(token, "SERIAL")) {
-        if (!s_virtual_serial_ready) {
-            uint8_t mac[6] = {0};
-            if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
-                snprintf(s_virtual_serial, sizeof(s_virtual_serial),
-                         "%02X%02X%02X%02X%02X%02X",
-                         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-            } else {
-                s_virtual_serial[0] = '\0';
-            }
-            s_virtual_serial_ready = true;
-        }
-        snprintf(pseudo_buf, 40, "%s", s_virtual_serial);
+        snprintf(pseudo_buf, 40, "%s", board_identity_serial());
         return pseudo_buf;
     }
     {
@@ -1446,8 +1392,14 @@ void batch_bg_release(int slot)
     p4heap_free(ctx->bg_env);
     ctx->bg_env = NULL;
     himem_free_owned(slot);
-    sync_release_owned(slot);
-    svc_slot_released(slot);
+    if (s_bg_cleanup_ops != NULL) {
+        if (s_bg_cleanup_ops->release_sync != NULL) {
+            s_bg_cleanup_ops->release_sync(slot);
+        }
+        if (s_bg_cleanup_ops->release_service != NULL) {
+            s_bg_cleanup_ops->release_service(slot);
+        }
+    }
     if (s_bg_lock != NULL) {
         xSemaphoreGive(s_bg_lock);
     }
