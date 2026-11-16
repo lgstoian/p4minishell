@@ -10,6 +10,7 @@
  * @provides RSS/JSON-Feed reader over the shared JSON core
  * @status stable
  * @hard-rule ai-context.md#module-layering-rules
+ * @test test/main/test_rss_store.c
  * @brief RSS 2.0 / Atom 1.0 / JSON Feed reader — public API.
  *
  * CONFIG POLICY (two tiers, no hardcoded limits):

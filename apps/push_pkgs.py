@@ -12,10 +12,16 @@ device.
 With `--sign NAME.priv.pem` every manifest gains an ECDSA P-256 `SIGN=` line
 (see ABI.md), so `pkg install` verifies it against the device's trusted key.
 
-Usage: python push_pkgs.py [COMx] [--sign NAME.priv.pem]
+With `--pkg`, each app is instead packed into a single-file `PKGS/<APP>.PKG`
+ZIP archive (via `tools/make_pkg.py`, the ONE bundle builder) and pushed as one
+file; the device unpacks it on `pkg install`.
+
+Usage: python push_pkgs.py [COMx] [--sign NAME.priv.pem] [--pkg]
 """
 import os
+import subprocess
 import sys
+import tempfile
 import time
 import zlib
 
@@ -66,9 +72,26 @@ def sign_manifest(body, keypath):
     return ("SIGN=%064x%064x\n" % (r, s)).encode() + body
 
 
+def build_archive(app, subdir, keypath):
+    """Build a `.PKG` archive with tools/make_pkg.py (the ONE bundle builder)."""
+    out = os.path.join(tempfile.gettempdir(), "%s.PKG" % app)
+    cmd = [sys.executable, os.path.join(ROOT, "tools", "make_pkg.py"),
+           app, "--src", os.path.join(APPS_DIR, subdir), "--out", out]
+    if keypath:
+        cmd += ["--sign", keypath]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return None, (proc.stderr or proc.stdout).strip()
+    return out, None
+
+
 def main():
     args = sys.argv[1:]
     keypath = None
+    pkg_mode = False
+    if "--pkg" in args:
+        pkg_mode = True
+        args.remove("--pkg")
     if "--sign" in args:
         i = args.index("--sign")
         if i + 1 >= len(args):
@@ -95,6 +118,26 @@ def main():
     shell("md PKGS/PKGTEST")
 
     ok = True
+    if pkg_mode:
+        # Single-file archives: the device unpacks PKGS/<APP>.PKG on install.
+        for app, subdir, payloads, appinfo in PACKAGES:
+            archive, err = build_archive(app, subdir, keypath)
+            if archive is None:
+                print("FAIL archive %s: %s" % (app, err))
+                ok = False
+                continue
+            with open(archive, "rb") as f:
+                data = f.read()
+            if not push_file(ser, "PKGS/%s.PKG" % app, data):
+                print("FAIL archive %s" % app)
+                ok = False
+                continue
+            print("ARCHIVE ok  %s (%d payloads, %d bytes%s)" %
+                  (app, len(payloads), len(data), ", signed" if keypath else ""))
+        ser.close()
+        print("RESULT %s" % ("OK" if ok else "FAIL"))
+        return 0 if ok else 1
+
     for app, subdir, payloads, appinfo in PACKAGES:
         shell("md PKGS/%s" % app)
         manifest = []

@@ -26,6 +26,7 @@
 #include "command.h"
 #include "storage.h"
 #include "gfx.h"
+#include "imgdec.h"
 #include "modal_surf.h"
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
@@ -145,6 +146,8 @@ void shell_command_image(int argc, char **argv)
         uint8_t *buf = NULL;
         size_t got = 0;
         gfx_bmp_info_t info;
+        int native_w = 0;
+        int native_h = 0;
         int rc;
 
         if (argc != 3) {
@@ -163,8 +166,22 @@ void shell_command_image(int argc, char **argv)
             batch_set_errorlevel(rc);
             return;
         }
+        {
+            imgdec_format_t fmt = imgdec_probe(buf, got, &native_w, &native_h);
+
+            if (fmt == IMGDEC_FMT_PNG || fmt == IMGDEC_FMT_JPEG) {
+                heap_caps_free(buf);
+                /* Machine-parsable single line (batch `for /f`-friendly). */
+                shell_transcript_appendf("image: %s %dx%d %s %u bytes\n",
+                                         resolved, native_w, native_h,
+                                         (fmt == IMGDEC_FMT_PNG) ? "PNG" : "JPEG",
+                                         (unsigned)got);
+                batch_set_errorlevel(0);
+                return;
+            }
+        }
         if (!gfx_bmp_parse_header_ex(buf, got, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H)) {
-            shell_transcript_appendf_ansi(SH_ERR "image: not a 24/32-bit BI_RGB BMP (%s)\n" SH_RST,
+            shell_transcript_appendf_ansi(SH_ERR "image: not a 24/32-bit BMP/PNG/JPEG (%s)\n" SH_RST,
                                           resolved);
             heap_caps_free(buf);
             batch_set_errorlevel(1);

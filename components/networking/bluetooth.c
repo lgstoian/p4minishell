@@ -78,7 +78,9 @@ static bluetooth_state_t s_bluetooth_state;
 
 #if CONFIG_BT_NIMBLE_ENABLED
 static esp_err_t bluetooth_start_scan(void);
-static esp_err_t bluetooth_start_advertising(void);
+static esp_err_t bluetooth_start_advertising_ex(bool connectable);
+static esp_err_t bluetooth_ensure_ready(void);
+static void bluetooth_report_not_available(esp_err_t error);
 
 /* ---- BLE HID host state ---- */
 
@@ -322,6 +324,119 @@ static void bluetooth_on_reset(int reason)
     bluetooth_schedulef("bluetooth: host reset; reason=%d\n", reason);
 }
 
+/* ========================================================================
+ * GATT SERVER (peripheral role)
+ * ========================================================================
+ * One GATT server: a standard Device Information service (manufacturer,
+ * model, firmware revision) plus a small P4MiniShell status characteristic.
+ * `bluetooth gatt on` registers it and switches advertising to connectable so
+ * a central can reach it.
+ */
+
+static bool s_bluetooth_gatt_enabled;
+static bool s_bluetooth_gatt_registered;
+
+static int bluetooth_gatt_read_str(uint16_t conn_handle, uint16_t attr_handle,
+                                   struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    const char *value = (const char *)arg;
+
+    (void)conn_handle;
+    (void)attr_handle;
+    if (value != NULL) {
+        os_mbuf_append(ctxt->om, value, strlen(value));
+    }
+    return 0;
+}
+
+static int bluetooth_gatt_read_status(uint16_t conn_handle, uint16_t attr_handle,
+                                      struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    char buf[160];
+
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+    snprintf(buf, sizeof(buf), "fw=%s wifi=%s",
+             P4_CONFIG_VERSION_STRING, networking_wifi_state_string());
+    os_mbuf_append(ctxt->om, buf, strlen(buf));
+    return 0;
+}
+
+static const struct ble_gatt_svc_def g_bluetooth_gatt_svcs[] = {
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = BLE_UUID16_DECLARE(0x180A),       /* Device Information */
+        .characteristics = (struct ble_gatt_chr_def[]) {
+            { .uuid = BLE_UUID16_DECLARE(0x2A29), /* Manufacturer Name */
+              .access_cb = bluetooth_gatt_read_str,
+              .arg = (void *)"P4MiniShell",
+              .flags = BLE_GATT_CHR_F_READ },
+            { .uuid = BLE_UUID16_DECLARE(0x2A24), /* Model Number */
+              .access_cb = bluetooth_gatt_read_str,
+              .arg = (void *)BLUETOOTH_DEVICE_NAME,
+              .flags = BLE_GATT_CHR_F_READ },
+            { .uuid = BLE_UUID16_DECLARE(0x2A26), /* Firmware Revision */
+              .access_cb = bluetooth_gatt_read_str,
+              .arg = (void *)P4_CONFIG_VERSION_STRING,
+              .flags = BLE_GATT_CHR_F_READ },
+            { 0 },
+        },
+    },
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = BLE_UUID16_DECLARE(0xFFF0),       /* P4MiniShell status */
+        .characteristics = (struct ble_gatt_chr_def[]) {
+            { .uuid = BLE_UUID16_DECLARE(0xFFF1),
+              .access_cb = bluetooth_gatt_read_status,
+              .flags = BLE_GATT_CHR_F_READ },
+            { 0 },
+        },
+    },
+    { 0 },
+};
+
+void bluetooth_gatt(bool enable)
+{
+#if CONFIG_BT_NIMBLE_ENABLED
+    if (!enable) {
+        s_bluetooth_gatt_enabled = false;
+        if (s_bluetooth_state.advertising_active) {
+            (void)ble_gap_adv_stop();
+            s_bluetooth_state.advertising_active = false;
+        }
+        bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " GATT server disabled\n");
+        return;
+    }
+
+    if (bluetooth_ensure_ready() != ESP_OK) {
+        bluetooth_report_not_available(s_bluetooth_state.last_error);
+        return;
+    }
+    s_bluetooth_gatt_enabled = true;
+    if (s_bluetooth_state.synced) {
+        ble_gatts_count_cfg(g_bluetooth_gatt_svcs);
+        ble_gatts_add_svcs(g_bluetooth_gatt_svcs);
+        s_bluetooth_gatt_registered = true;
+        s_bluetooth_state.advertising_requested = true;
+        if (bluetooth_start_advertising_ex(true) == ESP_OK) {
+            bluetooth_appendf(SH_OK "bluetooth:" SH_RST
+                              " GATT server enabled (connectable advertising)\n");
+        } else {
+            bluetooth_appendf(SH_WARN "bluetooth:" SH_RST
+                              " GATT server registered; advertising failed\n");
+        }
+    } else {
+        bluetooth_appendf(SH_PROMPT "bluetooth:" SH_RST
+                          " waiting for BLE host sync before enabling the GATT server\n");
+    }
+    bluetooth_record_infof("BLE GATT server %s", enable ? "enabled" : "disabled");
+#else
+    (void)enable;
+    bluetooth_report_not_available(ESP_ERR_NOT_SUPPORTED);
+#endif
+}
+
 static void bluetooth_on_sync(void)
 {
     int rc;
@@ -342,8 +457,14 @@ static void bluetooth_on_sync(void)
     bluetooth_schedulef("bluetooth: BLE host synchronized with the C6 controller\n");
     bluetooth_notify_headerf(3500, "Bluetooth synced with C6");
 
+    if (s_bluetooth_gatt_enabled && !s_bluetooth_gatt_registered) {
+        ble_gatts_count_cfg(g_bluetooth_gatt_svcs);
+        ble_gatts_add_svcs(g_bluetooth_gatt_svcs);
+        s_bluetooth_gatt_registered = true;
+    }
+
     if (s_bluetooth_state.advertising_requested && !s_bluetooth_state.advertising_active) {
-        if (bluetooth_start_advertising() == ESP_OK) {
+        if (bluetooth_start_advertising_ex(s_bluetooth_gatt_enabled) == ESP_OK) {
             bluetooth_schedulef("bluetooth: advertising enabled\n");
         } else {
             s_bluetooth_state.last_error = ESP_FAIL;
@@ -369,7 +490,7 @@ static void bluetooth_host_task(void *param)
     nimble_port_freertos_deinit();
 }
 
-static esp_err_t bluetooth_start_advertising(void)
+static esp_err_t bluetooth_start_advertising_ex(bool connectable)
 {
     struct ble_gap_adv_params adv_params;
     struct ble_hs_adv_fields fields;
@@ -377,6 +498,15 @@ static esp_err_t bluetooth_start_advertising(void)
 
     if (!s_bluetooth_state.synced) {
         return ESP_ERR_INVALID_STATE;
+    }
+
+    /* NimBLE rejects a second ble_gap_adv_start() with EALREADY. Re-issuing an
+     * advertise request must therefore restart rather than fail: this is what
+     * lets the GATT server switch a running non-connectable advert to a
+     * connectable one (and vice versa) without an error. */
+    if (s_bluetooth_state.advertising_active) {
+        (void)ble_gap_adv_stop();
+        s_bluetooth_state.advertising_active = false;
     }
 
     const char *advertise_name = s_bluetooth_state.session_advertise_name[0] != '\0'
@@ -397,7 +527,7 @@ static esp_err_t bluetooth_start_advertising(void)
     }
 
     memset(&adv_params, 0, sizeof(adv_params));
-    adv_params.conn_mode = BLE_GAP_CONN_MODE_NON;
+    adv_params.conn_mode = connectable ? BLE_GAP_CONN_MODE_UND : BLE_GAP_CONN_MODE_NON;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
 
     rc = ble_gap_adv_start(s_bluetooth_state.own_addr_type,
@@ -662,7 +792,7 @@ static esp_err_t bluetooth_refresh_fw_version(void)
     return error;
 }
 
-static esp_err_t bluetooth_ensure_ready(void)
+static esp_err_t bluetooth_ensure_ready_once(void)
 {
 #if CONFIG_BT_NIMBLE_ENABLED && CONFIG_ESP_HOSTED_HOST_FEAT_BT
     esp_err_t error;
@@ -676,6 +806,8 @@ static esp_err_t bluetooth_ensure_ready(void)
     error = bluetooth_refresh_fw_version();
     if (error != ESP_OK) {
         s_bluetooth_state.last_error = error;
+        bluetooth_appendf(SH_ERR "bluetooth: hosted firmware version read failed (%s)" SH_RST "\n",
+                          esp_err_to_name(error));
         return error;
     }
 
@@ -690,6 +822,10 @@ static esp_err_t bluetooth_ensure_ready(void)
                  s_bluetooth_state.fw_version.patch1);
 #else
         s_bluetooth_state.last_error = ESP_ERR_INVALID_STATE;
+        bluetooth_appendf(SH_ERR "bluetooth: hosted version mismatch (host %u.x, C6 %u.%u.%u)" SH_RST "\n",
+                          P4_CONFIG_HOSTED_COMPAT_MAJOR,
+                          s_bluetooth_state.fw_version.major1, s_bluetooth_state.fw_version.minor1,
+                          s_bluetooth_state.fw_version.patch1);
         return ESP_ERR_INVALID_STATE;
 #endif
     }
@@ -699,7 +835,12 @@ static esp_err_t bluetooth_ensure_ready(void)
         error = esp_hosted_bt_host_stack_setup(&cfg);
         if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
             s_bluetooth_state.last_error = error;
+            bluetooth_appendf(SH_ERR "bluetooth: hosted controller bring-up failed (%s)" SH_RST "\n",
+                              esp_err_to_name(error));
             return error;
+        }
+        if (error == ESP_ERR_INVALID_STATE) {
+            ESP_LOGW("bluetooth", "hosted controller already up (0x%x)", (unsigned)error);
         }
         s_bluetooth_state.controller_enabled = true;
     }
@@ -708,6 +849,8 @@ static esp_err_t bluetooth_ensure_ready(void)
         rc = nimble_port_init();
         if (rc != 0) {
             s_bluetooth_state.last_error = ESP_FAIL;
+            bluetooth_appendf(SH_ERR "bluetooth: NimBLE host init failed (rc=%d) - is the hosted HCI transport bound?" SH_RST "\n",
+                              rc);
             return ESP_FAIL;
         }
 
@@ -717,6 +860,7 @@ static esp_err_t bluetooth_ensure_ready(void)
         rc = ble_svc_gap_device_name_set(BLUETOOTH_DEVICE_NAME);
         if (rc != 0) {
             s_bluetooth_state.last_error = ESP_FAIL;
+            bluetooth_appendf(SH_ERR "bluetooth: GAP device name set failed (rc=%d)" SH_RST "\n", rc);
             /* nimble is up but the flag is not set: tear it down so a retry
              * does not call nimble_port_init() on an initialized stack. */
             nimble_port_deinit();
@@ -724,6 +868,17 @@ static esp_err_t bluetooth_ensure_ready(void)
         }
 
         nimble_port_freertos_init(bluetooth_host_task);
+        /* esp_nimble_enable() ignores the xTaskCreatePinnedToCore() result, so
+         * a failed host-task creation looks exactly like success. Verify it
+         * explicitly: without this task there is no host event loop and the
+         * stack never syncs. */
+        if (xTaskGetHandle("nimble_host") == NULL) {
+            s_bluetooth_state.nimble_initialized = false;
+            s_bluetooth_state.last_error = ESP_FAIL;
+            bluetooth_appendf(SH_ERR "bluetooth: NimBLE host task was not created "
+                                    "(raise CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE?)" SH_RST "\n");
+            return ESP_FAIL;
+        }
         s_bluetooth_state.nimble_initialized = true;
     }
 
@@ -733,6 +888,22 @@ static esp_err_t bluetooth_ensure_ready(void)
     s_bluetooth_state.last_error = ESP_ERR_NOT_SUPPORTED;
     return ESP_ERR_NOT_SUPPORTED;
 #endif
+}
+
+static esp_err_t bluetooth_ensure_ready(void)
+{
+    esp_err_t error = bluetooth_ensure_ready_once();
+
+    /* The hosted controller can still be settling when the first attempt runs
+     * (the C6 BT service is brought up over the same SDIO link as Wi-Fi), so a
+     * single bounded retry turns a transient failure into a working stack. */
+    if (error != ESP_OK && P4_CONFIG_BT_INIT_RETRIES > 0) {
+        ESP_LOGW("bluetooth", "host init attempt 1 failed (%s); retrying",
+                 esp_err_to_name(error));
+        vTaskDelay(pdMS_TO_TICKS(P4_CONFIG_BT_INIT_RETRY_DELAY_MS));
+        error = bluetooth_ensure_ready_once();
+    }
+    return error;
 }
 
 static void bluetooth_report_not_available(esp_err_t error)
@@ -894,7 +1065,7 @@ void bluetooth_advertise(bool enable, const char *name)
         return;
     }
 
-    if (bluetooth_start_advertising() != ESP_OK) {
+    if (bluetooth_start_advertising_ex(false) != ESP_OK) {
         bluetooth_report_not_available(ESP_FAIL);
         return;
     }
@@ -1447,6 +1618,17 @@ void bluetooth_handle_command(char *command)
 
         if (strutil_text_equals_ignore_case(argv[2], "off")) {
             bluetooth_advertise(false, NULL);
+            return;
+        }
+    }
+
+    if (strutil_text_equals_ignore_case(argv[1], "gatt") && argc >= 3) {
+        if (strutil_text_equals_ignore_case(argv[2], "on")) {
+            bluetooth_gatt(true);
+            return;
+        }
+        if (strutil_text_equals_ignore_case(argv[2], "off")) {
+            bluetooth_gatt(false);
             return;
         }
     }

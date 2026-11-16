@@ -758,6 +758,21 @@ static bool boot_handle_bt_advertise(const char *value)
     return true;
 }
 
+/** Apply an RSS directive through the `rss set` command, so the CONFIG.SYS
+ *  spelling and the runtime command share one parser and one validation. */
+static bool boot_handle_rss_key(const char *key, const char *value)
+{
+    char cmd[BOOT_CMD_LEN];
+
+    if (value == NULL || *value == '\0') {
+        boot_warn_unknown(key);
+        return false;
+    }
+    snprintf(cmd, sizeof(cmd), "rss set %s %s", key, value);
+    boot_exec(cmd);
+    return true;
+}
+
 /* ========================================================================
  * PUBLIC ENTRY POINT
  * ======================================================================== */
@@ -942,6 +957,14 @@ static void boot_script_apply(void)
                     (void)boot_handle_bluetooth(value);
                 } else if (boot_starts_with_ci(keyword, "BT_ADVERTISE")) {
                     (void)boot_handle_bt_advertise(value);
+                } else if (boot_starts_with_ci(keyword, "RSS_INTERVAL")) {
+                    (void)boot_handle_rss_key("interval", value);
+                } else if (boot_starts_with_ci(keyword, "RSS_AUTOPOLL")) {
+                    (void)boot_handle_rss_key("autopoll", value);
+                } else if (boot_starts_with_ci(keyword, "RSS_RETENTION")) {
+                    (void)boot_handle_rss_key("retention", value);
+                } else if (boot_starts_with_ci(keyword, "RSS_SAVEREAD")) {
+                    (void)boot_handle_rss_key("saveread", value);
                 } else if (boot_starts_with_ci(keyword, "USB_KEYBOARD")) {
                     (void)boot_handle_usb_keyboard(value);
                 } else if (boot_starts_with_ci(keyword, "USB_MOUSE")) {

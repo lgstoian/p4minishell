@@ -4975,6 +4975,14 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* ---- RSS reader (rss) ----
+     * argv-verb dispatcher: rss list|add|remove|enable|interval|refresh|read|
+     * open|reset|import|export|set. Sets ERRORLEVEL 0/1/2. */
+    if (shell_text_equals_ignore_case(argv[0], "rss")) {
+        batch_set_errorlevel(shell_command_rss(argc, argv));
+        return true;
+    }
+
     /* ---- Natural Display math (math) ----
      * argv-verb dispatcher: math new|open|close|edit|render|eval|cursor|insert.
      * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage). */
@@ -5215,6 +5223,16 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "pkg")) {
         shell_command_pkg(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "store")) {
+        shell_command_store(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "download")) {
+        shell_command_download(argc, argv);
         return true;
     }
 

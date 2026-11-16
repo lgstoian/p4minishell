@@ -41,6 +41,7 @@
 #include "networking.h"
 #include "wifi_known.h"
 #include "locale.h"
+#include "rss_store.h"
 
 #define SHELL_COMMAND_BYTES         P4_CONFIG_COMMAND_BYTES
 
@@ -306,6 +307,57 @@ static void config_render_locale(char *out, size_t out_size)
     snprintf(out, out_size, "%s", locale_name(locale_get()));
 }
 
+/* ---- RSS reader ----
+ * The parsing and validation live in the rss module (rss_store_apply_directive)
+ * so the CONFIG.SYS table and the `rss set` command cannot drift. */
+static bool config_apply_rss_interval(const char *value)
+{
+    return rss_store_apply_directive("RSS_INTERVAL", value);
+}
+
+static void config_render_rss_interval(char *out, size_t out_size)
+{
+    if (!rss_store_render_directive("RSS_INTERVAL", out, out_size)) {
+        snprintf(out, out_size, "60");
+    }
+}
+
+static bool config_apply_rss_autopoll(const char *value)
+{
+    return rss_store_apply_directive("RSS_AUTOPOLL", value);
+}
+
+static void config_render_rss_autopoll(char *out, size_t out_size)
+{
+    if (!rss_store_render_directive("RSS_AUTOPOLL", out, out_size)) {
+        snprintf(out, out_size, "OFF");
+    }
+}
+
+static bool config_apply_rss_retention(const char *value)
+{
+    return rss_store_apply_directive("RSS_RETENTION", value);
+}
+
+static void config_render_rss_retention(char *out, size_t out_size)
+{
+    if (!rss_store_render_directive("RSS_RETENTION", out, out_size)) {
+        snprintf(out, out_size, "%d", (int)P4_CONFIG_RSS_ITEM_CAPACITY);
+    }
+}
+
+static bool config_apply_rss_saveread(const char *value)
+{
+    return rss_store_apply_directive("RSS_SAVEREAD", value);
+}
+
+static void config_render_rss_saveread(char *out, size_t out_size)
+{
+    if (!rss_store_render_directive("RSS_SAVEREAD", out, out_size)) {
+        snprintf(out, out_size, "ON");
+    }
+}
+
 static const config_setting_t config_settings[] = {
     { "BRIGHTNESS",       STR(P4_CONFIG_DISPLAY_DEFAULT_BRIGHTNESS), config_apply_brightness,       config_render_brightness },
     { "ROTATE",           "0",                                        config_apply_rotate,           config_render_rotate },
@@ -319,6 +371,10 @@ static const config_setting_t config_settings[] = {
     { "LAUNCH_APP",       "",                                        config_apply_launch_app,       config_render_launch_app },
     { "HOSTNAME",         P4_CONFIG_HOSTNAME_DEFAULT,                config_apply_hostname,         config_render_hostname },
     { "LOCALE",           "US",                                      config_apply_locale,           config_render_locale },
+    { "RSS_INTERVAL",     "60",                                      config_apply_rss_interval,     config_render_rss_interval },
+    { "RSS_AUTOPOLL",     "OFF",                                     config_apply_rss_autopoll,     config_render_rss_autopoll },
+    { "RSS_RETENTION",    STR(P4_CONFIG_RSS_ITEM_CAPACITY),           config_apply_rss_retention,    config_render_rss_retention },
+    { "RSS_SAVEREAD",     "ON",                                      config_apply_rss_saveread,     config_render_rss_saveread },
 };
 
 #define CONFIG_SETTING_COUNT (sizeof(config_settings) / sizeof(config_settings[0]))

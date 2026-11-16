@@ -3,11 +3,15 @@ dependencies:
   esp_wifi_remote:
     rules:
     - if: target in [esp32p4]
-    version: '>=1.6.2'
+    version: ==1.6.3
   espressif/cjson:
     rules:
     - if: idf_version >= 6.0
     version: ^1.7.15
+  espressif/esp_hosted:
+    rules:
+    - if: target in [esp32p4]
+    version: '>=2.11,<3.0'
   espressif/mdns: ^1.0.3
   idf: '>=5.3'
   protocol_examples_common:

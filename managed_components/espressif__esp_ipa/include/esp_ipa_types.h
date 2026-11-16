@@ -11,6 +11,7 @@
 #include <stdbool.h>
 #include <pthread.h>
 #include "driver/isp.h"
+#include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -67,6 +68,9 @@ extern "C" {
 #define IPA_METADATA_FLAGS_AF       (1 << 17)   /*!< Meta data has AF */
 #define IPA_METADATA_FLAGS_FP       (1 << 18)   /*!< Meta data has focus position */
 #define IPA_METADATA_FLAGS_BLC      (1 << 19)   /*!< Meta data has BLC */
+#define IPA_METADATA_FLAGS_DPC      (1 << 20)   /*!< Meta data has DPC */
+#define IPA_METADATA_FLAGS_IR       (1 << 21)   /*!< Meta data has IR mode */
+#define IPA_METADATA_FLAGS_WL       (1 << 22)   /*!< Meta data has white light */
 
 
 #define IPA_GAMMA_FLAGS_RED         (1 << 0)   /*!< GAMMA red channel needs to update */
@@ -124,6 +128,13 @@ typedef enum esp_ipa_atc_model {
 } esp_ipa_atc_model_t;
 
 /**
+ * @brief IR data model type
+ */
+typedef enum esp_ipa_ir_model {
+    ESP_IPA_IR_MODEL_0 = 0,                     /*!< IR data process model type 0 */
+} esp_ipa_ir_model_t;
+
+/**
  * @brief GAMMA model type
  */
 typedef enum esp_ipa_aen_gamma_model {
@@ -137,6 +148,24 @@ typedef enum esp_ipa_aen_gamma_model {
 typedef enum esp_ipa_acc_blc_model {
     ESP_IPA_ACC_BLC_MODEL_0 = 0,              /*!< BLC model type 0 */
 } esp_ipa_acc_blc_model_t;
+
+/**
+ * @brief DPC data model type
+ */
+typedef enum esp_ipa_dpc_model {
+    ESP_IPA_DPC_MODEL_0 = 0,                  /*!< Use parameters of the nearest gain node, with optional debounce */
+    ESP_IPA_DPC_MODEL_1,                      /*!< Linearly interpolate parameters between neighboring gain nodes */
+} esp_ipa_dpc_model_t;
+
+/**
+ * @brief DPC dynamic correction method
+ *
+ * Values match ISP `esp_isp_dpc_dynamic_method_t` so metadata can be applied without conversion.
+ */
+typedef enum esp_ipa_dpc_dynamic_method {
+    ESP_IPA_DPC_DYNAMIC_METHOD_1 = 0,         /*!< Detects a pixel outside [min8 - low_threshold, max8 + high_threshold] */
+    ESP_IPA_DPC_DYNAMIC_METHOD_2 = 1,         /*!< Applies ratio screening followed by an estimate-based adaptive threshold test */
+} esp_ipa_dpc_dynamic_method_t;
 
 struct esp_ipa;
 struct esp_ipa_pipeline;
@@ -178,6 +207,10 @@ typedef struct esp_ipa_sensor {
     uint32_t step_ae_target_level;          /*!< Step Sensor AE target level */
 
     esp_ipa_sensor_focus_t *focus_info;     /*!< Sensor focus information, if sensor does not support setting focus, set to NULL */
+
+    uint32_t cur_saturation;                /*!< Current saturation, used to restore after leaving IR mode */
+
+    bool ir_led_on;                            /*!< Caller-supplied IR LED state. true: LED is on */
 } esp_ipa_sensor_t;
 
 /**
@@ -231,6 +264,10 @@ typedef struct esp_ipa_stats_af {
 
 /**
  * @brief ISP statistics for IPA.
+ *
+ * Callers of esp_ipa_pipeline_process() must upload real-time statistics every
+ * cycle. IPA metadata may change statistics parameters from configuration, but
+ * the statistics stream itself must not stop.
  */
 typedef struct esp_ipa_stats {
     uint64_t seq;                           /*!< ISP statistics sequence */
@@ -361,6 +398,37 @@ typedef struct esp_ipa_af {
 } esp_ipa_af_t;
 
 /**
+ * @brief DPC(dynamic dead pixel correction) meta data.
+ *
+ * Each gain node may select method 1 or 2. Method 2 ratios and deviation
+ * factors are floating-point values in range [0, 1].
+ */
+typedef struct esp_ipa_dpc {
+    esp_ipa_dpc_dynamic_method_t method;            /*!< Dynamic correction method */
+    union {
+        struct {
+            uint8_t high_threshold;                 /*!< A pixel above max8 + high_threshold is a bright dead-pixel candidate (0-255) */
+            uint8_t low_threshold;                  /*!< A pixel below min8 - low_threshold is a dark dead-pixel candidate (0-255) */
+        } method_1;
+        struct {
+            float first_stage_upper_ratio;          /*!< Upper bound of the first-stage normal-pixel range, range [0, 1]; must be greater than first_stage_lower_ratio */
+            float first_stage_lower_ratio;          /*!< Lower bound of the first-stage normal-pixel range, range [0, 1] */
+            float bright_deviation_factor;          /*!< Second-stage bright-pixel sensitivity, range [0, 1] */
+            float dark_deviation_factor;            /*!< Second-stage dark-pixel sensitivity, range [0, 1] */
+        } method_2;
+    };
+} esp_ipa_dpc_t;
+
+/**
+ * @brief White light parameters
+ */
+typedef struct esp_ipa_wl {
+    uint8_t brightness;                     /*!< Fill light brightness, percent of the full brightness, 0 ~ 100. The LED
+                                                 output must be linear to it, the algorithm separates the light
+                                                 contribution from the ambient luma with the ratio of two levels */
+} esp_ipa_wl_t;
+
+/**
  * @brief IPA meta data, these data are calculated by IPA and configured to ISP hardware
  */
 typedef struct esp_ipa_metadata {
@@ -400,6 +468,12 @@ typedef struct esp_ipa_metadata {
     esp_ipa_af_t af;                        /*!< AF parameters */
 
     uint32_t focus_pos;                     /*!< Focus position parameter */
+
+    esp_ipa_dpc_t dpc;                      /*!< DPC dynamic correction parameters */
+
+    bool ir_enable;                         /*!< true: IR mode on; false: normal mode */
+
+    esp_ipa_wl_t wl;                        /*!< White light parameters */
 } esp_ipa_metadata_t;
 
 /**
@@ -756,8 +830,10 @@ typedef struct esp_ipa_awb_fixed {
  * @endcode
  *
  * Legacy single entry (`fixed_ct { ct, rg, bg }`) is equivalent to one preset with
- * `default_ct = ct`. Runtime CT is selected with esp_ipa_awb_set_fixed_ct(), which
- * validates the preset and caches it; process applies the cached preset directly.
+ * `default_ct = ct`. Runtime CT uses `ESP_IPA_AWB_S_CT` or `esp_ipa_awb_set_fixed_ct`.
+ * A Kelvin value on a preset is used as stored. A value between two presets is
+ * interpolated in mired (1000000 / Kelvin). A value outside the table is clamped
+ * to the nearest preset. process applies the cached gains directly.
  */
 typedef struct esp_ipa_awb_fixed_cfg {
     uint32_t default_ct;                        /*!< Initial CT (Kelvin); 0 = first preset */
@@ -820,6 +896,11 @@ typedef struct esp_ipa_awb_config {
     /* Configuration parameters used in model_3 (fixed CT) */
 
     esp_ipa_awb_fixed_cfg_t fixed_ct;           /*!< Preset table + default CT (JSON awb.fixed_ct { ... }) */
+
+    /* Optional model_2 startup seed; automatic AWB continues after initialization. */
+    bool startup_zone_enabled;                /*!< False preserves startup without preset gains/CT */
+    esp_ipa_awb_zone_type_t startup_zone;       /*!< Neutral zone UHCT..ULCT; first matching ref_point supplies CT and gains */
+    uint32_t startup_hold_frames;              /*!< Hold startup WBG for this many AWB-stat calls; 0 disables */
 } esp_ipa_awb_config_t;
 
 /**
@@ -886,6 +967,28 @@ typedef struct esp_ipa_adn_config {
 } esp_ipa_adn_config_t;
 
 /**
+ * @brief DPC parameter and gain mapping data
+ */
+typedef struct esp_ipa_dpc_unit {
+    uint32_t gain;                              /*!< Camera sensor gain, unit is 0.001 */
+    esp_ipa_dpc_t dpc;                          /*!< ISP DPC dynamic correction parameter */
+} esp_ipa_dpc_unit_t;
+
+/**
+ * @brief Dead pixel correction algorithm configuration
+ */
+typedef struct esp_ipa_dpc_config {
+    esp_ipa_dpc_model_t model;                  /*!< DPC data model type */
+
+    uint32_t debounce_gain;                     /*!< Model 0 switch debounce threshold, unit is 0.001; 0 disables */
+
+    const esp_ipa_dpc_unit_t *table;            /*!< DPC parameter and gain mapping table */
+    uint32_t table_size;                        /*!< DPC parameter and gain mapping table size */
+
+    bool enable_log;                            /*!< Enable DPC algorithm log */
+} esp_ipa_dpc_config_t;
+
+/**
  * @brief Auto enhancement algorithm configuration
  */
 typedef struct esp_ipa_aen_config {
@@ -906,6 +1009,18 @@ typedef struct esp_ipa_agc_luma_pwl {
     float env_luma;                             /*!< Environment luma breakpoint (maps to "env.luma.avg") */
     int8_t luma_shift;                          /*!< Target luma shift applied when env_luma matches */
 } esp_ipa_agc_luma_pwl_t;
+
+#define ESP_IPA_AGC_METER_TARGET_OFFSET_MIN       (-254.0f) /*!< Largest negative shift; JSON target plus offset is then clamped to 1..255 */
+#define ESP_IPA_AGC_METER_TARGET_OFFSET_MAX       (254.0f)  /*!< Largest positive shift; JSON target plus offset is then clamped to 1..255 */
+
+/**
+ * @brief Runtime AE luma weight table.
+ *
+ * Index matches AE statistics: index = x * ISP_AE_BLOCK_Y_NUM + y.
+ */
+typedef struct esp_ipa_agc_meter_luma_weight {
+    uint8_t weight[ISP_AE_REGIONS];             /*!< Per-block luma weight */
+} esp_ipa_agc_meter_luma_weight_t;
 
 /**
  * @brief Auto gain control algorithm configuration
@@ -978,6 +1093,56 @@ typedef struct esp_ipa_atc_config {
 } esp_ipa_atc_config_t;
 
 /**
+ * @brief White light algorithm state, published as int32_t environment variable "wl.state" every frame
+ */
+typedef enum esp_ipa_wl_state {
+    ESP_IPA_WL_STATE_DAY = 0,                   /*!< Day, fill light off */
+    ESP_IPA_WL_STATE_NIGHT_ENTER,               /*!< Night, turning on the fill light and measuring K */
+    ESP_IPA_WL_STATE_NIGHT,                     /*!< Night, fill light on */
+    ESP_IPA_WL_STATE_PROBE,                     /*!< Night, fill light dimmed or off to measure the ambient luma */
+} esp_ipa_wl_state_t;
+
+/**
+ * @brief White light lamp configuration
+ */
+typedef struct esp_ipa_wl_light_config {
+    uint32_t ct;                                /*!< Fill light color temperature, Kelvin; 0: unknown, AWB is not locked.
+                                                     Out of DAY, WL locks AWB to it by ESP_IPA_AWB_S_CT and releases
+                                                     it by ESP_IPA_AWB_S_RESET in DAY; only AWB model 2 supports it */
+} esp_ipa_wl_light_config_t;
+
+/**
+ * @brief White light enter night gate configuration
+ */
+typedef struct esp_ipa_wl_gate_config {
+    bool enable;                                /*!< Require gain and exposure near maximum to enter night */
+    float min_gain_of_max;                      /*!< Minimum cur_gain as a fraction of sensor max gain, 0 ~ 1 */
+    float min_exposure_of_max;                  /*!< Minimum cur_exposure as a fraction of sensor max exposure, 0 ~ 1 */
+} esp_ipa_wl_gate_config_t;
+
+/**
+ * @brief White light algorithm configuration
+ */
+typedef struct esp_ipa_wl_config {
+    bool enable;                                /*!< Enable white light algorithm, only takes effect at init; false: the
+                                                     module does nothing and the fill light stays off */
+    float enter_luma;                          /*!< Enter night when luma is below this value */
+    float exit_luma;                            /*!< Exit night: start probe when ambient luma is above this value */
+    float verify_ratio;                         /*!< Leave night when luma with light off is above enter_luma * verify_ratio */
+    float k_tolerance;                          /*!< Allowed measurement error of K as a fraction of K, 0 ~ 1; the threshold is max(enter_luma, k_tolerance * K) */
+    uint16_t enter_frames;                      /*!< Consecutive frames required to enter night */
+    uint16_t exit_frames;                       /*!< Consecutive frames required to start probe */
+    uint16_t settle_frames;                     /*!< Frames with unchanged gain and exposure regarded as AE stable */
+    uint16_t settle_max_frames;                 /*!< Maximum frames to wait for AE stable, and then for E stable */
+    float settle_tolerance;                     /*!< E regarded as stable when it stays within max(enter_luma, settle_tolerance * E) for settle_frames, 0 ~ 1 */
+    uint32_t probe_period_s;                    /*!< Probe in night when K was measured this long ago, recovers from an overestimated K; 0: disable */
+    esp_ipa_wl_light_config_t light;            /*!< Fill light configuration */
+    esp_ipa_wl_gate_config_t gate;              /*!< Enter night gate configuration */
+
+    bool enable_log;                            /*!< Enable white light algorithm log */
+} esp_ipa_wl_config_t;
+
+/**
  * @brief IPA extended configuration
  */
 typedef struct esp_ipa_ext_config {
@@ -1017,6 +1182,58 @@ typedef struct esp_ipa_af_config {
 } esp_ipa_af_config_t;
 
 /**
+ * @brief Runtime AF sampling windows.
+ */
+typedef struct esp_ipa_af_windows {
+    isp_window_t windows[ISP_AF_WINDOW_NUM];    /*!< Current AF windows */
+} esp_ipa_af_windows_t;
+
+/**
+ * @brief Runtime AF window weights.
+ *
+ * Index matches AF statistics. Scoring uses definition * weight[i]
+ * and luminance * weight[i]. JSON weight_table is the reset value.
+ */
+typedef struct esp_ipa_af_window_weight {
+    uint8_t weight[ISP_AF_WINDOW_NUM];          /*!< Per-window AF weight */
+} esp_ipa_af_window_weight_t;
+
+/**
+ * @brief IR model 0 configuration.
+ *
+ * Day compares environment luma with day_luma_threshold.
+ * Night multiplies luma by night_ir_factor, then compares with night_luma_threshold.
+ */
+typedef struct esp_ipa_ir_model0_config {
+    const char *luma_env;                       /*!< Environment luma variable. Missing variable means this frame has no luma */
+
+    float day_luma_threshold;                   /*!< Day environment luma threshold; bright when luma is greater */
+    uint32_t day_switch_night_time_us;          /*!< Transition time from day to night, microseconds */
+    uint32_t day_keep_time_us;                  /*!< Dark must hold this long before leaving day, microseconds */
+
+    float night_ir_factor;                      /*!< Multiply environment luma at night */
+    float night_luma_threshold;                 /*!< Night environment luma threshold; bright when luma is greater */
+    uint32_t night_switch_day_time_us;          /*!< Transition time from night to day, microseconds */
+    uint32_t night_keep_time_us;                /*!< Bright must hold this long before leaving night, microseconds */
+
+    esp_ipa_awb_range_t night_awb;              /*!< AWB statistics window written when the switch to night starts */
+    esp_ipa_ccm_t night_ccm;                    /*!< CCM written when the switch to night starts */
+    float night_red_gain;                       /*!< Red gain written when the switch to night starts */
+    float night_blue_gain;                      /*!< Blue gain written when the switch to night starts */
+
+    bool enable_log;                            /*!< Enable IR algorithm log */
+} esp_ipa_ir_model0_config_t;
+
+/**
+ * @brief IR algorithm configuration.
+ */
+typedef struct esp_ipa_ir_config {
+    esp_ipa_ir_model_t model;                   /*!< IR data model type */
+
+    esp_ipa_ir_model0_config_t *model0_param;      /*!< Parameters used by model 0 */
+} esp_ipa_ir_config_t;
+
+/**
  * @brief IPA initialize configuration
  */
 typedef struct esp_ipa_config {
@@ -1035,9 +1252,14 @@ typedef struct esp_ipa_config {
     const esp_ipa_aen_config_t *aen;            /*!< Auto enhancement algorithm configuration */
     const esp_ipa_af_config_t  *af;             /*!< Auto focus algorithm configuration */
     const esp_ipa_atc_config_t *atc;            /*!< Auto sensor AE target level control algorithm configuration */
+    const esp_ipa_dpc_config_t *dpc;            /*!< Dead pixel correction algorithm configuration */
+    const esp_ipa_ir_config_t  *ir;             /*!< IR algorithm configuration */
+    const esp_ipa_wl_config_t  *wl;             /*!< White light algorithm configuration */
 
     const esp_ipa_ext_config_t *ext;            /*!< Image extended configuration */
 } esp_ipa_config_t;
+
+struct esp_ipa_state;
 
 /**
  * @brief Image process algorithm operations
@@ -1045,6 +1267,11 @@ typedef struct esp_ipa_config {
 typedef struct esp_ipa_ops {
     uint8_t type;                               /*!< IPA type: 0: no type,
                                                                1: AGC,
+                                                               2: AF,
+                                                               3: AWB,
+                                                               4: ACC,
+                                                               5: IAN,
+                                                               6: WL,
                                                                others: reserved */
 
     /**
@@ -1077,6 +1304,32 @@ typedef struct esp_ipa_ops {
     esp_err_t (*ioctl)(struct esp_ipa *ipa, uint32_t cmd, void *data);
 
     /**
+     * @brief Write this module's computed state into @p state.
+     *
+     * NULL when the module has nothing to persist.
+     */
+    void (*state_get)(struct esp_ipa *ipa, struct esp_ipa_state *state);
+
+    /**
+     * @brief Check this module's slice of @p state.
+     *
+     * NULL when the module has nothing to persist. The pipeline calls this on
+     * every such module before any state_set.
+     */
+    esp_err_t (*state_check)(struct esp_ipa *ipa, const struct esp_ipa_state *state,
+                             const esp_ipa_sensor_t *sensor);
+
+    /**
+     * @brief Restore this module from @p state.
+     *
+     * Copy the state into the module and write this module's ISP parameters
+     * into @p metadata. Statistics are not used. state_check has already
+     * accepted @p state.
+     */
+    void (*state_set)(struct esp_ipa *ipa, const struct esp_ipa_state *state,
+                      const esp_ipa_sensor_t *sensor, esp_ipa_metadata_t *metadata);
+
+    /**
      * @brief Free all resources allocated by IPA.
      *
      * Called for both detect-only objects (e.g. a later detect failed before
@@ -1104,13 +1357,25 @@ typedef struct esp_ipa {
 } esp_ipa_t;
 
 /**
+ * @brief IPA global variable maps.
+ *
+ * int32/float/ptr values are stored in independent typed maps and are not mixed.
+ */
+typedef struct esp_ipa_map {
+    void *int32_map;                        /*!< IPA global int32_t map object pointer */
+    void *float_map;                        /*!< IPA global float map object pointer */
+    void *ptr_map;                          /*!< IPA global void * map object pointer */
+} esp_ipa_map_t;
+
+/**
  * @brief Image process algorithm pipeline object
  */
 typedef struct esp_ipa_pipeline {
     pthread_mutex_t mutex;                  /*!< IPA pipeline mutex */
     const esp_ipa_config_t *config;         /*!< IPA numbers */
     esp_ipa_t **ipa_array;                  /*!< IPA array */
-    void *map;                              /*!< IPA global map object pointer */
+    esp_ipa_map_t map;                      /*!< IPA global variable maps */
+    bool inited;                            /*!< True after a successful init */
 } esp_ipa_pipeline_t;
 
 #ifdef __cplusplus

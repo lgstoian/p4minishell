@@ -9,7 +9,7 @@ import re
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/isp')
 
-import customized, agc, atc, af, ext, acc, aen, adn, ian, awb, common
+import customized, agc, atc, wl, af, ext, acc, aen, adn, dpc, ian, awb, ir, common
 
 JSON_GLOBAL_KEYS = ('version', 'writable', 'description')
 
@@ -65,21 +65,27 @@ class ipa_c(object):
         self.version = version
         self.writable = writable
 
-    def add(self, obj, name, type):
+    def add(self, obj, name, type, sensor=None):
         ipa_unit_lut = {
             'ian': ian.ipa_unit_ian_c,
             'awb': awb.ipa_unit_awb_c,
             'acc': acc.ipa_unit_acc_c,
             'aen': aen.ipa_unit_aen_c,
             'adn': adn.ipa_unit_adn_c,
+            'dpc': dpc.ipa_unit_dpc_c,
             'agc': agc.ipa_unit_agc_c,
             'atc': atc.ipa_unit_atc_c,
+            'wl':  wl.ipa_unit_wl_c,
             'ext': ext.ipa_unit_ext_c,
-            'af':  af.ipa_unit_af_c
+            'af':  af.ipa_unit_af_c,
+            'ir':  ir.ipa_unit_ir_c
         }
 
         if type in ipa_unit_lut:
-            self.decodes.append(ipa_unit_lut[type](obj, name, type))
+            if type == 'ir':
+                self.decodes.append(ipa_unit_lut[type](obj, name, type, sensor))
+            else:
+                self.decodes.append(ipa_unit_lut[type](obj, name, type))
         else:
             if 'customized_ipa_' in type:
                 self.decodes.append(customized.ipa_unit_customized_c(obj, name, type))
@@ -276,8 +282,9 @@ def ipa_config(version, input, output):
                     raise common.fatal_error(f'Duplicated IPA json configuration "description" "{file_description}" for sensor "{k}"')
                 seen_idents.add(ident)
                 ipa = ipa_c(k, version, writable, file_description)
+                sensor_obj = common.dict_object(j[k])
                 for i in j[k]:
-                    ipa.add(common.dict_object(j[k][i]), ipa.name, i)
+                    ipa.add(getattr(sensor_obj, i), ipa.name, i, sensor_obj)
                 ipas.add(ipa)
 
         input_info = common.cfmt_string(f'''

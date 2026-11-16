@@ -17,6 +17,7 @@ idf_component_register(
         filetype
         font
         gfx
+        imgdec
         p4heap
         strutil
 )

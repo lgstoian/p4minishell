@@ -10,6 +10,8 @@
 #include "storage.h"
 #include "p4heap.h"
 #include "gfx.h"
+#include "imgdec.h"
+#include "browser.h"
 #include "command.h"
 #include <string.h>
 #include <stdlib.h>
@@ -20,7 +22,7 @@
  * a VFS mount, so a raw fopen() on it would silently fail. */
 #define BROWSER_HIST_FILE  "sd:/BROWSER.HIST"
 #define BROWSER_BOOK_FILE  "sd:/BROWSER.BOOK"
-#define BROWSER_URL_LEN    512
+#define BROWSER_URL_LEN    P4_CONFIG_BROWSER_URL_BYTES
 #define BROWSER_NAME_LEN   64
 
 /* Bulk tables live in PSRAM, allocated on first use, NOT in .bss: internal
@@ -315,22 +317,40 @@ static uint32_t browser_rgb565_to_rgb888(uint16_t c)
     return (((r * 255) / 31) << 16) | (((g * 255) / 63) << 8) | ((b * 255) / 31);
 }
 
+/* Map one RGB565 pixel to the packed DOS foreground + luminance level (0..9)
+ * the renderer uses to pick a shade glyph. */
+static uint8_t browser_pixel_to_cell(uint16_t c565)
+{
+    uint32_t rgb = browser_rgb565_to_rgb888(c565);
+    uint8_t dos = tui_rgb_to_dos(rgb);
+    int lum = (int)((((rgb >> 16) & 0xFF) * 30 +
+                     ((rgb >> 8) & 0xFF) * 59 +
+                     (rgb & 0xFF) * 11) / 100);
+    int level = lum * 9 / 255;
+
+    if (level < 0) level = 0;
+    if (level > 9) level = 9;
+    return (uint8_t)((dos << 4) | level);
+}
+
 /* Image loader for the renderer: resolve the src against the page URL, fetch
- * (HTTP) or read (SD), decode with the one gfx BMP decoder, and map to DOS
- * cells. Returns false so the renderer falls back to alt text. */
+ * (HTTP) or read (SD), decode through the ONE image path (BMP in gfx, PNG and
+ * JPEG in imgdec), and map to DOS cells. Returns false so the renderer falls
+ * back to alt text. */
 static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
 {
     const char *base = (const char *)ctx;
     char target[1024];
     uint8_t *data = NULL;
     size_t len = 0;
-    gfx_bmp_info_t info;
-    gfx_surface_t surf;
     uint8_t *pixels;
     int w;
     int h;
     int x;
     int y;
+    imgdec_format_t fmt;
+    int native_w = 0;
+    int native_h = 0;
 
     if (src == NULL || out == NULL || !P4_CONFIG_BROWSER_IMAGES) return false;
     memset(out, 0, sizeof(*out));
@@ -345,6 +365,18 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
             snprintf(target, sizeof(target), "%s/%s", base != NULL ? base : "sd:/", src);
         }
     }
+    /* The decoded-cell cache makes a re-render or a back/forward skip BOTH the
+     * fetch and the decode; the grid geometry is fixed by the config, so the
+     * resolved URL is a complete key. */
+    {
+        dom_image_t cached;
+
+        if (browser_image_cache_get(target, &cached)) {
+            *out = cached;
+            return true;
+        }
+    }
+
     if (strncmp(target, "http://", 7) == 0 || strncmp(target, "https://", 8) == 0) {
         networking_http_result_t result;
         memset(&result, 0, sizeof(result));
@@ -360,13 +392,14 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
         free(data);
         return false;
     }
-    memset(&info, 0, sizeof(info));
-    if (!gfx_bmp_parse_header_ex(data, len, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H)) {
+    fmt = imgdec_probe(data, len, &native_w, &native_h);
+    if (fmt == IMGDEC_FMT_UNKNOWN) {
         free(data);
         return false;
     }
-    w = info.w;
-    h = info.h;
+    /* Fit the native size to the TUI image budget. */
+    w = native_w > 0 ? native_w : 1;
+    h = native_h > 0 ? native_h : 1;
     if (w > P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH) {
         h = h * P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH / w;
         w = P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH;
@@ -377,38 +410,63 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
     }
     if (w < 1) w = 1;
     if (h < 1) h = 1;
-    memset(&surf, 0, sizeof(surf));
-    if (!gfx_bmp_decode_scaled_565(data, len, &info, w, h, &surf)) {
-        free(data);
-        return false;
-    }
+
     pixels = malloc((size_t)w * (size_t)h);
     if (pixels == NULL) {
-        gfx_surface_free(&surf);
         free(data);
         return false;
     }
-    for (y = 0; y < h; y++) {
-        for (x = 0; x < w; x++) {
-            uint16_t c = gfx_surface_get(&surf, x, y);
-            uint32_t rgb = browser_rgb565_to_rgb888(c);
-            uint8_t dos = tui_rgb_to_dos(rgb);
-            /* Pack the DOS foreground and the luminance-ramp level (0..9) so
-             * the renderer can pick a shade glyph without a local palette. */
-            int lum = (int)((((rgb >> 16) & 0xFF) * 30 +
-                             ((rgb >> 8) & 0xFF) * 59 +
-                             (rgb & 0xFF) * 11) / 100);
-            int level = lum * 9 / 255;
-            if (level < 0) level = 0;
-            if (level > 9) level = 9;
-            pixels[y * w + x] = (uint8_t)((dos << 4) | level);
+    if (fmt == IMGDEC_FMT_PNG || fmt == IMGDEC_FMT_JPEG) {
+        imgdec_image_t img;
+
+        if (!imgdec_decode_scaled(data, len, w, h, &img)) {
+            free(pixels);
+            free(data);
+            return false;
         }
+        for (y = 0; y < h; y++) {
+            for (x = 0; x < w; x++) {
+                pixels[y * w + x] = browser_pixel_to_cell(img.pixels[y * w + x]);
+            }
+        }
+        imgdec_free(&img);
+        free(data);
+        out->width = w;
+        out->height = h;
+        out->pixels = pixels;
+        browser_image_cache_put(target, out);
+        return true;
     }
-    gfx_surface_free(&surf);
+
+    /* BMP: the strict gfx path. */
+    {
+        gfx_bmp_info_t info;
+        gfx_surface_t surf;
+
+        memset(&info, 0, sizeof(info));
+        if (!gfx_bmp_parse_header_ex(data, len, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H)) {
+            free(pixels);
+            free(data);
+            return false;
+        }
+        memset(&surf, 0, sizeof(surf));
+        if (!gfx_bmp_decode_scaled_565(data, len, &info, w, h, &surf)) {
+            free(pixels);
+            free(data);
+            return false;
+        }
+        for (y = 0; y < h; y++) {
+            for (x = 0; x < w; x++) {
+                pixels[y * w + x] = browser_pixel_to_cell(gfx_surface_get(&surf, x, y));
+            }
+        }
+        gfx_surface_free(&surf);
+    }
     free(data);
     out->width = w;
     out->height = h;
     out->pixels = pixels;
+    browser_image_cache_put(target, out);
     return true;
 }
 
@@ -448,6 +506,15 @@ static void browser_run_onload(dom_node_t *node)
     }
 }
 
+static void browser_page_present(void)
+{
+    tui_page_render();
+    tui_address_bar_render();
+    tui_status_bar_set(" links ");
+    tui_status_bar_render();
+    tui_flush();
+}
+
 static void browser_page_render(void)
 {
     dom_render_ops_t ops;
@@ -470,11 +537,7 @@ static void browser_page_render(void)
     ops.tui = true;
     ops.base_url = s_page_base;
     dom_render_tree(s_page_tree, &ops);
-    tui_page_render();
-    tui_address_bar_render();
-    tui_status_bar_set(" links ");
-    tui_status_bar_render();
-    tui_flush();
+    browser_page_present();
 }
 
 int browser_render_html(const char *html, const char *base_url) {
@@ -484,6 +547,7 @@ int browser_render_html(const char *html, const char *base_url) {
     if (html == NULL) {
         return 1;
     }
+    browser_cache_init();
     tree = dom_parse(html);
     if (tree == NULL) {
         return 1;
@@ -525,6 +589,9 @@ int browser_render_html(const char *html, const char *base_url) {
         jsengine_set_dom_tree(NULL);
     }
     browser_page_render();
+    /* Remember the rendered page so back/forward restores it from PSRAM by
+     * memcpy instead of re-fetching, re-parsing and re-rendering. */
+    browser_page_cache_put(base_url != NULL ? base_url : "");
     return 0;
 }
 
@@ -622,6 +689,20 @@ static int browser_load_url(const char *url) {
     const char *auth_pass = NULL;
     networking_http_result_t result;
 
+    /* A cached page restores instantly - no fetch, parse or render - for both
+     * http(s) and sd:/ pages. The viewport must exist for the snapshot restore
+     * to have somewhere to land. */
+    if (!tui_is_active() && tui_ready()) {
+        (void)tui_init();
+    }
+    if (tui_viewport_get_page_rows() <= 0) {
+        tui_viewport_init(P4_CONFIG_TUI_PAGE_ROWS);
+    }
+    if (browser_page_cache_get(url)) {
+        browser_page_present();
+        return 0;
+    }
+
     /* Anything that is not http(s) is an SD path: render it locally. */
     if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0) {
         return browser_load_file(url);
@@ -660,6 +741,7 @@ static int browser_load_url(const char *url) {
 }
 
 int shell_command_browser(int argc, char **argv) {
+    browser_cache_init();
     if (argc < 2) {
         shell_print_usage("browser <url|file> | browser back | browser forward | browser js <id> | browser css | browser bookmark [add|del|list]");
         return 2;
@@ -694,6 +776,20 @@ int shell_command_browser(int argc, char **argv) {
         }
         return 0;
     }
+    if (strcmp(argv[1], "cache") == 0) {
+        if (argc >= 3 && strcmp(argv[2], "clear") == 0) {
+            browser_image_cache_clear();
+            browser_page_cache_clear();
+            shell_print_ok("browser: caches cleared");
+            return 0;
+        }
+        shell_transcript_appendf("browser cache: %d image(s) %u bytes; %d page(s) %u bytes\n",
+                                 browser_image_cache_count(),
+                                 (unsigned)browser_image_cache_bytes(),
+                                 browser_page_cache_count(),
+                                 (unsigned)browser_page_cache_bytes());
+        return 0;
+    }
     if (strcmp(argv[1], "back") == 0) {
         const char *url = browser_back();
         if (url && url[0]) {
@@ -705,6 +801,27 @@ int shell_command_browser(int argc, char **argv) {
     if (strcmp(argv[1], "forward") == 0) {
         const char *url = browser_forward();
         if (url && url[0]) {
+            return browser_load_url(url);
+        }
+        shell_print_error("No history");
+        return 1;
+    }
+    if (strcmp(argv[1], "swipe") == 0) {
+        /* Gesture entry point: a left swipe goes forward, a right swipe back
+         * (the same convention as the LVGL gesture events on the panel path).
+         * Batch-callable, so a script can drive navigation from a swipe. */
+        const char *dir = (argc >= 3) ? argv[2] : "back";
+        const char *url;
+
+        if (strcmp(dir, "back") == 0) {
+            url = browser_back();
+        } else if (strcmp(dir, "forward") == 0) {
+            url = browser_forward();
+        } else {
+            shell_print_usage("browser swipe <back|forward>");
+            return 2;
+        }
+        if (url != NULL && url[0] != '\0') {
             return browser_load_url(url);
         }
         shell_print_error("No history");

@@ -580,11 +580,14 @@
  * Browser
  * ======================================================================== */
 
-/** Maximum browser history entries. */
-#define P4_CONFIG_BROWSER_HISTORY_MAX           8
+/** Maximum browser history entries (each carries its page title). */
+#define P4_CONFIG_BROWSER_HISTORY_MAX           150
 
 /** Maximum browser bookmarks. */
-#define P4_CONFIG_BROWSER_BOOKMARK_MAX          8
+#define P4_CONFIG_BROWSER_BOOKMARK_MAX          32
+
+/** Maximum length of a browser URL or file path. */
+#define P4_CONFIG_BROWSER_URL_BYTES             512
 
 /** Maximum bytes for an image download in the browser. */
 #define P4_CONFIG_BROWSER_IMAGE_MAX_BYTES       (64 * 1024)
@@ -597,12 +600,31 @@
 
 /** Maximum total in-page JavaScript bytes per page. */
 #define P4_CONFIG_BROWSER_JS_MAX_BYTES          (16 * 1024)
-
 /** Enable in-page `<script>` execution in the browser (0/1). */
 #define P4_CONFIG_BROWSER_JS                    1
 
 /** Enable `<img>` fetching/decoding in the browser (0/1). */
 #define P4_CONFIG_BROWSER_IMAGES                1
+
+/** Decoded images kept in the browser's PSRAM image cache. A hit skips both the
+ *  network fetch and the decode, which is what makes back/forward and re-renders
+ *  cheap. Each entry is at most IMAGE_MAX_WIDTH * IMAGE_MAX_HEIGHT bytes. */
+#define P4_CONFIG_BROWSER_IMAGE_CACHE_MAX       256
+
+/** Rendered pages kept in the browser's PSRAM back/forward cache. A hit restores
+ *  the cell grid and link regions by memcpy - no fetch, parse or render. */
+#define P4_CONFIG_BROWSER_PAGE_CACHE_MAX        6
+
+/** Arena block size for parsed DOM nodes (PSRAM). A page builds hundreds of
+ *  ~3.6 KB nodes; handing them from a few large blocks keeps the heap out of it. */
+#define P4_CONFIG_DOM_ARENA_BLOCK_BYTES         (256 * 1024)
+
+/** Upper bound on arena memory per parsed document. Past it, nodes fall back to
+ *  plain calloc so a pathological page still renders instead of failing. */
+#define P4_CONFIG_DOM_ARENA_LIMIT_BYTES         (4 * 1024 * 1024)
+
+/** Hard cap on DOM nodes per parsed document, arena or not. */
+#define P4_CONFIG_DOM_MAX_NODES                 20000
 
 /* ========================================================================
  * Event Bus
@@ -792,6 +814,18 @@
  * ~2.8 MB; this covers the Tab5's own screenshots with headroom while
  * keeping the staging buffer bounded). */
 #define P4_CONFIG_IMAGE_MAX_BYTES               (4 * 1024 * 1024)
+
+/** Native pixel cap for PNG/JPEG decode (`components/imgdec`). The native
+ *  decode is held in LVGL's allocator (LodePNG's `lodepng_malloc` maps to
+ *  `lv_malloc`), so this bounds the RGBA/RGB888 staging buffer; the scaled
+ *  RGB565 output is PSRAM. Images larger than this are refused rather than
+ *  exhausting internal RAM. */
+#define P4_CONFIG_IMGDEC_MAX_W                  512
+#define P4_CONFIG_IMGDEC_MAX_H                  512
+
+/** Largest PNG/JPEG file the image path will ingest (covers the browser's
+ *  image cap and a generous web graphic). */
+#define P4_CONFIG_IMGDEC_MAX_BYTES              (1024 * 1024)
 
 /** Show the viewer fit-to-screen (1) or at native size only (0). */
 #define P4_CONFIG_IMAGE_VIEWER_FIT              1
@@ -1113,6 +1147,29 @@
 /** Guard window before a subscription is eligible for another background poll. */
 #define P4_CONFIG_RSS_POLL_OVERLAP_MS        2000
 
+/** Stack size of the background feed poller task. The fetch path stacks the
+ *  HTTP client, the expat parser and the store save (a 1.4 KB subscription copy
+ *  plus the feed struct), which needs well over 8 KB. The stack is allocated in
+ *  PSRAM (see rss_store_start_poller) so enabling autopoll does not consume the
+ *  internal DRAM every other subsystem competes for. */
+#define P4_CONFIG_RSS_POLLER_TASK_STACK      16384
+
+/** Maximum read/unread item guids retained per feed. Older entries are evicted
+ *  FIFO so the read-state store stays bounded; a guid that has been evicted
+ *  reads as unread again. */
+#define P4_CONFIG_RSS_READ_MAX               200
+
+/** Line capacity for the subscription / read-state stores. Records are
+ *  pipe-separated; a line that would exceed this is rejected, never split.
+ *  Sized for the worst-case record: every field at its P4_CONFIG_RSS_* cap
+ *  plus the separators. */
+#define P4_CONFIG_RSS_STORE_LINE_BYTES       1536
+
+/** SD directory holding the subscription and read-state stores. */
+#define P4_CONFIG_RSS_STORE_DIR              "sd:/RSS"
+#define P4_CONFIG_RSS_SUBS_FILE              P4_CONFIG_RSS_STORE_DIR "/SUBS.INI"
+#define P4_CONFIG_RSS_READ_FILE              P4_CONFIG_RSS_STORE_DIR "/READING"
+
 /* ========================================================================
  * PING AND DNS
  * ========================================================================
@@ -1311,6 +1368,17 @@
 /** Chunk size for streaming HTTP reads. */
 #define P4_CONFIG_HTTP_STREAM_CHUNK         4096
 
+/** Transient-failure retries for the buffered HTTP GET (a timeout or a 5xx).
+ *  0 disables retrying. Each retry waits `P4_CONFIG_HTTP_RETRY_DELAY_MS`. */
+#define P4_CONFIG_HTTP_MAX_RETRIES          2
+
+/** Delay between HTTP retries (milliseconds). */
+#define P4_CONFIG_HTTP_RETRY_DELAY_MS       500
+
+/** Default directory the `download` verb writes into (`sd:/<name>/`). The
+ *  browser and the app store also use it as the public download location. */
+#define P4_CONFIG_DOWNLOAD_DIR_NAME         "DOWNLOAD"
+
 /* ========================================================================
  * TLS TRUST STORE (sd:/CERTS)
  * ========================================================================
@@ -1415,6 +1483,14 @@
 
 /** BLE device name used during advertising. */
 #define P4_CONFIG_BLUETOOTH_DEVICE_NAME      "P4MiniShell BLE"
+
+/** Host-init retry count for the hosted NimBLE stack. The C6 BT controller is
+ *  brought up over the same SDIO link as Wi-Fi and can still be settling when
+ *  the first attempt runs; one bounded retry absorbs that. 0 disables it. */
+#define P4_CONFIG_BT_INIT_RETRIES            1
+
+/** Delay between hosted NimBLE host-init attempts (milliseconds). */
+#define P4_CONFIG_BT_INIT_RETRY_DELAY_MS     500
 
 /** Maximum number of BLE scan results to report. */
 #define P4_CONFIG_BLUETOOTH_DISCOVERY_LIMIT  16
@@ -1943,6 +2019,32 @@
 #define P4_CONFIG_PKG_MAX_ENTRIES            48
 #define P4_CONFIG_PKG_MANIFEST_BYTES         16384
 #define P4_CONFIG_PKG_LINE_BYTES             512
+
+/** Single-file bundle archive extension. A `.PKG` is a ZIP container whose
+ *  entries mirror the `PKGS/<APP>/` directory layout (`<APP>/<APP>.ASSETS`,
+ *  `<APP>/<APP>.APPINFO`, and the payload files). `pkg install <APP>` unpacks
+ *  it into `PKGS/<APP>/` through the ONE ZIP reader (`components/zip`) and
+ *  then runs the ordinary directory-bundle flow; `pkg unpack <APP>` does only
+ *  the unpack. (Distinct from the `NATIVE/<APP>.P4X` native payload blob,
+ *  which is never executed — see ABI.md §1.) See docs/native_packaging.md. */
+#define P4_CONFIG_PKG_ARCHIVE_EXT            ".PKG"
+
+/** Staging directory under `PKGS/`. Atomic installs back up each destination
+ *  file here before overwriting it and restore the backup if the install
+ *  fails; `pkg unpack` also uses it while materialising an archive. */
+#define P4_CONFIG_PKG_STAGING_DIR_NAME       ".installing"
+
+/** Maximum `services=` dependency entries a bundle may declare (additive
+ *  APPINFO metadata; enforced at install, reported by `pkg info`). */
+#define P4_CONFIG_PKG_MAX_SERVICES           8
+
+/** Longest backup name inside a staging slot (path separators flattened). */
+#define P4_CONFIG_PKG_BACKUP_NAME_BYTES      96
+
+/** App-store index URL for the `store` verb (empty disables it). The index is
+ *  a JSON `apps[]` document; each entry's `bpk_url` is downloaded to
+ *  `PKGS/<id>.PKG` and installed through the ordinary bundle flow. */
+#define P4_CONFIG_STORE_INDEX_URL            ""
 
 /** Native-app ABI tag (see ABI.md). `pkg install` warns
  *  when a native/hybrid bundle's `abi=` differs; execution refuses. */

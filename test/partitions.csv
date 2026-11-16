@@ -1,7 +1,8 @@
 # Name,   Type, SubType, Offset,  Size, Flags
 # Unit-test image: the suite links every component, so give the app partition
 # comfortable headroom (the default single-app table caps factory at 1 MB and
-# the suite had reached 0% free).
+# the suite had reached 0% free; 2 MB was reached once the RSS reader landed).
+# The test image flashes a 4 MB layout, so 3 MB still fits.
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, ,        2M,
+factory,  app,  factory, ,        3M,

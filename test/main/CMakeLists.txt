@@ -51,6 +51,7 @@ idf_component_register(
         test_audio.c
         test_json.c
         test_gfx.c
+        test_imgdec.c
         test_csv.c
         test_import.c
         test_pim.c
@@ -64,6 +65,8 @@ idf_component_register(
         test_netsvc.c
         test_userial.c        test_asset.c
         test_pkg.c
+        test_rss_store.c
+        test_browser_cache.c
         test_epub.c
         test_chat.c
         test_cas.c
@@ -87,6 +90,8 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/../components/batch"
         "${CMAKE_SOURCE_DIR}/../components/command"
         "${CMAKE_SOURCE_DIR}/../components/pim"
+        "${CMAKE_SOURCE_DIR}/../components/rss/include"
+        "${CMAKE_SOURCE_DIR}/../components/browser/include"
         "${CMAKE_SOURCE_DIR}/../components/networking"
         "${CMAKE_SOURCE_DIR}/../components/editor"
         "${CMAKE_SOURCE_DIR}/../components/keyboard"
@@ -142,6 +147,7 @@ idf_component_register(
         json
         rss
         mcp
+        browser
         esp_timer
         mbedtls
 )

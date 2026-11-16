@@ -1,4 +1,4 @@
-# Native-App Packaging Spec (v1.2 — hybrid launch + signed manifests)
+# Native-App Packaging Spec (v1.3 — ZIP bundles + staged installs)
 
 How an SD-deployable app is described, verified, installed, and launched with
 the `pkg` system. **Every** app launches through a `*.bat` file; the work
@@ -8,20 +8,34 @@ execution** — the `.P4X`/`.bin` payload is a verified data blob (see
 [`ABI.md`](../ABI.md) §1). This document is the packaging walk-through; the
 frozen contract is `ABI.md`.
 
-- **Packaging spec:** v1.2 (firmware v1.2.1) · **Target:** ESP32-P4 + ESP32-C6
+- **Packaging spec:** v1.3 (firmware v1.4.2) · **Target:** ESP32-P4 + ESP32-C6
 - Related: [`ABI.md`](../ABI.md) (the contract), [`command.md`](../command.md)
-  (`pkg`, `asset`, `launch`), [`SDK.md`](../SDK.md) (applib ABI),
-  `tools/pkg_sign.py`, `apps/push_pkgs.py`.
+  (`pkg`, `asset`, `store`, `launch`), [`SDK.md`](../SDK.md) (applib ABI),
+  `tools/pkg_sign.py`, `tools/make_pkg.py`, `apps/push_pkgs.py`.
 
 ## 1. Bundle layout
 
+A bundle is either a **directory** or a **single-file archive**:
+
 ```
-PKGS/<APP>/
+PKGS/<APP>/                 (directory bundle)
   <APP>.APPINFO      INI metadata (see §2)
   <APP>.ASSETS       path=HEXCRC lines + optional SIGN= line (see §4)
   <APP>.BAT          the launch shim (batch and hybrid apps)
   ...                optional payloads (data, native blob, docs)
+
+PKGS/<APP>.PKG              (archive bundle: a ZIP container)
+  <APP>/<APP>.APPINFO
+  <APP>/<APP>.ASSETS
+  <APP>/<path>       each payload at its install-relative path
 ```
+
+The `.PKG` entries mirror the directory layout; the leading `<APP>/` is
+optional (an archive whose entries sit at the root unpacks the same way).
+`pkg install <APP>` prefers the directory bundle and falls back to the archive,
+unpacking it into `PKGS/<APP>/` through the **ONE** ZIP reader
+(`components/zip`); `pkg unpack <APP>` does only the unpack. `pkg scan [dir]`
+lists both forms. Host tool: `tools/make_pkg.py`.
 
 Payload convention: an optional native blob lives at `NATIVE/<APP>.P4X`
 (uppercase app name, matching `asset_app_ok`). Every file must be
@@ -38,6 +52,7 @@ its install-relative path and the `.APPINFO`/`.ASSETS` into `APPS/`.
 | `arch` | hybrid/native | `esp32p4` |
 | `entry` | hybrid/native | C entry name the shim/dispatcher invokes; hybrid bundles MUST set it |
 | `handles`, `setup`, `autostart`, `alias`, `data`, `requires`, `min_fw` | no | Registration keys, same as batch apps (see [`ABI.md`](../../ABI.md) §3) |
+| `services` | no | Comma-separated dependency list (`APP>=1.2`, `APP=2`, `APP>3`, or a bare `APP` = any version). Enforced at install: every declared service must be installed and satisfy its version. Reported by `pkg info`. Additive metadata — no ABI bump. |
 
 ```ini
 title=Hello Native
@@ -49,13 +64,23 @@ arch=esp32p4
 entry=hello
 ```
 
-## 3. Install / verify / remove semantics (v1.2)
+## 3. Install / verify / remove semantics (v1.3)
 
 - `pkg install <app> [/signed] [/force]`: version/dependency gates, then the
-  two-pass flow (verify-then-copy over `shell_fs_copy_file`). Pass 1 checks CRCs
-  **and** the manifest trust verdict (see §4); a BAD signature aborts before
-  any copy. Downgrades refuse without `/force`; `requires=`/`min_fw=` always
-  hold. Pass 2 copies payloads, then metadata + manifest.
+  two-pass flow. Pass 1 checks CRCs **and** the manifest trust verdict (see
+  §4); a BAD signature aborts before any copy. Downgrades refuse without
+  `/force`; `requires=`/`min_fw=`/`services=` always hold.
+- **Staged, atomic install.** Pass 2 builds the full operation list (payloads,
+  then `.APPINFO`, then `.ASSETS`), backs up every existing destination under
+  `PKGS/.installing/<APP>/`, then installs each file atomically (copy to
+  `<dst>.tmp`, then `storage_replace_file()` rename). If any step fails the
+  backups are restored and the staging slot is removed, so a failed install
+  leaves the previous version intact. Backups are best-effort: a file that
+  cannot be backed up is still installed (the backup is a safety net, not a
+  gate).
+- `pkg unpack <app>`: unpack `PKGS/<APP>.PKG` into `PKGS/<APP>/` only.
+- `pkg scan [dir]`: list `.PKG` archives and bundle directories (default
+  `PKGS/`).
   - `type=batch` installs as before.
   - `type=hybrid` requires `entry=`; install reports
     `pkg: <app> is hybrid (launch <app> runs <app>.BAT into <entry>)`.
@@ -90,7 +115,27 @@ pkg key install mykey.pub.bin
 pkg install MYAPP /signed
 ```
 
-## 5. Future: true native execution
+## 5. App store (`store` verb)
+
+`store url | list | install <id>` is a thin remote-app-store client over the
+shared networking stack (`store_commands.c`). The index URL is the compile-time
+`P4_CONFIG_STORE_INDEX_URL` (empty disables the verb). The index is a JSON
+`apps[]` document:
+
+```json
+{ "apps": [ { "package_name": "demo", "latest_version": "1.0",
+              "app_name": {"en": "Demo"},
+              "bpk_url": "https://host/demo.PKG" } ] }
+```
+
+`store list` fetches and prints `id | version | name`; `store install <id>`
+streams the entry's `bpk_url` to `PKGS/<id>.PKG` (via
+`networking_http_get_stream()`, no second HTTP client) and then installs it
+through the ordinary `pkg install` path. There is no second package format, no
+second JSON parser (`json_walk()` is the ONE reader), and no second
+dispatcher.
+
+## 6. Future: true native execution
 
 Running unmodified SD code needs a dynamic linker/relocator and per-app
 memory protection, which this bare-metal ESP-IDF target does not provide

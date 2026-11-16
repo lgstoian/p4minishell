@@ -1,0 +1,5 @@
+dependencies:
+  esp_video:
+    version: '>=0.1.0'
+  espressif/esp_board_manager: '*'
+  idf: '>=5.3'

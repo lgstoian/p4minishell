@@ -1,3 +1,37 @@
+## 2.5.0
+
+- Added AGC, AF, and AWB runtime ioctl commands in this component's headers and prebuilt libraries: `ESP_IPA_AGC_S/G_METER_LUMA_WEIGHT`, `ESP_IPA_AGC_S_RESET_METER_WEIGHT`, `ESP_IPA_AGC_S/G_METER_TARGET_OFFSET`, `ESP_IPA_AF_S/G_WINDOWS`, `ESP_IPA_AF_S/G_WINDOW_WEIGHT`, `ESP_IPA_AF_S_RESET`, `ESP_IPA_AWB_S_CT`, and `ESP_IPA_AWB_S_RESET`. `esp_video` links this tree through `override_path`
+- Changed `esp_ipa_awb_set_fixed_ct` to wrap `ESP_IPA_AWB_S_CT`: exact preset match when present, otherwise mired interpolation between presets (clamped to the table ends). Previously only exact preset match was accepted (`ESP_ERR_INVALID_ARG` between presets)
+- Documented AF `S_WINDOWS` contract: statistics-window pixels, each edge in 0..4094, no automatic check against the current sensor frame size
+- Added ESP-IDF 6.0+ support for ESP32-P4 revisions below v3.0
+- Added optional AWB model 2 `startup_zone` and `startup_hold_frames` to initialize gains and CT from a selected zone and hold startup WBG while AWB calculation continues; normal startup is preserved when omitted
+- Updated AWB model 2 reference counters with low white-point counts to reduce stale statistics that delay recovery after lens occlusion
+- Added support for the DPC (Defective Pixel Correction) control algorithm
+- Added the WL (white light) algorithm to switch the white fill light from environment luma
+- WL locks AWB to the fill light CT by `ESP_IPA_AWB_S_CT` out of day, and releases it by `ESP_IPA_AWB_S_RESET` in day
+- IR: added day/night IR mode switching from environment luma, with AWB G/R checked only when `esp_ipa_sensor_t::ir_led_on` is true (a G/R of 0 skips that check); hold time and enter/exit delay still apply
+- IR: day/night switching uses the `luma_env` variable. Model 0 parameters are `model0_param`
+    - A bright night frame starts leaving only when AWB statistics are present and both R and G are non-zero. Missing AWB, R=0, or G=0 stays in night
+    - `day_keep_time_us` / `night_keep_time_us` is how long the leave condition must hold. `day_switch_night_time_us` / `night_switch_day_time_us` is the transition after the switch starts
+    - The switch to night stops AWB, IAN color-temperature estimation, CCM and saturation, then writes `night_awb`, `night_ccm`, `night_red_gain`, `night_blue_gain` and saturation `0`. Entering day starts those modules again so each one republishes. IR no longer stores the previous saturation
+    - Omitted `luma_env` defaults to `env.luma.avg`. JSON `null` and the string `"NULL"` generate C `NULL`, and that frame has no luma
+    - `esp_ipa_pipeline_process()` callers must keep uploading real-time ISP statistics every cycle. With the default `env.luma.avg`, a stalled AE feed can advance IR hold timing on stale luma
+- Documented that `esp_ipa_pipeline_process()` callers must keep uploading real-time ISP statistics every cycle; IPA may update statistics parameters from configuration, but the statistics stream must not stop (IR default `env.luma.avg` can otherwise advance hold timing on stale luma)
+- Added APIs to get and set IPA pipeline running state
+    - `esp_ipa_pipeline_get_state` and `esp_ipa_pipeline_set_state` require the same IPA configuration at both calls. Do not call `esp_ipa_pipeline_set_config` to change parameters between them: state does not store the configuration, and a different config makes `set_state` write wrong ISP parameters
+- Pipeline global variables: `esp_ipa_map_t` owns typed maps (`int32_map` / `float_map` / `ptr_map`); independent C++ map implementations (no uint32_t type-punning); added `esp_ipa_has_int32_var` / `esp_ipa_has_float_var` / `esp_ipa_has_ptr_var` while keeping `esp_ipa_has_var`
+- ACC CCM: publish `IPA_METADATA_FLAGS_CCM` only when the gain-blended matrix differs from the last published CCM
+- ACC LSC: init still applies a table, but leaves the gain/CT lookup uncommitted so the first process publishes the table selected by the real CT
+- AGC meter: the high luma bound is exclusive (`< high`) for both block luma and environment luma
+- AWB model 3: publish red/blue gain on any real change (step `1e-4`) instead of `min_*_gain_step`, and write the active preset CT into the pipeline `ct` variable during process
+- IAN: when AWB model 3 is active, `cal_ct` does not overwrite the fixed color temperature
+- Added APIs to get and set IPA pipeline running state
+    - `esp_ipa_pipeline_get_state` and `esp_ipa_pipeline_set_state` require the same IPA configuration at both calls. Do not call `esp_ipa_pipeline_set_config` to change parameters between them: state does not store the configuration, and a different config makes `set_state` write wrong ISP parameters
+- ACC: added `ESP_IPA_ACC_S_SAT_STATUS` / `ESP_IPA_ACC_G_SAT_STATUS` to stop or resume saturation updates (`0` stops, non-zero runs; default is running). Stopping does not clear the last saturation. Resuming sets the saturation index to `-1`, so the next process publishes the table value
+- ACC: added `ESP_IPA_ACC_S_CCM_STATUS` / `ESP_IPA_ACC_G_CCM_STATUS` to stop or resume CCM the same way
+- AWB: added `ESP_IPA_AWB_S_STATUS` / `ESP_IPA_AWB_G_STATUS`. Resuming clears the applied statistics window and white-balance gain so the next process publishes them again
+- IAN: added `ESP_IPA_IAN_S_CT_STATUS` / `ESP_IPA_IAN_G_CT_STATUS` for color-temperature estimation. Luma estimation keeps running. Resuming sets the color-temperature index to `-1`
+
 ## 2.4.0
 
 - Added `esp_ipa_pipeline_set_config(handle, config, sensor, metadata)` to rebuild IPA modules from a new `esp_ipa_config_t` (not thread-safe): create a temporary pipeline (IPA + map), run `init` into `metadata`, swap `ipa_array`/`map`/`config` into the caller's handle, then destroy the temporary pipeline (which now owns the old modules); on failure destroy the temporary pipeline and leave the handle unchanged

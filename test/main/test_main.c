@@ -611,6 +611,19 @@ extern void test_asset_parse_skip(void);
 extern void test_asset_parse_bad(void);
 extern void test_pkg_app_name_from_appinfo_ok(void);
 extern void test_pkg_app_name_from_appinfo_bad(void);
+extern void test_rss_store_name_ok(void);
+extern void test_rss_store_record_roundtrip(void);
+extern void test_rss_store_record_no_auth(void);
+extern void test_rss_store_record_rejects(void);
+extern void test_rss_store_render_rejects_separator(void);
+extern void test_rss_store_read_line(void);
+extern void test_rss_store_directives(void);
+extern void test_browser_image_cache_roundtrip(void);
+extern void test_browser_image_cache_miss_and_null(void);
+extern void test_browser_image_cache_refresh_in_place(void);
+extern void test_browser_image_cache_lru_eviction(void);
+extern void test_browser_image_cache_clear(void);
+extern void test_browser_page_cache_degrades_without_a_page(void);
 extern void test_pkg_sign_line(void);
 extern void test_pkg_sign_canonical(void);
 extern void test_pkg_sign_hash(void);
@@ -620,6 +633,9 @@ extern void test_pkg_sign_stock_manifest(void);
 extern void test_pkg_version_compare(void);
 extern void test_pkg_requires_parse(void);
 extern void test_pkg_sanitize_pipe_field(void);
+extern void test_pkg_services_parse(void);
+extern void test_store_path_parse(void);
+extern void test_imgdec_probe_all(void);
 extern void test_theme_registry(void);
 extern void test_theme_lookup(void);
 extern void test_theme_set_and_active(void);
@@ -1448,6 +1464,35 @@ void app_main(void)
     RUN_TEST(test_pkg_version_compare);
     RUN_TEST(test_pkg_requires_parse);
     RUN_TEST(test_pkg_sanitize_pipe_field);
+    RUN_TEST(test_pkg_services_parse);
+    RUN_TEST(test_store_path_parse);
+    UNITY_END();
+
+    /* RSS store: pure record editors + CONFIG.SYS directive parser. */
+    UNITY_BEGIN();
+    RUN_TEST(test_rss_store_name_ok);
+    RUN_TEST(test_rss_store_record_roundtrip);
+    RUN_TEST(test_rss_store_record_no_auth);
+    RUN_TEST(test_rss_store_record_rejects);
+    RUN_TEST(test_rss_store_render_rejects_separator);
+    RUN_TEST(test_rss_store_read_line);
+    RUN_TEST(test_rss_store_directives);
+
+    /* Browser PSRAM caches: image round-trip/miss/LRU/clear and the page cache's
+     * no-page degradation path. */
+    UNITY_BEGIN();
+    RUN_TEST(test_browser_image_cache_roundtrip);
+    RUN_TEST(test_browser_image_cache_miss_and_null);
+    RUN_TEST(test_browser_image_cache_refresh_in_place);
+    RUN_TEST(test_browser_image_cache_lru_eviction);
+    RUN_TEST(test_browser_image_cache_clear);
+    RUN_TEST(test_browser_page_cache_degrades_without_a_page);
+    UNITY_END();
+    UNITY_END();
+
+    /* Image decode probe (imgdec component). */
+    UNITY_BEGIN();
+    RUN_TEST(test_imgdec_probe_all);
     UNITY_END();
 
     /* Theme registry (font component). */

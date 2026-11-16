@@ -350,6 +350,162 @@ static esp_err_t portal_connect_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ---- JSON provisioning API (programmatic clients) ---- */
+
+/** Last provisioning status reported by `GET /api/wifi/status`. */
+static char s_portal_status[32] = "idle";
+static char s_portal_status_error[64] = "";
+
+/** JSON-escape a string into @p out (bounded). Returns bytes written. */
+static size_t portal_json_escape(const char *in, char *out, size_t out_size)
+{
+    size_t o = 0;
+
+    if (in == NULL || out == NULL || out_size == 0) {
+        return 0;
+    }
+    while (*in != '\0' && o + 2 < out_size) {
+        unsigned char c = (unsigned char)*in++;
+
+        if (c == '"' || c == '\\') {
+            out[o++] = '\\';
+            out[o++] = (char)c;
+        } else if (c == '\n' || c == '\r' || c == '\t') {
+            out[o++] = (c == '\n') ? 'n' : (c == '\r') ? 'r' : 't';
+            if (o > 0) {
+                out[o - 1] = '\\';
+                out[o++] = (c == '\n') ? 'n' : (c == '\r') ? 'r' : 't';
+            }
+        } else {
+            out[o++] = (char)c;
+        }
+    }
+    out[o] = '\0';
+    return o;
+}
+
+/** GET /api/wifi/scan -> `[{"ssid":"...","rssi":-42,"locked":true}, ...]`. */
+static esp_err_t portal_api_scan_handler(httpd_req_t *req)
+{
+    wifi_ap_record_t records[P4_CONFIG_WIFI_SCAN_LIMIT];
+    int count = networking_wifi_scan_records(records, P4_CONFIG_WIFI_SCAN_LIMIT);
+    char body[1024];
+    size_t o = 0;
+    int i;
+
+    if (count < 0) {
+        count = 0;
+    }
+    o += (size_t)snprintf(body + o, sizeof(body) - o, "[");
+    for (i = 0; i < count && o + 80 < sizeof(body); i++) {
+        char esc[64];
+        const char *ssid = (records[i].ssid[0] != '\0')
+                               ? (const char *)records[i].ssid : "";
+        bool locked = (records[i].authmode != WIFI_AUTH_OPEN);
+
+        portal_json_escape(ssid, esc, sizeof(esc));
+        o += (size_t)snprintf(body + o, sizeof(body) - o,
+                              "%s{\"ssid\":\"%s\",\"rssi\":%d,\"locked\":%s}",
+                              (i > 0) ? "," : "", esc, (int)records[i].rssi,
+                              locked ? "true" : "false");
+    }
+    o += (size_t)snprintf(body + o, sizeof(body) - o, "]");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, body, (ssize_t)o);
+    return ESP_OK;
+}
+
+/** Shared credential stash + portal stop (the form and JSON handlers). */
+static void portal_submit_credentials(const char *ssid, const char *password)
+{
+    extern void portal_request_stop(void);
+    extern void portal_request_connect_after_stop(const char *ssid,
+                                                  const char *password);
+
+    if (networking_wifi_known_upsert(ssid, password, -1, false) == ESP_OK) {
+        ESP_LOGI(PORTAL_HTTP_TAG, "saved to known-network list");
+    } else {
+        ESP_LOGW(PORTAL_HTTP_TAG, "failed to save to known-network list");
+    }
+    snprintf(s_portal_status, sizeof(s_portal_status), "connecting");
+    s_portal_status_error[0] = '\0';
+    portal_request_connect_after_stop(ssid, password);
+    portal_request_stop();
+}
+
+/** POST /api/wifi/connect -> `{"success":true}` (body: `{"ssid":..,"password":..}`). */
+static esp_err_t portal_api_connect_handler(httpd_req_t *req)
+{
+    char buf[256];
+    char ssid[P4_CONFIG_WIFI_SSID_BYTES] = {0};
+    char password[P4_CONFIG_WIFI_PASSWORD_BYTES] = {0};
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    char *p;
+
+    if (ret <= 0) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    buf[ret] = '\0';
+
+    /* Minimal JSON string extraction: "ssid":"..." and "password":"...". */
+    p = strstr(buf, "\"ssid\"");
+    if (p != NULL) {
+        p = strchr(p, ':');
+        if (p != NULL) {
+            p = strchr(p, '"');
+            if (p != NULL) {
+                p++;
+                snprintf(ssid, sizeof(ssid), "%s", p);
+                p = strchr(ssid, '"');
+                if (p != NULL) {
+                    *p = '\0';
+                }
+            }
+        }
+    }
+    p = strstr(buf, "\"password\"");
+    if (p != NULL) {
+        p = strchr(p, ':');
+        if (p != NULL) {
+            p = strchr(p, '"');
+            if (p != NULL) {
+                p++;
+                snprintf(password, sizeof(password), "%s", p);
+                p = strchr(password, '"');
+                if (p != NULL) {
+                    *p = '\0';
+                }
+            }
+        }
+    }
+
+    if (ssid[0] == '\0') {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"missing ssid\"}", 36);
+        return ESP_OK;
+    }
+    portal_submit_credentials(ssid, password);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"success\":true}", 16);
+    return ESP_OK;
+}
+
+/** GET /api/wifi/status -> `{"status":"idle|connecting|success|failed"}`. */
+static esp_err_t portal_api_status_handler(httpd_req_t *req)
+{
+    char body[128];
+    size_t o;
+
+    o = (size_t)snprintf(body, sizeof(body),
+                         "{\"status\":\"%s\",\"error\":\"%s\"}",
+                         s_portal_status, s_portal_status_error);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, body, (ssize_t)o);
+    return ESP_OK;
+}
+
 /* ---- Server lifecycle ---- */
 
 /** 404 error handler: redirect every unmatched request to the portal page. */
@@ -372,7 +528,7 @@ void portal_http_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = P4_CONFIG_PORTAL_HTTP_PORT;
-    config.max_uri_handlers = 8;
+    config.max_uri_handlers = 12;
     config.stack_size = 4096;
     config.lru_purge_enable = true;
 
@@ -420,6 +576,29 @@ void portal_http_start(void)
         .handler = portal_redirect_handler,
     };
     httpd_register_uri_handler(s_portal_server, &probe_win);
+
+    /* JSON provisioning API (programmatic clients; registered before the
+     * catch-all so the exact URIs win). */
+    httpd_uri_t api_scan = {
+        .uri = "/api/wifi/scan",
+        .method = HTTP_GET,
+        .handler = portal_api_scan_handler,
+    };
+    httpd_register_uri_handler(s_portal_server, &api_scan);
+
+    httpd_uri_t api_connect = {
+        .uri = "/api/wifi/connect",
+        .method = HTTP_POST,
+        .handler = portal_api_connect_handler,
+    };
+    httpd_register_uri_handler(s_portal_server, &api_connect);
+
+    httpd_uri_t api_status = {
+        .uri = "/api/wifi/status",
+        .method = HTTP_GET,
+        .handler = portal_api_status_handler,
+    };
+    httpd_register_uri_handler(s_portal_server, &api_status);
 
     /* GET any other path - catch-all redirect (registered last, acts as
      * default handler for all unmatched URIs). */

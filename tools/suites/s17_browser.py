@@ -91,7 +91,10 @@ def run(dev, ctx):
     c.expect("bare browser prints usage", "browser <url", out)
 
     # A previous suite may have left httpd running; stop it so the
-    # no-connection path is deterministic.
+    # no-connection path is deterministic. The browser's RAM page cache must go
+    # too, or a retried attempt would restore RENDER.HTML from the previous run
+    # instead of reporting the failure this check is about.
+    dev.run("browser cache clear", timeout=20)
     dev.run("httpd stop", timeout=20)
     out = dev.run("browser http://127.0.0.1/RENDER.HTML", timeout=30, settle=2.0)
     c.expect("fetch without a connection fails", "Failed to fetch URL", out)

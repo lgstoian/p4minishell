@@ -1739,6 +1739,33 @@ rss:
     type: int
     description: "Guard window before a subscription is eligible for another background poll"
     range: "0..60000"
+  poller_task_stack:
+    value: 16384
+    type: int
+    description: "Stack size of the background feed poller task (runs the expat parser and a full fetch; allocated in PSRAM)"
+    range: "2048..16384"
+  read_max:
+    value: 200
+    type: int
+    description: "Maximum read/unread item guids retained per feed (older entries are evicted FIFO)"
+    range: "8..2048"
+  store_line_bytes:
+    value: 1536
+    type: int
+    description: "Line capacity for the subscription / read-state stores (a longer record is refused, never split)"
+    range: "128..4096"
+  store_dir:
+    value: "sd:/RSS"
+    type: string
+    description: "SD directory holding the subscription and read-state stores"
+  subs_file:
+    value: "sd:/RSS/SUBS.INI"
+    type: string
+    description: "Subscription store path (pipe-separated records)"
+  read_file:
+    value: "sd:/RSS/READING"
+    type: string
+    description: "Read/unread state store path (pipe-separated records)"
 
 
 # ---- Bluetooth ----
@@ -1751,6 +1778,16 @@ bluetooth:
     value: "P4MiniShell BLE"
     type: string
     description: "BLE device name used during advertising"
+  bt_init_retries:
+    value: 1
+    type: int
+    description: "Host-init retry count for the hosted NimBLE stack (the C6 BT controller can still be settling); 0 disables the retry"
+    range: "0..3"
+  bt_init_retry_delay_ms:
+    value: 500
+    type: uint32_t
+    description: "Delay between hosted NimBLE host-init attempts (milliseconds)"
+    range: "0..5000"
   discovery_limit:
     value: 16
     type: size_t
@@ -2227,6 +2264,28 @@ batch_env:
     type: size_t
     description: "Maximum files listed in one package manifest (P4_CONFIG_PKG_MAX_ENTRIES)"
     range: "1..256"
+  pkg_archive_ext:
+    value: ".PKG"
+    type: string
+    description: "Single-file bundle archive extension (a ZIP container mirroring the PKGS/<APP>/ directory; unpacked by pkg install/pkg unpack via the one ZIP reader, see docs/native_packaging.md)"
+  pkg_staging_dir_name:
+    value: ".installing"
+    type: string
+    description: "Staging directory under PKGS/ for atomic installs (backup + rollback) and archive unpacking (P4_CONFIG_PKG_STAGING_DIR_NAME)"
+  pkg_max_services:
+    value: 8
+    type: size_t
+    description: "Maximum services= dependency entries a bundle may declare (additive APPINFO metadata, enforced at install) (P4_CONFIG_PKG_MAX_SERVICES)"
+    range: "1..32"
+  pkg_backup_name_bytes:
+    value: 96
+    type: size_t
+    description: "Longest backup name inside a staging slot (path separators flattened) (P4_CONFIG_PKG_BACKUP_NAME_BYTES)"
+    range: "16..256"
+  store_index_url:
+    value: ""
+    type: string
+    description: "App-store index URL for the `store` verb (empty disables it); the index is a JSON apps[] document and each bpk_url is downloaded to PKGS/<id>.PKG (P4_CONFIG_STORE_INDEX_URL)"
   native_abi:
     value: "applib-1"
     type: string
@@ -3280,15 +3339,20 @@ task_stacks:
 # ---- Browser ----
 browser:
   history_max:
-    value: 8
+    value: 150
     type: int
-    description: "Maximum browser history entries."
-    range: "1..64"
+    description: "Maximum browser history entries (each carries its page title)."
+    range: "1..256"
   bookmark_max:
-    value: 8
+    value: 32
     type: int
     description: "Maximum browser bookmarks."
-    range: "1..64"
+    range: "1..128"
+  url_bytes:
+    value: 512
+    type: int
+    description: "Maximum length of a browser URL or file path."
+    range: "64..2048"
   image_max_bytes:
     value: 65536
     type: size_t
@@ -3304,6 +3368,46 @@ browser:
     type: int
     description: "Maximum browser image height in terminal rows."
     range: "1..128"
+  image_cache_max:
+    value: 256
+    type: int
+    description: "Decoded images kept in the browser PSRAM image cache (a hit skips the fetch and the decode)"
+    range: "1..2048"
+  page_cache_max:
+    value: 6
+    type: int
+    description: "Rendered pages kept in the browser PSRAM back/forward cache (a hit restores by memcpy)"
+    range: "1..64"
+  dom_arena_block_bytes:
+    value: 262144
+    type: int
+    description: "Arena block size for parsed DOM nodes (PSRAM); a page builds hundreds of ~3.6 KB nodes"
+    range: "16384..2097152"
+  dom_arena_limit_bytes:
+    value: 4194304
+    type: int
+    description: "Upper bound on arena memory per parsed document; beyond it nodes fall back to calloc"
+    range: "65536..33554432"
+  dom_max_nodes:
+    value: 20000
+    type: int
+    description: "Hard cap on DOM nodes per parsed document (arena or not)"
+    range: "64..200000"
+  imgdec_max_w:
+    value: 512
+    type: int
+    description: "Native pixel width cap for PNG/JPEG decode (components/imgdec); the native decode is held in LVGL's allocator (P4_CONFIG_IMGDEC_MAX_W)"
+    range: "1..2048"
+  imgdec_max_h:
+    value: 512
+    type: int
+    description: "Native pixel height cap for PNG/JPEG decode (components/imgdec) (P4_CONFIG_IMGDEC_MAX_H)"
+    range: "1..2048"
+  imgdec_max_bytes:
+    value: 1048576
+    type: size_t
+    description: "Largest PNG/JPEG file the image path will ingest (P4_CONFIG_IMGDEC_MAX_BYTES)"
+    range: "1024..4194304"
   js_max_bytes:
     value: 16384
     type: size_t

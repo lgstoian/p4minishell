@@ -140,3 +140,27 @@ python tools/breadcrumbs.py --write       # refresh breadcrumbs.json + BREADCRUM
 
 Both are committed generated artifacts (like `components/gfx/gfx_font.c`), so
 review the diff. The release gate runs `--check` on both.
+
+---
+
+## 6. Keeping generated artifacts and docs in sync
+
+A generated artifact is one command away from the code that produces it, and a
+doc that describes a protocol is one edit away from drifting. The checklist
+below is the "protocol maintenance" discipline (borrowed from ESP-Brookesia's
+`contributing.rst`): run it whenever the matching source changes.
+
+| Change | Regenerate / update |
+|--------|---------------------|
+| Component added, renamed, or retagged | `comment_index.py --write`, `breadcrumbs.py --write` |
+| Config macro added/changed | `p4minishell_config.h` **and** `p4minishell_config.yaml` (they mirror each other) |
+| Board pin / timing / feature flag | `boards/<name>/board_config.h` **and** `.yaml`, plus `schematics.md` |
+| New command verb or switch | `command.md` (+ `documentation.md` if it is a new module) |
+| App ABI / package metadata key / trust rule | `ABI.md` **and** `docs/native_packaging.md` **and** the changelog |
+| New host tool | `tools/README.md` (+ `licence.md` if it is derived from third-party code) |
+| New image/font asset | the generating `tools/*.py` script, re-run; never hand-edit the generated file |
+| New third-party code | `licence.md` third-party table **and** the upstream license text |
+
+A doc that describes a *protocol* (the batch language, the app ABI, the
+comment tags) is part of the contract: treat a doc-only change to one as a
+breaking change until the code matches, and say so in the changelog.

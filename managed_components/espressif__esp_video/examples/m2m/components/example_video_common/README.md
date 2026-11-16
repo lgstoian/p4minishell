@@ -1,21 +1,21 @@
 # Example Video Common Component
 
-This component provides board-level initialization for esp_video, including MIPI-CSI sensor I2C port, DVP sensor I2C port, DVP interface configuration and SPI interface configuration. It is primarily designed for esp_video examples to simplify board-level configuration and initialization processes.
+This component provides board-level initialization for esp_video, including MIPI-CSI sensor SCCB port, DVP sensor SCCB port, DVP interface configuration, SPI interface configuration, and MIPI-CSI IR-Cut and IR LED pins. It is primarily designed for esp_video examples to simplify board-level configuration and initialization processes.
 
 ## Supported Boards and GPIO Pins
 
 | Hardware | ESP32-P4-Function-EV-Board V1.4 | ESP32-P4-Function-EV-Board V1.5 | ESP32-P4-EYE | ESP32-S3-EYE | ESP32-S31-Korvo |
 |:-:|:-:|:-:|:-:|:-:|:-:|
-| MIPI-CSI I2C SCL Pin        |  8 |  8 | 13 | NA | NA |
-| MIPI-CSI I2C SDA Pin        |  7 |  7 | 14 | NA | NA |
-| MIPI-CSI I2C Reset Pin      | NA | NA | 26 | NA | NA |
-| MIPI-CSI I2C Power-down Pin | NA | NA | 12 | NA | NA |
-| MIPI-CSI I2C XCLK           | NA | NA | 11 | NA | NA |
+| MIPI-CSI SCCB SCL Pin        |  8 |  8 | 13 | NA | NA |
+| MIPI-CSI SCCB SDA Pin        |  7 |  7 | 14 | NA | NA |
+| MIPI-CSI SCCB Reset Pin      | NA | NA | 26 | NA | NA |
+| MIPI-CSI SCCB Power-down Pin | NA | NA | 12 | NA | NA |
+| MIPI-CSI SCCB XCLK           | NA | NA | 11 | NA | NA |
 |   |   |   |   |
-| DVP I2C SCL Pin             | NA |  8 | NA |  5 |  1 |
-| DVP I2C SDA Pin             | NA |  7 | NA |  4 |  0 |
-| DVP I2C Reset Pin           | NA | 36 | NA | NA | NA |
-| DVP I2C Power-down Pin      | NA | 38 | NA | NA | NA |
+| DVP SCCB SCL Pin             | NA |  8 | NA |  5 |  1 |
+| DVP SCCB SDA Pin             | NA |  7 | NA |  4 |  0 |
+| DVP SCCB Reset Pin           | NA | 36 | NA | NA | NA |
+| DVP SCCB Power-down Pin      | NA | 38 | NA | NA | NA |
 | DVP XCLK Pin                | NA | 20 | NA | 15 | 55 |
 | DVP PCLK Pin                | NA |  4 | NA | 13 | 54 |
 | DVP V-SYNC Pin              | NA | 37 | NA |  6 | 56 |
@@ -29,10 +29,10 @@ This component provides board-level initialization for esp_video, including MIPI
 | DVP D6 Pin                  | NA |  5 | NA | 17 | 52 |
 | DVP D7 Pin                  | NA | 21 | NA | 16 | 53 |
 |   |   |   |   |
-| SPI I2C SCL Pin             | NA |  8 | NA |  5 |  1 |
-| SPI I2C SDA Pin             | NA |  7 | NA |  4 |  0 |
-| SPI I2C Reset Pin           | NA | NA | NA | NA | NA |
-| SPI I2C Power-down Pin      | NA | NA | NA | NA | NA |
+| SPI SCCB SCL Pin             | NA |  8 | NA |  5 |  1 |
+| SPI SCCB SDA Pin             | NA |  7 | NA |  4 |  0 |
+| SPI SCCB Reset Pin           | NA | NA | NA | NA | NA |
+| SPI SCCB Power-down Pin      | NA | NA | NA | NA | NA |
 | SPI XCLK Pin                | NA | 20 | NA | 15 | 55 |
 | SPI CS Pin                  | NA | 37 | NA |  6 | 56 |
 | SPI SCLK Pin                | NA |  4 | NA | 13 | 54 |
@@ -66,16 +66,16 @@ When using "ESP32-XX-DevKitC" development boards, you can try the default GPIO p
 
 | Hardware | ESP32-P4 | ESP32-S3 | ESP32-C3 | ESP32-C6 | ESP32-C61 | ESP32-C5 | ESP32-S31 |
 |:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| MIPI-CSI CAM I2C SCL Pin        |  8 | NA | NA | NA | NA | NA | NA |
-| MIPI-CSI CAM I2C SDA Pin        |  7 | NA | NA | NA | NA | NA | NA |
-| MIPI-CSI CAM I2C Reset Pin      | NA | NA | NA | NA | NA | NA | NA |
-| MIPI-CSI CAM I2C Power-down Pin | NA | NA | NA | NA | NA | NA | NA |
-| MIPI-CSI CAM I2C XCLK           | NA | NA | NA | NA | NA | NA | NA |
+| MIPI-CSI CAM SCCB SCL Pin        |  8 | NA | NA | NA | NA | NA | NA |
+| MIPI-CSI CAM SCCB SDA Pin        |  7 | NA | NA | NA | NA | NA | NA |
+| MIPI-CSI CAM SCCB Reset Pin      | NA | NA | NA | NA | NA | NA | NA |
+| MIPI-CSI CAM SCCB Power-down Pin | NA | NA | NA | NA | NA | NA | NA |
+| MIPI-CSI CAM SCCB XCLK           | NA | NA | NA | NA | NA | NA | NA |
 |   |   |   |   |
-| DVP CAM I2C SCL Pin             |  8 |  5 | NA | NA | NA | NA |  1 |
-| DVP CAM I2C SDA Pin             |  7 |  4 | NA | NA | NA | NA |  0 |
-| DVP CAM I2C Reset Pin           | NA | NA | NA | NA | NA | NA | NA |
-| DVP CAM I2C Power-down Pin      | NA | NA | NA | NA | NA | NA | NA |
+| DVP CAM SCCB SCL Pin             |  8 |  5 | NA | NA | NA | NA |  1 |
+| DVP CAM SCCB SDA Pin             |  7 |  4 | NA | NA | NA | NA |  0 |
+| DVP CAM SCCB Reset Pin           | NA | NA | NA | NA | NA | NA | NA |
+| DVP CAM SCCB Power-down Pin      | NA | NA | NA | NA | NA | NA | NA |
 | DVP CAM XCLK Pin                | 20 | 15 | NA | NA | NA | NA | 55 |
 | DVP CAM PCLK Pin                |  4 | 13 | NA | NA | NA | NA | 54 |
 | DVP CAM V-SYNC Pin              | 37 |  6 | NA | NA | NA | NA | 56 |
@@ -89,10 +89,10 @@ When using "ESP32-XX-DevKitC" development boards, you can try the default GPIO p
 | DVP CAM D6 Pin                  |  5 | 17 | NA | NA | NA | NA | 52 |
 | DVP CAM D7 Pin                  | 21 | 16 | NA | NA | NA | NA | 53 |
 |   |   |   |   |
-| SPI CAM0 I2C SCL Pin             |  8 |  5 |  5 |  5 |  5 |  5 |  1 |
-| SPI CAM0 I2C SDA Pin             |  7 |  4 |  4 |  4 |  4 |  4 |  0 |
-| SPI CAM0 I2C Reset Pin           | NA | NA | NA | NA | NA | NA | NA |
-| SPI CAM0 I2C Power-down Pin      | NA | NA | NA | NA | NA | NA | NA |
+| SPI CAM0 SCCB SCL Pin             |  8 |  5 |  5 |  5 |  5 |  5 |  1 |
+| SPI CAM0 SCCB SDA Pin             |  7 |  4 |  4 |  4 |  4 |  4 |  0 |
+| SPI CAM0 SCCB Reset Pin           | NA | NA | NA | NA | NA | NA | NA |
+| SPI CAM0 SCCB Power-down Pin      | NA | NA | NA | NA | NA | NA | NA |
 | SPI CAM0 XCLK Pin                | 20 | 15 |  8 |  0 |  0 |  0 | 55 |
 | SPI CAM0 CS Pin                  | 37 |  6 | 10 |  1 |  8 | 10 | 56 |
 | SPI CAM0 SCLK Pin                |  4 | 13 |  6 |  6 |  6 |  6 | 54 |
@@ -101,10 +101,10 @@ When using "ESP32-XX-DevKitC" development boards, you can try the default GPIO p
 | SPI CAM0 Data2 I/O Pin           | 33 | NA | NA | NA | NA |  8 | NA |
 | SPI CAM0 Data3 I/O Pin           | 23 | NA | NA | NA | NA | 26 | NA |
 |   |   |   |   |
-| SPI CAM1 I2C SCL Pin             |  5 |  1 | NA | NA | NA | NA | NA |
-| SPI CAM1 I2C SDA Pin             |  6 |  2 | NA | NA | NA | NA | NA |
-| SPI CAM1 I2C Reset Pin           | NA | NA | NA | NA | NA | NA | NA |
-| SPI CAM1 I2C Power-down Pin      | NA | NA | NA | NA | NA | NA | NA |
+| SPI CAM1 SCCB SCL Pin             |  5 |  1 | NA | NA | NA | NA | NA |
+| SPI CAM1 SCCB SDA Pin             |  6 |  2 | NA | NA | NA | NA | NA |
+| SPI CAM1 SCCB Reset Pin           | NA | NA | NA | NA | NA | NA | NA |
+| SPI CAM1 SCCB Power-down Pin      | NA | NA | NA | NA | NA | NA | NA |
 | SPI CAM1 XCLK Pin                | 23 | 39 | NA | NA | NA | NA | NA |
 | SPI CAM1 CS Pin                  | 38 | 42 | NA | NA | NA | NA | NA |
 | SPI CAM1 SCLK Pin                | 22 | 41 | NA | NA | NA | NA | NA |
@@ -112,7 +112,7 @@ When using "ESP32-XX-DevKitC" development boards, you can try the default GPIO p
 
 **Note 1**: Only SoCs that have more than one SPI port, except for SPI flash and SPI RAM ports, can use the SPI CAM0 and SPI CAM1 simultaneously.
 
-**Note 2**: If the SPI CAM0 and SPI CAM1 use the same camera sensor and it only owns one I2C slave address, the SPI CAM0 and SPI CAM1 should use different I2C ports to communicate with their target camera sensor.
+**Note 2**: If the SPI CAM0 and SPI CAM1 use the same camera sensor and it only owns one SCCB address, the SPI CAM0 and SPI CAM1 should use different SCCB ports to communicate with their target camera sensor.
 
 **Note 3:** Only the Parallel IO mode supports more than 1-bit to transform data (up to 4-bit mode with Data0-Data3), so only the Parallel IO mode supports "SPI CAM0 Data1/Data2/Data3 I/O Pin".
 
@@ -151,15 +151,64 @@ Example Video Initialization Configuration  --->
         (X) Customized Development Board
     Select and Set Camera Sensor Interface  --->
         [*] MIPI-CSI  --->
-            (0) SCCB(I2C) Port Number
-            (100000) SCCB(I2C) Frequency (100K-400K Hz)
-            (8) SCCB(I2C) SCL Pin
-            (7) SCCB(I2C) SDA Pin
+            (0) SCCB Port Number
+            (100000) SCCB Frequency (100K-400K Hz)
+            (8) SCCB SCL Pin
+            (7) SCCB SDA Pin
             (-1) Reset Pin
             (-1) Power Down Pin
             (-1) XCLK Pin
         [ ] DVP  ----
 ```
+
+### MIPI-CSI IR-Cut and IR LED
+
+IR-Cut and the supplemental IR LED are configured on the MIPI-CSI camera only. The LED follows the IR-Cut day/night state:
+
+- Entering night mode switches the IR-Cut filter out of the optical path first. The LED turns on only after that switch succeeds. If the filter switch fails, the LED stays as it is.
+- Returning to day mode turns the LED off first, then moves the IR-Cut filter back into the optical path.
+
+With the ISP pipeline controller enabled, this sequence runs automatically. The example does not require the application to toggle the filter or the LED each frame.
+
+Select the drivers before the video-device options. `Enable MIPI-CSI IR-Cut Support` stays hidden until an IR-Cut driver is selected, and `Enable MIPI-CSI LED Support` stays hidden until both that IR-Cut option and an LED driver are selected. `Camera LED Control Configuration` is available on chips that have an on-chip ISP.
+
+```
+Component config  --->
+    Espressif Camera Sensors Configurations  --->
+        Camera IRCUT Control Configuration  --->
+            [*] AP1511B
+        Camera LED Control Configuration  --->
+            [*] IR2835
+    Espressif Video Configuration  --->
+        [*] Enable MIPI-CSI based Video Device  --->
+            [*] Enable MIPI-CSI IR-Cut Support
+            [*] Enable MIPI-CSI LED Support
+```
+
+`AP1511B` waits 1000 ms by default after each filter switch so the filter can settle. Increase `Waiting time for stabilization after switching (milliseconds)` when the filter moves slowly or sometimes sticks.
+
+Then fill the pins under the MIPI-CSI camera sensor. `Enable LED Control` appears only after `Enable IR-Cut Control` is selected. Replace `-1` with the GPIO wired on the board.
+
+```
+Example Video Initialization Configuration  --->
+    Select and Set Camera Sensor Interface  --->
+        [*] MIPI-CSI  --->
+            [*] Enable IR-Cut Control
+                (-1) IR-Cut FBC Pin
+                (-1) IR-Cut EN Pin
+            [*] Enable LED Control
+                (-1) LED Control Pin
+                (-1) LED Enable Pin
+```
+
+| Pin | Connection | `-1` |
+|-----|------------|------|
+| IR-Cut FBC Pin | AP1511B forward/backward control | Pin is not connected |
+| IR-Cut EN Pin | AP1511B enable | Pin is not connected |
+| LED Control Pin | IR LED on/off. IR2835 drives this GPIO high to turn the LED on and low to turn it off | Skip LED initialization |
+| LED Enable Pin | Passed through to the LED driver | Pin is not used |
+
+IR2835 does not drive `LED Enable Pin`. Leave it at `-1`. A later LED driver may use this pin to enable the LED supply.
 
 ### DVP Development Kit
 
@@ -195,11 +244,11 @@ Example Video Initialization Configuration  --->
     Select and Set Camera Sensor Interface  --->
         [ ] MIPI-CSI  ---
         [*] DVP  ---->
-            (0) SCCB(I2C) Port Number
-            (100000) SCCB(I2C) Frequency (100K-400K Hz)
+            (0) SCCB Port Number
+            (100000) SCCB Frequency (100K-400K Hz)
             (20000000) XCLK Frequency (Hz)
-            (8) SCCB(I2C) SCL Pin
-            (7) SCCB(I2C) SDA Pin
+            (8) SCCB SCL Pin
+            (7) SCCB SDA Pin
             (-1) Reset Pin
             (-1) Power Down Pin
             (20) XCLK Pin
@@ -260,13 +309,13 @@ Example Video Initialization Configuration  --->
         [ ] MIPI-CSI  ---
         [ ] DVP  ----
         [*] SPI  ---->
-            ()  SCCB(I2C) Port Number
-            (100000) SCCB(I2C) Frequency (100K-400K Hz)
+            ()  SCCB Port Number
+            (100000) SCCB Frequency (100K-400K Hz)
             (2) SPI Port Number
                 Select XCLK Source (ESP Clock Router)  --->
             (24000000) XCLK Frequency (Hz)
-            (8) SCCB(I2C) SCL Pin
-            (7) SCCB(I2C) SDA Pin
+            (8) SCCB SCL Pin
+            (7) SCCB SDA Pin
             (-1) Reset Pin
             (-1) Power Down Pin
             (20) XCLK Output Pin
@@ -301,13 +350,13 @@ Configure the GPIO pins according to your board specifications:
 Example Video Initialization Configuration  --->
     Select and Set Camera Sensor Interface  --->
         [*] SPI Camera Sensor 0  --->
-            (0) SCCB(I2C) Port Number
-            (100000) SCCB(I2C) Frequency (100K-400K Hz)
+            (0) SCCB Port Number
+            (100000) SCCB Frequency (100K-400K Hz)
             (2) SPI Port Number
                 Select XCLK Source (ESP Clock Router)  --->
             (24000000) XCLK Frequency (Hz)
-            (8) SCCB(I2C) SCL Pin (NEW)
-            (7) SCCB(I2C) SDA Pin (NEW)
+            (8) SCCB SCL Pin (NEW)
+            (7) SCCB SDA Pin (NEW)
             (-1) Reset Pin (NEW)
             (-1) Power Down Pin (NEW)
             (20) XCLK Output Pin (NEW)
@@ -315,15 +364,15 @@ Example Video Initialization Configuration  --->
             (4) Clock Pin (NEW)
             (21) Data0 I/O Pin (NEW)
        [*] SPI Camera Sensor 1  --->
-            (1) SCCB(I2C) Port Number
-            (100000) SCCB(I2C) Frequency (100K-400K Hz)
+            (1) SCCB Port Number
+            (100000) SCCB Frequency (100K-400K Hz)
             (1) SPI Port Number
                 Select XCLK Source (LEDC Timer)  --->
             (20000000) XCLK Frequency (Hz)
             (1) XCLK LEDC Timer Number
             (1) XCLK LEDC Timer Channel
-            (5) SCCB(I2C) SCL Pin (NEW)
-            (6) SCCB(I2C) SDA Pin (NEW)
+            (5) SCCB SCL Pin (NEW)
+            (6) SCCB SDA Pin (NEW)
             (-1) Reset Pin (NEW)
             (-1) Power Down Pin (NEW)
             (23) XCLK Output Pin (NEW)
@@ -332,16 +381,16 @@ Example Video Initialization Configuration  --->
             (3) Data0 I/O Pin (NEW)
 ```
 
-### Use Pre-initialized SCCB(I2C) Bus
+### Use Pre-initialized SCCB Bus
 
-For some development boards, the MIPI-CSI, DVP, SPI camera sensors or motors share the same SCCB(I2C) port and GPIO pins, such as ESP32-P4-Function-EV-Board V1.5. You can select and set the following options:
+For some development boards, the MIPI-CSI, DVP, SPI camera sensors or motors share the same SCCB port and GPIO pins, such as ESP32-P4-Function-EV-Board V1.5. You can select and set the following options:
 
 ```
 Example Video Initialization Configuration  --->
-    [*] Use Pre-initialized SCCB(I2C) Bus for All Camera Sensors And Motors  --->
-        (0) SCCB(I2C) Port Number
-        (8) SCCB(I2C) SCL Pin
-        (7) SCCB(I2C) SDA Pin
+    [*] Use Pre-initialized SCCB Bus for All Camera Sensors And Motors  --->
+        (0) SCCB Port Number
+        (8) SCCB SCL Pin
+        (7) SCCB SDA Pin
 ```
 
 ### Storage Configuration

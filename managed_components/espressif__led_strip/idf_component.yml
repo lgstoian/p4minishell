@@ -5,7 +5,7 @@ documentation: https://espressif.github.io/idf-extra-components/latest/led_strip
 issues: https://github.com/espressif/idf-extra-components/issues
 repository: git://github.com/espressif/idf-extra-components.git
 repository_info:
-  commit_sha: f3a3b53e27141fadd10c154bac8a25eecb0b0bc6
+  commit_sha: 65ccbe1918e094bf21e87d6cef08aba000f40432
   path: led_strip
 url: https://github.com/espressif/idf-extra-components/tree/master/led_strip
-version: 3.1.0~1
+version: 3.1.1

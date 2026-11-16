@@ -19,6 +19,7 @@
 #include "html.h"
 #include "filetype.h"
 #include "gfx.h"
+#include "imgdec.h"
 #include "theme.h"
 #include "shell.h"
 #include "strutil.h"
@@ -1166,10 +1167,29 @@ typedef struct {
     const char *path;
     bool fit;
     gfx_surface_t surface;
+    bool surface_is_imgdec;   /**< true when surface.px came from imgdec_free() */
     uint8_t *file;
 } image_ctx_t;
 
 static image_ctx_t *s_image_active = NULL;
+
+/** Free the viewer surface through the decoder that produced it (one owner). */
+static void image_surface_free(image_ctx_t *ctx)
+{
+    if (ctx == NULL) {
+        return;
+    }
+    if (ctx->surface_is_imgdec) {
+        imgdec_image_t imd = { ctx->surface.px, ctx->surface.w, ctx->surface.h };
+        imgdec_free(&imd);
+    } else {
+        gfx_surface_free(&ctx->surface);
+    }
+    ctx->surface.px = NULL;
+    ctx->surface.w = 0;
+    ctx->surface.h = 0;
+    ctx->surface_is_imgdec = false;
+}
 
 static void image_close_btn_cb(lv_event_t *e)
 {
@@ -1189,6 +1209,8 @@ static bool image_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     long sz = 0;
     int tw;
     int th;
+    int native_w = 0;
+    int native_h = 0;
     lv_obj_t *surf;
     lv_obj_t *holder;
     lv_obj_t *canvas;
@@ -1216,7 +1238,7 @@ static bool image_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
         s_image_active = NULL;
         return false;
     }
-    if (sz < 54 || (uint64_t)sz > P4_CONFIG_IMAGE_MAX_BYTES) {
+    if (sz < 4 || (uint64_t)sz > P4_CONFIG_IMAGE_MAX_BYTES) {
         fclose(f);
         s_image_active = NULL;
         return false;
@@ -1236,34 +1258,65 @@ static bool image_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     }
     fclose(f);
 
-    if (!gfx_bmp_parse_header_ex(ctx->file, (size_t)sz, &info,
-                                 GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H)) {
-        free(ctx->file);
-        ctx->file = NULL;
-        s_image_active = NULL;
-        return false;
-    }
-
-    /* Fit into the live transcript region, leaving room for the title and the
-     * Close row. The source is decoded straight to that target, so a large
-     * image never allocates its native buffer. */
-    rect = windows_get_rect(WINDOW_REGION_TRANSCRIPT);
     {
-        int avail_w = (rect.width > 32) ? (int)rect.width - 32 : (int)rect.width;
-        int avail_h = (rect.height > 80) ? (int)rect.height - 80 : (int)rect.height;
+        imgdec_format_t fmt = imgdec_probe(ctx->file, (size_t)sz, &native_w, &native_h);
+        bool is_compressed = (fmt == IMGDEC_FMT_PNG || fmt == IMGDEC_FMT_JPEG);
+        int src_w;
+        int src_h;
 
-        if (ctx->fit) {
-            gfx_bmp_fit(info.w, info.h, avail_w, avail_h, &tw, &th);
+        if (!is_compressed) {
+            if (!gfx_bmp_parse_header_ex(ctx->file, (size_t)sz, &info,
+                                         GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H)) {
+                free(ctx->file);
+                ctx->file = NULL;
+                s_image_active = NULL;
+                return false;
+            }
+            src_w = info.w;
+            src_h = info.h;
         } else {
-            tw = info.w;
-            th = info.h;
+            src_w = native_w;
+            src_h = native_h;
         }
-    }
-    if (!gfx_bmp_decode_scaled_565(ctx->file, (size_t)sz, &info, tw, th, &ctx->surface)) {
-        free(ctx->file);
-        ctx->file = NULL;
-        s_image_active = NULL;
-        return false;
+
+        /* Fit into the live transcript region, leaving room for the title and
+         * the Close row. The source is decoded straight to that target, so a
+         * large image never allocates its native buffer. */
+        rect = windows_get_rect(WINDOW_REGION_TRANSCRIPT);
+        {
+            int avail_w = (rect.width > 32) ? (int)rect.width - 32 : (int)rect.width;
+            int avail_h = (rect.height > 80) ? (int)rect.height - 80 : (int)rect.height;
+
+            if (ctx->fit) {
+                gfx_bmp_fit(src_w, src_h, avail_w, avail_h, &tw, &th);
+            } else {
+                tw = src_w;
+                th = src_h;
+            }
+        }
+        if (is_compressed) {
+            imgdec_image_t imd;
+
+            if (!imgdec_decode_scaled(ctx->file, (size_t)sz, tw, th, &imd)) {
+                free(ctx->file);
+                ctx->file = NULL;
+                s_image_active = NULL;
+                return false;
+            }
+            ctx->surface.px = imd.pixels;
+            ctx->surface.w = imd.width;
+            ctx->surface.h = imd.height;
+            ctx->surface_is_imgdec = true;
+        } else {
+            if (!gfx_bmp_decode_scaled_565(ctx->file, (size_t)sz, &info, tw, th,
+                                            &ctx->surface)) {
+                free(ctx->file);
+                ctx->file = NULL;
+                s_image_active = NULL;
+                return false;
+            }
+            ctx->surface_is_imgdec = false;
+        }
     }
     free(ctx->file);
     ctx->file = NULL;
@@ -1272,7 +1325,7 @@ static bool image_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     surf = windows_enter_editor_mode();
     if (surf == NULL) {
         lvgl_port_unlock();
-        gfx_surface_free(&ctx->surface);
+        image_surface_free(ctx);
         s_image_active = NULL;
         return false;
     }
@@ -1327,7 +1380,7 @@ static void image_surface_close(void *ctx_ptr)
     }
     windows_exit_editor_mode();
     lvgl_port_unlock();
-    gfx_surface_free(&ctx->surface); /* safe now the canvas is gone */
+    image_surface_free(ctx); /* safe now the canvas is gone */
     if (ctx->file) {
         free(ctx->file);
         ctx->file = NULL;

@@ -1,6 +1,7 @@
 #include "dom.h"
 #include "html.h"
 #include "strutil.h"
+#include "p4minishell_config.h"
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -16,14 +17,74 @@ dom_node_t *dom_node_new(dom_node_type_t type) {
     return node;
 }
 
+dom_node_t *dom_node_new_in(dom_arena_t *arena, dom_node_type_t type) {
+    dom_node_t *node;
+
+    if (arena != NULL) {
+        node = (dom_node_t *)dom_arena_alloc(arena, sizeof(dom_node_t));
+        if (node != NULL) {
+            memset(node, 0, sizeof(*node));
+            node->type = type;
+            node->display = DOM_DISPLAY_INLINE;
+            node->fg = 16;
+            node->bg = 16;
+            node->arena = arena;
+            return node;
+        }
+        /* Arena exhausted: fall back to an individually-owned node so the page
+         * still renders instead of truncating at the arena boundary. */
+    }
+    return dom_node_new(type);
+}
+
+/** Unlink @p node from its parent and release its children: arena-owned
+ *  children are only unlinked (their memory returns with the arena), while
+ *  individually-owned children are freed. */
+static void dom_node_release(dom_node_t *node) {
+    dom_node_t *child;
+
+    if (node == NULL) return;
+
+    if (node->parent != NULL) {
+        dom_node_remove_child(node->parent, node);
+    }
+
+    child = node->first_child;
+    node->first_child = NULL;
+    node->last_child = NULL;
+    while (child != NULL) {
+        dom_node_t *next = child->next_sibling;
+
+        child->parent = NULL;
+        child->next_sibling = NULL;
+        child->prev_sibling = NULL;
+        if (child->arena != NULL) {
+            dom_node_release(child);
+        } else {
+            dom_node_free(child);
+        }
+        child = next;
+    }
+}
+
 void dom_node_free(dom_node_t *node) {
     if (!node) return;
+    if (node->arena != NULL) {
+        /* Arena-owned: unlinking is the whole job, and the arena's destroy
+         * reclaims the memory. Freeing here would be a double free. */
+        dom_node_release(node);
+        return;
+    }
+
+    /* Individually owned: release the children, then the node itself. */
     dom_node_t *child = node->first_child;
     while (child) {
         dom_node_t *next = child->next_sibling;
         dom_node_free(child);
         child = next;
     }
+    node->first_child = NULL;
+    node->last_child = NULL;
     free(node);
 }
 
@@ -211,7 +272,8 @@ static void skip_element_content(const char **p, const char *tag) {
     }
 }
 
-static dom_node_t *parse_element(const char **p, dom_node_t *parent, int depth) {
+static dom_node_t *parse_element(const char **p, dom_node_t *parent, int depth,
+                                 dom_arena_t *arena, size_t *node_count) {
     if (**p != '<') return NULL;
     (*p)++;
     if (**p == '!' || **p == '?') {
@@ -224,8 +286,10 @@ static dom_node_t *parse_element(const char **p, dom_node_t *parent, int depth) 
         if (**p == '>') (*p)++;
         return (dom_node_t *)-1;
     }
-    dom_node_t *node = dom_node_new(DOM_NODE_ELEMENT);
+    if (*node_count >= P4_CONFIG_DOM_MAX_NODES) return NULL;
+    dom_node_t *node = dom_node_new_in(arena, DOM_NODE_ELEMENT);
     if (!node) return NULL;
+    (*node_count)++;
     parse_tag_name(p, node->tag, sizeof(node->tag));
     parse_attributes(p, node);
     if (is_block_element(node->tag)) {
@@ -262,7 +326,7 @@ static dom_node_t *parse_element(const char **p, dom_node_t *parent, int depth) 
             }
         }
         if (**p == '<') {
-            dom_node_t *child = parse_element(p, node, depth + 1);
+            dom_node_t *child = parse_element(p, node, depth + 1, arena, node_count);
             if (child == (dom_node_t *)-1) break;
             if (child) dom_node_append_child(node, child);
         } else {
@@ -281,8 +345,9 @@ static dom_node_t *parse_element(const char **p, dom_node_t *parent, int depth) 
                 end--;
             }
             if (end > start) {
-                dom_node_t *text_node = dom_node_new(DOM_NODE_TEXT);
+                dom_node_t *text_node = dom_node_new_in(arena, DOM_NODE_TEXT);
                 if (text_node) {
+                    (*node_count)++;
                     dom_decode_entities(start, (size_t)(end - start),
                                         text_node->text, sizeof(text_node->text));
                     dom_node_append_child(node, text_node);
@@ -295,20 +360,25 @@ static dom_node_t *parse_element(const char **p, dom_node_t *parent, int depth) 
 }
 
 dom_tree_t *dom_parse(const char *html) {
+    size_t node_count = 0;
+
     if (!html) return NULL;
     dom_tree_t *tree = calloc(1, sizeof(dom_tree_t));
     if (!tree) return NULL;
-    tree->root = dom_node_new(DOM_NODE_ELEMENT);
+    tree->arena = dom_arena_create();
+    tree->root = dom_node_new_in(tree->arena, DOM_NODE_ELEMENT);
     if (!tree->root) {
+        dom_arena_destroy(tree->arena);
         free(tree);
         return NULL;
     }
+    node_count++;
     strcpy(tree->root->tag, "#document");
     const char *p = html;
     while (*p) {
         skip_whitespace(&p);
         if (*p == '<') {
-            dom_node_t *child = parse_element(&p, tree->root, 0);
+            dom_node_t *child = parse_element(&p, tree->root, 0, tree->arena, &node_count);
             if (child == (dom_node_t *)-1) break;
             if (child) {
                 dom_node_append_child(tree->root, child);
@@ -350,7 +420,14 @@ dom_tree_t *dom_parse(const char *html) {
 
 void dom_free(dom_tree_t *tree) {
     if (!tree) return;
+    /* Release every individually-owned node first (JS-created text nodes), then
+     * hand the arena's blocks back. dom_node_free() unlinks arena-owned nodes
+     * instead of freeing them, so a single recursive walk covers both. */
     dom_node_free(tree->root);
+    if (tree->arena != NULL) {
+        dom_arena_destroy(tree->arena);
+        tree->arena = NULL;
+    }
     free(tree);
 }
 
@@ -465,7 +542,7 @@ void dom_set_text(dom_node_t *node, const char *text) {
         dom_node_free(child);
         child = next;
     }
-    dom_node_t *text_node = dom_node_new(DOM_NODE_TEXT);
+    dom_node_t *text_node = dom_node_new_in(node->arena, DOM_NODE_TEXT);
     if (text_node) {
         strncpy(text_node->text, text, sizeof(text_node->text) - 1);
         dom_node_append_child(node, text_node);

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: ESPRESSIF MIT
  */
@@ -56,6 +56,11 @@ esp_err_t esp_ipa_pipeline_create(const esp_ipa_config_t *config, esp_ipa_pipeli
  * @note `config->version` must match the current pipeline. `config->nums` and
  *       `config->names[i]` must match the modules loaded at create time, and
  *       each built-in module must have its sub-configuration present.
+ * @note Do not call this between esp_ipa_pipeline_get_state() and
+ *       esp_ipa_pipeline_set_state(). State does not store the configuration;
+ *       the config at get and set must be identical. Changing it here makes
+ *       the saved results inconsistent with the modules, and set_state then
+ *       writes wrong ISP parameters.
  *
  * @param[in]  handle   Pipeline handle (pointer value stays the same)
  * @param[in]  config   New IPA configuration
@@ -90,6 +95,12 @@ esp_err_t esp_ipa_pipeline_init(esp_ipa_pipeline_handle_t handle, const esp_ipa_
  *        pipeline and process it. The image process algorithm pipeline will calculate
  *        the meta data used to reconfigure ISP to improve image quality.
  *
+ * @note The caller must keep feeding real-time ISP statistics on every process cycle.
+ *       Metadata may update ISP statistics parameters (for example region or range)
+ *       according to the IPA configuration, but statistics upload must not stop.
+ *       Modules that publish or consume pipeline luma (IAN `env.luma.avg`, IR hold
+ *       timing, and similar) assume fresh AE statistics continue to arrive; a stalled
+ *       or AE-less feed can reuse stale pipeline values.
  *
  * @param handle    Image process algorithm pipeline object handle
  * @param stats     Image statistics information
@@ -114,22 +125,25 @@ esp_err_t esp_ipa_pipeline_process(esp_ipa_pipeline_handle_t handle, const esp_i
 esp_err_t esp_ipa_pipeline_destroy(esp_ipa_pipeline_handle_t handle);
 
 /**
- * @brief Set fixed color temperature for AWB model 3 (fixed_ct).
+ * @brief Set fixed color temperature for AWB (compatibility wrapper).
  *
- * @note CT must exactly match an entry in `awb.fixed_ct.presets[]`.
- *       Call esp_ipa_pipeline_process() afterwards to apply WBG and ACC tables.
+ * @note Prefer `esp_ipa_pipeline_ioctl(handle, ESP_IPA_AWB_S_CT, &ct)`.
+ *       CT uses exact preset match when present, otherwise mired interpolation
+ *       between presets (clamped to the table ends). Call
+ *       esp_ipa_pipeline_process() afterwards to apply WBG and ACC tables.
  *
  * @param[in] handle Pipeline handle
  * @param[in] ct     Color temperature in Kelvin
  *
  * @return
  * - ESP_OK On success
- * - ESP_ERR_INVALID_ARG handle is NULL, pipeline has no AWB fixed_ct module, or ct not in presets
+ * - ESP_ERR_INVALID_ARG handle is NULL, or the pipeline has no AWB module that
+ *   accepts fixed CT
  */
 esp_err_t esp_ipa_awb_set_fixed_ct(esp_ipa_pipeline_handle_t handle, uint32_t ct);
 
 /**
- * @brief Check if IPA contains of this variable.
+ * @brief Check if IPA contains of this variable in any typed map.
  *
  * @note Returns false if `ipa->pipeline` is NULL. Do not call from detect-only
  *       `destroy` — that path must not access the pipeline at all.
@@ -137,9 +151,45 @@ esp_err_t esp_ipa_awb_set_fixed_ct(esp_ipa_pipeline_handle_t handle, uint32_t ct
  * @param ipa   Image process algorithm object
  * @param name  Variable name
  *
- * @return true if IPA has global variable of this name; false true if IPA has no global variable of this name
+ * @return true if IPA has global variable of this name; false if IPA has no global variable of this name
  */
 bool esp_ipa_has_var(esp_ipa_t *ipa, const char *name);
+
+/**
+ * @brief Check if IPA contains of this int32_t variable.
+ *
+ * @note Returns false if `ipa` or `ipa->pipeline` is NULL.
+ *
+ * @param ipa   Image process algorithm object
+ * @param name  Variable name
+ *
+ * @return true if IPA has int32_t global variable of this name; otherwise false
+ */
+bool esp_ipa_has_int32_var(esp_ipa_t *ipa, const char *name);
+
+/**
+ * @brief Check if IPA contains of this float variable.
+ *
+ * @note Returns false if `ipa` or `ipa->pipeline` is NULL.
+ *
+ * @param ipa   Image process algorithm object
+ * @param name  Variable name
+ *
+ * @return true if IPA has float global variable of this name; otherwise false
+ */
+bool esp_ipa_has_float_var(esp_ipa_t *ipa, const char *name);
+
+/**
+ * @brief Check if IPA contains of this pointer variable.
+ *
+ * @note Returns false if `ipa` or `ipa->pipeline` is NULL.
+ *
+ * @param ipa   Image process algorithm object
+ * @param name  Variable name
+ *
+ * @return true if IPA has pointer global variable of this name; otherwise false
+ */
+bool esp_ipa_has_ptr_var(esp_ipa_t *ipa, const char *name);
 
 /**
  * @brief Set int32_t type global variable.

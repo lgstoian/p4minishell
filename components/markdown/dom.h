@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "dom_arena.h"
+
 typedef enum {
     DOM_NODE_ELEMENT,
     DOM_NODE_TEXT,
@@ -50,6 +52,8 @@ typedef struct dom_node {
     struct dom_node *last_child;
     struct dom_node *next_sibling;
     struct dom_node *prev_sibling;
+    dom_arena_t *arena;      /**< non-NULL when the node came from an arena; such a
+                                  node is released by unlinking, not by free(). */
 } dom_node_t;
 
 typedef struct dom_tree {
@@ -57,9 +61,15 @@ typedef struct dom_tree {
     dom_node_t *head;
     dom_node_t *body;
     char title[256];
+    dom_arena_t *arena;      /**< the arena the parsed nodes came from, or NULL */
 } dom_tree_t;
 
 dom_node_t *dom_node_new(dom_node_type_t type);
+
+/** Same as dom_node_new(), but the node comes from @p arena when it has one and
+ *  falls back to a plain calloc() when the arena is exhausted. Arena-owned
+ *  nodes are released by dom_arena_destroy(), not by dom_node_free(). */
+dom_node_t *dom_node_new_in(dom_arena_t *arena, dom_node_type_t type);
 void dom_node_free(dom_node_t *node);
 void dom_node_append_child(dom_node_t *parent, dom_node_t *child);
 void dom_node_remove_child(dom_node_t *parent, dom_node_t *child);

@@ -8,11 +8,14 @@ Espressif image process algorithm component provides a suit of image process alg
 |:-:|:-|
 | Auto Color Correction | Calculate lens shadow correction parameters, color correction matrix, and saturation value |
 | Auto Denoising | Calculate Bayer denoising parameters and demosaic parameters |
+| Dead Pixel Correction | Calculate ISP dynamic dead-pixel-correction parameters based on sensor gain |
 | Auto Enhancement | Calculate GAMMA table, sharpen parameters, and contrast value |
 | Auto Gain Control | Calculate exposure and gain |
 | Auto White Balance | Calculate red and blue channels' gain |
 | Image Analyze | Calculate image color temperature and luma |
 | Auto Sensor AE Target Control | This is added for the sensors supported AEG/AGC by themselves |
+| IR Control | Switch between day and night from environment luma. Night also requires AWB statistics with non-zero R and G sums |
+| White Light Control | Switch the white fill light from environment luma, separating the light contribution from the ambient luma |
 
 ## 2. Pipeline Global Variable
 
@@ -27,20 +30,21 @@ algorithm_1.c
 
 algorithm_2.c
 
-    if (esp_ipa_has_var(ipa_2, "color")) {
-        int color = esp_ipa_get_int32(ipa, "color")
+    if (esp_ipa_has_int32_var(ipa_2, "color")) {
+        int color = esp_ipa_get_int32(ipa_2, "color")
     }
 
 algorithm_3.c
 
-    if (esp_ipa_has_var(ipa_3, "color")) {
-        int color = esp_ipa_get_int32(ipa, "color")
+    if (esp_ipa_has_int32_var(ipa_3, "color")) {
+        int color = esp_ipa_get_int32(ipa_3, "color")
     }
 
 ......
 ```
 
 - Note: "ipa_1", "ipa_2" and "ipa_3" should be in one IPA pipeline
+- Prefer typed checkers (`esp_ipa_has_int32_var` / `esp_ipa_has_float_var` / `esp_ipa_has_ptr_var`); `esp_ipa_has_var` still returns true if the name exists in any typed map
 
 ## 3. JSON Configuration
 
@@ -170,6 +174,8 @@ Developers can refer to the configuration files in [esp_cam_sensor](https://gith
 |:-:|:-:|:-:|:-|
 | zones | Array | non-empty for model 2 | Each entry: **`type`** (`uhct`, `hct`, `mct`, `lct`, `ulct`, `green`, `skin`), **`rg`**.min/max, **`bg`**.min/max (chromaticity bounds on **R/G** and **B/G**), **`enabled`** (optional, default true). First matching enabled neutral zone wins. |
 | ref_points | Array | ≥1 for model 2 | Each entry: **`ct`** (Kelvin), **`rg`**, **`bg`**, **`radius`** (attraction in chroma space; `0` disables snapping for that point). |
+| startup_zone | String | `uhct`, `hct`, `mct`, `lct`, `ulct` | Optional model-2 startup zone. Uses the first matching reference point for initial gains and CT, then continues automatic AWB. Omitted: preserve normal white-point scanning without a startup preset. |
+| startup_hold_frames | Integer | ≥ 0 | Hold startup WBG for this many calls carrying AWB statistics; requires `startup_zone`. AWB calculation, statistics scanning and CT export continue. Default `0`: no hold. |
 | new_w | Float | ≥ 0 | IIR weight for the new frame when smoothing chroma / CT. |
 | prev_w | Float | ≥ 0 | IIR weight for the previous frame; with **`new_w`**, both `0` disables smoothing on that path. |
 | export_ct | Boolean | true or false | If **true**, publish estimated CT to **`ct`**. |
@@ -179,7 +185,13 @@ Developers can refer to the configuration files in [esp_cam_sensor](https://gith
 | outlier_bg | Float | ≥ 0 | Same for B/G. |
 | zone_hysteresis_ratio | Float | ≥ 0 | Zone-switch stickiness; `0` disables. |
 
-**AWB model 3 (fixed CT)** — set `model` to `3` or `"fixed_ct"`. Does not use AWB statistics. Applies the active preset from `fixed_ct.presets[]` (exact CT match only). **`fixed_ct.default_ct`** must exist in `presets[]` and is selected at init. Runtime switch: `esp_ipa_awb_set_fixed_ct(handle, <kelvin>)` then `esp_ipa_pipeline_process()`. Returns `ESP_ERR_INVALID_ARG` if CT is not in the preset table. KV **`ct`** is published for ACC CCM/LSC/SAT.
+**AWB model 2 startup white balance** — optionally set `startup_zone` to `uhct`, `hct`, `mct`, `lct`, or `ulct`. Initializes gains and CT from the first valid reference point in the selected enabled zone, then continues automatic AWB. Omitting this parameter preserves normal startup white-point scanning. Returns `ESP_ERR_INVALID_ARG` if no matching reference is available. Startup CT is published to **`ct`**; subsequent CT updates require `export_ct: true`.
+
+**AWB model 2 fixed color temperature** — `ESP_IPA_AWB_S_CT` (`esp_ipa_pipeline_ioctl`, `uint32_t` Kelvin) holds gains from `ref_points[]` and skips statistics. An exact `ct` uses that point. A value between two points interpolates R/G and B/G in mired (`1000000 / Kelvin`). A value outside the table is clamped to the nearest point. The next `esp_ipa_pipeline_process()` publishes WBG on any real gain change (same `1e-4` step as model 3) and keeps **`ct`**. IAN does not overwrite that held CT. `esp_ipa_pipeline_get_state` / `set_state` restore this hold when `awb.fixed.valid` is set. `ESP_IPA_AWB_S_RESET` resumes statistics and the JSON `min_*_gain_step` filter. `ct` 0 returns `ESP_ERR_INVALID_ARG`.
+
+**AWB model 3 (fixed CT)** — set `model` to `3` or `"fixed_ct"`. Does not use AWB statistics. Applies gains from `fixed_ct.presets[]`. A requested Kelvin value that matches a preset uses that preset. A value between two presets interpolates R/G and B/G in mired (`1000000 / Kelvin`). A value outside the table is clamped to the nearest preset. **`fixed_ct.default_ct`** is selected at init the same way. Runtime switch: `ESP_IPA_AWB_S_CT` then `esp_ipa_pipeline_process()`. `ESP_IPA_AWB_S_RESET` restores `default_ct` and stays on the fixed-CT table. Returns `ESP_ERR_INVALID_ARG` if `ct` is 0. KV **`ct`** is the applied Kelvin, after clamping, for ACC CCM/LSC/SAT.
+
+Model 0 and model 1 reject `ESP_IPA_AWB_S_CT` / `ESP_IPA_AWB_S_RESET` with `ESP_ERR_INVALID_ARG`.
 
 ```json
 "awb":
@@ -210,7 +222,7 @@ Legacy single preset (still supported):
 
 | Parameter | Type | Range | Description |
 |:-:|:-:|:-:|:-|
-| fixed_ct | Object | required for model 3 | **`esp_ipa_awb_fixed_cfg_t`**: **`default_ct`** (Kelvin, must match a preset), **`presets[]`** each with **`ct`/`rg`/`bg`** (>0). Runtime CT via **`esp_ipa_awb_set_fixed_ct()`** only (exact match). Legacy `{ ct, rg, bg }` = one preset. Deprecated JSON key **`fixed`** is still accepted by the generator. |
+| fixed_ct | Object | required for model 3 | **`esp_ipa_awb_fixed_cfg_t`**: **`default_ct`** (Kelvin; a preset, or a value interpolated between presets), **`presets[]`** each with **`ct`/`rg`/`bg`** (>0). Runtime CT via **`ESP_IPA_AWB_S_CT`**: exact preset, mired interpolation between presets, or clamp to the nearest preset. Legacy `{ ct, rg, bg }` = one preset. Deprecated JSON key **`fixed`** is still accepted by the generator. |
 
 ---
 
@@ -250,6 +262,8 @@ Legacy single preset (still supported):
 | saturation | Array | / | The saturation value and color temperature mapping table adopted the principle of nearest neighbor indexing |
 | color_temp | Integer | >0 | Color temperature value |
 | value | Integer | <div style="white-space: nowrap;">[0,255]</div> | Saturation value |
+
+Saturation runs after init. `esp_ipa_pipeline_ioctl()` `ESP_IPA_ACC_S_SAT_STATUS` takes an `int`: `0` stops later saturation updates, and any other value runs them again. `ESP_IPA_ACC_G_SAT_STATUS` reads that flag. Stopping does not clear the last saturation value. The next run after resume publishes the table value for the current color temperature.
 
 ---
 
@@ -549,7 +563,77 @@ Legacy single preset (still supported):
 
 ---
 
-#### 3.2.4 Auto Enhancement
+#### 3.2.4 Dead Pixel Correction
+
+---
+
+```json
+"SC2336":
+{
+    "dpc": {}
+}
+```
+
+| Parameter | Type | Range | Description |
+|:-:|:-:|:-:|:-|
+| dpc | Object | / | Dead pixel correction configuration parameters |
+
+---
+
+```json
+"dpc":
+{
+    "model": 0,
+    "debounce_gain": 0.1,
+    "table":
+    [
+        {
+            "gain": 1.0,
+            "param":
+            {
+                "method": 1,
+                "high_threshold": 8,
+                "low_threshold": 8
+            }
+        },
+        {
+            "gain": 4.0,
+            "param":
+            {
+                "method": 2,
+                "first_stage_upper_ratio": 1.0,
+                "first_stage_lower_ratio": 0.5,
+                "bright_deviation_factor": 0.5,
+                "dark_deviation_factor": 0.5
+            }
+        },
+        ...
+    ]
+}
+```
+
+| Parameter | Type | Range | Description |
+|:-:|:-:|:-:|:-|
+| model | Integer | {0,1} | DPC gain mapping model: `0` selects the nearest gain node (with optional debounce); `1` linearly interpolates parameters between neighboring gain nodes |
+| debounce_gain | Float | ≥0 | Model 0 switch debounce threshold in sensor-gain units; `0` disables debounce. A candidate node is accepted only when it is closer than the current node by more than this value |
+| table | Array | ≥1 entries | DPC dynamic parameters and sensor gain mapping table |
+| gain | Float | >0 | Sensor gain |
+| param | Object | / | ISP dynamic DPC parameters for this gain node |
+| method | Integer | {1,2} | Dynamic correction method selected for this node; method 1 and method 2 can be mixed across nodes |
+| high_threshold | Integer | [0,255] | Method 1: a pixel above `max8 + high_threshold` is a bright dead-pixel candidate |
+| low_threshold | Integer | [0,255] | Method 1: a pixel below `min8 - low_threshold` is a dark dead-pixel candidate |
+| first_stage_upper_ratio | Float | [0,1] | Method 2: upper bound of the first-stage normal-pixel range; must be greater than `first_stage_lower_ratio` |
+| first_stage_lower_ratio | Float | [0,1] | Method 2: lower bound of the first-stage normal-pixel range |
+| bright_deviation_factor | Float | [0,1] | Method 2: second-stage bright-pixel sensitivity; a smaller value corrects bright pixels more aggressively |
+| dark_deviation_factor | Float | [0,1] | Method 2: second-stage dark-pixel sensitivity; a smaller value corrects dark pixels more aggressively |
+
+* Note: Model 0 uses nearest-neighbor indexing like ADN. Model 1 interpolates continuously between two nodes that share the same `method`; if adjacent nodes use different methods, model 1 falls back to the nearer node
+* Note: Method 1 / method 2 parameters are stored in `esp_ipa_dpc_t`. Method 2 ratios and deviation factors remain floating-point values in range [0, 1]
+* Note: Aliases `"nearest"` / `"linear"` (for `model`) and `"method_1"` / `"method_2"` (for `method`) are also accepted
+
+---
+
+#### 3.2.5 Auto Enhancement
 
 ---
 
@@ -742,7 +826,7 @@ Legacy single preset (still supported):
 
 ---
 
-#### 3.2.5 Auto Gain Control
+#### 3.2.6 Auto Gain Control
 
 ---
 
@@ -892,6 +976,10 @@ Legacy single preset (still supported):
 | high_regions | Integer | ESP32-P4:(0,25) | Image high threshold counter high regions number: if high threshold counter is less than this value will all sampled data which is higher than "high_threshold" be dropped |
 | weight | <div style="white-space: nowrap;">Array[Integer]</div> | [0,255] | Image brightness sampling weight |
 
+**Runtime AE weight** — `ESP_IPA_AGC_S_METER_LUMA_WEIGHT` replaces the 5×5 AE weight table. Index is `x * ISP_AE_BLOCK_Y_NUM + y`. An all-zero table is rejected. Blocks whose weight differs from the JSON table stay in the average when the low-threshold or high-threshold region drop would otherwise set their weight to 0. `ESP_IPA_AGC_S_RESET_METER_WEIGHT` restores the JSON table. The application maps points or rectangles onto AE blocks.
+
+**Luma target offset** — `ESP_IPA_AGC_S_METER_TARGET_OFFSET` and `ESP_IPA_AGC_G_METER_TARGET_OFFSET` add the same integer shift to JSON `luma_target`, `luma_low`, and `luma_high`. NaN and infinity are rejected. The stored shift is limited to [`ESP_IPA_AGC_METER_TARGET_OFFSET_MIN`, `ESP_IPA_AGC_METER_TARGET_OFFSET_MAX`] so an 8-bit JSON target can reach either end of 1..255. The resulting target, low, and high are then clamped to 1..255. AGC continues to split exposure and gain. Resetting the weight table does not change the offset.
+
 ---
 
 ```json
@@ -1031,7 +1119,7 @@ Legacy single preset (still supported):
 
 ---
 
-#### 3.2.6 Auto Sensor AE Target Control
+#### 3.2.7 Auto Sensor AE Target Control
 
 ---
 
@@ -1085,7 +1173,7 @@ Legacy single preset (still supported):
 | ae_value | Integer | >0 | AE target level value |
 ---
 
-#### 3.2.7 Auto Focus Control
+#### 3.2.8 Auto Focus Control
 
 ---
 
@@ -1145,9 +1233,175 @@ Legacy single preset (still supported):
 | l2_scan_points_num | Integer | >0 | Level 2 scanning point numbers |
 | max_pos | Integer | >0 | Maximum focus position, less value can reduce scanning time cost, but also shorten the focus distance |
 
+**Runtime AF windows** — `ESP_IPA_AF_S_WINDOWS` replaces the three runtime windows and restarts the focus scan. `ESP_IPA_AF_S_WINDOW_WEIGHT` replaces window weights (software only; no ISP settle). `ESP_IPA_AF_S_RESET` restores the JSON windows and `weight_table`, then restarts the scan. After IPA publishes new windows to the ISP, the next AF stats frame is ignored so the scan does not use stale geometry. `ESP_IPA_AF_G_WINDOWS` and `ESP_IPA_AF_G_WINDOW_WEIGHT` read the runtime windows and weights. The application maps points or rectangles onto AF windows.
+
 ---
 
-#### 3.2.8 Extended Control
+#### 3.2.9 IR Control
+
+---
+
+```json
+"SC2336":
+{
+    "ir":
+    {
+        "model": 0,
+        "model0_param":
+        {
+            ...
+        }
+    }
+}
+```
+
+| Parameter | Type | Range | Description |
+|:-:|:-:|:-:|:-|
+| ir | Object | / | IR day/night switching configuration. Omitted `luma_env` uses `env.luma.avg`. JSON `null` or `"NULL"` stays C `NULL` and that frame has no luma |
+
+---
+
+```json
+"ir":
+{
+    "model": 0,
+    "model0_param":
+    {
+        "luma_env": "env.luma.avg",
+        "day_luma_threshold": 0.5,
+        "day_switch_night_time_us": 500000,
+        "day_keep_time_us": 2000000,
+        "night_ir_factor": 10.0,
+        "night_luma_threshold": 0.8,
+        "night_switch_day_time_us": 500000,
+        "night_keep_time_us": 3000000,
+        "night_awb":
+        {
+            "green": { "max": 255, "min": 0 },
+            "rg": { "max": 1.5, "min": 0.5 },
+            "bg": { "max": 1.5, "min": 0.5 }
+        },
+        "night_ccm":
+        {
+            "matrix": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        },
+        "night_red_gain": 1.0,
+        "night_blue_gain": 1.0
+    }
+}
+```
+
+| Parameter | Type | Range | Description |
+|:-:|:-:|:-:|:-|
+| model | Integer | {0} | IR data process model |
+| model0_param | Object | / | Model 0 parameters |
+| luma_env | String | / | Pipeline variable for environment luma. Omit the key to use `env.luma.avg`. JSON `null` or the string `NULL` is C `NULL`, and that frame has no luma |
+| day_luma_threshold | Float | / | Day environment luma threshold. Bright when luma is greater |
+| day_switch_night_time_us | Integer | >=0 | Transition time from day to night, microseconds. Omitted key is `0` |
+| day_keep_time_us | Integer | >=0 | Dark must hold this long before leaving day, microseconds |
+| night_ir_factor | Float | / | Multiply environment luma at night before the threshold compare. Omitted key is `1.0` |
+| night_luma_threshold | Float | / | Night environment luma threshold. Bright when `luma * night_ir_factor` is greater |
+| night_switch_day_time_us | Integer | >=0 | Transition time from night to day, microseconds. Omitted key is `0` |
+| night_keep_time_us | Integer | >=0 | Bright luma and non-zero AWB R and G must hold this long before leaving night, microseconds |
+| night_awb | Object | / | AWB statistics window written when the switch to night starts. `green`/`rg`/`bg` each have `max` and `min` |
+| night_ccm | Object | / | CCM written when the switch to night starts. `matrix` has 9 elements, row-major |
+| night_red_gain | Float | / | Red gain written when the switch to night starts |
+| night_blue_gain | Float | / | Blue gain written when the switch to night starts |
+
+When the `luma_env` key is omitted, it becomes `env.luma.avg`. JSON `null` and the string `NULL` stay C `NULL`. IR does not compute luma from AE statistics.
+
+Day compares luma with `day_luma_threshold`. Night multiplies luma by `night_ir_factor` before comparing with `night_luma_threshold`. A bright night frame starts leaving only when AWB statistics are present and both R and G are non-zero. No luma, missing AWB, R=0, or G=0 keeps night and does not advance the timer. Day turns IR on when it stays dark for `day_keep_time_us`. Night turns IR off when bright luma and AWB R and G stay non-zero for `night_keep_time_us`. `day_switch_night_time_us` is the day-to-night transition; night judging starts after it. `night_switch_day_time_us` is the night-to-day transition; day judging starts after it. Switching publishes `metadata.ir_enable` (`IPA_METADATA_FLAGS_IR`).
+
+The switch to night stops AWB (`ESP_IPA_AWB_S_STATUS`), IAN color-temperature estimation (`ESP_IPA_IAN_S_CT_STATUS`), CCM (`ESP_IPA_ACC_S_CCM_STATUS`) and saturation, then writes `night_awb`, `night_ccm`, `night_red_gain`, `night_blue_gain` and saturation `0`. Entering day starts those modules again. Each module clears its applied index (`-1`, or the AWB statistics window) and republishes on its next process. IR does not store or restore the previous saturation.
+
+**Note**: The IR module should be put the last node of the Json configuration file.
+
+**Note**: `esp_ipa_pipeline_process()` requires the lower layer to keep uploading real-time ISP statistics every cycle. IPA may update statistics parameters from configuration or metadata (for example region or range), but the statistics stream must not stop. With the default `luma_env` (`env.luma.avg`), IAN only refreshes that variable when the current frame carries AE; IR still reads the last published value for `day_keep_time_us` and `night_keep_time_us`. Stopping AE upload or calling process without AE can therefore advance IR hold timing on stale luma. That cached-luma path is not a skipped decision. JSON `null` / `"NULL"` (`luma_env == NULL`) means this frame has no luma, so IR does not advance the day/night decision. `esp_ipa_pipeline_process()` still returns `ESP_OK`. The application does not drop the frame. 
+
+---
+
+#### 3.2.10 White Light Control
+
+---
+
+```json
+"SC2337P":
+{
+    "ian": { "luma": { "env": { ... } } },
+    "wl":
+    {
+        "enter_luma": 4.0,
+        "exit_luma": 16.0,
+        "light": { "ct": 5000 }
+    },
+    "awb": { ... },
+    "agc": { ... },
+    "acc": { ... }
+}
+```
+
+| Parameter | Type | Range | Description |
+|:-:|:-:|:-:|:-|
+| wl | Object | / | White fill light control configuration parameters |
+
+---
+
+```json
+"wl":
+{
+    "enable": true,
+    "enter_luma": 4.0,
+    "exit_luma": 16.0,
+    "verify_ratio": 1.5,
+    "k_tolerance": 0.1,
+    "enter_frames": 30,
+    "exit_frames": 30,
+    "settle_frames": 5,
+    "settle_max_frames": 60,
+    "settle_tolerance": 0.02,
+    "probe_period_s": 600,
+    "light":
+    {
+        "ct": 5000
+    },
+    "gate":
+    {
+        "enable": false,
+        "min_gain_of_max": 0.8,
+        "min_exposure_of_max": 0.9
+    },
+    "enable_log": false
+}
+```
+
+| Parameter | Type | Range | Description |
+|:-:|:-:|:-:|:-|
+| enable | Boolean | true or false | Enable the algorithm, only takes effect at init. `false`: the module does nothing and the fill light stays off. Default `true` |
+| enter_luma | Float | >0 | Required. Enter night when environment luma `E` is below this value for `enter_frames` |
+| exit_luma | Float | >enter_luma | Required. Start a probe when the ambient luma `A = E - K` is above this value for `exit_frames` |
+| verify_ratio | Float | ≥1 | Leave night when the luma with the light off is above `enter_luma * verify_ratio`. Default `1.5` |
+| k_tolerance | Float | [0, 1) | Allowed measurement error of the light contribution `K` as a fraction of `K`, the mismatch threshold is `max(enter_luma, k_tolerance * K)`. Default `0.1` |
+| enter_frames | Integer | >0 | Consecutive frames to enter night. Default `30` |
+| exit_frames | Integer | >0 | Consecutive frames to start a probe. Default `30` |
+| settle_frames | Integer | ≥0 | Frames with unchanged gain and exposure regarded as AE stable. Default `5` |
+| settle_max_frames | Integer | >0 | Maximum frames to wait for AE stable, and then for `E` stable. Default `60` |
+| settle_tolerance | Float | [0, 1) | `E` is stable when it stays within `max(enter_luma, settle_tolerance * E)` for `settle_frames`. Default `0.02` |
+| probe_period_s | Integer | ≥0 | Probe in night when `K` was measured this long ago, recovers from an overestimated `K`; `0` disables. Default `600` |
+| light | Object | / | Fill light parameters |
+| ct | Integer | ≥0 | Fill light color temperature, Kelvin; `0`: unknown. Out of day, AWB is locked to it by `ESP_IPA_AWB_S_CT`, see AWB model 2 fixed color temperature. Default `0` |
+| gate | Object | / | Enter night gate parameters |
+| enable(gate) | Boolean | true or false | Also require gain and exposure near the sensor maximum to enter night. Default `false` |
+| min_gain_of_max | Float | [0, 1] | Minimum current gain as a fraction of the sensor maximum gain. Default `0.8` |
+| min_exposure_of_max | Float | [0, 1] | Minimum current exposure as a fraction of the sensor maximum exposure. Default `0.9` |
+| enable_log | Boolean | true or false | Enable the algorithm debug log |
+
+The environment luma is `E = A + K`, the ambient luma plus the light contribution. Entering night turns the light on in two steps, off → 50% → 100%, and measures `K` from the luma of each step after AE settles. In night, `A = E - K` decides when to probe: the light is dimmed to 50% to measure the ambient luma again, and the night is left only when the luma with the light off confirms it. The brightness is published in percent by `metadata.wl.brightness` (`IPA_METADATA_FLAGS_WL`); the camera driver converts it to the LED output, which must be linear to it. The state is published to pipeline variable **`wl.state`** (`esp_ipa_wl_state_t`). When WL leaves day, it locks AWB to `light.ct` by `ESP_IPA_AWB_S_CT`, and when it returns to day, it releases AWB by `ESP_IPA_AWB_S_RESET`; nothing is sent if `light.ct` is `0`. AWB model 0 and model 1 reject the command, and WL goes on without the lock. The application should not send `ESP_IPA_AWB_S_CT` / `ESP_IPA_AWB_S_RESET` while WL is enabled, because WL releases AWB when it returns to day.
+
+**Note**: WL requires IAN `luma.env`, which publishes `env.luma.avg`, so it must be put after IAN in the Json configuration file. Putting it before AWB lets AWB follow the lock in the same frame, otherwise one frame later. WL and IR are exclusive.
+
+---
+
+#### 3.2.11 Extended Control
 
 ---
 

@@ -28,6 +28,8 @@
 #include "mbedtls/base64.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_wifi.h"
 #include "esp_wifi_default.h"
 #include "freertos/FreeRTOS.h"
@@ -1412,16 +1414,65 @@ static void networking_wifi_format_bssid(const uint8_t bssid[6], char *out, size
  * `bare` selects the machine-readable form (bare SSID lines, no colour), so
  * `wifi scan /b > ap.txt` produces a clean list for a batch file to consume.
  */
-void networking_wifi_scan(bool bare)
+int networking_wifi_scan_records(wifi_ap_record_t *records, int max)
 {
 #if NETWORKING_WIFI_RUNTIME_ENABLED
     esp_err_t error;
+    uint16_t requested;
+    uint16_t record_count;
+    uint16_t index;
+    uint16_t inner;
+
+    if (records == NULL || max < 1) {
+        return 0;
+    }
+    if (s_wifi_state != NETWORKING_WIFI_STATE_STARTED) {
+        return 0;
+    }
+    requested = (uint16_t)max;
+    memset(records, 0, sizeof(*records) * (size_t)max);
+    record_count = requested;
+
+    error = esp_wifi_scan_start(NULL, true);
+    if (error != ESP_OK) {
+        return 0;
+    }
+    error = esp_wifi_scan_get_ap_records(&record_count, records);
+    if (error != ESP_OK) {
+        return 0;
+    }
+    if (record_count > requested) {
+        record_count = requested;
+    }
+    (void)networking_wifi_ap_cache_from_scan(records, record_count);
+
+    /* Selection sort by RSSI, strongest first. The record set is bounded by
+     * the driver's own caps, so the O(n^2) loop is cheap in practice. */
+    for (index = 0; index < record_count; index++) {
+        for (inner = index + 1; inner < record_count; inner++) {
+            if (records[inner].rssi > records[index].rssi) {
+                wifi_ap_record_t swap = records[index];
+                records[index] = records[inner];
+                records[inner] = swap;
+            }
+        }
+    }
+    return (int)record_count;
+#else
+    (void)records;
+    (void)max;
+    return 0;
+#endif
+}
+
+void networking_wifi_scan(bool bare)
+{
+#if NETWORKING_WIFI_RUNTIME_ENABLED
     wifi_ap_record_t *records = NULL;
     uint16_t requested = P4_CONFIG_WIFI_SCAN_LIMIT;
     uint16_t record_count;
     uint16_t limit;
     uint16_t index;
-    uint16_t inner;
 
     if (requested < 1) {
         requested = 1;
@@ -1439,41 +1490,13 @@ void networking_wifi_scan(bool bare)
         networking_record_errorf(ESP_ERR_NO_MEM, "WiFi scan failed to allocate the AP table");
         return;
     }
-    record_count = requested;
-
-    networking_appendf(SH_PROMPT "wifi.scan:" SH_RST " scanning for access points...\n");
-    error = esp_wifi_scan_start(NULL, true);
-    if (error != ESP_OK) {
-        networking_record_errorf(error, "WiFi scan failed - check sdkconfig or hosted link");
-        free(records);
-        return;
-    }
-
-    error = esp_wifi_scan_get_ap_records(&record_count, records);
-    if (error != ESP_OK) {
-        networking_record_errorf(error, "Failed to read WiFi scan results");
-        free(records);
-        return;
-    }
-    (void)networking_wifi_ap_cache_from_scan(records, record_count);
+    record_count = (uint16_t)networking_wifi_scan_records(records, requested);
 
     if (record_count == 0) {
         networking_appendf(SH_MUTE "wifi.scan:" SH_RST " no access points found\n");
         networking_record_infof("Scan completed with no visible APs");
         free(records);
         return;
-    }
-
-    /* Selection sort by RSSI, strongest first. The record set is bounded by
-     * the driver's own caps, so the O(n^2) loop is cheap in practice. */
-    for (index = 0; index < record_count; index++) {
-        for (inner = index + 1; inner < record_count; inner++) {
-            if (records[inner].rssi > records[index].rssi) {
-                wifi_ap_record_t swap = records[index];
-                records[index] = records[inner];
-                records[inner] = swap;
-            }
-        }
     }
 
     limit = record_count;
@@ -2419,10 +2442,32 @@ esp_err_t networking_http_get_ex(const char *url,
         use = stack_headers;
         use_count = header_count + 1;
     }
-    return networking_http_request_internal(HTTP_METHOD_GET, url, NULL, NULL, 0,
-                                            NULL, auth_user, auth_pass,
-                                            use, use_count, true,
-                                            result, true, "rss");
+    /* Bounded retry on transient failures only: a timeout or a 5xx server
+     * error. A 4xx is final (retrying cannot fix it), so it returns at once. */
+    {
+        int attempts = 1 + P4_CONFIG_HTTP_MAX_RETRIES;
+        esp_err_t error = ESP_FAIL;
+        int i;
+
+        for (i = 0; i < attempts; i++) {
+            error = networking_http_request_internal(HTTP_METHOD_GET, url, NULL, NULL, 0,
+                                                     NULL, auth_user, auth_pass,
+                                                     use, use_count, true,
+                                                     result, true, "rss");
+            if (error == ESP_OK) {
+                return ESP_OK;
+            }
+            if (error != ESP_ERR_TIMEOUT &&
+                !(error == ESP_ERR_NOT_FOUND && result != NULL &&
+                  result->http_status >= 500 && result->http_status < 600)) {
+                return error;
+            }
+            if (i + 1 < attempts && P4_CONFIG_HTTP_RETRY_DELAY_MS > 0) {
+                vTaskDelay(pdMS_TO_TICKS(P4_CONFIG_HTTP_RETRY_DELAY_MS));
+            }
+        }
+        return error;
+    }
 }
 
 /* ========================================================================
@@ -2841,14 +2886,17 @@ esp_err_t networking_http_post_form(const char *url,
  * STREAMING HTTP
  * ======================================================================== */
 
-esp_err_t networking_http_get_stream(const char *url, networking_stream_cb cb,
-                                      void *ctx)
+static esp_err_t networking_http_stream_impl(const char *url,
+                                             const networking_http_header_t *headers,
+                                             size_t header_count,
+                                             networking_stream_cb cb, void *ctx)
 {
     esp_http_client_config_t http_config = {0};
     esp_http_client_handle_t client = NULL;
     uint8_t *chunk_buf = NULL;
     char cookie_host[128];
     esp_err_t error = ESP_FAIL;
+    size_t i;
 
     if (url == NULL || url[0] == '\0' || cb == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -2893,6 +2941,13 @@ esp_err_t networking_http_get_stream(const char *url, networking_stream_cb cb,
     if (client == NULL) {
         heap_caps_free(chunk_buf);
         return ESP_ERR_NO_MEM;
+    }
+
+    /* Extra request headers (e.g. `Range: bytes=N-` for a resumed download). */
+    for (i = 0; i < header_count && headers != NULL; i++) {
+        if (headers[i].name != NULL && headers[i].value != NULL) {
+            (void)esp_http_client_set_header(client, headers[i].name, headers[i].value);
+        }
     }
 
     networking_appendf(SH_PROMPT "httpget:" SH_RST " streaming " SH_VAL "%s" SH_RST "\n", url);
@@ -2948,6 +3003,26 @@ cleanup:
         heap_caps_free(chunk_buf);
     }
     return error;
+}
+
+esp_err_t networking_http_get_stream(const char *url, networking_stream_cb cb,
+                                      void *ctx)
+{
+    return networking_http_stream_impl(url, NULL, 0, cb, ctx);
+}
+
+esp_err_t networking_http_get_stream_ex(const char *url,
+                                         const networking_http_header_t *headers,
+                                         size_t header_count,
+                                         networking_stream_cb cb, void *ctx)
+{
+    if (headers == NULL && header_count > 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (header_count > NETWORKING_HTTP_MAX_EXTRA_HEADERS) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return networking_http_stream_impl(url, headers, header_count, cb, ctx);
 }
 
 /** Skip leading spaces/tabs and a UTF-8 BOM. */

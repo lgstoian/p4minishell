@@ -71,10 +71,36 @@ below lists the components that ship in this repository and their licenses.
 | `lvgl__lvgl` | MIT License |
 | `espressif__esp_hosted/common/protobuf-c` | BSD-style license (protobuf-c project) |
 
+`components/imgdec/` decodes PNG with **LodePNG** and JPEG with **TJpgDec** —
+both ship inside the vendored `lvgl__lvgl` component (`src/libs/lodepng`,
+`src/libs/tjpgd`) and keep their own notices there: LodePNG is zlib-licensed
+(© Lode Vandevenne), TJpgDec is © ChaN (2021). `imgdec` is a thin wrapper and
+adds no new third-party source; the licenses above already cover them.
+
 The exact license texts ship inside each component directory
 (`LICENSE`, `LICENCE`, `license.txt`, or equivalent). Some Espressif
 components bundle additional third-party sources under their own notices; those
 notices are preserved verbatim inside the component.
+
+### Design influence recorded, no code copied
+
+Two public browser projects were reviewed for ideas and deliberately **not**
+copied, because neither ships a licence file (GitHub reports `license: null` for
+both), so their code is "all rights reserved" regardless of any README claim:
+
+| Project | Licence status | What was taken |
+|---------|----------------|----------------|
+| `alunmorris/babe32-ESP32-web-browser-for-cheap-black-display` | README claims MIT, **no LICENSE file in the repo** | Design only: a deliberate PSRAM budget (source buffer / parse pool / image buffers / history), pool-allocating the parse output instead of per-node `malloc`, and keeping the network off the UI task. |
+| `mactjaap/mini_browser` | **No licence file** | Design only: an LRU image cache, a back/forward page cache that stores rendered pages, background image loading, find-in-page, and a reader view. |
+
+Copyright protects expression, not ideas, so the architecture above is
+re-expressed in our own code (`components/browser/`, the `components/tui` page
+snapshots) with our own naming, structure and implementation. No file, function
+or table was copied and no licence text is required, because none was
+reproduced. The implementation deliberately **surpasses** their limits: we keep
+QuickJS (neither has JS), a CSS cascade (babe32 has none), native PNG/JPEG
+decode (they need a resize proxy), CA-store TLS (babe32 accepts any
+certificate), a 1024x600 panel and 32 MB of PSRAM (versus 480x320 and 8 MB).
 
 ### Board support packages vendored in-tree (`boards/*/board_bsp/`)
 
@@ -131,6 +157,43 @@ The co-processor firmware this project ships is built from its own
 | `assets/fonts/Noto*.ttf` | SIL Open Font License 1.1 (`assets/fonts/OFL.txt`) |
 | `components/gfx/gfx_font.c` | Generated from the public-domain `unscii-8` font |
 | `icon/icon-512.png`, `main/assets/icon_splash.c` | Project-authored derivatives |
+
+### Code adapted from ESP-Brookesia (Apache-2.0)
+
+One host tool is a **derivative work** of Espressif's
+[ESP-Brookesia](https://github.com/espressif/esp-brookesia) (Apache-2.0). It
+keeps the upstream copyright and license header, and the full Apache-2.0 text
+ships at [`tools/LICENSE-Apache-2.0.txt`](tools/LICENSE-Apache-2.0.txt):
+
+| This project | Adapted from | Terms |
+|--------------|--------------|-------|
+| `tools/font_subset.py` | `gui/brookesia_gui_interface/tools/font/charset_filter.py` | Apache-2.0, © Espressif Systems (Shanghai) CO LTD |
+
+Local changes to that file are marked in its header: the input charset file is
+optional (the GB2312/GBK candidate sets are generated from the encoding
+tables), P4MiniShell-specific defaults were added, and the branding was
+reworded. The upstream `charset_zh_en_gbk.txt` data file is **not** vendored.
+
+The rest of this repository is MIT, including the files below. They were
+written for P4MiniShell and are **not** derivative works, but they adopt
+ESP-Brookesia's *designs* (an idea or a data format is not copyrightable
+expression); the credit is recorded here rather than in the code:
+
+| This project | Design credit |
+|--------------|---------------|
+| `pkg install`/`pkg unpack`/`pkg scan`, `.PKG` bundles, staged installs | ESP-Brookesia `.bpk` ZIP packages, boot-time `<volume>/apps` scan, staging + rollback install |
+| `store` verb | ESP-Brookesia `brookesia_app_store` index/metadata/download flow |
+| `tools/lvgl_image_pack.py` | ESP-Brookesia `cmake/image_pack.cmake` (LVGL v9 `.bin` + `imageSet` index) |
+| `tools/make_pkg.py` | ESP-Brookesia `.bpk` container layout |
+| `tools/dev_mcp_server.py` | ESP-Brookesia `@brookesia/app-dev-plugin` (MCP dev plugin) |
+
+**Not** taken from ESP-Brookesia, and deliberately avoided: the Lua/JS/WASM/ELF
+runtime backends, the ELF loader (P4MiniShell has no SD code execution —
+[`ABI.md`](ABI.md) §1), the JSON-UI document model and its LVGL backend (a
+second windowing model), the service framework / `lib_utils` / HAL / system
+core (duplicates of this project's own layers), and `brookesia_emulation_nes`
+(which vendors the GPL-2.0 `nofrendo` emulator — GPL is incompatible with this
+MIT project and must not be copied).
 
 ## Distribution rules
 

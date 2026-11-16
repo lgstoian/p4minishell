@@ -239,6 +239,31 @@ typedef struct {
 void tui_viewport_init(int page_rows);
 void tui_viewport_scroll_to(int row);
 void tui_viewport_scroll_by(int delta);
+
+/* ==== Page snapshots (the browser back/forward cache) ====
+ * A snapshot is an opaque PSRAM blob holding the rendered page: the cell grid,
+ * the link regions and the address bar. Restoring one is a memcpy, so going back
+ * or forward to a cached page is instant and costs no network, parse or render
+ * work. The blob is versioned by its dimensions: a snapshot taken under a
+ * different grid is rejected rather than blitted into the wrong shape. */
+typedef struct {
+    int32_t cols;
+    int32_t rows;
+    int32_t link_count;
+    uint32_t link_offset;      /* bytes from the header to the link array */
+    char address[256];
+} tui_page_shot_t;
+
+/** Capture the current page. @return an owned PSRAM blob (release with
+ *  tui_page_shot_release()), or NULL when no page is up or on OOM. */
+void *tui_page_shot_capture(void);
+
+/** Restore a captured page. @return false when the blob is NULL, the viewport
+ *  is not initialised, or the snapshot's grid does not match the current one. */
+bool tui_page_shot_restore(const void *blob);
+
+/** Release a blob returned by tui_page_shot_capture(). NULL-safe. */
+void tui_page_shot_release(void *blob);
 int tui_viewport_get_offset(void);
 int tui_viewport_get_page_rows(void);
 

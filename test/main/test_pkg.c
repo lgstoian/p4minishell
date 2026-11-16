@@ -12,6 +12,7 @@
 
 #include "unity.h"
 #include "command.h"
+#include "p4minishell_config.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -315,4 +316,85 @@ void test_pkg_sanitize_pipe_field(void)
     pkg_sanitize_pipe_field(field);
     TEST_ASSERT_EQUAL_STRING("x  y", field);
     pkg_sanitize_pipe_field(NULL);
+}
+
+void test_pkg_services_parse(void)
+{
+    char apps[P4_CONFIG_PKG_MAX_SERVICES][COMMAND_APP_NAME_BYTES];
+    char ops[P4_CONFIG_PKG_MAX_SERVICES][3];
+    char vers[P4_CONFIG_PKG_MAX_SERVICES][32];
+    char text[256];
+
+    /* All three operators, plus a bare name (any version). */
+    snprintf(text, sizeof(text), "MOOD>=1.2, DB=2.0, X-1_Y>3, PLAIN");
+    TEST_ASSERT_EQUAL_INT(4, pkg_services_parse(text, apps, ops, vers,
+                                                P4_CONFIG_PKG_MAX_SERVICES));
+    TEST_ASSERT_EQUAL_STRING("MOOD", apps[0]);
+    TEST_ASSERT_EQUAL_STRING(">=", ops[0]);
+    TEST_ASSERT_EQUAL_STRING("1.2", vers[0]);
+    TEST_ASSERT_EQUAL_STRING("DB", apps[1]);
+    TEST_ASSERT_EQUAL_STRING("=", ops[1]);
+    TEST_ASSERT_EQUAL_STRING("2.0", vers[1]);
+    TEST_ASSERT_EQUAL_STRING("X-1_Y", apps[2]);
+    TEST_ASSERT_EQUAL_STRING(">", ops[2]);
+    TEST_ASSERT_EQUAL_STRING("3", vers[2]);
+    TEST_ASSERT_EQUAL_STRING("PLAIN", apps[3]);
+    TEST_ASSERT_EQUAL_STRING("=", ops[3]);
+    TEST_ASSERT_EQUAL_UINT8(0, (uint8_t)vers[3][0]);   /* any version */
+
+    /* Empty list is zero entries, not an error. */
+    text[0] = '\0';
+    TEST_ASSERT_EQUAL_INT(0, pkg_services_parse(text, apps, ops, vers,
+                                                P4_CONFIG_PKG_MAX_SERVICES));
+
+    /* Whitespace around tokens is tolerated (not around the operator: the
+     * `requires=` grammar is `APP>=1.2`). */
+    snprintf(text, sizeof(text), "  MOOD>=1.2 , DB=2.0  ");
+    TEST_ASSERT_EQUAL_INT(2, pkg_services_parse(text, apps, ops, vers,
+                                                P4_CONFIG_PKG_MAX_SERVICES));
+    TEST_ASSERT_EQUAL_STRING("MOOD", apps[0]);
+    TEST_ASSERT_EQUAL_STRING("1.2", vers[0]);
+    TEST_ASSERT_EQUAL_STRING("DB", apps[1]);
+
+    /* Malformed: bad name chars, overflow, NULLs. `strtok_r` collapses
+     * consecutive commas (the project's split convention), so `MOOD,,DB`
+     * yields two entries rather than an error. */
+    snprintf(text, sizeof(text), "MO OD>=1.2");
+    TEST_ASSERT_EQUAL_INT(-1, pkg_services_parse(text, apps, ops, vers,
+                                                 P4_CONFIG_PKG_MAX_SERVICES));
+    snprintf(text, sizeof(text), "MOOD,,DB");
+    TEST_ASSERT_EQUAL_INT(2, pkg_services_parse(text, apps, ops, vers,
+                                                P4_CONFIG_PKG_MAX_SERVICES));
+    snprintf(text, sizeof(text), "A,B,C");
+    TEST_ASSERT_EQUAL_INT(-1, pkg_services_parse(text, apps, ops, vers, 2));
+    TEST_ASSERT_EQUAL_INT(-1, pkg_services_parse(NULL, apps, ops, vers,
+                                                 P4_CONFIG_PKG_MAX_SERVICES));
+}
+
+void test_store_path_parse(void)
+{
+    int index = -1;
+    const char *field = NULL;
+    size_t flen = 0;
+
+    /* apps.<n>.<field> -> index + field. */
+    TEST_ASSERT_TRUE(store_path_parse("apps.0.id", &index, &field, &flen));
+    TEST_ASSERT_EQUAL_INT(0, index);
+    TEST_ASSERT_EQUAL_STRING("id", field);
+    TEST_ASSERT_EQUAL_INT(2, (int)flen);
+
+    TEST_ASSERT_TRUE(store_path_parse("apps.12.bpk_url", &index, &field, &flen));
+    TEST_ASSERT_EQUAL_INT(12, index);
+    TEST_ASSERT_EQUAL_STRING("bpk_url", field);
+
+    TEST_ASSERT_TRUE(store_path_parse("apps.3.app_name.en", &index, &field, &flen));
+    TEST_ASSERT_EQUAL_INT(3, index);
+    TEST_ASSERT_EQUAL_STRING("app_name.en", field);
+
+    /* Not an app path: wrong prefix, no index, no field, NULL. */
+    TEST_ASSERT_FALSE(store_path_parse("version", &index, &field, &flen));
+    TEST_ASSERT_FALSE(store_path_parse("apps.id", &index, &field, &flen));
+    TEST_ASSERT_FALSE(store_path_parse("apps.1", &index, &field, &flen));
+    TEST_ASSERT_FALSE(store_path_parse(NULL, &index, &field, &flen));
+    TEST_ASSERT_FALSE(store_path_parse("apps.1.id", NULL, &field, &flen));
 }

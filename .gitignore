@@ -4,6 +4,8 @@ build/
 build-*/
 test/build/
 test/build-*/
+# tools/font_subset.py default output directory
+tools/build/
 .vscode/
 __pycache__/
 *.pyc

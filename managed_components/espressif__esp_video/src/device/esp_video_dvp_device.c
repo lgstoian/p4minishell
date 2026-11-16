@@ -21,6 +21,8 @@
 #include "esp_video_dvp_format.h"
 #include "esp_video_ioctl.h"
 #include "esp_video_caps.h"
+#include "esp_video_internal.h"
+#include "esp_check.h"
 #if CONFIG_ESP_VIDEO_ENABLE_SWAP_BYTE
 #include "esp_video_swap_byte.h"
 #endif

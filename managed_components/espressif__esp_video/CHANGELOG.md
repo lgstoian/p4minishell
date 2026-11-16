@@ -1,3 +1,53 @@
+## 2.6.0
+
+- Set the focus step to one code when AF is enabled and the camera has no focus motor; skip focus motor ioctls on the stub path so logs are not flooded
+- Added ISP pipeline AWB `set_awb_ct` / `set_awb_reset` (model 2 resumes stats; model 3 restores `default_ct`)
+- Added ISP pipeline AF `set/get_af_windows`, `set/get_af_window_weight`, and `reset_af` (coordinates are statistics-window pixels; edges 0..4094; caller keeps windows inside the active frame)
+- Added ISP pipeline AGC `set/get_agc_meter_luma_weight`, `reset_agc_meter_weight`, and `set/get_agc_meter_target_offset`
+- Meter / AF / AWB runtime APIs return `ESP_ERR_INVALID_STATE` when the ISP pipeline controller is not initialized (not when the stream is merely idle)
+- Added `ae_meter` serial `win` / `del win` / `winw` / `aew`; demo maps windows to AE weights and AF windows
+- Added `ae_meter` serial `scan ct` and `scan ae` sweeps with start, end, signed step, and dwell time in milliseconds
+- Added `touch_3a` LCD touch demo for AWB CT buttons, AE+AF tap focus, SUN+ meter boost, and RST
+- Added `V4L2_CID_USER_ESP_ISP_DPC_DYNAMIC` and ISP pipeline control to apply IPA DPC metadata to hardware
+- Added camera-side encoder controls for the USB UVC H.264 passthrough path, over the UVC
+  H.264 payload specification's Extension Unit and the Camera Terminal, exposed as standard
+  V4L2 controls
+    - Added `ESP_VIDEO_UVC_H264_BITRATE_BPS` and `ESP_VIDEO_UVC_H264_GOP_SIZE`, which set the
+      initial value of two of these controls and both default to 0, leaving the camera's own
+      settings alone
+    - `VIDIOC_QUERY_EXT_CTRL` reports the bitrate range read from the camera once a stream is open
+    - Bitrate, rate-control mode and QP limits are changed mid-stream through the payload
+      specification's runtime controls (`UVCX_BITRATE_LAYERS`, `UVCX_RATE_CONTROL_MODE`,
+      `UVCX_QP_STEPS_LAYERS`) where the camera implements them, so no stream restart is needed
+- Updated the USB UVC device to open the stream with the format V4L2 selected instead of the
+  camera's first frame descriptor
+- Updated to use usb_host_uvc v2.6.x
+- Fixed the USB UVC teardown abandoning the stream when `uvc_host_stream_stop()` reports an
+  error, which left the framework and the driver disagreeing about whether the stream was running
+- Added `V4L2_CID_IRCUT_MODE` and IR-CUT initialization for the MIPI-CSI video device
+    - `esp_video_init_ircut_config_t` supplies the IR-CUT chip and GPIO pins on CSI init
+    - ISP pipeline applies IPA IR metadata to the camera through `V4L2_CID_IRCUT_MODE`
+- Added supplemental LED initialization for the MIPI-CSI video device
+    - `esp_video_init_led_config_t` supplies the LED GPIO pins on CSI init
+    - `gpio_en` is passed to the LED driver. IR2835 does not drive it; a later driver may
+    - `V4L2_CID_IR_LED_BRIGHTNESS` sets the IR LED brightness
+    - The ISP pipeline turns the LED on with night IR-CUT mode and off with day IR-CUT mode. IR-CUT is an electromagnetic device and its switching time cannot be controlled, so the LED is switched independently of the IR-CUT
+    - `esp_ipa_sensor_t::ir_led_on` follows the brightness read at init and each successful LED ioctl, so IPA checks AWB G/R only while the IR LED is on
+    - CSI deinit keeps the LED handle until the driver has driven the control pin low
+    - `esp_video_init_led_config_t::type` selects the LED driver, e.g. `ESP_CAM_LED_HW_TYPE_LEDC` for TCJ60; the default is `ESP_CAM_LED_HW_TYPE_GPIO`
+    - With the IPA white light algorithm, the ISP pipeline scales the white light brightness (percent) to the LED range and applies it through `V4L2_CID_IR_LED_BRIGHTNESS`
+    - MIPI-CSI LED support no longer depends on MIPI-CSI IR-Cut support, so the white light LED can be used without an IR-Cut device
+- Added APIs to save and restore IPA pipeline state for fast startup
+    - `esp_video_isp_pipeline_get_ipa_state()` reads the computed IPA state while the ISP pipeline is initialized
+    - `esp_video_isp_pipeline_set_ipa_state()` writes a saved state to the ISP and camera. Call it after the pipeline is initialized and before `VIDIOC_STREAMON` of the frame that must use the restored parameters
+    - The same `esp_ipa_state_t` and the same IPA configuration, width and height are required between the two calls. A version or CRC mismatch returns `ESP_ERR_INVALID_VERSION` or `ESP_ERR_INVALID_CRC`
+- Added `examples/fast_startup/deep_sleep` to store IPA state in RTC memory across deep sleep and save the first frame after wakeup to the SD card
+- Updated `esp_video_isp_pipeline_get_env_int32()` and `esp_video_isp_pipeline_get_env_float()` to look up typed IPA variables
+- Updated the minimum camera exposure value in the `examples/v4l2_cmd/README.md`.
+- Added I3C as one of the options for SCCB
+- Fixed a rare ISP data type error, hnum/vnum setting error and input FIFO overflow when the sensor is still sending the current frame at stream-off. The capture controller now stops first, and the in-flight frame is drained for `ESP_VIDEO_STREAM_STOP_DRAIN_FRAMES` periods of the current format before the ISP is deleted. The default is 1. Set it to 0 to skip the wait.
+- Fixed MIPI-CSI input color on ESP32-P4 revisions below v3.0 with ESP-IDF v5.5.6 or later. These versions expect the CSI input format to match the ISP output, so the capture path no longer reports the sensor format as the CSI input
+
 ## 2.5.0
 
 - Added ISP pipeline APIs to enumerate and switch IPA JSON configurations at runtime

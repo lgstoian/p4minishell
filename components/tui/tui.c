@@ -1366,6 +1366,83 @@ int tui_viewport_get_page_rows(void)
     return s_page_rows;
 }
 
+/* ==== Page snapshots (the browser back/forward cache) ==== */
+
+void *tui_page_shot_capture(void)
+{
+    tui_page_shot_t *shot;
+    tui_cell_t *cells;
+    tui_link_t *links;
+    size_t cell_bytes;
+    size_t total;
+
+    if (s_page == NULL || s_page_rows <= 0) {
+        return NULL;
+    }
+    cell_bytes = (size_t)s_cols * (size_t)s_page_rows * sizeof(tui_cell_t);
+    total = ((sizeof(tui_page_shot_t) + cell_bytes) + 3u) & ~(size_t)3u;
+    total += (size_t)s_link_count * sizeof(tui_link_t);
+
+    shot = p4heap_alloc_psram(total);
+    if (shot == NULL) {
+        return NULL;
+    }
+    shot->cols = s_cols;
+    shot->rows = s_page_rows;
+    shot->link_count = s_link_count;
+    shot->link_offset = (uint32_t)(((sizeof(tui_page_shot_t) + cell_bytes) + 3u) & ~(size_t)3u);
+    memcpy(shot->address, s_address_bar, sizeof(shot->address));
+
+    cells = (tui_cell_t *)(shot + 1);
+    memcpy(cells, s_page, cell_bytes);
+    links = (tui_link_t *)((char *)shot + shot->link_offset);
+    if (s_link_count > 0) {
+        memcpy(links, s_links, (size_t)s_link_count * sizeof(tui_link_t));
+    }
+    return shot;
+}
+
+bool tui_page_shot_restore(const void *blob)
+{
+    const tui_page_shot_t *shot = (const tui_page_shot_t *)blob;
+    const tui_cell_t *cells;
+    const tui_link_t *links;
+    size_t cell_bytes;
+    int count;
+
+    if (shot == NULL || s_page == NULL) {
+        return false;
+    }
+    /* A snapshot from another grid (or a truncated blob) is refused, not
+     * blitted: the cell stride would be wrong and the page would be garbage. */
+    if (shot->cols != s_cols || shot->rows != s_page_rows) {
+        return false;
+    }
+    cell_bytes = (size_t)s_cols * (size_t)s_page_rows * sizeof(tui_cell_t);
+    if (shot->link_offset < sizeof(tui_page_shot_t) + cell_bytes) {
+        return false;
+    }
+    cells = (const tui_cell_t *)(shot + 1);
+    memcpy(s_page, cells, cell_bytes);
+
+    count = shot->link_count;
+    if (count < 0 || count > TUI_MAX_LINKS) {
+        count = TUI_MAX_LINKS;
+    }
+    links = (const tui_link_t *)((const char *)shot + shot->link_offset);
+    if (count > 0) {
+        memcpy(s_links, links, (size_t)count * sizeof(tui_link_t));
+    }
+    s_link_count = count;
+    snprintf(s_address_bar, sizeof(s_address_bar), "%s", shot->address);
+    return true;
+}
+
+void tui_page_shot_release(void *blob)
+{
+    p4heap_free(blob);
+}
+
 void tui_page_set_cell(int col, int row, const char *utf8, uint8_t fg, uint8_t bg, uint8_t attr)
 {
     if (!s_page || col < 1 || col > s_cols || row < 1 || row > s_page_rows) return;

@@ -199,6 +199,27 @@
       "status": "stable",
       "tests": []
     },
+    "browser": {
+      "domain": "ui",
+      "header": "components/browser/include/browser.h",
+      "layer": "leaf",
+      "path": "components/browser",
+      "provides": "PSRAM image cache and rendered-page back/forward cache for the browser",
+      "requires": [
+        "tui",
+        "markdown",
+        "p4heap",
+        "PRIV_REQUIRES",
+        "freertos"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_browser_cache.c"
+      ]
+    },
     "c6ota": {
       "domain": "platform",
       "header": "components/c6ota/c6ota.h",
@@ -359,6 +380,7 @@
         "font",
         "header",
         "imagefmt",
+        "imgdec",
         "keyboard",
         "markdown",
         "filetype",
@@ -395,7 +417,9 @@
         "json",
         "jsengine",
         "rss",
-        "mcp"
+        "mcp",
+        "browser",
+        "zip"
       ],
       "rules": [
         "ai-context.md#module-layering-rules"
@@ -604,6 +628,25 @@
       "status": "stable",
       "tests": []
     },
+    "imgdec": {
+      "domain": "media",
+      "header": "components/imgdec/imgdec.h",
+      "layer": "leaf",
+      "path": "components/imgdec",
+      "provides": "the ONE PNG + JPEG decoder (LodePNG / TJpgDec, the libs LVGL already compiles)",
+      "requires": [
+        "lvgl__lvgl",
+        "p4heap",
+        "esp_hw_support"
+      ],
+      "rules": [
+        "ai-context.md#image-support-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_imgdec.c"
+      ]
+    },
     "imu": {
       "domain": "platform",
       "header": "components/imu/include/imu.h",
@@ -808,6 +851,7 @@
         "filetype",
         "font",
         "gfx",
+        "imgdec",
         "p4heap",
         "strutil"
       ],
@@ -947,6 +991,8 @@
       "requires": [
         "networking",
         "json",
+        "storage",
+        "clock",
         "PRIV_REQUIRES",
         "expat"
       ],
@@ -954,7 +1000,9 @@
         "ai-context.md#module-layering-rules"
       ],
       "status": "stable",
-      "tests": []
+      "tests": [
+        "test/main/test_rss_store.c"
+      ]
     },
     "shell": {
       "domain": "core",

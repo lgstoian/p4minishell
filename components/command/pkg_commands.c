@@ -15,11 +15,20 @@
  *   PKGS/<APP>/<APP>.ASSETS   the same manifest
  *   PKGS/<APP>/<path>         each payload file at its install-relative path
  *   PKGS/<APP>/<APP>.APPINFO  the metadata file
+ * A single-file bundle is also accepted: PKGS/<APP>.PKG, a ZIP container whose
+ * entries mirror that layout. `pkg install <APP>` unpacks it through the ONE
+ * ZIP reader (`components/zip`) before running the ordinary directory flow;
+ * `pkg unpack <APP>` does only the unpack. `pkg scan [dir]` lists both forms.
  *
- * Verbs: list, info, verify, check, install [/signed], remove, key. Verification
- * reuses the single CRC/manifest implementation (`asset_parse_line`,
- * `asset_crc_file`, `asset_verify_app`); copies reuse `shell_fs_copy_file`;
- * removal reuses `storage_trash_delete_file`. Nothing here re-implements those.
+ * Installs are staged: each existing destination is backed up under
+ * PKGS/.installing/<APP>/ before being replaced atomically (temp + rename), and
+ * the backups are restored if the install fails. See docs/native_packaging.md.
+ *
+ * Verbs: list, info, verify, check, install [/signed], unpack, scan, remove,
+ * key. Verification reuses the single CRC/manifest implementation
+ * (`asset_parse_line`, `asset_crc_file`, `asset_verify_app`); copies reuse
+ * `shell_fs_copy_file`; removal reuses `storage_trash_delete_file`; archives
+ * reuse `components/zip`. Nothing here re-implements those.
  *
  * This file also owns the ONE manifest trust core (`pkg_sign_*`: canonical
  * bytes, ECDSA P-256 + SHA-256 verify, the `p4sign` NVS key store) and the
@@ -35,6 +44,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
+#include <unistd.h>
 
 #include "shell.h"
 #include "batch.h"
@@ -45,6 +55,7 @@
 #include "p4minishell_config.h"
 #include "esp_heap_caps.h"
 #include "p4heap.h"
+#include "zip.h"
 #include "nvs_flash.h"
 #include "mbedtls/sha256.h"
 #include "mbedtls/ecdsa.h"
@@ -205,7 +216,8 @@ int pkg_list_installed(char names[][COMMAND_APP_NAME_BYTES], int max)
     return pkg_collect_apps(names, max);
 }
 
-/** Public: available bundle names (PKGS/<APP>/ dirs) for completion. */
+/** Public: available bundle names (PKGS/<APP>/ dirs and PKGS/<APP>.PKG
+ *  archives) for completion. */
 int pkg_list_available(char names[][COMMAND_APP_NAME_BYTES], int max)
 {
     char dir_rel[P4_CONFIG_SD_PATH_BYTES];
@@ -231,25 +243,320 @@ int pkg_list_available(char names[][COMMAND_APP_NAME_BYTES], int max)
         char full[P4_CONFIG_SD_PATH_BYTES + 258];
         struct stat st;
         size_t len;
+        const char *name = entry->d_name;
 
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
             continue;
         }
-        snprintf(full, sizeof(full), "%s/%s", dir_resolved, entry->d_name);
+        if (shell_path_has_extension(name, P4_CONFIG_PKG_ARCHIVE_EXT)) {
+            /* `NAME.PKG` -> `NAME`. */
+            len = strlen(name) - strlen(P4_CONFIG_PKG_ARCHIVE_EXT);
+            if (len == 0 || len >= COMMAND_APP_NAME_BYTES) {
+                continue;
+            }
+            memcpy(names[count], name, len);
+            names[count][len] = '\0';
+            count++;
+            continue;
+        }
+        snprintf(full, sizeof(full), "%s/%s", dir_resolved, name);
         if (stat(full, &st) != 0 || !S_ISDIR(st.st_mode)) {
             continue;
         }
-        len = strlen(entry->d_name);
+        len = strlen(name);
         if (len == 0 || len >= COMMAND_APP_NAME_BYTES) {
             continue;
         }
-        memcpy(names[count], entry->d_name, len);
+        memcpy(names[count], name, len);
         names[count][len] = '\0';
         count++;
     }
     closedir(dir);
     shell_sd_end(&session, "pkg");
     return count;
+}
+
+/* ========================================================================
+ * Bundle archives (`.PKG`), the local scan, and the `services=` gate
+ * ======================================================================== */
+
+/** Flatten a bundle-relative path into a staging backup name (`/` -> `_`),
+ *  prefixed with the operation index so two entries can never collide. */
+static void pkg_backup_name(const char *rel, int index, char *out, size_t out_size)
+{
+    size_t o;
+    size_t i;
+
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    if (out_size < 8) {
+        out[0] = '\0';
+        return;
+    }
+    o = (size_t)snprintf(out, out_size, "%d_", index);
+    if (o >= out_size) {
+        o = out_size - 1;
+    }
+    for (i = 0; rel[i] != '\0' && o + 1 < out_size; i++) {
+        char c = rel[i];
+
+        out[o++] = (c == '/' || c == '\\') ? '_' : c;
+    }
+    out[o] = '\0';
+}
+
+/**
+ * Unpack `PKGS/<app>.PKG` into `PKGS/<app>/` through the ONE ZIP reader
+ * (`components/zip`). Entries may carry a leading `<app>/` (the directory
+ * layout) or sit at the archive root; both land in `PKGS/<app>/`. Unsafe entry
+ * paths are skipped by the reader. @return true when the archive opened and
+ * every entry was materialised.
+ */
+static bool pkg_unpack_archive(const char *app)
+{
+    char zip_rel[P4_CONFIG_SD_PATH_BYTES];
+    char zip_resolved[P4_CONFIG_SD_PATH_BYTES];
+    char dest_dir[P4_CONFIG_SD_PATH_BYTES];
+    void *handle = NULL;
+    int count;
+    int i;
+    int total = 0;
+    int ok = 0;
+    size_t app_len = strlen(app);
+
+    snprintf(zip_rel, sizeof(zip_rel), "%s/%s%s",
+             P4_CONFIG_PKG_BUNDLE_DIR_NAME, app, P4_CONFIG_PKG_ARCHIVE_EXT);
+    if (shell_fs_resolve_path(zip_rel, zip_resolved, sizeof(zip_resolved)) != ESP_OK) {
+        return false;
+    }
+    if (zip_open(zip_resolved, &handle) != ESP_OK) {
+        return false;
+    }
+    snprintf(dest_dir, sizeof(dest_dir), "%s/%s",
+             P4_CONFIG_PKG_BUNDLE_DIR_NAME, app);
+    if (storage_mkdir_p(dest_dir) != ESP_OK) {
+        zip_close(handle);
+        return false;
+    }
+    count = zip_get_count(handle);
+    for (i = 0; i < count; i++) {
+        zip_entry_t entry;
+        const char *rel;
+        char dest[P4_CONFIG_SD_PATH_BYTES];
+        char resolved[P4_CONFIG_SD_PATH_BYTES];
+
+        if (zip_get_entry(handle, i, &entry) != ESP_OK) {
+            continue;
+        }
+        total++;
+        if (!zip_path_safe(entry.path)) {
+            continue;
+        }
+        rel = entry.path;
+        if (strncmp(rel, app, app_len) == 0 && rel[app_len] == '/') {
+            rel += app_len + 1;
+        }
+        if (rel[0] == '\0') {
+            continue;
+        }
+        snprintf(dest, sizeof(dest), "%.36s/%.256s", dest_dir, rel);
+        if (shell_fs_resolve_path(dest, resolved, sizeof(resolved)) != ESP_OK) {
+            continue;
+        }
+        if (entry.is_dir) {
+            if (storage_mkdir_p(resolved) == ESP_OK) {
+                ok++;
+            }
+            continue;
+        }
+        if (zip_extract_entry(handle, &entry, resolved) == ESP_OK) {
+            ok++;
+        }
+    }
+    zip_close(handle);
+    return (total > 0 && ok == total);
+}
+
+/** True when `PKGS/<name>/<name>.ASSETS` exists (a directory bundle). */
+static bool pkg_bundle_dir_ok(const char *name)
+{
+    char rel[P4_CONFIG_SD_PATH_BYTES];
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    struct stat st;
+
+    snprintf(rel, sizeof(rel), "%.4s/%.31s/%.31s.ASSETS",
+             P4_CONFIG_PKG_BUNDLE_DIR_NAME, name, name);
+    if (shell_fs_resolve_path(rel, resolved, sizeof(resolved)) != ESP_OK) {
+        return false;
+    }
+    return (stat(resolved, &st) == 0 && S_ISREG(st.st_mode));
+}
+
+/** `pkg scan [dir]`: list `.PKG` archives and bundle directories in @p dir
+ *  (default `PKGS/`). */
+static void pkg_scan(const char *dir)
+{
+    char rel[P4_CONFIG_SD_PATH_BYTES];
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    shell_sd_session_t session;
+    DIR *d;
+    struct dirent *entry;
+    int found = 0;
+
+    snprintf(rel, sizeof(rel), "%s",
+             (dir != NULL && dir[0] != '\0') ? dir : P4_CONFIG_PKG_BUNDLE_DIR_NAME);
+    if (shell_fs_resolve_path(rel, resolved, sizeof(resolved)) != ESP_OK) {
+        shell_transcript_appendf_ansi(SH_ERR "pkg: invalid directory %s\n" SH_RST, rel);
+        batch_set_errorlevel(2);
+        return;
+    }
+    if (shell_sd_begin(&session) != ESP_OK) {
+        shell_transcript_appendf_ansi(SH_ERR "pkg: SD card not present\n" SH_RST);
+        batch_set_errorlevel(1);
+        return;
+    }
+    d = opendir(resolved);
+    if (d == NULL) {
+        shell_transcript_appendf_ansi(SH_ERR "pkg: cannot list %s\n" SH_RST, resolved);
+        shell_sd_end(&session, "pkg");
+        batch_set_errorlevel(1);
+        return;
+    }
+    while ((entry = readdir(d)) != NULL) {
+        const char *name = entry->d_name;
+
+        if (name[0] == '.') {
+            continue;
+        }
+        if (shell_path_has_extension(name, P4_CONFIG_PKG_ARCHIVE_EXT)) {
+            shell_transcript_appendf("pkg: %s  (archive)\n", name);
+            found++;
+            continue;
+        }
+        if (pkg_bundle_dir_ok(name)) {
+            shell_transcript_appendf("pkg: %s/  (bundle)\n", name);
+            found++;
+        }
+    }
+    closedir(d);
+    shell_sd_end(&session, "pkg");
+    if (found == 0) {
+        shell_transcript_appendf_ansi(SH_MUTE "pkg: no bundles in %s\n" SH_RST, rel);
+        batch_set_errorlevel(1);
+        return;
+    }
+    shell_transcript_appendf("pkg: %d bundle(s) in %s\n", found, rel);
+    batch_set_errorlevel(0);
+}
+
+/**
+ * Parse a `services=` list (`APP>=1.2`, `APP=2`, `APP>3`, or a bare `APP`)
+ * into up to @p max entries. Pure and unit-tested (test/main/test_pkg.c).
+ * @p text is split in place; a bare name means "any version" (`=` + empty).
+ * @return the entry count, or -1 on a malformed entry or overflow.
+ */
+int pkg_services_parse(char *text,
+                       char app_out[][COMMAND_APP_NAME_BYTES],
+                       char op_out[][3], char ver_out[][32], int max)
+{
+    char *save = NULL;
+    char *tok;
+    int count = 0;
+
+    if (text == NULL || app_out == NULL || op_out == NULL ||
+        ver_out == NULL || max <= 0) {
+        return -1;
+    }
+    for (tok = strtok_r(text, ",", &save); tok != NULL;
+         tok = strtok_r(NULL, ",", &save)) {
+        char app[COMMAND_APP_NAME_BYTES];
+        char op[3];
+        char ver[32];
+        char *p = tok;
+        size_t tl;
+
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        tl = strlen(p);
+        while (tl > 0 && (p[tl - 1] == ' ' || p[tl - 1] == '\t')) {
+            p[--tl] = '\0';
+        }
+        if (*p == '\0') {
+            return -1;
+        }
+        /* The operator form validates its own name characters; a bare name is
+         * checked here (the token may carry `>=1.2`, which is not a name). */
+        if (!pkg_requires_parse(p, app, sizeof(app), op, ver, sizeof(ver))) {
+            if (!asset_app_ok(p) || strlen(p) >= sizeof(app)) {
+                return -1;
+            }
+            snprintf(app, sizeof(app), "%s", p);
+            op[0] = '=';
+            op[1] = '\0';
+            ver[0] = '\0';
+        }
+        if (count >= max) {
+            return -1;
+        }
+        snprintf(app_out[count], COMMAND_APP_NAME_BYTES, "%s", app);
+        snprintf(op_out[count], 3, "%s", op);
+        snprintf(ver_out[count], 32, "%s", ver);
+        count++;
+    }
+    return count;
+}
+
+/** Enforce a bundle's `services=` list against installed packages. @return
+ *  true when every declared service is present and satisfies its version. */
+static bool pkg_services_check(const char *appinfo_rel)
+{
+    char text[256];
+    char apps[P4_CONFIG_PKG_MAX_SERVICES][COMMAND_APP_NAME_BYTES];
+    char ops[P4_CONFIG_PKG_MAX_SERVICES][3];
+    char vers[P4_CONFIG_PKG_MAX_SERVICES][32];
+    int count;
+    int i;
+    bool ok = true;
+
+    text[0] = '\0';
+    (void)storage_ini_file_get(appinfo_rel, "services", text, sizeof(text));
+    if (text[0] == '\0') {
+        return true;
+    }
+    count = pkg_services_parse(text, apps, ops, vers, P4_CONFIG_PKG_MAX_SERVICES);
+    if (count < 0) {
+        shell_transcript_appendf_ansi(SH_ERR "pkg: bundle has a malformed services= list\n" SH_RST);
+        return false;
+    }
+    for (i = 0; i < count; i++) {
+        char rel[P4_CONFIG_SD_PATH_BYTES];
+        char installed[32];
+        bool satisfied = false;
+
+        snprintf(rel, sizeof(rel), "%s/%s.APPINFO",
+                 P4_CONFIG_PKG_APPS_DIR_NAME, apps[i]);
+        installed[0] = '\0';
+        (void)storage_ini_file_get(rel, "version", installed, sizeof(installed));
+        if (installed[0] != '\0') {
+            if (vers[i][0] == '\0') {
+                satisfied = true;
+            } else {
+                int cmp = pkg_version_compare(installed, vers[i]);
+
+                satisfied = (strcmp(ops[i], ">=") == 0) ? (cmp >= 0) :
+                            (strcmp(ops[i], ">") == 0) ? (cmp > 0) : (cmp == 0);
+            }
+        }
+        if (!satisfied) {
+            shell_transcript_appendf_ansi(SH_ERR "pkg: bundle needs service %s %s%s (installed %s)\n" SH_RST,
+                                          apps[i], ops[i], vers[i],
+                                          installed[0] ? installed : "(none)");
+            ok = false;
+        }
+    }
+    return ok;
 }
 
 /** `pkg list` worker shared by the human and `/b` forms: `want_bare`
@@ -384,6 +691,16 @@ static void pkg_info(const char *app)
         }
     }
     {
+        /* `services=` dependency list (additive APPINFO metadata). */
+        char services[256];
+
+        services[0] = '\0';
+        pkg_meta(app, "services", services, sizeof(services));
+        if (services[0] != '\0') {
+            shell_transcript_appendf("  services:    %s\n", services);
+        }
+    }
+    {
         /* Trust line over the installed manifest (no file reads beyond it). */
         char *manifest = NULL;
         size_t manifest_len = 0;
@@ -452,8 +769,8 @@ static void pkg_info_bare(const char *app)
     /* Registration keys in ABI.md §3 order (description last: free text). */
     static const char *const keys[] = {
         "title", "version", "type", "abi", "arch", "entry", "handles",
-        "setup", "requires", "min_fw", "data", "alias", "autostart",
-        "description",
+        "setup", "requires", "services", "min_fw", "data", "alias",
+        "autostart", "description",
     };
     char rel[P4_CONFIG_SD_PATH_BYTES];
     char *text = NULL;
@@ -554,10 +871,24 @@ static void pkg_install(const char *app, bool require_sign, bool force)
     snprintf(bmanifest_rel, sizeof(bmanifest_rel), "%s/%s/%s.ASSETS",
              P4_CONFIG_PKG_BUNDLE_DIR_NAME, app, app);
     if (!pkg_read_file(bmanifest_rel, &text, &len)) {
-        shell_transcript_appendf_ansi(SH_ERR "pkg: no bundle %s (push the app first)\n" SH_RST,
-                                      bmanifest_rel);
-        batch_set_errorlevel(1);
-        return;
+        /* No directory bundle: try the single-file `.PKG` archive bundle. */
+        char zip_rel[P4_CONFIG_SD_PATH_BYTES];
+
+        snprintf(zip_rel, sizeof(zip_rel), "%s/%s%s",
+                 P4_CONFIG_PKG_BUNDLE_DIR_NAME, app, P4_CONFIG_PKG_ARCHIVE_EXT);
+        if (!pkg_unpack_archive(app)) {
+            shell_transcript_appendf_ansi(SH_ERR "pkg: no bundle %s (push the app first)\n" SH_RST,
+                                          bmanifest_rel);
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_transcript_appendf("pkg: unpacked %s\n", zip_rel);
+        if (!pkg_read_file(bmanifest_rel, &text, &len)) {
+            shell_transcript_appendf_ansi(SH_ERR "pkg: archive %s has no %s.ASSETS\n" SH_RST,
+                                          zip_rel, app);
+            batch_set_errorlevel(1);
+            return;
+        }
     }
     /* Trust verdict while newlines still separate the lines (the entry loop
      * below tokenizes @p text in place). */
@@ -723,6 +1054,16 @@ static void pkg_install(const char *app, bool require_sign, bool force)
         }
     }
 
+    /* `services=` dependency gate (additive APPINFO metadata): every declared
+     * service must be installed and satisfy its version. */
+    if (!pkg_services_check(bappinfo_rel)) {
+        free(paths);
+        free(crcs);
+        heap_caps_free(text);
+        batch_set_errorlevel(1);
+        return;
+    }
+
     /* Trust gate: a BAD signature always aborts before anything is copied. An
      * unsigned bundle, or a signed one with no trusted key, aborts only when
      * `/signed` or the policy demands it. */
@@ -790,54 +1131,159 @@ static void pkg_install(const char *app, bool require_sign, bool force)
         return;
     }
 
-    /* Pass 2: copy payloads, then the metadata + manifest. */
-    for (i = 0; i < n; i++) {
-        char src_rel[P4_CONFIG_SD_PATH_BYTES];
-        char src[P4_CONFIG_SD_PATH_BYTES];
-        char dst[P4_CONFIG_SD_PATH_BYTES];
-        esp_err_t error;
+    /* Pass 2: staged, atomic install. Every operation is (source, destination):
+     * the payloads, then the APPINFO and the manifest. Each existing
+     * destination is backed up under PKGS/.installing/<APP>/ before being
+     * replaced (copy to `<dst>.tmp`, then rename into place). If any step
+     * fails the backups are restored and the staging slot is removed, so a
+     * failed install leaves the previous version intact. */
+    {
+        int ops_count = n + 2;
+        char (*src)[P4_CONFIG_SD_PATH_BYTES] = NULL;
+        char (*dst)[P4_CONFIG_SD_PATH_BYTES] = NULL;
+        char (*bak)[P4_CONFIG_SD_PATH_BYTES] = NULL;
+        bool *backed = NULL;
+        char staging[P4_CONFIG_SD_PATH_BYTES];
+        int slot = 0;
+        int s;
+        bool abort_install = false;
 
-        snprintf(src_rel, sizeof(src_rel), "%s/%s/%s", P4_CONFIG_PKG_BUNDLE_DIR_NAME, app, paths[i]);
-        if (shell_fs_resolve_path(src_rel, src, sizeof(src)) != ESP_OK ||
-            shell_fs_resolve_path(paths[i], dst, sizeof(dst)) != ESP_OK) {
-            shell_transcript_appendf_ansi(SH_ERR "pkg: bad path %s\n" SH_RST, paths[i]);
-            failed++;
-            continue;
+        src = p4heap_alloc_psram((size_t)ops_count * sizeof(*src));
+        dst = p4heap_alloc_psram((size_t)ops_count * sizeof(*dst));
+        bak = p4heap_alloc_psram((size_t)ops_count * sizeof(*bak));
+        backed = calloc((size_t)ops_count, sizeof(*backed));
+        if (src == NULL || dst == NULL || bak == NULL || backed == NULL) {
+            free(src);
+            free(dst);
+            free(bak);
+            free(backed);
+            heap_caps_free(text);
+            shell_transcript_appendf_ansi(SH_ERR "pkg: out of memory\n" SH_RST);
+            batch_set_errorlevel(1);
+            return;
         }
-        error = shell_fs_copy_file(src, dst);
-        if (error != ESP_OK) {
-            shell_transcript_appendf_ansi(SH_ERR "pkg: copy %s failed (%s)\n" SH_RST,
-                                          paths[i], esp_err_to_name(error));
-            failed++;
-            continue;
-        }
-        shell_transcript_appendf("pkg: installed %s\n", paths[i]);
-    }
-    if (failed == 0) {
-        /* Metadata + manifest from the bundle into APPS/. */
-        char bundle_manifest[P4_CONFIG_SD_PATH_BYTES];
-        char dst_rel[P4_CONFIG_SD_PATH_BYTES];
-        char src[P4_CONFIG_SD_PATH_BYTES];
-        char dst[P4_CONFIG_SD_PATH_BYTES];
 
-        snprintf(bundle_manifest, sizeof(bundle_manifest), "%s/%s/%s.ASSETS",
-                 P4_CONFIG_PKG_BUNDLE_DIR_NAME, app, app);
-        if (shell_fs_resolve_path(bappinfo_rel, src, sizeof(src)) == ESP_OK) {
+        snprintf(staging, sizeof(staging), "%s/%s/%s",
+                 P4_CONFIG_PKG_BUNDLE_DIR_NAME,
+                 P4_CONFIG_PKG_STAGING_DIR_NAME, app);
+        (void)storage_mkdir_p(staging);
+
+        /* Resolve every operation up front: a bad path aborts before any file
+         * is touched (pass 1 already proved the sources exist). */
+        for (i = 0; i < n; i++) {
+            char src_rel[P4_CONFIG_SD_PATH_BYTES];
+            char src_res[P4_CONFIG_SD_PATH_BYTES];
+            char dst_res[P4_CONFIG_SD_PATH_BYTES];
+
+            snprintf(src_rel, sizeof(src_rel), "%s/%s/%s",
+                     P4_CONFIG_PKG_BUNDLE_DIR_NAME, app, paths[i]);
+            if (shell_fs_resolve_path(src_rel, src_res, sizeof(src_res)) != ESP_OK ||
+                shell_fs_resolve_path(paths[i], dst_res, sizeof(dst_res)) != ESP_OK) {
+                shell_transcript_appendf_ansi(SH_ERR "pkg: bad path %s\n" SH_RST, paths[i]);
+                abort_install = true;
+                break;
+            }
+            snprintf(src[slot], sizeof(src[slot]), "%s", src_res);
+            snprintf(dst[slot], sizeof(dst[slot]), "%s", dst_res);
+            pkg_backup_name(paths[i], slot, bak[slot], sizeof(bak[slot]));
+            slot++;
+        }
+        if (!abort_install) {
+            char bundle_manifest[P4_CONFIG_SD_PATH_BYTES];
+            char dst_rel[P4_CONFIG_SD_PATH_BYTES];
+
+            snprintf(bundle_manifest, sizeof(bundle_manifest), "%s/%s/%s.ASSETS",
+                     P4_CONFIG_PKG_BUNDLE_DIR_NAME, app, app);
             pkg_appinfo_rel(app, dst_rel, sizeof(dst_rel));
-            if (shell_fs_resolve_path(dst_rel, dst, sizeof(dst)) != ESP_OK ||
-                shell_fs_copy_file(src, dst) != ESP_OK) {
-                shell_transcript_appendf_ansi(SH_ERR "pkg: metadata copy failed\n" SH_RST);
-                failed++;
+            if (shell_fs_resolve_path(bappinfo_rel, src[slot], sizeof(src[slot])) == ESP_OK &&
+                shell_fs_resolve_path(dst_rel, dst[slot], sizeof(dst[slot])) == ESP_OK) {
+                pkg_backup_name("APPINFO", slot, bak[slot], sizeof(bak[slot]));
+                slot++;
             }
-        }
-        if (shell_fs_resolve_path(bundle_manifest, src, sizeof(src)) == ESP_OK) {
             pkg_manifest_rel(app, dst_rel, sizeof(dst_rel));
-            if (shell_fs_resolve_path(dst_rel, dst, sizeof(dst)) != ESP_OK ||
-                shell_fs_copy_file(src, dst) != ESP_OK) {
-                shell_transcript_appendf_ansi(SH_ERR "pkg: manifest copy failed\n" SH_RST);
-                failed++;
+            if (shell_fs_resolve_path(bundle_manifest, src[slot], sizeof(src[slot])) == ESP_OK &&
+                shell_fs_resolve_path(dst_rel, dst[slot], sizeof(dst[slot])) == ESP_OK) {
+                pkg_backup_name("ASSETS", slot, bak[slot], sizeof(bak[slot]));
+                slot++;
             }
         }
+        ops_count = slot;
+
+        if (abort_install || ops_count == 0) {
+            free(src);
+            free(dst);
+            free(bak);
+            free(backed);
+            heap_caps_free(text);
+            batch_set_errorlevel(1);
+            return;
+        }
+
+        /* Backup pass: best-effort. A file that cannot be backed up is still
+         * installed (the backup is a safety net, not a gate). */
+        for (s = 0; s < ops_count; s++) {
+            struct stat st;
+            char bak_path[P4_CONFIG_SD_PATH_BYTES];
+
+            if (shell_sd_stat_path(dst[s], &st) != ESP_OK) {
+                continue;   /* nothing to preserve */
+            }
+            snprintf(bak_path, sizeof(bak_path), "%.48s/%.95s", staging, bak[s]);
+            if (shell_fs_copy_file(dst[s], bak_path) == ESP_OK) {
+                backed[s] = true;
+            }
+        }
+
+        /* Install pass: atomic per file (temp + rename). */
+        for (s = 0; s < ops_count; s++) {
+            char tmp[P4_CONFIG_SD_PATH_BYTES + 8];
+            const char *label;
+
+            if (s < n) {
+                label = paths[s];
+            } else if (s == n) {
+                label = "APPINFO";
+            } else {
+                label = "manifest";
+            }
+            snprintf(tmp, sizeof(tmp), "%s.tmp", dst[s]);
+            if (shell_fs_copy_file(src[s], tmp) != ESP_OK ||
+                storage_replace_file(tmp, dst[s]) != ESP_OK) {
+                (void)unlink(tmp);
+                shell_transcript_appendf_ansi(SH_ERR "pkg: install %s failed\n" SH_RST, label);
+                failed++;
+                break;
+            }
+            shell_transcript_appendf("pkg: installed %s\n", label);
+        }
+
+        if (failed != 0) {
+            /* Rollback: restore every backup, then drop the staging slot. */
+            for (s = 0; s < ops_count; s++) {
+                char bak_path[P4_CONFIG_SD_PATH_BYTES];
+
+                if (!backed[s]) {
+                    continue;
+                }
+                snprintf(bak_path, sizeof(bak_path), "%.48s/%.95s", staging, bak[s]);
+                (void)shell_fs_copy_file(bak_path, dst[s]);
+            }
+            shell_transcript_appendf_ansi(SH_ERR "pkg: install rolled back\n" SH_RST);
+        }
+        for (s = 0; s < ops_count; s++) {
+            char bak_path[P4_CONFIG_SD_PATH_BYTES];
+
+            if (!backed[s]) {
+                continue;
+            }
+            snprintf(bak_path, sizeof(bak_path), "%.48s/%.95s", staging, bak[s]);
+            (void)unlink(bak_path);
+        }
+        (void)rmdir(staging);
+        free(src);
+        free(dst);
+        free(bak);
+        free(backed);
     }
 
     free(paths);
@@ -897,6 +1343,13 @@ static void pkg_install(const char *app, bool require_sign, bool force)
         shell_transcript_appendf_ansi(SH_ERR "pkg: %s install had %d error(s)\n" SH_RST, app, failed);
         batch_set_errorlevel(1);
     }
+}
+
+/** Public entry used by the `store` verb: the same install path as
+ *  `pkg install`, exposed so a downloaded `.PKG` needs no second dispatcher. */
+void pkg_install_app(const char *app, bool require_sign, bool force)
+{
+    pkg_install(app, require_sign, force);
 }
 
 /** Read an installed app's `data=` uninstall-manifest entries (may be empty). */
@@ -1839,7 +2292,7 @@ static void pkg_key_command(int argc, char **argv)
 void shell_command_pkg(int argc, char **argv)
 {
     if (argc < 2) {
-        shell_print_usage("Usage: pkg list | info <app> | verify <app> | check | install <app> [/signed] [/force] | remove <app> | purge <app> | outdated | key show|install|clear");
+        shell_print_usage("Usage: pkg list | info <app> | verify <app> | check | install <app> [/signed] [/force] | unpack <app> | scan [dir] | remove <app> | purge <app> | outdated | key show|install|clear");
         batch_set_errorlevel(2);
         return;
     }
@@ -1901,12 +2354,37 @@ void shell_command_pkg(int argc, char **argv)
             } else if (shell_text_equals_ignore_case(argv[i], "/force")) {
                 force = true;
             } else {
-                shell_print_usage("Usage: pkg list | info <app> | verify <app> | check | install <app> [/signed] [/force] | remove <app> | purge <app> | outdated | key show|install|clear");
+                shell_print_usage("Usage: pkg list | info <app> | verify <app> | check | install <app> [/signed] [/force] | unpack <app> | scan [dir] | remove <app> | purge <app> | outdated | key show|install|clear");
                 batch_set_errorlevel(2);
                 return;
             }
         }
         pkg_install(argv[2], require_sign, force);
+        return;
+    }
+    if (argc == 3 && shell_text_equals_ignore_case(argv[1], "unpack")) {
+        char zip_rel[P4_CONFIG_SD_PATH_BYTES];
+
+        if (!asset_app_ok(argv[2])) {
+            shell_transcript_appendf_ansi(SH_ERR "pkg: bad app name '%s'\n" SH_RST, argv[2]);
+            batch_set_errorlevel(2);
+            return;
+        }
+        snprintf(zip_rel, sizeof(zip_rel), "%s/%s%s",
+                 P4_CONFIG_PKG_BUNDLE_DIR_NAME, argv[2], P4_CONFIG_PKG_ARCHIVE_EXT);
+        if (!pkg_unpack_archive(argv[2])) {
+            shell_transcript_appendf_ansi(SH_ERR "pkg: cannot unpack %s (is it a valid ZIP bundle?)\n" SH_RST,
+                                          zip_rel);
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_transcript_appendf("pkg: unpacked %s -> %s/%s/\n",
+                                 zip_rel, P4_CONFIG_PKG_BUNDLE_DIR_NAME, argv[2]);
+        batch_set_errorlevel(0);
+        return;
+    }
+    if ((argc == 2 || argc == 3) && shell_text_equals_ignore_case(argv[1], "scan")) {
+        pkg_scan((argc == 3) ? argv[2] : NULL);
         return;
     }
     if (argc == 3 && shell_text_equals_ignore_case(argv[1], "remove")) {

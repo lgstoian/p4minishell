@@ -3,7 +3,7 @@ dependencies:
 description: Expat - XML Parsing C Library
 repository: git://github.com/espressif/idf-extra-components.git
 repository_info:
-  commit_sha: d26f2a2453f75baa6240a04bdf2dd87e4dc9f0b5
+  commit_sha: d2919258a0e9709e7c2a6f13dba32da1a17743a3
   path: expat
 url: https://github.com/espressif/idf-extra-components/tree/master/expat
-version: 2.8.4
+version: 2.9.0

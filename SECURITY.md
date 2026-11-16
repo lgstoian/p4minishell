@@ -90,6 +90,14 @@ report. There is no bug-bounty program.
   re-signing bundles and running `pkg key install` again. Anyone with USB
   serial control (which equals full control by design) can replace the trusted
   key.
+- **Delivery does not change the trust model.** A bundle may arrive as a
+  `PKGS/<APP>/` directory or a `PKGS/<APP>.PKG` ZIP archive; the archive is
+  unpacked through the ONE ZIP reader and then goes through the same
+  verify-then-install flow, so the CRC/signature checks are unchanged. The
+  `store` verb downloads an index entry over HTTP (or HTTPS) and writes it to
+  `PKGS/<id>.PKG`; a plaintext HTTP download is therefore only as trustworthy as
+  its CRC manifest and optional signature — enable `P4_CONFIG_PKG_REQUIRE_SIGN`
+  (or `pkg install /signed`) if the index server is not trusted.
 
 ## HTTP file server (`httpd`)
 
@@ -101,6 +109,41 @@ report. There is no bug-bounty program.
   runtime command to change it: edit the header (empty username disables
   auth) and rebuild before putting a device on an untrusted network.
 - `httpd status` reports whether auth is on.
+
+## Captive portal provisioning API
+
+- The first-run portal serves an HTML form **and** a JSON API
+  (`GET /api/wifi/scan`, `POST /api/wifi/connect`, `GET /api/wifi/status`).
+- The portal is LAN-scoped by construction: it only runs while the device is
+  in SoftAP mode with no configured network, and it stops as soon as
+  credentials are submitted. It is not reachable once the device is a station.
+- The scan endpoint returns SSIDs/RSSI/auth only; the connect endpoint stores
+  the submitted credentials in `sd:/WIFI.KNOWN` (the same store `wifi connect`
+  uses) and never echoes the password.
+
+## Bluetooth GATT server
+
+- `bluetooth gatt on` registers a read-only GATT server: a standard Device
+  Information service (manufacturer / model / firmware revision) and a
+  P4MiniShell status characteristic (firmware version + Wi-Fi state). It
+  exposes **no secrets and no writable characteristics**.
+- Enabling it switches advertising to connectable, so any BLE central in range
+  can read those characteristics. It is off by default and session-scoped.
+
+## RSS feed credentials
+
+- Feed tokens (Basic passwords, Bearer tokens) are stored in `sd:/RSS/SUBS.INI` so a
+  feed can be fetched later without re-entering them. They are never printed to the
+  transcript, history or debug log, and `rss list` shows only the auth type.
+- `rss export` writes them into the OPML file in plain text and says so. Treat an
+  exported `.opml` as a secret, the same way `sd:/WIFI.KNOWN` is.
+- The read/unread store keeps a 64-bit hash of each item guid, never the guid itself.
+
+## Download trust
+
+- `download <url> <path>` writes whatever the server sends to SD. A plaintext
+  HTTP download is only as trustworthy as its bytes; use HTTPS, or verify the
+  result with `crc32`/`asset` when the source provides a checksum.
 
 ## Destructive actions are gated
 

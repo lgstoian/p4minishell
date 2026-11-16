@@ -65,6 +65,7 @@
 #include "windows.h"
 #include "ui_test.h"
 #include "icon_splash.h"
+#include "rss_store.h"
 
 /* Backward-compatibility aliases */
 #define SHELL_TAG                       P4_CONFIG_SHELL_TAG
@@ -1026,7 +1027,7 @@ void app_main(void)
      * "sdmmc_allocate_aligned_buf: not enough mem" on every retry. Mounting the
      * card first (as the init-time CONFIG.SYS read used to do by accident) keeps
      * the shared host and buffer layout deterministic. */
-    networking_init(&(networking_host_ops_t){
+    networking_host_ops_t host_ops = {
         .transcript_append_text = shell_transcript_append_text,
         .schedule_transcript_append_text = shell_networking_schedule_text,
         .transcript_append_ansi = shell_transcript_append_ansi,
@@ -1036,7 +1037,16 @@ void app_main(void)
         .notify_header = shell_header_notify,
         .bluetooth_keyboard_input = shell_usb_keyboard_input,
         .bluetooth_mouse_scroll = usb_host_scroll_transcript,
-    });
+    };
+
+    networking_init(&host_ops);
+
+    /* RSS reader: the subscription store lives on the SD card and the poller
+     * follows the CONFIG.SYS RSS_AUTOPOLL / RSS_INTERVAL directives. Both are
+     * optional - a board with no sd:/RSS directory simply has no feeds. */
+    rss_store_init(&host_ops);
+    (void)rss_store_load();
+    rss_store_start_poller();
 
     /* Audio is deliberately LAZY: do not initialize the I2S DMA at boot.
      * The hosted C6 SDIO transport needs the same contiguous DMA-capable

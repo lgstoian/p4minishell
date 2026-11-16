@@ -26,6 +26,7 @@
 #include "batch.h"
 #include "command.h"
 #include "gfx.h"
+#include "imgdec.h"
 #include "tui.h"
 #include "storage.h"
 #include "windows.h"
@@ -818,9 +819,10 @@ bool shell_command_gfx(int argc, char **argv)
     }
 
     if (shell_text_equals_ignore_case(argv[1], "image")) {
-        /* gfx image <path> [x y [w h]]: decode a BMP straight to the target
-         * rect and blit it onto the canvas. Defaults to the native size
-         * aspect-fit to the canvas at 0,0. Reuses the single BMP decoder. */
+        /* gfx image <path> [x y [w h]]: decode a BMP/PNG/JPEG straight to the
+         * target rect and blit it onto the canvas. Defaults to the native size
+         * aspect-fit to the canvas at 0,0. Reuses the single image path
+         * (gfx BMP / imgdec PNG+JPEG). */
         uint8_t *buf = NULL;
         size_t got = 0;
         gfx_bmp_info_t info;
@@ -830,6 +832,8 @@ bool shell_command_gfx(int argc, char **argv)
         int w = 0;
         int h = 0;
         int rc;
+        int native_w = 0;
+        int native_h = 0;
 
         if (argc != 3 && argc != 5 && argc != 7) {
             shell_transcript_appendf_ansi(SH_ERR "gfx image: usage: gfx image <path> [x y [w h]]\n" SH_RST);
@@ -855,8 +859,37 @@ bool shell_command_gfx(int argc, char **argv)
             batch_set_errorlevel(rc);
             return false;
         }
+        {
+            imgdec_format_t fmt = imgdec_probe(buf, got, &native_w, &native_h);
+
+            if (fmt == IMGDEC_FMT_PNG || fmt == IMGDEC_FMT_JPEG) {
+                imgdec_image_t imd;
+
+                if (w < 1 || h < 1) {
+                    gfx_bmp_fit(native_w > 0 ? native_w : 1,
+                                native_h > 0 ? native_h : 1,
+                                s_gfx.w, s_gfx.h, &w, &h);
+                }
+                if (!imgdec_decode_scaled(buf, got, w, h, &imd)) {
+                    shell_transcript_appendf_ansi(SH_ERR "gfx image: decode failed (%s)\n" SH_RST, argv[2]);
+                    heap_caps_free(buf);
+                    batch_set_errorlevel(1);
+                    return false;
+                }
+                heap_caps_free(buf);
+                {
+                    /* Point a surface at the decoded buffer (no second copy). */
+                    gfx_surface_t dec = { imd.pixels, imd.width, imd.height };
+
+                    gfx_surface_blit(&s_gfx, &dec, x, y, false, 0);
+                }
+                imgdec_free(&imd);
+                batch_set_errorlevel(0);
+                return true;
+            }
+        }
         if (!gfx_bmp_parse_header_ex(buf, got, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H)) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx image: not a 24/32-bit BI_RGB BMP (%s)\n" SH_RST, argv[2]);
+            shell_transcript_appendf_ansi(SH_ERR "gfx image: not a 24/32-bit BMP/PNG/JPEG (%s)\n" SH_RST, argv[2]);
             heap_caps_free(buf);
             batch_set_errorlevel(1);
             return false;

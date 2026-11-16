@@ -46,6 +46,15 @@ CRC + signature-covered **data blob**, never executed. "Installing a native
 app" means the blob is verified and stored; the C code that can run is the
 code linked into the firmware image and registered via `app_register`.
 
+A bundle is either a `PKGS/<APP>/` directory or a single-file `PKGS/<APP>.PKG`
+ZIP archive (the `.P4X` extension is reserved for the never-executed native
+payload blob). `pkg install <APP>` prefers the directory and falls back to the
+archive, unpacking it through the ONE ZIP reader; `pkg unpack <APP>` does only
+the unpack. Installs are staged: existing destinations are backed up under
+`PKGS/.installing/<APP>/`, each file is replaced atomically (temp + rename), and
+the backups are restored if the install fails. See
+[`docs/native_packaging.md`](docs/native_packaging.md).
+
 ---
 
 ## 2. Native-app entry ABI (`applib-1`)
@@ -110,6 +119,7 @@ Flat `KEY=VALUE`, the same shape as any INI file (read through the shared
 | `alias` | no | Short name; `pkg install` suggests `alias X="launch <APP>"` (never auto-registered, never a builtin name). |
 | `data` | no | Comma-separated uninstall-manifest paths (saves, stores); `pkg remove` keeps them with a warning, `pkg purge` deletes them. |
 | `requires` | no | Dependency (`APP>=1.2`, `APP=1.2`, `APP>1.2`); enforced at install. |
+| `services` | no | Comma-separated dependency list (`APP>=1.2`, `APP=2`, `APP>3`, or a bare `APP` = any version); enforced at install (every declared service must be installed and satisfy its version). Additive metadata — no ABI bump. |
 | `min_fw` | no | Minimum firmware (`1.4.0`); enforced at install, never bypassed by `/force`. |
 
 New keys are additive metadata only — they never change the entry ABI, so
@@ -227,7 +237,11 @@ walk-throughs are [`tutorial_native.md`](tutorial_native.md) (C) and
 | Dispatch + launch discovery | `components/command/command.c` (`shell_execute_command_core`, `shell_launch_*`) |
 | Signature/trust core | `components/command/pkg_commands.c` (`pkg_sign_*`) |
 | Manifest CRC verify | `components/command/asset_commands.c` (`asset_verify_app`) |
+| Archive unpack (`.PKG`) | `components/command/pkg_commands.c` (`pkg_unpack_archive`, via `components/zip`) |
+| Staged install + rollback | `components/command/pkg_commands.c` (pass 2, `PKGS/.installing/<APP>/`) |
+| App-store client | `components/command/store_commands.c` (`store url|list|install`) |
 | Host signer | `tools/pkg_sign.py` |
+| Host bundle builder (`.PKG`) | `tools/make_pkg.py` |
 | Host bundle push | `apps/push_pkgs.py` |
 | Build-time guard | `_Static_assert` on the SDIO mirror (see `PORTING.md`) |
 

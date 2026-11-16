@@ -68,6 +68,7 @@
 
 #include "esp_err.h"
 #include "esp_http_client.h"
+#include "esp_wifi_types.h"
 
 #define NETWORKING_WIFI_SSID_BYTES 33
 #define NETWORKING_WIFI_PASSWORD_BYTES 65
@@ -147,6 +148,15 @@ void networking_wifi_status(void);
  *              (the `/b` form). When false, print the aligned report.
  */
 void networking_wifi_scan(bool bare);
+
+/**
+ * Run a Wi-Fi scan and return up to @p max AP records, sorted strongest first.
+ * The ONE scan implementation (`wifi scan` and the captive-portal JSON API
+ * both use it). @p records must be at least @p max entries.
+ * @return the number of records written (0 when Wi-Fi is not started or the
+ *         scan failed).
+ */
+int networking_wifi_scan_records(wifi_ap_record_t *records, int max);
 
 void networking_wifi_diag(void);
 void networking_wifi_disconnect(void);
@@ -432,6 +442,23 @@ typedef esp_err_t (*networking_stream_cb)(const uint8_t *chunk, size_t len,
  */
 esp_err_t networking_http_get_stream(const char *url, networking_stream_cb cb,
                                       void *ctx);
+
+/**
+ * GET with callback-based streaming plus caller-supplied request headers
+ * (additive: `networking_http_get_stream` keeps its exact signature).
+ * @param url            http:// or https:// URL.
+ * @param headers        Optional extra request headers (may be NULL when
+ *                       @p header_count is 0).
+ * @param header_count   Number of entries, at most
+ *                       NETWORKING_HTTP_MAX_EXTRA_HEADERS.
+ * @param cb             Callback for each received chunk.
+ * @param ctx            User context passed to the callback.
+ * @return ESP_OK on completion (an HTTP error status is ESP_ERR_NOT_FOUND).
+ */
+esp_err_t networking_http_get_stream_ex(const char *url,
+                                         const networking_http_header_t *headers,
+                                         size_t header_count,
+                                         networking_stream_cb cb, void *ctx);
 
 /**
  * One-shot TCP request/response terminal (`tcpterm`, tcpterm.c).

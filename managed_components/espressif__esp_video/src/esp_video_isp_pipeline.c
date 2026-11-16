@@ -7,6 +7,7 @@
 // #undef LOG_LOCAL_LEVEL
 // #define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
 
+#include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -41,6 +42,10 @@
 #define TLINE_NS_UNIT               1000
 #define REG_TO_US(reg, isp)         ((reg) * (isp)->sensor_tline_ns / TLINE_NS_UNIT)
 
+#if CONFIG_ESP_VIDEO_ENABLE_LED_SUPPORT && CONFIG_ESP_IPA_WL_ALGORITHM
+#define ISP_PIPELINE_CONTROL_WL_LED 1
+#endif
+
 typedef struct esp_video_isp {
     int isp_fd;
     esp_video_isp_stats_t *isp_stats[ISP_METADATA_BUFFER_COUNT];
@@ -72,7 +77,13 @@ typedef struct esp_video_isp {
         uint8_t group       : 1;
         uint8_t ae_level    : 1;
         uint8_t af_stime    : 1;
+        uint8_t focus       : 1; /*!< Real V4L2_CID_FOCUS_ABSOLUTE motor present */
+        uint8_t ir_led      : 1;
     } sensor_attr;
+#if CONFIG_ESP_VIDEO_ENABLE_LED_SUPPORT
+    int32_t ir_led_min;
+    int32_t ir_led_max;
+#endif
 
     TaskHandle_t task_handler;
 #if CONFIG_ISP_PIPELINE_CONTROLLER_TASK_STACK_USE_PSRAM
@@ -450,6 +461,8 @@ static void config_color(esp_video_isp_t *isp, esp_ipa_metadata_t *metadata)
         control[0].value    = metadata->saturation;
         if (ioctl(isp->isp_fd, VIDIOC_S_EXT_CTRLS, &controls) != 0) {
             ESP_LOGE(TAG, "failed to set saturation");
+        } else {
+            isp->sensor.cur_saturation = metadata->saturation;
         }
     }
 
@@ -683,7 +696,7 @@ static void config_lsc(esp_video_isp_t *isp, esp_ipa_metadata_t *metadata)
     esp_video_isp_lsc_t lsc;
 
     if (metadata->flags & IPA_METADATA_FLAGS_LSC) {
-        lsc.enable = true;
+        lsc.enable = metadata->lsc.enable;
         lsc.gain_r = metadata->lsc.gain_r;
         lsc.gain_gr = metadata->lsc.gain_gr;
         lsc.gain_gb = metadata->lsc.gain_gb;
@@ -799,31 +812,40 @@ static void config_motor_position(esp_video_isp_t *isp, esp_ipa_metadata_t *meta
     struct v4l2_ext_controls controls;
     struct v4l2_ext_control control[1];
 
-    if (metadata->flags & IPA_METADATA_FLAGS_FP) {
+    if (!(metadata->flags & IPA_METADATA_FLAGS_FP)) {
+        return;
+    }
+
+    if (!isp->sensor_attr.focus) {
+        /* Stub focus range when AF runs without a motor: advance scan state only. */
+        isp->focus_info.cur_pos = metadata->focus_pos;
+        isp->focus_info.start_time = 0;
+        return;
+    }
+
+    controls.ctrl_class = V4L2_CID_CAMERA_CLASS;
+    controls.count      = 1;
+    controls.controls   = control;
+    control[0].id       = V4L2_CID_FOCUS_ABSOLUTE;
+    control[0].value    = metadata->focus_pos;
+    if (ioctl(isp->cam_fd, VIDIOC_S_EXT_CTRLS, &controls) != 0) {
+        ESP_LOGE(TAG, "failed to set motor position");
+        isp->focus_info.start_time = 0;
+    } else {
+        int64_t strat_time;
+
         controls.ctrl_class = V4L2_CID_CAMERA_CLASS;
         controls.count      = 1;
         controls.controls   = control;
-        control[0].id       = V4L2_CID_FOCUS_ABSOLUTE;
-        control[0].value    = metadata->focus_pos;
-        if (ioctl(isp->cam_fd, VIDIOC_S_EXT_CTRLS, &controls) != 0) {
-            ESP_LOGE(TAG, "failed to set motor position");
+        control[0].id       = V4L2_CID_MOTOR_START_TIME;
+        control[0].p_u8     = (uint8_t *)&strat_time;
+        control[0].size     = sizeof(strat_time);
+        if (ioctl(isp->cam_fd, VIDIOC_G_EXT_CTRLS, &controls) != 0) {
+            ESP_LOGE(TAG, "failed to get motor start time");
             isp->focus_info.start_time = 0;
         } else {
-            int64_t strat_time;
-
-            controls.ctrl_class = V4L2_CID_CAMERA_CLASS;
-            controls.count      = 1;
-            controls.controls   = control;
-            control[0].id       = V4L2_CID_MOTOR_START_TIME;
-            control[0].p_u8     = (uint8_t *)&strat_time;
-            control[0].size     = sizeof(strat_time);
-            if (ioctl(isp->cam_fd, VIDIOC_G_EXT_CTRLS, &controls) != 0) {
-                ESP_LOGE(TAG, "failed to get motor start time");
-                isp->focus_info.start_time = 0;
-            } else {
-                isp->focus_info.start_time = strat_time;
-                isp->focus_info.cur_pos = metadata->focus_pos;
-            }
+            isp->focus_info.start_time = strat_time;
+            isp->focus_info.cur_pos = metadata->focus_pos;
         }
     }
 }
@@ -857,6 +879,145 @@ static void config_blc(esp_video_isp_t *isp, esp_ipa_metadata_t *metadata)
 }
 #endif
 
+#if ESP_VIDEO_ISP_DEVICE_DPC
+static void ipa_dpc_to_isp(const esp_ipa_dpc_t *ipa_dpc, esp_isp_dpc_dynamic_config_t *isp_dpc)
+{
+    memset(isp_dpc, 0, sizeof(*isp_dpc));
+    isp_dpc->method = (esp_isp_dpc_dynamic_method_t)ipa_dpc->method;
+
+    if (ipa_dpc->method == ESP_IPA_DPC_DYNAMIC_METHOD_1) {
+        isp_dpc->method_1.high_threshold = ipa_dpc->method_1.high_threshold;
+        isp_dpc->method_1.low_threshold = ipa_dpc->method_1.low_threshold;
+    } else {
+        uint32_t value;
+
+        value = ipa_dpc->method_2.first_stage_upper_ratio * ISP_DPC_RATIO_MAX;
+        if (value == 0) {
+            value = 1;
+        }
+        isp_dpc->method_2.first_stage_upper_ratio.val = MIN(value, ISP_DPC_RATIO_MAX);
+
+        value = ipa_dpc->method_2.first_stage_lower_ratio * ISP_DPC_RATIO_MAX;
+        if (value >= isp_dpc->method_2.first_stage_upper_ratio.val) {
+            value = isp_dpc->method_2.first_stage_upper_ratio.val - 1;
+        }
+        isp_dpc->method_2.first_stage_lower_ratio.val = MIN(value, ISP_DPC_RATIO_MAX);
+
+        value = ipa_dpc->method_2.bright_deviation_factor * ISP_DPC_DEVIATION_FACTOR_MAX;
+        isp_dpc->method_2.bright_deviation_factor.val = MIN(value, ISP_DPC_DEVIATION_FACTOR_MAX);
+
+        value = ipa_dpc->method_2.dark_deviation_factor * ISP_DPC_DEVIATION_FACTOR_MAX;
+        isp_dpc->method_2.dark_deviation_factor.val = MIN(value, ISP_DPC_DEVIATION_FACTOR_MAX);
+    }
+}
+
+static void config_dpc(esp_video_isp_t *isp, esp_ipa_metadata_t *metadata)
+{
+    if (metadata->flags & IPA_METADATA_FLAGS_DPC) {
+        struct v4l2_ext_controls controls;
+        struct v4l2_ext_control control[1];
+        esp_video_isp_dpc_dynamic_t dpc;
+
+        memset(&dpc, 0, sizeof(dpc));
+        dpc.enable = true;
+        ipa_dpc_to_isp(&metadata->dpc, &dpc.dynamic);
+
+        controls.ctrl_class = V4L2_CID_USER_CLASS;
+        controls.count      = 1;
+        controls.controls   = control;
+        control[0].id       = V4L2_CID_USER_ESP_ISP_DPC_DYNAMIC;
+        control[0].size     = sizeof(esp_video_isp_dpc_dynamic_t);
+        control[0].p_u8     = (uint8_t *)&dpc;
+        if (ioctl(isp->isp_fd, VIDIOC_S_EXT_CTRLS, &controls) != 0) {
+            ESP_LOGE(TAG, "failed to set DPC");
+        }
+    }
+}
+#endif
+
+#if CONFIG_ESP_VIDEO_ENABLE_LED_SUPPORT && CONFIG_ESP_VIDEO_ENABLE_IRCUT_SUPPORT
+static void config_ir_led(esp_video_isp_t *isp, bool enable)
+{
+    struct v4l2_ext_controls controls;
+    struct v4l2_ext_control control[1];
+
+    if (!isp->sensor_attr.ir_led) {
+        return;
+    }
+
+    memset(&controls, 0, sizeof(controls));
+    memset(&control, 0, sizeof(control));
+    controls.count = 1;
+    controls.controls = control;
+    control[0].id = V4L2_CID_IR_LED_BRIGHTNESS;
+    control[0].value = enable ? isp->ir_led_max : isp->ir_led_min;
+    if (ioctl(isp->cam_fd, VIDIOC_S_EXT_CTRLS, &controls) != 0) {
+        ESP_LOGE(TAG, "failed to set IR LED");
+    } else {
+        /* IPA checks AWB G/R only while this is true. The current frame already
+         * ran with the previous state; the next cycle sees this LED state. */
+        isp->sensor.ir_led_on = enable;
+        ESP_LOGD(TAG, "IR LED set to %s", enable ? "on" : "off");
+    }
+}
+#endif
+
+#if ISP_PIPELINE_CONTROL_WL_LED
+static void config_wl_led(esp_video_isp_t *isp, esp_ipa_metadata_t *metadata)
+{
+    struct v4l2_ext_controls controls;
+    struct v4l2_ext_control control[1];
+    uint32_t percent;
+
+    if (!(metadata->flags & IPA_METADATA_FLAGS_WL) || !isp->sensor_attr.ir_led) {
+        return;
+    }
+
+    /* IPA gives the white light brightness in percent, the LED reports its own range */
+    percent = MIN(metadata->wl.brightness, 100);
+    memset(&controls, 0, sizeof(controls));
+    memset(&control, 0, sizeof(control));
+    controls.count = 1;
+    controls.controls = control;
+    control[0].id = V4L2_CID_IR_LED_BRIGHTNESS;
+    control[0].value = isp->ir_led_min + (int32_t)((percent * (uint32_t)(isp->ir_led_max - isp->ir_led_min) + 50) / 100);
+    if (ioctl(isp->cam_fd, VIDIOC_S_EXT_CTRLS, &controls) != 0) {
+        ESP_LOGE(TAG, "failed to set white light LED");
+    } else {
+        ESP_LOGD(TAG, "white light LED set to %" PRIu32 "%%, brightness %" PRIi32, percent, control[0].value);
+    }
+}
+#endif
+
+#if CONFIG_ESP_VIDEO_ENABLE_IRCUT_SUPPORT
+static void config_ir_cut(esp_video_isp_t *isp, esp_ipa_metadata_t *metadata)
+{
+    if (metadata->flags & IPA_METADATA_FLAGS_IR) {
+        struct v4l2_ext_controls controls;
+        struct v4l2_ext_control control[1];
+        bool night = metadata->ir_enable;
+
+        memset(&controls, 0, sizeof(controls));
+        memset(&control, 0, sizeof(control));
+        controls.count = 1;
+        controls.controls = control;
+        control[0].id = V4L2_CID_IRCUT_MODE;
+        control[0].value = night ? ESP_CAM_IRCUT_MODE_NIGHT : ESP_CAM_IRCUT_MODE_DAY;
+        if (ioctl(isp->cam_fd, VIDIOC_S_EXT_CTRLS, &controls) != 0) {
+            ESP_LOGE(TAG, "failed to set IR-Cut mode");
+        } else {
+            ESP_LOGD(TAG, "IR-CUT set to mode %s", night ? "Night" : "Day");
+
+#if CONFIG_ESP_VIDEO_ENABLE_LED_SUPPORT
+            /* IR-CUT is an electromagnetic device and its switching time cannot be
+             * controlled, so the IR LED is switched independently of the IR-CUT. */
+            config_ir_led(isp, night);
+#endif
+        }
+    }
+}
+#endif
+
 static void config_isp_and_camera(esp_video_isp_t *isp, esp_ipa_metadata_t *metadata)
 {
     config_statistics_region(isp, metadata);
@@ -879,10 +1040,19 @@ static void config_isp_and_camera(esp_video_isp_t *isp, esp_ipa_metadata_t *meta
 #if ESP_VIDEO_ISP_DEVICE_BLC
     config_blc(isp, metadata);
 #endif
+#if ESP_VIDEO_ISP_DEVICE_DPC
+    config_dpc(isp, metadata);
+#endif
     config_sensor_ae_target_level(isp, metadata);
     config_exposure_and_gain(isp, metadata);
 #if CONFIG_ESP_VIDEO_ISP_PIPELINE_CONTROL_CAMERA_MOTOR
     config_motor_position(isp, metadata);
+#endif
+#if CONFIG_ESP_VIDEO_ENABLE_IRCUT_SUPPORT
+    config_ir_cut(isp, metadata);
+#endif
+#if ISP_PIPELINE_CONTROL_WL_LED
+    config_wl_led(isp, metadata);
 #endif
 }
 
@@ -1252,6 +1422,32 @@ static esp_err_t init_cam_dev(const esp_video_isp_config_t *config, esp_video_is
         ESP_LOGD(TAG, "V4L2_CID_CAMERA_AE_LEVEL is not supported");
     }
 
+#if CONFIG_ESP_VIDEO_ENABLE_LED_SUPPORT
+    qctrl.id = V4L2_CID_IR_LED_BRIGHTNESS;
+    ret = ioctl(fd, VIDIOC_QUERY_EXT_CTRL, &qctrl);
+    if (ret == 0) {
+        isp->sensor_attr.ir_led = 1;
+        isp->ir_led_min = (int32_t)qctrl.minimum;
+        isp->ir_led_max = (int32_t)qctrl.maximum;
+
+        controls.ctrl_class = V4L2_CID_USER_CLASS;
+        controls.count      = 1;
+        controls.controls   = control;
+        control[0].id       = V4L2_CID_IR_LED_BRIGHTNESS;
+        control[0].value    = 0;
+        ret = ioctl(fd, VIDIOC_G_EXT_CTRLS, &controls);
+        ESP_GOTO_ON_FALSE(ret == 0, ESP_ERR_NOT_SUPPORTED, fail_0, TAG, "failed to get IR LED brightness");
+        isp->sensor.ir_led_on = control[0].value > isp->ir_led_min;
+
+        ESP_LOGD(TAG, "IR LED brightness:");
+        ESP_LOGD(TAG, "  min: %"PRIi64, qctrl.minimum);
+        ESP_LOGD(TAG, "  max: %"PRIi64, qctrl.maximum);
+        ESP_LOGD(TAG, "  current: %"PRIi32" on=%d", control[0].value, isp->sensor.ir_led_on);
+    } else {
+        ESP_LOGD(TAG, "V4L2_CID_IR_LED_BRIGHTNESS is not supported");
+    }
+#endif
+
 #if CONFIG_ESP_VIDEO_ISP_PIPELINE_CONTROL_CAMERA_MOTOR
     qctrl.id = V4L2_CID_MOTOR_START_TIME;
     ret = ioctl(fd, VIDIOC_QUERY_EXT_CTRL, &qctrl);
@@ -1273,6 +1469,7 @@ static esp_err_t init_cam_dev(const esp_video_isp_config_t *config, esp_video_is
         ESP_GOTO_ON_FALSE(ret == 0, ESP_ERR_NOT_SUPPORTED, fail_0, TAG, "failed to get AF absolute position code");
 
         isp->sensor.focus_info = &isp->focus_info;
+        isp->sensor_attr.focus = 1;
 
         isp->focus_info.min_pos = qctrl.minimum;
         isp->focus_info.max_pos = qctrl.maximum;
@@ -1292,9 +1489,24 @@ static esp_err_t init_cam_dev(const esp_video_isp_config_t *config, esp_video_is
     if (ret == 0) {
         isp->focus_info.period_in_us = motor_format.step_period.period_in_us;
         isp->focus_info.codes_per_step = motor_format.step_period.codes_per_step;
+    } else if (isp->sensor_attr.focus) {
+        ESP_LOGW(TAG, "VIDIOC_G_MOTOR_FMT is not supported");
     } else {
-        ESP_LOGE(TAG, "VIDIOC_G_MOTOR_FMT is not supported");
+        ESP_LOGD(TAG, "VIDIOC_G_MOTOR_FMT is not supported");
     }
+
+#if CONFIG_ESP_IPA_AF_ALGORITHM
+    if (!isp->sensor.focus_info) {
+        /* Motor compiled in but not detected: keep IPA AF init alive. */
+        isp->sensor.focus_info = &isp->focus_info;
+        isp->focus_info.min_pos = 0;
+        isp->focus_info.max_pos = 1;
+        isp->focus_info.step_pos = 1;
+        isp->focus_info.cur_pos = 0;
+        isp->focus_info.codes_per_step = 1;
+        isp->focus_info.period_in_us = 1000;
+    }
+#endif
 #elif CONFIG_ESP_IPA_AF_ALGORITHM
     isp->sensor.focus_info = &isp->focus_info;
 
@@ -1302,6 +1514,8 @@ static esp_err_t init_cam_dev(const esp_video_isp_config_t *config, esp_video_is
     isp->focus_info.max_pos = 1;
     isp->focus_info.step_pos = 1;
     isp->focus_info.cur_pos = 0;
+    isp->focus_info.codes_per_step = 1;
+    isp->focus_info.period_in_us = 1000;
 #endif
 
     memset(&format, 0, sizeof(struct v4l2_format));
@@ -1331,6 +1545,23 @@ static esp_err_t init_isp_dev(const esp_video_isp_config_t *config, esp_video_is
     fd = open(config->isp_dev, O_RDWR);
     ESP_RETURN_ON_FALSE(fd > 0, ESP_ERR_INVALID_ARG, TAG, "failed to open %s", config->isp_dev);
     print_dev_info(fd);
+
+#if CONFIG_ESP_VIDEO_ENABLE_IRCUT_SUPPORT
+    {
+        struct v4l2_ext_controls controls;
+        struct v4l2_ext_control control[1];
+
+        memset(&controls, 0, sizeof(controls));
+        memset(&control, 0, sizeof(control));
+        controls.ctrl_class = V4L2_CID_USER_CLASS;
+        controls.count = 1;
+        controls.controls = control;
+        control[0].id = V4L2_CID_SATURATION;
+        ret = ioctl(fd, VIDIOC_G_EXT_CTRLS, &controls);
+        ESP_GOTO_ON_FALSE(ret == 0, ESP_FAIL, fail_0, TAG, "failed to get saturation");
+        isp->sensor.cur_saturation = control[0].value;
+    }
+#endif
 
     memset(&req, 0, sizeof(req));
     req.count  = ISP_METADATA_BUFFER_COUNT;
@@ -1976,6 +2207,241 @@ esp_err_t esp_video_isp_pipeline_get_agc_min_exposure(uint32_t *exposure_us)
     return ret;
 }
 
+esp_err_t esp_video_isp_pipeline_set_agc_meter_luma_weight(const uint8_t weight[ISP_AE_REGIONS])
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+    esp_ipa_agc_meter_luma_weight_t table;
+
+    ESP_RETURN_ON_FALSE(weight, ESP_ERR_INVALID_ARG, TAG, "weight is NULL");
+
+    memcpy(table.weight, weight, sizeof(table.weight));
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AGC_S_METER_LUMA_WEIGHT, &table);
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+esp_err_t esp_video_isp_pipeline_get_agc_meter_luma_weight(uint8_t weight[ISP_AE_REGIONS])
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+    esp_ipa_agc_meter_luma_weight_t table;
+
+    ESP_RETURN_ON_FALSE(weight, ESP_ERR_INVALID_ARG, TAG, "weight is NULL");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AGC_G_METER_LUMA_WEIGHT, &table);
+        if (ret == ESP_OK) {
+            memcpy(weight, table.weight, sizeof(table.weight));
+        }
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+esp_err_t esp_video_isp_pipeline_reset_agc_meter_weight(void)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AGC_S_RESET_METER_WEIGHT, NULL);
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+esp_err_t esp_video_isp_pipeline_reset_af(void)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AF_S_RESET, NULL);
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+esp_err_t esp_video_isp_pipeline_set_af_windows(const isp_window_t windows[ISP_AF_WINDOW_NUM])
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+    esp_ipa_af_windows_t table;
+
+    ESP_RETURN_ON_FALSE(windows, ESP_ERR_INVALID_ARG, TAG, "windows is NULL");
+
+    memcpy(table.windows, windows, sizeof(table.windows));
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AF_S_WINDOWS, &table);
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+esp_err_t esp_video_isp_pipeline_get_af_windows(isp_window_t windows[ISP_AF_WINDOW_NUM])
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+    esp_ipa_af_windows_t table;
+
+    ESP_RETURN_ON_FALSE(windows, ESP_ERR_INVALID_ARG, TAG, "windows is NULL");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AF_G_WINDOWS, &table);
+        if (ret == ESP_OK) {
+            memcpy(windows, table.windows, sizeof(table.windows));
+        }
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+esp_err_t esp_video_isp_pipeline_set_af_window_weight(const uint8_t weight[ISP_AF_WINDOW_NUM])
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+    esp_ipa_af_window_weight_t table;
+
+    ESP_RETURN_ON_FALSE(weight, ESP_ERR_INVALID_ARG, TAG, "weight is NULL");
+
+    memcpy(table.weight, weight, sizeof(table.weight));
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AF_S_WINDOW_WEIGHT, &table);
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+esp_err_t esp_video_isp_pipeline_get_af_window_weight(uint8_t weight[ISP_AF_WINDOW_NUM])
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+    esp_ipa_af_window_weight_t table;
+
+    ESP_RETURN_ON_FALSE(weight, ESP_ERR_INVALID_ARG, TAG, "weight is NULL");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AF_G_WINDOW_WEIGHT, &table);
+        if (ret == ESP_OK) {
+            memcpy(weight, table.weight, sizeof(table.weight));
+        }
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+esp_err_t esp_video_isp_pipeline_set_awb_ct(uint32_t ct)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AWB_S_CT, &ct);
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+esp_err_t esp_video_isp_pipeline_set_awb_reset(void)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AWB_S_RESET, NULL);
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+esp_err_t esp_video_isp_pipeline_set_agc_meter_target_offset(float offset)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AGC_S_METER_TARGET_OFFSET, &offset);
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+esp_err_t esp_video_isp_pipeline_get_agc_meter_target_offset(float *offset)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    ESP_RETURN_ON_FALSE(offset, ESP_ERR_INVALID_ARG, TAG, "offset is NULL");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AGC_G_METER_TARGET_OFFSET, offset);
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+esp_err_t esp_video_isp_pipeline_get_sensor_ae(esp_video_isp_pipeline_sensor_ae_t *ae)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    ESP_RETURN_ON_FALSE(ae, ESP_ERR_INVALID_ARG, TAG, "ae is NULL");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        ae->exposure_us = s_esp_video_isp->sensor.cur_exposure;
+        ae->min_exposure_us = s_esp_video_isp->sensor.min_exposure;
+        ae->max_exposure_us = s_esp_video_isp->sensor.max_exposure;
+        ae->gain = s_esp_video_isp->sensor.cur_gain;
+        ae->min_gain = s_esp_video_isp->sensor.min_gain;
+        ae->max_gain = s_esp_video_isp->sensor.max_gain;
+        ret = ESP_OK;
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
 /**
  * @brief Get int32_t type IPA environment variable.
  *
@@ -1998,7 +2464,7 @@ esp_err_t esp_video_isp_pipeline_get_env_int32(const char *name, int32_t *val)
             s_esp_video_isp->ipa_pipeline->ipa_array) {
         esp_ipa_t *ipa = s_esp_video_isp->ipa_pipeline->ipa_array[0];
 
-        if (!esp_ipa_has_var(ipa, name)) {
+        if (!esp_ipa_has_int32_var(ipa, name)) {
             ret = ESP_ERR_NOT_FOUND;
         } else {
             *val = esp_ipa_get_int32(ipa, name);
@@ -2034,12 +2500,31 @@ esp_err_t esp_video_isp_pipeline_get_env_float(const char *name, float *val)
             s_esp_video_isp->ipa_pipeline->ipa_array) {
         esp_ipa_t *ipa = s_esp_video_isp->ipa_pipeline->ipa_array[0];
 
-        if (!esp_ipa_has_var(ipa, name)) {
+        if (!esp_ipa_has_float_var(ipa, name)) {
             ret = ESP_ERR_NOT_FOUND;
         } else {
             *val = esp_ipa_get_float(ipa, name);
             ret = ESP_OK;
         }
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+esp_err_t esp_video_isp_pipeline_set_env_float(const char *name, float val)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    ESP_RETURN_ON_FALSE(name, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp && s_esp_video_isp->ipa_pipeline &&
+            s_esp_video_isp->ipa_pipeline->ipa_array) {
+        esp_ipa_set_float(s_esp_video_isp->ipa_pipeline->ipa_array[0], name, val);
+        ret = ESP_OK;
     } else {
         ESP_LOGD(TAG, "ISP controller is not initialized");
     }
@@ -2091,6 +2576,108 @@ esp_err_t esp_video_isp_pipeline_set_ipa_config(const esp_ipa_config_t *config)
             config_isp_and_camera(s_esp_video_isp, &metadata);
             ESP_LOGD(TAG, "switched IPA config description=%s",
                      config->description ? config->description : "");
+        }
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+/**
+ * @brief Read the computed IPA state.
+ *
+ * Call while the ISP pipeline is initialized. On ESP32-P4 the ISP is bound to
+ * MIPI-CSI, so VIDIOC_STREAMOFF stops both and the state no longer changes.
+ * @p state must be the same object later passed to esp_video_isp_pipeline_set_ipa_state().
+ * The IPA configuration, width and height must stay the same between the two calls.
+ *
+ * @param state State filled on success. The caller owns this buffer.
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_INVALID_ARG if @p state is NULL
+ *      - ESP_ERR_INVALID_STATE if the pipeline is not initialized
+ *      - Others if failed
+ */
+esp_err_t esp_video_isp_pipeline_get_ipa_state(esp_ipa_state_t *state)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    ESP_RETURN_ON_FALSE(state, ESP_ERR_INVALID_ARG, TAG, "state is NULL");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp && s_esp_video_isp->ipa_pipeline) {
+        ESP_LOGD(TAG, "get IPA state, sensor %" PRIu32 "x%" PRIu32 " gain=%0.4f exposure=%" PRIu32,
+                 s_esp_video_isp->sensor.width, s_esp_video_isp->sensor.height,
+                 s_esp_video_isp->sensor.cur_gain, s_esp_video_isp->sensor.cur_exposure);
+        ret = esp_ipa_pipeline_get_state(s_esp_video_isp->ipa_pipeline,
+                                         &s_esp_video_isp->sensor, state);
+        if (ret == ESP_OK) {
+            ESP_LOGD(TAG, "got IPA state version=%" PRIu32 " config=%" PRIu32
+                     " modules=0x%" PRIx32 " %" PRIu32 "x%" PRIu32 " crc=0x%08" PRIx32,
+                     state->version, state->config_version, state->modules,
+                     state->width, state->height, state->crc32);
+            if (state->modules & ESP_IPA_STATE_MOD_AWB) {
+                ESP_LOGD(TAG, "AWB ct valid=%u ct=%" PRId32,
+                         state->awb.ct.valid, state->awb.ct.ct);
+            }
+            if (state->modules & ESP_IPA_STATE_MOD_IAN) {
+                ESP_LOGD(TAG, "IAN flags=0x%" PRIx32 " ct=%" PRId32,
+                         state->ian.global.flags, state->ian.global.ct);
+            }
+        } else {
+            ESP_LOGD(TAG, "get IPA state failed: %s", esp_err_to_name(ret));
+        }
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+/**
+ * @brief Restore a saved IPA state and write it to the ISP and camera.
+ *
+ * Call after the pipeline is initialized, before VIDIOC_STREAMON of the frame
+ * that must use the restored parameters. @p state must come from
+ * esp_video_isp_pipeline_get_ipa_state() with the same IPA configuration.
+ *
+ * @param state State previously returned by esp_video_isp_pipeline_get_ipa_state()
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_INVALID_ARG if @p state is NULL
+ *      - ESP_ERR_INVALID_STATE if the pipeline is not initialized, or @p state
+ *        does not match this pipeline
+ *      - ESP_ERR_INVALID_VERSION if @p state->version does not match
+ *      - ESP_ERR_INVALID_CRC if @p state->crc32 does not match
+ *      - Others if failed
+ */
+esp_err_t esp_video_isp_pipeline_set_ipa_state(const esp_ipa_state_t *state)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+    esp_ipa_metadata_t metadata = {0};
+
+    ESP_RETURN_ON_FALSE(state, ESP_ERR_INVALID_ARG, TAG, "state is NULL");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp && s_esp_video_isp->ipa_pipeline) {
+        ESP_LOGD(TAG, "set IPA state version=%" PRIu32 " modules=0x%" PRIx32
+                 " %" PRIu32 "x%" PRIu32 " crc=0x%08" PRIx32,
+                 state->version, state->modules, state->width, state->height, state->crc32);
+        ret = esp_ipa_pipeline_set_state(s_esp_video_isp->ipa_pipeline, state,
+                                         &s_esp_video_isp->sensor, &metadata);
+        if (ret == ESP_OK) {
+            ESP_LOGD(TAG, "apply IPA metadata flags=0x%" PRIx32 " exposure=%" PRIu32
+                     " gain=%0.4f rg=%0.4f bg=%0.4f",
+                     metadata.flags, metadata.exposure, metadata.gain,
+                     metadata.red_gain, metadata.blue_gain);
+            config_isp_and_camera(s_esp_video_isp, &metadata);
+        } else {
+            ESP_LOGD(TAG, "set IPA state failed: %s", esp_err_to_name(ret));
         }
     } else {
         ESP_LOGD(TAG, "ISP controller is not initialized");

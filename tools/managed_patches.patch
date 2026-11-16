@@ -1266,3 +1266,91 @@ index 724aae83..2fa671fe 100644
      _i2s_unlock(i2s_data);
      return ret;
  #else
+diff --git a/managed_components/espressif__usb_host_hid/hid_host.c b/managed_components/espressif__usb_host_hid/hid_host.c
+index 8355f75d..766e1b86 100644
+--- a/managed_components/espressif__usb_host_hid/hid_host.c
++++ b/managed_components/espressif__usb_host_hid/hid_host.c
+@@ -85,6 +85,7 @@ typedef struct hid_host_device {
+     usb_transfer_t *ctrl_xfer;                  /**< Pointer to control transfer buffer */
+     usb_device_handle_t dev_hdl;                /**< USB device handle */
+     uint8_t dev_addr;                           /**< USB device address */
++    bool in_list;                               /**< Inserted into hid_devices_tailq; only then may it be removed */
+ #ifdef HID_HOST_REMOTE_WAKE_SUPPORTED
+     bool remote_wakeup_enabled;                 /**< To indicate whether remote wakeup is currently enabled */
+ #endif // HID_HOST_REMOTE_WAKE_SUPPORTED
+@@ -517,10 +518,26 @@ static bool hid_host_device_init_attempt(uint8_t dev_addr)
+ 
+     // Create HID interfaces list in RAM, connected to the particular USB dev
+     if (is_hid_device) {
+-        // Proceed, add HID device to the list, get handle if necessary
+-        ESP_ERROR_CHECK( hid_host_install_device(dev_addr, dev_hdl, &hid_device) );
+-        // Create Interfaces list for a possibility to claim Interface
+-        ESP_ERROR_CHECK( hid_host_interface_list_create(hid_device, config_desc) );
++        // Proceed, add HID device to the list, get handle if necessary.
++        // A failure here (typically ESP_ERR_NO_MEM for the control transfer's
++        // DMA buffer on a tight board) must not abort the firmware: report it and
++        // leave the device unenumerated instead.
++        esp_err_t err = hid_host_install_device(dev_addr, dev_hdl, &hid_device);
++
++        if (err != ESP_OK) {
++            /* NOTE: the device handle is deliberately NOT closed here. Closing
++             * it right after a failed install on a board with a real HID device
++             * wedged the command worker permanently (the board only printed
++             * prompts afterwards). The handle is released when the device
++             * detaches; leaking it on a failed enumerate is the lesser evil. */
++            ESP_LOGE(TAG, "HID device install failed: %s", esp_err_to_name(err));
++            return false;
++        }
++        if (hid_host_interface_list_create(hid_device, config_desc) != ESP_OK) {
++            ESP_LOGE(TAG, "HID interface list create failed");
++            hid_host_uninstall_device(hid_device);
++            return false;
++        }
+     } else {
+         usb_host_device_close(s_hid_driver->client_handle, dev_hdl);
+         ESP_LOGW(TAG, "No HID device at USB port %d", dev_addr);
+@@ -1304,6 +1321,7 @@ static esp_err_t hid_host_install_device(uint8_t dev_addr,
+     HID_GOTO_ON_FALSE_CRITICAL( s_hid_driver, ESP_ERR_INVALID_STATE );
+     HID_GOTO_ON_FALSE_CRITICAL( s_hid_driver->client_handle, ESP_ERR_INVALID_STATE );
+     STAILQ_INSERT_TAIL(&s_hid_driver->hid_devices_tailq, hid_device, tailq_entry);
++    hid_device->in_list = true;
+     HID_EXIT_CRITICAL();
+ 
+     if (hid_device_handle) {
+@@ -1321,11 +1339,19 @@ esp_err_t hid_host_uninstall_device(hid_device_t *hid_device)
+ {
+     HID_RETURN_ON_INVALID_ARG(hid_device);
+ 
+-    HID_RETURN_ON_ERROR( usb_host_transfer_free(hid_device->ctrl_xfer),
+-                         "Unable to free transfer buffer for EP0");
+-    HID_RETURN_ON_ERROR( usb_host_device_close(s_hid_driver->client_handle,
+-                                               hid_device->dev_hdl),
+-                         "Unable to close USB host");
++    /* Tolerate a device that failed part-way through install: the install path
++     * calls this on any failure, and a STAILQ_REMOVE of a non-member walks off
++     * the list and dereferences NULL. */
++    if (hid_device->ctrl_xfer != NULL) {
++        HID_RETURN_ON_ERROR( usb_host_transfer_free(hid_device->ctrl_xfer),
++                             "Unable to free transfer buffer for EP0");
++    }
++    if (hid_device->dev_hdl != NULL &&
++        s_hid_driver != NULL && s_hid_driver->client_handle != NULL) {
++        HID_RETURN_ON_ERROR( usb_host_device_close(s_hid_driver->client_handle,
++                                                   hid_device->dev_hdl),
++                             "Unable to close USB host");
++    }
+ 
+     if (hid_device->ctrl_xfer_done) {
+         vSemaphoreDelete(hid_device->ctrl_xfer_done);
+@@ -1339,7 +1365,10 @@ esp_err_t hid_host_uninstall_device(hid_device_t *hid_device)
+              hid_device->dev_addr);
+ 
+     HID_ENTER_CRITICAL();
+-    STAILQ_REMOVE(&s_hid_driver->hid_devices_tailq, hid_device, hid_host_device, tailq_entry);
++    if (hid_device->in_list) {
++        STAILQ_REMOVE(&s_hid_driver->hid_devices_tailq, hid_device, hid_host_device, tailq_entry);
++        hid_device->in_list = false;
++    }
+     HID_EXIT_CRITICAL();
+ 
+     free(hid_device);

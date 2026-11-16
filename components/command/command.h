@@ -930,6 +930,25 @@ const shell_command_entry_t *epub_commands_get_table(size_t *out_count);
 int shell_command_epub(int argc, char **argv);
 
 /**
+ * `rss` verb family (RSS 2.0 / Atom 1.0 / JSON Feed reader).
+ *   rss list                     — subscriptions and their fetch state
+ *   rss add <name> <url> [user] [token] — subscribe
+ *   rss remove <name>            — unsubscribe
+ *   rss enable <name> <on|off>    — include/exclude from polling
+ *   rss interval <name> <minutes> — 0 = the CONFIG.SYS default
+ *   rss refresh [name]            — fetch now (all feeds when omitted)
+ *   rss read <name> [n]           — render an item (n, or the first unread)
+ *   rss open <name> [n]           — open an item's link in the browser
+ *   rss reset <name>              — mark every item read
+ *   rss import <file>             — merge an OPML document
+ *   rss export [file]             — write an OPML document
+ *   rss set <key> <value>         — runtime tunables
+ * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage).
+ */
+const shell_command_entry_t *rss_commands_get_table(size_t *out_count);
+int shell_command_rss(int argc, char **argv);
+
+/**
  * `cas` â€” Computer Algebra System. argv-verb dispatcher:
  *   cas open <expr>          â€” parse and open expression
  *   cas close                â€” close current expression
@@ -983,6 +1002,35 @@ int shell_command_math(int argc, char **argv);
  * ERRORLEVEL 0 ok / 1 some failure / 2 usage.
  */
 void shell_command_pkg(int argc, char **argv);
+
+/**
+ * Install a bundle by app name (pkg_commands.c). The `store` verb calls this
+ * after downloading a `.PKG`; it is the same code path as `pkg install`, not a
+ * second dispatcher.
+ */
+void pkg_install_app(const char *app, bool require_sign, bool force);
+
+/**
+ * `store` — remote app-store client over the shared networking stack
+ * (`store url|list|install <id>`; store_commands.c). The index URL is the
+ * compile-time `P4_CONFIG_STORE_INDEX_URL` (empty disables the verb).
+ */
+void shell_command_store(int argc, char **argv);
+
+/**
+ * `download <url> <path> [/resume] [/progress]` — stream an HTTP resource to
+ * SD through the ONE HTTP client (`download_commands.c`). `/resume` sends a
+ * `Range` header and appends.
+ */
+void shell_command_download(int argc, char **argv);
+
+/**
+ * Parse an `apps.<n>.<field>` index path into its array index and field name.
+ * Pure (store_commands.c, unit-tested).
+ * @return true when @p path has the `apps.<digits>.<field>` shape.
+ */
+bool store_path_parse(const char *path, int *index_out,
+                      const char **field_out, size_t *field_len_out);
 
 /** Manifest trust sizes (pkg_commands.c): raw P-256 X||Y, raw r||s, SHA-256. */
 #define PKG_SIGN_PUB_BYTES 64
@@ -1052,6 +1100,16 @@ bool pkg_requires_parse(const char *text, char *app_out, size_t app_size,
 /** App-name buffers for the completion providers (pkg_commands.c). */
 #define COMMAND_APP_NAME_BYTES 32
 #define COMMAND_APP_MAX        48
+
+/**
+ * Parse a `services=` list (`APP>=1.2`, `APP=2`, `APP>3`, or a bare `APP`)
+ * into up to @p max entries. Pure (pkg_commands.c, unit-tested). @p text is
+ * split in place; a bare name means "any version" (`=` + empty version).
+ * @return the entry count, or -1 on a malformed entry or overflow.
+ */
+int pkg_services_parse(char *text,
+                       char app_out[][COMMAND_APP_NAME_BYTES],
+                       char op_out[][3], char ver_out[][32], int max);
 
 /**
  * Completion sources (pkg_commands.c): installed app names from the

@@ -154,6 +154,7 @@ typedef struct {
 
 typedef struct {
     bool connected;
+    bool connecting;   /**< enumeration in progress; keeps a second connect out */
     bool mounted;
     msc_host_device_handle_t device;
     msc_host_vfs_handle_t vfs_handle;
@@ -896,7 +897,10 @@ static void usb_module_task(void *arg)
             }
 
             /* Take the first free slot so several drives can mount at once
-             * (/usb0..N). A reconnect installs fresh into whatever is free. */
+             * (/usb0..N). A reconnect installs fresh into whatever is free.
+             * The lock is released before enumeration: msc_host_install_device()
+             * does blocking SCSI transfers, and holding the module lock across
+             * them would stall every other USB operation behind one slow stick. */
             for (slot = 0; slot < P4_CONFIG_USB_MSC_MAX_DEVICES; slot++) {
                 if (s_usb_msc[slot].connected && s_usb_msc[slot].device != NULL) {
                     continue;
@@ -911,11 +915,29 @@ static void usb_module_task(void *arg)
                                     (int)P4_CONFIG_USB_MSC_MAX_DEVICES);
                 break;
             }
+            if (slot_state->connecting) {
+                xSemaphoreGive(s_usb_lock);
+                break;
+            }
+            slot_state->connecting = true;
             slot = (int)(slot_state - s_usb_msc);
+            xSemaphoreGive(s_usb_lock);
 
             error = msc_host_install_device(event.data.msc_connected.address, &slot_state->device);
+
+            /* Re-take the lock: header_notify_queue is not internally locked,
+             * so the notification and transcript paths stay serialized. */
+            if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) != pdTRUE) {
+                break;
+            }
+            if (!slot_state->connecting) {
+                /* Unplugged while enumerating; drop the result. */
+                xSemaphoreGive(s_usb_lock);
+                break;
+            }
             if (error == ESP_OK) {
                 slot_state->connected = true;
+                slot_state->connecting = false;
                 if (msc_host_get_device_info(slot_state->device, &slot_state->info) == ESP_OK) {
                     usb_wide_to_ascii(slot_state->info.iManufacturer, manufacturer, sizeof(manufacturer));
                     usb_wide_to_ascii(slot_state->info.iProduct, product, sizeof(product));
@@ -941,6 +963,7 @@ static void usb_module_task(void *arg)
                 }
             } else {
                 usb_record_errorf(error, "USB MSC install_device failed for address %u", (unsigned int)event.data.msc_connected.address);
+                slot_state->connecting = false;
             }
 
             xSemaphoreGive(s_usb_lock);

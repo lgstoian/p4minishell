@@ -414,12 +414,20 @@ bool     asset_app_ok(const char *app);            /* [A-Za-z0-9_-]+ name rule (
 bool     asset_crc_file(const char *resolved, uint32_t *crc_out);
 int      asset_verify_app(const char *tag, const char *app, bool list_only);  /* 0 ok, 1 fail */
 
-/* components/command/pkg_commands.c  (packaged SD apps: PKGS/<APP>/ -> APPS/) */
-void shell_command_pkg(int argc, char **argv);     /* list|info|verify|check|install [/signed] [/force]|remove|purge|outdated|key ... */
+/* components/command/pkg_commands.c  (packaged SD apps: PKGS/<APP>/ or
+ * PKGS/<APP>.PKG -> APPS/) */
+void shell_command_pkg(int argc, char **argv);     /* list|info|verify|check|install [/signed] [/force]|unpack|scan|remove|purge|outdated|key ... */
+void pkg_install_app(const char *app, bool require_sign, bool force);  /* store's install entry */
 bool pkg_app_name_from_appinfo(const char *filename, char *out, size_t size);  /* pure, unit-tested */
 int  pkg_version_compare(const char *a, const char *b);  /* pure, unit-tested: <0/0/>0 */
 bool pkg_requires_parse(const char *text, char *app_out, size_t app_size,  /* pure, unit-tested */
                         char *op_out, char *ver_out, size_t ver_size);
+int  pkg_services_parse(char *text,                              /* pure, unit-tested */
+                        char app_out[][COMMAND_APP_NAME_BYTES],
+                        char op_out[][3], char ver_out[][32], int max);
+
+/* components/command/store_commands.c  (remote app store over networking) */
+void shell_command_store(int argc, char **argv);   /* url|list|install <id> */
 
 /* Manifest trust (ECDSA P-256 + SHA-256; contract in ABI.md). The pure
  * helpers are unit-tested; the key store uses the `p4sign` NVS namespace. */
@@ -503,6 +511,22 @@ extern const uint8_t gfx_font8x8[GFX_FONT_GLYPHS][GFX_FONT_H];  /* index = ch - 
   wrapper (24-bit bottom-up, `GFX_SPR_MAX`). `gfx_bmp_decode_scaled_565` decodes straight to a
   target size (the source is never materialized), and `gfx_bmp_fit` is the single
   never-upscaling aspect-fit used by the viewer/TUI/canvas. All pure and unit-tested.
+
+### Image decode (`components/imgdec/imgdec.c`)
+PNG (LodePNG) + JPEG (TJpgDec) — the two decoders LVGL already compiles — to a
+scaled RGB565 buffer, the same contract as `gfx_bmp_decode_scaled_565`. There is
+one PNG decoder and one JPEG decoder in the firmware:
+```c
+typedef enum { IMGDEC_FMT_UNKNOWN = 0, IMGDEC_FMT_BMP, IMGDEC_FMT_PNG, IMGDEC_FMT_JPEG } imgdec_format_t;
+typedef struct { uint16_t *pixels; int width; int height; } imgdec_image_t;
+imgdec_format_t imgdec_probe(const uint8_t *data, size_t len, int *native_w, int *native_h);
+bool imgdec_decode_scaled(const uint8_t *data, size_t len, int dst_w, int dst_h, imgdec_image_t *out);
+void imgdec_free(imgdec_image_t *img);
+```
+- `imgdec_probe` sniffs the format and reads the native PNG/JPEG dimensions
+  without decoding; `imgdec_decode_scaled` composites PNG alpha onto white and
+  scales to RGB565 (nearest neighbour). The native decode is capped by
+  `P4_CONFIG_IMGDEC_MAX_W/H`; the scaled output is PSRAM.
 
 ### Plot viewport (`components/gfx/gfx_view.c`)
 World-coordinate mapping shared by the canvas and TUI plot targets (pure,
@@ -2212,7 +2236,17 @@ hard constraint enforced both in code and by disabling SoftAP in Kconfig.
 - `void bluetooth_advertise(bool enable, const char *name)`
   - `name` is a session-only advertising name (RAM-only, never persisted); NULL
     or empty falls back to the configured default device name.
-  - Focused Bluetooth helpers for shell subcommands.
+  - Starting while an advert is already running stops and restarts it instead of
+    failing with `EALREADY`; this is also how `bluetooth gatt on` switches a
+    non-connectable advert to a connectable one.
+- `static esp_err_t bluetooth_ensure_ready_once(void)`
+  - One hosted bring-up attempt: firmware-version gate, controller bring-up,
+    `nimble_port_init()`, GAP service init, then host-task creation verified with
+    `xTaskGetHandle("nimble_host")` (`esp_nimble_enable()` discards the
+    `xTaskCreatePinnedToCore()` result, so a failure would otherwise look like
+    success). `bluetooth_ensure_ready()` wraps it with one bounded retry
+    (`P4_CONFIG_BT_INIT_RETRIES`, `P4_CONFIG_BT_INIT_RETRY_DELAY_MS`).
+- Focused Bluetooth helpers for shell subcommands.
 
 - `esp_err_t bluetooth_connect(const char *addr_str)`
   - Acts as a BLE central for an external HID keyboard/mouse. Parses a
@@ -2243,6 +2277,50 @@ hard constraint enforced both in code and by disabling SoftAP in Kconfig.
 - Host-only HID is architecture, not a gap: the board uses keyboards/mice
   (BLE central + USB host) and never becomes one — no peripheral/device HID
   mode exists or is planned.
+
+## RSS reader API (`components/rss/`)
+
+- `esp_err_t rss_parse(const char *data, size_t len, rss_feed_t *feed)`
+  - Pure: parses RSS 2.0 / Atom 1.0 / JSON Feed, auto-detecting the format. The
+    feed owns a PSRAM item array released with `rss_feed_free()`.
+- `void rss_feed_free(rss_feed_t *feed)`
+- `esp_err_t rss_fetch(const char *url, const rss_subscription_t *sub, rss_feed_t *feed,
+  char *etag_out, size_t etag_out_size, char *last_modified_out, size_t lm_out_size)`
+  - One conditional GET. Returns `RSS_ERR_NOT_MODIFIED` on HTTP 304. On success
+    `etag_out` / `last_modified_out` receive the validators to persist (the
+    timestamp is rendered as an IMF-fixdate for `If-Modified-Since`), and the
+    caller releases the parsed feed with `rss_feed_free()`.
+- `const char *rss_format_name(rss_format_t format)`
+
+Store (`rss_store.h`) — the single owner of subscriptions and read state:
+- `void rss_store_init(const networking_host_ops_t *ops)` — copies the host table.
+- `esp_err_t rss_store_load(void)` / `esp_err_t rss_store_save(void)`
+- `int rss_store_count(void)` / `bool rss_store_get(int index, rss_subscription_t *out)`
+  / `int rss_store_find(const char *name)`
+- `esp_err_t rss_store_add/remove/update(const rss_subscription_t *sub)`, plus
+  `rss_store_set_enabled` / `rss_store_set_interval`.
+- `esp_err_t rss_store_fetch(const char *name, rss_feed_t *feed)` — with
+  `feed == NULL` the parsed feed becomes the session cache; the poller always
+  passes its own feed so it never races a reader.
+- `rss_item_t *rss_store_cached_item(const char *name, int want, int *index_out)`
+  - An owned, PSRAM-allocated deep copy of one cached item (`rss_item_t` is ~11 KB,
+    far too big for a command-worker frame that a nested batch would multiply).
+- `int rss_store_cached_unread(const char *name)`
+- `bool rss_store_is_read(const char *name, const char *guid)` /
+  `void rss_store_mark_read(...)` / `int rss_store_unread_count(...)` /
+  `esp_err_t rss_store_reset_read(const char *name)`
+- `bool rss_store_apply_directive(const char *key, const char *value)` /
+  `bool rss_store_render_directive(const char *key, char *out, size_t out_size)`
+  - The one parser for `RSS_INTERVAL` / `RSS_AUTOPOLL` / `RSS_RETENTION` /
+    `RSS_SAVEREAD`, shared by the `config` table and the boot directive handler.
+- `void rss_store_start_poller(void)` / `void rss_store_stop_poller(void)` /
+  `bool rss_store_poller_running(void)`
+- `esp_err_t rss_store_export(const char *path)` /
+  `esp_err_t rss_store_import(const char *path, int *added)`
+- Pure record editors (unit-tested): `rss_store_name_ok`,
+  `rss_store_parse_record`, `rss_store_render_record`, `rss_store_parse_read_line`,
+  `rss_store_format_time`.
+- OPML interchange (`rss_opml.c`): `rss_opml_parse` / `rss_opml_write`.
 
 ## LED API
 - `void led_init(void)`
@@ -2716,6 +2794,64 @@ bool font_restore(const char *terminal, const char *ui, const char *reading);
   enforces the monospace rule. `windows_get_reading_font()` returns the
   resolved reading chain.
 
+## Browser cache API (`components/browser/`)
+
+Two bounded LRU caches in PSRAM (`browser_cache.h`). The browser command layer is
+the only consumer; a hit on either cache skips work that would otherwise cost a
+network round-trip, a parse or a decode.
+
+```c
+void browser_cache_init(void);   /* idempotent; allocates the entry tables in PSRAM */
+
+/* Decoded images, keyed by source URL */
+bool browser_image_cache_get(const char *url, dom_image_t *out);
+bool browser_image_cache_put(const char *url, const dom_image_t *img);
+void browser_image_cache_clear(void);
+int  browser_image_cache_count(void);
+size_t browser_image_cache_bytes(void);
+
+/* Rendered pages, keyed by URL or sd: path */
+bool browser_page_cache_get(const char *url);
+bool browser_page_cache_put(const char *url);
+void browser_page_cache_clear(void);
+int  browser_page_cache_count(void);
+size_t browser_page_cache_bytes(void);
+```
+
+- `browser_image_cache_get()` hands back an **owned** pixel buffer (release it
+  with `free()`, exactly as the renderer expects); the cache keeps its own copy.
+- A failed store commits nothing: the slot is only published once its payload
+  exists, so a cache entry is never visible half-populated.
+- The page cache stores `tui_page_shot_t` blobs (see the TUI API); restoring one
+  is a `memcpy` and is refused when the grid does not match the live viewport.
+- Both entry tables are PSRAM-allocated: at `IMAGE_CACHE_MAX` x ~532 bytes the
+  image table alone would be ~136 KB of `.bss`, which the P4's internal DRAM
+  cannot afford.
+
+## DOM arena API (`components/markdown/dom_arena.h`)
+
+Parsed DOM nodes come from a bounded bump arena in PSRAM, so a page costs a few
+256 KB blocks instead of a `calloc` per node.
+
+```c
+dom_arena_t *dom_arena_create(void);
+void         dom_arena_destroy(dom_arena_t *arena);
+void        *dom_arena_alloc(dom_arena_t *arena, size_t size);  /* NULL when exhausted */
+size_t       dom_arena_used(const dom_arena_t *arena);
+size_t       dom_arena_max_request(void);
+```
+
+- `dom_arena_alloc()` returns 8-byte-aligned memory and NULL once
+  `P4_CONFIG_DOM_ARENA_LIMIT_BYTES` is reached or the request exceeds
+  `dom_arena_max_request()`; the caller (`dom_node_new_in()`) then falls back to a
+  plain `calloc`.
+- `dom_node_new_in(arena, type)` is the arena-aware constructor used by
+  `dom_parse()`. Nodes taken from an arena carry `arena != NULL`; `dom_node_free()`
+  **unlinks** them (their memory returns with the arena) and only frees
+  individually-owned nodes. Never call `free()` on a node with `arena != NULL`.
+- `dom_free()` releases individually-owned nodes (JS-created) first, then destroys
+  the arena.
+
 ## TUI Module API (`components/tui/` + `components/modal/`)
 
 The TUI is an 80x25 heap cell buffer rendered into the live transcript region. Full
@@ -2744,6 +2880,11 @@ uint32_t tui_table_parse_sel(const char *s, int n_data_rows);
 uint8_t tui_rgb_to_dos(uint32_t rgb); uint32_t tui_dos_color_rgb(uint8_t index);
 void tui_flush(void); void tui_refresh_surface(void);
 void tui_enter_fullscreen(void); void tui_exit_fullscreen(void); bool tui_is_fullscreen(void);
+
+/* Page snapshots - the browser back/forward cache's storage unit */
+void *tui_page_shot_capture(void);                 /* owned PSRAM blob, NULL when no page is up */
+bool tui_page_shot_restore(const void *blob);      /* false on NULL, no viewport, or a grid mismatch */
+void tui_page_shot_release(void *blob);            /* NULL-safe */
 
 /* Modal surfaces (components/modal/modal_surf.h) - seven on one shared runtime */
 int modal_dialog_run(const char *title, const char *message,

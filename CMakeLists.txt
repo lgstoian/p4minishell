@@ -23,6 +23,7 @@ set(EXTRA_COMPONENT_DIRS
   components/batch
   components/board_caps
   components/boot
+  components/browser
   components/c6ota
   components/camera
   components/certs
@@ -35,6 +36,7 @@ set(EXTRA_COMPONENT_DIRS
   components/font
   components/filetype
   components/gfx
+components/imgdec
   components/header
   components/imagefmt
   components/imu

@@ -145,9 +145,12 @@ static void rss_xml_start(void *ud, const char *name, const char **atts)
         return;
     }
 
-    /* Atom carries the URL in a link element's href attribute, not as text. */
+    /* Atom carries the URL in a link element's href attribute; RSS 2.0 puts it
+     * in the element text. Handle both: prefer href when present, otherwise
+     * capture the character data like any other text field. */
     if (strcmp(name, "link") == 0) {
         int i;
+        bool have_href = false;
 
         for (i = 0; atts != NULL && atts[i] != NULL; i += 2) {
             if (strcmp(atts[i], "href") == 0) {
@@ -157,8 +160,13 @@ static void rss_xml_start(void *ud, const char *name, const char **atts)
                 } else {
                     rss_field_set(f->link, sizeof(f->link), atts[i + 1], strlen(atts[i + 1]));
                 }
+                have_href = true;
                 break;
             }
+        }
+        if (!have_href) {
+            rss_xml_capture(x, item ? x->item->link : f->link,
+                            item ? sizeof(x->item->link) : sizeof(f->link), false);
         }
         return;
     }

@@ -24,6 +24,14 @@ menu "Espressif Video Configuration"
     config ESP_VIDEO_ENABLE_DATA_PREPROCESSING
         bool
         default n
+    
+    config ESP_VIDEO_ENABLE_IRCUT_SUPPORT
+        bool
+        default n
+
+    config ESP_VIDEO_ENABLE_LED_SUPPORT
+        bool
+        default n
 
     config ESP_VIDEO_CHECK_PARAMETERS
         bool "Check Video Function Parameters"
@@ -40,6 +48,19 @@ menu "Espressif Video Configuration"
 
             Recommended: Keep enabled during development, consider disabling
             for production builds where performance is critical.
+
+    config ESP_VIDEO_STREAM_STOP_DRAIN_FRAMES
+        int "Frames to wait after stream off before deleting ISP"
+        range 0 16
+        default 1
+        help
+            Sensor stream-off returns after the I2C write. The sensor stays in
+            HS until the current frame ends. Wait this many periods of the active
+            format before the ISP is deleted, so an in-flight frame can finish.
+
+            One frame covers a stop that takes effect at the end of the current
+            frame. Raise this when exposure stretches the frame past the mode fps.
+            Set this to 0 to skip the wait.
 
     menuconfig ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE
         bool "Enable MIPI-CSI based Video Device"
@@ -81,9 +102,47 @@ menu "Espressif Video Configuration"
                 - Video buffer count must be greater than 1
 
                 Recommended: Keep enabled unless the application has to setup only one video buffer.
+
+        config ESP_VIDEO_ENABLE_MIPI_CSI_IRCUT_SUPPORT
+            bool "Enable MIPI-CSI IR-Cut Support"
+            default n
+            depends on CAMERA_IRCUT_DEVICE_USED
+            select ESP_VIDEO_ENABLE_IRCUT_SUPPORT
+            help
+                Enable IR-Cut control on the MIPI-CSI video device.
+
+                When enabled, the MIPI-CSI video device exposes ioctl commands
+                to switch the IR-Cut filter between day (visible light) and
+                night (infrared) modes.
+
+                Features:
+                - IR-Cut day/night mode switching via MIPI-CSI video device ioctl
+
+                Requirements:
+                - Fill the IR-Cut chip ID and GPIO pins in the esp_video_init
+                  configuration so the driver can probe the corresponding IR-Cut device.
+
+        config ESP_VIDEO_ENABLE_MIPI_CSI_LED_SUPPORT
+            bool "Enable MIPI-CSI LED Support"
+            default n
+            depends on CAMERA_LED_DEVICE_USED
+            select ESP_VIDEO_ENABLE_LED_SUPPORT
+            help
+                Enable supplemental LED control on the MIPI-CSI video device.
+
+                With MIPI-CSI IR-Cut support, the LED follows IR-CUT mode. Night mode
+                turns the LED on, and day mode turns it off.
+                With the IPA white light algorithm, the brightness follows the IPA
+                white light metadata.
+
+                Requirements:
+                - Select an LED driver.
+                - Fill the LED control pin in the esp_video_init configuration.
+                  gpio_en is passed through for drivers that use it. IR2835
+                  does not drive that pin.
     endif
 
-    config ESP_VIDEO_ENABLE_DVP_VIDEO_DEVICE
+    menuconfig ESP_VIDEO_ENABLE_DVP_VIDEO_DEVICE
         bool "Enable DVP based Video Device"
         depends on SOC_LCDCAM_CAM_SUPPORTED
         default y
@@ -182,6 +241,31 @@ menu "Espressif Video Configuration"
 
 
     if ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE
+
+        config ESP_VIDEO_UVC_H264_BITRATE_BPS
+            int "Initial value of V4L2_CID_MPEG_VIDEO_BITRATE, in bps (0 = leave the camera alone)"
+            default 0
+            help
+                Starting value of the V4L2_CID_MPEG_VIDEO_BITRATE control on a UVC device,
+                applied through the UVC H.264 extension unit when an H.264 stream starts.
+
+                Leave it at 0 to use the camera default.
+
+                The value is absolute bits per second for whatever resolution the stream
+                negotiates so set accordingly.
+
+        config ESP_VIDEO_UVC_H264_GOP_SIZE
+            int "Initial value of V4L2_CID_MPEG_VIDEO_H264_I_PERIOD, in frames (0 = leave alone)"
+            default 0
+            help
+                Starting value of the V4L2_CID_MPEG_VIDEO_H264_I_PERIOD control on a UVC
+                device, in frames, converted to the extension unit's millisecond key-frame
+                period using the negotiated frame interval.
+
+                Every key frame carries the parameter sets a decoder needs to start, so a
+                camera's multi-second default leaves a joining viewer blank and makes loss
+                recovery unbounded. How short a period is worth its bitrate depends on the
+                application, so the default here is to change nothing.
 
         config USB_UVC_VIDEO_DEVICE_URB_SIZE
             int "USB UVC Video Device URB Size"

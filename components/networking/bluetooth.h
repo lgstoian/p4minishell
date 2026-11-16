@@ -80,6 +80,16 @@ void bluetooth_disconnect(void);
  */
 bool bluetooth_is_device_connected(void);
 
+/**
+ * Enable (true) or disable (false) the GATT server (peripheral role).
+ *
+ * Registers a Device Information service (manufacturer / model / firmware
+ * revision) plus a P4MiniShell status characteristic, and switches advertising
+ * to connectable so a central can reach it. The server is registered once the
+ * NimBLE host syncs.
+ */
+void bluetooth_gatt(bool enable);
+
 /** Returns true when hosted controller and NimBLE host are initialized. */
 bool bluetooth_is_enabled(void);
 

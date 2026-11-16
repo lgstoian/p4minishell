@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.7.0
+
+- Updated JX-H63P default IPA JSON: AWB model 2, adjusted AGC, LSC, and CCM, and an AF window of 320x240 at (160,120) that fits both 640x480 and 1280x720
+- Updated SC2336 default IPA JSON for ESP32-P4 ECO5 (`sc2336_default_p4_eco5.json`).
+- Added AP1511B IR-CUT driver.
+- Added PT1411 ALS(Ambient Light Sensor) driver.
+- Added IR2835 LED driver.
+- Added TCJ60 white fill light driver dimmed by LEDC PWM, the brightness has 3 levels: off, half and full. The LEDC timer, channel, frequency and polarity are set in menuconfig.
+- Added SC2337P IR control JSON file for esp_ipa.
+  - The control logic relies on IR-CUT hardware currently supported by this component.
+- Fixed the OV5647 camera sensor driver to use non-continuous clock and no-line-sync mode.
+- Updated the minimum exposure values ​​for the SC2336 and SC2337P camera sensors.
+- Updated the SC132GS default IPA JSON and added DPC configuration.
+- Updated the MIT245 default IPA configuration by removing LSC and retuning AWB, AGC, CCM, denoising, gamma and sharpening parameters.
+- Added `set_fps()` function to set the frame rate in the SC2336 sensor driver.
+- Added JX-H63P MIPI RAW sensor driver.
+- Fixed the mirror and flip settings in the OV5645 camera sensor driver.
+
 ## 2.6.0
 
 - Added a Kconfig option to control the SC101 SCCB access delay after power-on.

@@ -1,4 +1,4 @@
-set(srcs "src/esp_cam_sensor.c" "src/esp_cam_sensor_xclk.c" "src/esp_cam_motor.c" "src/esp_cam_sensor_detect.c" "src/esp_cam_motor_detect.c")
+set(srcs "src/esp_cam_sensor.c" "src/esp_cam_sensor_xclk.c" "src/esp_cam_motor.c" "src/esp_cam_sensor_detect.c" "src/esp_cam_motor_detect.c" "src/esp_cam_ircut_detect.c" "src/esp_cam_ircut.c")
 
 if(CONFIG_CAMERA_SENSOR_MOTOR_DETECT_METHOD_DYNAMIC_LINK)
     set(ldfragments "linker.lf")
@@ -17,8 +17,12 @@ if(CONFIG_CAM_CTRL_DVP_ENABLE)
 endif()
 
 set(include_dirs "include")
-set(requires "esp_sccb_intf" "esp_driver_cam" "esp_driver_gpio" "esp_driver_ledc" "esp_driver_spi" "esp_driver_parlio")
+set(requires "esp_sccb_intf" "esp_driver_cam" "esp_driver_gpio" "esp_driver_ledc" "esp_driver_spi" "esp_driver_parlio" "esp_adc")
 set(priv_requires "esp_timer")
+
+if(CONFIG_SOC_ISP_SUPPORTED)
+    list(APPEND srcs "src/esp_cam_als_detect.c" "src/esp_cam_als.c" "src/esp_cam_led_detect.c" "src/esp_cam_led.c")
+endif()
 
 if(CONFIG_CAMERA_OV2640)
     list(APPEND srcs "sensors/ov2640/ov2640.c")
@@ -120,6 +124,12 @@ if(CONFIG_CAMERA_GC4053)
     list(APPEND srcs "sensors/gc4053/gc4053.c")
     list(APPEND include_dirs "sensors/gc4053/include")
     list(APPEND priv_include_dirs "sensors/gc4053/private_include")
+endif()
+
+if(CONFIG_CAMERA_JXH63P)
+    list(APPEND srcs "sensors/jxh63p/jxh63p.c")
+    list(APPEND include_dirs "sensors/jxh63p/include")
+    list(APPEND priv_include_dirs "sensors/jxh63p/private_include")
 endif()
 
 if(CONFIG_CAMERA_LT6911)
@@ -254,6 +264,26 @@ if(CONFIG_CAM_MOTOR_DW9714)
     list(APPEND priv_include_dirs "motors/dw9714/private_include")
 endif()
 
+if(CONFIG_CAM_IRCUT_AP1511B)
+    list(APPEND srcs "ircuts/ap1511b/ap1511b.c")
+    list(APPEND include_dirs "ircuts/ap1511b/include")
+endif()
+
+if(CONFIG_CAM_ALS_PT1411)
+    list(APPEND srcs "als/pt1411/pt1411.c")
+    list(APPEND include_dirs "als/pt1411/include")
+endif()
+
+if(CONFIG_CAM_LED_IR2835)
+    list(APPEND srcs "leds/ir2835/ir2835.c")
+    list(APPEND include_dirs "leds/ir2835/include")
+endif()
+
+if(CONFIG_CAM_LED_TCJ60)
+    list(APPEND srcs "leds/tcj60/tcj60.c")
+    list(APPEND include_dirs "leds/tcj60/include")
+endif()
+
 if(CONFIG_CAMERA_PIVARIETY)
     list(APPEND srcs "sensors/arducam/pivariety/pivariety.c")
     list(APPEND include_dirs "sensors/arducam/pivariety/include")
@@ -342,6 +372,10 @@ if(CONFIG_CAMERA_SENSOR_MOTOR_DETECT_METHOD_DYNAMIC_LINK)
 
     if(CONFIG_CAMERA_GC4053_AUTO_DETECT_MIPI_INTERFACE_SENSOR)
         target_link_libraries(${COMPONENT_LIB} INTERFACE "-u gc4053_detect")
+    endif()
+
+    if(CONFIG_CAMERA_JXH63P_AUTO_DETECT_MIPI_INTERFACE_SENSOR)
+        target_link_libraries(${COMPONENT_LIB} INTERFACE "-u jxh63p_detect")
     endif()
     
     if(CONFIG_CAMERA_LT6911_AUTO_DETECT_MIPI_INTERFACE_SENSOR)

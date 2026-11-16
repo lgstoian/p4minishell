@@ -19,7 +19,13 @@
 #if CONFIG_ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE
 #include "usb/usb_host.h"
 #endif
+#include "soc/soc_caps.h"
+#include "esp_sccb_intf.h"
 #include "esp_sccb_i2c.h"
+#if ESP_SCCB_I3C_SUPPORTED
+#include "driver/i3c_master.h"
+#include "esp_sccb_i3c.h"
+#endif
 #include "esp_cam_sensor.h"
 #include "esp_cam_sensor_detect.h"
 #if CONFIG_ESP_VIDEO_ENABLE_CAMERA_MOTOR_CONTROLLER
@@ -29,6 +35,14 @@
 #include "esp_cam_sensor_xclk.h"
 #include "esp_video_init.h"
 #include "esp_video_device_internal.h"
+#if CONFIG_ESP_VIDEO_ENABLE_IRCUT_SUPPORT
+#include "esp_cam_ircut.h"
+#include "esp_cam_ircut_detect.h"
+#endif
+#if CONFIG_ESP_VIDEO_ENABLE_LED_SUPPORT
+#include "esp_cam_led.h"
+#include "esp_cam_led_detect.h"
+#endif
 #if CONFIG_ESP_VIDEO_ENABLE_DVP_VIDEO_DEVICE
 #include "esp_cam_ctlr_dvp_ext.h"
 #endif
@@ -113,6 +127,26 @@ static spi_dev_t s_spi_dev[ESP_VIDEO_SPI_DEVICE_NUM];
 #endif /* CONFIG_ESP_VIDEO_ENABLE_SPI_VIDEO_DEVICE */
 
 static i2c_dev_t s_i2c_dev[I2C_NUM_MAX];
+
+#if ESP_SCCB_I3C_SUPPORTED
+typedef struct i3c_dev {
+    i3c_master_bus_handle_t i3c_handle;
+    gpio_num_t scl_pin;
+    gpio_num_t sda_pin;
+    bool owned;
+} i3c_dev_t;
+
+static i3c_dev_t s_i3c_dev;
+#endif
+
+#define ESP_VIDEO_SCCB_IO_MAX  8
+
+typedef struct esp_video_sccb_io_record {
+    esp_sccb_io_handle_t handle;
+    bool is_i3c;
+} esp_video_sccb_io_record_t;
+
+static esp_video_sccb_io_record_t s_sccb_ios[ESP_VIDEO_SCCB_IO_MAX];
 #endif /* ESP_VIDEO_ENABLE_SCCB_DEVICE */
 #if CONFIG_ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE
 static SemaphoreHandle_t s_usb_uvc_sem;
@@ -150,8 +184,45 @@ static esp_err_t destroy_cam_device(esp_cam_sensor_device_t *cam)
     return ret;
 }
 
+static esp_err_t esp_video_sccb_io_record(esp_sccb_io_handle_t handle, bool is_i3c)
+{
+    for (int i = 0; i < ESP_VIDEO_SCCB_IO_MAX; i++) {
+        if (s_sccb_ios[i].handle == NULL) {
+            s_sccb_ios[i].handle = handle;
+            s_sccb_ios[i].is_i3c = is_i3c;
+            return ESP_OK;
+        }
+    }
+
+    return ESP_ERR_NO_MEM;
+}
+
+static esp_err_t esp_video_sccb_io_del(esp_sccb_io_handle_t handle)
+{
+    bool is_i3c = false;
+
+    for (int i = 0; i < ESP_VIDEO_SCCB_IO_MAX; i++) {
+        if (s_sccb_ios[i].handle == handle) {
+            is_i3c = s_sccb_ios[i].is_i3c;
+            s_sccb_ios[i].handle = NULL;
+            s_sccb_ios[i].is_i3c = false;
+            break;
+        }
+    }
+
+#if ESP_SCCB_I3C_SUPPORTED
+    if (is_i3c) {
+        return esp_sccb_del_i3c_io(handle);
+    }
+#else
+    (void)is_i3c;
+#endif
+
+    return esp_sccb_del_i2c_io(handle);
+}
+
 /**
- * @brief Initialize I2C and SCCB devices
+ * @brief Initialize SCCB bus and the camera device
  *
  * @param config video device initialization configuration
  *
@@ -162,14 +233,59 @@ static esp_err_t destroy_cam_device(esp_cam_sensor_device_t *cam)
 static esp_err_t esp_video_init_sensor_and_video_device(const video_device_init_config_t *config)
 {
     esp_err_t ret = ESP_OK;
-    bool i2c_initialized = false;
+    bool bus_initialized = false;
+    bool use_i3c = false;
     i2c_master_bus_handle_t i2c_handle = NULL;
+#if ESP_SCCB_I3C_SUPPORTED
+    i3c_master_bus_handle_t i3c_handle = NULL;
+#endif
     const esp_video_init_sccb_config_t *sccb_config = config->sccb_config;
 
+#if ESP_SCCB_I3C_SUPPORTED
+    use_i3c = sccb_config->bus_type == ESP_VIDEO_SCCB_BUS_I3C;
+#endif
+
     /**
-     * Step 1: Check if I2C master bus handle is already initialized
+     * Step 1: Check if the SCCB bus handle is already initialized
      */
-    if (sccb_config->init_sccb) {
+    if (use_i3c) {
+#if ESP_SCCB_I3C_SUPPORTED
+        if (sccb_config->init_sccb) {
+            if (s_i3c_dev.i3c_handle != NULL) {
+                ESP_LOGD(TAG, "I3C master bus is already initialized");
+
+                if (s_i3c_dev.scl_pin != sccb_config->i3c_config.scl_pin ||
+                        s_i3c_dev.sda_pin != sccb_config->i3c_config.sda_pin) {
+                    ESP_LOGE(TAG, "I3C SCL pin or SDA pin is mismatched");
+                    return ESP_ERR_INVALID_ARG;
+                }
+
+                i3c_handle = s_i3c_dev.i3c_handle;
+            } else {
+                /**
+                 * Step 2: Initialize I3C master bus handle
+                 */
+                i3c_master_bus_config_t i3c_bus_config = {
+                    .clock_source = I3C_MASTER_CLK_SRC_DEFAULT,
+                    .scl_io_num = sccb_config->i3c_config.scl_pin,
+                    .sda_io_num = sccb_config->i3c_config.sda_pin,
+                };
+
+                ESP_RETURN_ON_ERROR(i3c_new_master_bus(&i3c_bus_config, &s_i3c_dev.i3c_handle), TAG, "Failed to initialize I3C master bus");
+                s_i3c_dev.scl_pin = sccb_config->i3c_config.scl_pin;
+                s_i3c_dev.sda_pin = sccb_config->i3c_config.sda_pin;
+                s_i3c_dev.owned = true;
+                i3c_handle = s_i3c_dev.i3c_handle;
+                bus_initialized = true;
+                ESP_LOGI(TAG, "I3C SCCB scl_pin=%d, sda_pin=%d, freq=%" PRIu32,
+                         sccb_config->i3c_config.scl_pin, sccb_config->i3c_config.sda_pin, sccb_config->freq);
+            }
+        } else {
+            ESP_RETURN_ON_FALSE(sccb_config->i3c_handle != NULL, ESP_ERR_INVALID_ARG, TAG, "I3C handle is not initialized");
+            i3c_handle = sccb_config->i3c_handle;
+        }
+#endif
+    } else if (sccb_config->init_sccb) {
         if (s_i2c_dev[sccb_config->i2c_config.port].i2c_handle != NULL) {
             ESP_LOGD(TAG, "I2C master port %d is already initialized", sccb_config->i2c_config.port);
 
@@ -201,7 +317,7 @@ static esp_err_t esp_video_init_sensor_and_video_device(const video_device_init_
             s_i2c_dev[sccb_config->i2c_config.port].sda_pin = sccb_config->i2c_config.sda_pin;
 
             i2c_handle = s_i2c_dev[sccb_config->i2c_config.port].i2c_handle;
-            i2c_initialized = true;
+            bus_initialized = true;
         }
     } else {
         ESP_RETURN_ON_FALSE(sccb_config->i2c_handle != NULL, ESP_ERR_INVALID_ARG, TAG, "I2C handle is not initialized");
@@ -211,8 +327,7 @@ static esp_err_t esp_video_init_sensor_and_video_device(const video_device_init_
     /**
      * Step 3: Initialize SCCB device
      */
-    esp_sccb_io_handle_t sccb_io;
-    sccb_i2c_config_t sccb_i2c_config = {0};
+    esp_sccb_io_handle_t sccb_io = NULL;
     uint16_t sccb_addr = 0;
 
     if (config->is_motor) {
@@ -223,10 +338,36 @@ static esp_err_t esp_video_init_sensor_and_video_device(const video_device_init_
         sccb_addr = config->sensor_cfg.detect->sccb_addr;
     }
 
-    sccb_i2c_config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    sccb_i2c_config.device_address = sccb_addr;
-    sccb_i2c_config.scl_speed_hz = sccb_config->freq;
-    ESP_GOTO_ON_ERROR(sccb_new_i2c_io(i2c_handle, &sccb_i2c_config, &sccb_io), fail_0, TAG, "Failed to initialize SCCB device");
+#if ESP_SCCB_I3C_SUPPORTED
+    if (use_i3c) {
+        sccb_i3c_config_t sccb_i3c_config = {0};
+
+        ESP_GOTO_ON_FALSE(sccb_addr <= 0x7F, ESP_ERR_INVALID_ARG, fail_0, TAG, "I3C SCCB address must be 7-bit");
+        sccb_i3c_config.device_address = (uint8_t)sccb_addr;
+        sccb_i3c_config.scl_speed_hz = sccb_config->freq;
+        ESP_GOTO_ON_ERROR(sccb_new_i3c_io(i3c_handle, &sccb_i3c_config, &sccb_io), fail_0, TAG, "Failed to initialize SCCB device");
+    } else
+#endif
+    {
+        sccb_i2c_config_t sccb_i2c_config = {0};
+
+        sccb_i2c_config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+        sccb_i2c_config.device_address = sccb_addr;
+        sccb_i2c_config.scl_speed_hz = sccb_config->freq;
+        ESP_GOTO_ON_ERROR(sccb_new_i2c_io(i2c_handle, &sccb_i2c_config, &sccb_io), fail_0, TAG, "Failed to initialize SCCB device");
+    }
+    if (esp_video_sccb_io_record(sccb_io, use_i3c) != ESP_OK) {
+#if ESP_SCCB_I3C_SUPPORTED
+        if (use_i3c) {
+            esp_sccb_del_i3c_io(sccb_io);
+        } else
+#endif
+        {
+            esp_sccb_del_i2c_io(sccb_io);
+        }
+        ret = ESP_ERR_NO_MEM;
+        goto fail_0;
+    }
 
     if (config->init_clk_func) {
         ESP_GOTO_ON_ERROR(config->init_clk_func(config->clk_priv), fail_1, TAG, "Failed to initialize clock");
@@ -311,7 +452,7 @@ fail_2:
         config->deinit_clk_func(config->clk_priv);
     }
 fail_1: {
-        esp_err_t sccb_ret = esp_sccb_del_i2c_io(sccb_io);
+        esp_err_t sccb_ret = esp_video_sccb_io_del(sccb_io);
         if (sccb_ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to delete SCCB device: %s", esp_err_to_name(sccb_ret));
             if (ret == ESP_OK) {
@@ -320,15 +461,31 @@ fail_1: {
         }
     }
 fail_0:
-    if (i2c_initialized) {
-        esp_err_t i2c_ret = i2c_del_master_bus(i2c_handle);
-        if (i2c_ret == ESP_OK) {
-            s_i2c_dev[sccb_config->i2c_config.port].i2c_handle = NULL;
-        } else {
-            ESP_LOGE(TAG, "Failed to delete I2C master bus port %d: %s",
-                     sccb_config->i2c_config.port, esp_err_to_name(i2c_ret));
-            if (ret == ESP_OK) {
-                ret = i2c_ret;
+    if (bus_initialized) {
+#if ESP_SCCB_I3C_SUPPORTED
+        if (use_i3c) {
+            esp_err_t i3c_ret = i3c_del_master_bus(i3c_handle);
+            if (i3c_ret == ESP_OK) {
+                s_i3c_dev.i3c_handle = NULL;
+                s_i3c_dev.owned = false;
+            } else {
+                ESP_LOGE(TAG, "Failed to delete I3C master bus: %s", esp_err_to_name(i3c_ret));
+                if (ret == ESP_OK) {
+                    ret = i3c_ret;
+                }
+            }
+        } else
+#endif
+        {
+            esp_err_t i2c_ret = i2c_del_master_bus(i2c_handle);
+            if (i2c_ret == ESP_OK) {
+                s_i2c_dev[sccb_config->i2c_config.port].i2c_handle = NULL;
+            } else {
+                ESP_LOGE(TAG, "Failed to delete I2C master bus port %d: %s",
+                         sccb_config->i2c_config.port, esp_err_to_name(i2c_ret));
+                if (ret == ESP_OK) {
+                    ret = i2c_ret;
+                }
             }
         }
     }
@@ -434,7 +591,7 @@ static esp_err_t destroy_spi_video_device(void)
             continue;
         }
 
-        ESP_RETURN_ON_ERROR(esp_sccb_del_i2c_io(cam.sensor->sccb_handle), TAG, "Failed to delete SCCB device");
+        ESP_RETURN_ON_ERROR(esp_video_sccb_io_del(cam.sensor->sccb_handle), TAG, "Failed to delete SCCB device");
         ESP_RETURN_ON_ERROR(destroy_cam_device(cam.sensor), TAG, "Failed to delete SPI sensor");
         ESP_RETURN_ON_ERROR(esp_video_destroy_spi_video_device(i), TAG, "Failed to destroy SPI video device");
     }
@@ -443,11 +600,136 @@ static esp_err_t destroy_spi_video_device(void)
 }
 #endif /* CONFIG_ESP_VIDEO_ENABLE_SPI_VIDEO_DEVICE */
 
+#if CONFIG_ESP_VIDEO_ENABLE_IRCUT_SUPPORT
+static esp_err_t init_cam_ircut(const esp_video_init_ircut_config_t *ircut_config,
+                                esp_err_t (*add_func)(esp_cam_ircut_device_t *))
+{
+    if (!ircut_config || ircut_config->ircut_chip_id == (uint8_t) -1) {
+        return ESP_OK;
+    }
+
+    esp_cam_ircut_device_t *ircut_dev = NULL;
+    esp_cam_ircut_config_t cfg = {
+        .gpio_pwdn = GPIO_NUM_NC,
+        .gpio_fbc = ircut_config->fbc_pin,
+        .gpio_en = ircut_config->en_pin,
+    };
+
+    ESP_RETURN_ON_ERROR(esp_cam_ircut_detect(&cfg, &ircut_dev), TAG, "Failed to detect IR-Cut");
+    esp_err_t ret = add_func(ircut_dev);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to add IR-Cut to video device");
+        esp_cam_ircut_del_dev(ircut_dev);
+        return ret;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t deinit_cam_ircut(const char *dev_name)
+{
+    struct esp_video *video;
+    esp_video_device_common_t *common;
+    esp_cam_ircut_device_t *ircut_dev;
+
+    video = esp_video_device_get_object(dev_name);
+    ESP_RETURN_ON_FALSE(video, ESP_ERR_NOT_FOUND, TAG, "Failed to get video camera");
+
+    common = VIDEO_PRIV_DATA(esp_video_device_common_t *, video);
+    ircut_dev = common->cam.ircut;
+    common->cam.ircut = NULL;
+    if (ircut_dev) {
+        ESP_RETURN_ON_ERROR(esp_cam_ircut_del_dev(ircut_dev), TAG, "Failed to delete IR-Cut");
+    }
+
+    return ESP_OK;
+}
+#endif /* CONFIG_ESP_VIDEO_ENABLE_IRCUT_SUPPORT */
+
+#if CONFIG_ESP_VIDEO_ENABLE_LED_SUPPORT
+static esp_err_t init_cam_led(const esp_video_init_led_config_t *led_config,
+                              esp_err_t (*add_func)(esp_cam_led_device_t *))
+{
+    if (!led_config || led_config->gpio_ctrl == GPIO_NUM_NC) {
+        return ESP_OK;
+    }
+
+    esp_cam_led_device_t *led_dev = NULL;
+    esp_cam_led_config_t cfg = {
+        .type = led_config->type,
+        .gpio_ctrl = led_config->gpio_ctrl,
+        .gpio_en = led_config->gpio_en,
+    };
+
+    ESP_RETURN_ON_ERROR(esp_cam_led_detect(&cfg, &led_dev), TAG, "Failed to detect LED");
+    esp_err_t ret = add_func(led_dev);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to add LED to video device");
+        if (esp_cam_led_del_dev(led_dev) != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to turn IR LED off after add failure");
+        }
+        return ret;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t deinit_cam_led(const char *dev_name)
+{
+    struct esp_video *video;
+    esp_video_device_common_t *common;
+    esp_cam_led_device_t *led_dev;
+
+    video = esp_video_device_get_object(dev_name);
+    ESP_RETURN_ON_FALSE(video, ESP_ERR_NOT_FOUND, TAG, "Failed to get video camera");
+
+    common = VIDEO_PRIV_DATA(esp_video_device_common_t *, video);
+    led_dev = common->cam.led;
+    if (led_dev) {
+        ESP_RETURN_ON_ERROR(esp_cam_led_del_dev(led_dev), TAG, "Failed to delete LED");
+        common->cam.led = NULL;
+    }
+
+    return ESP_OK;
+}
+#endif /* CONFIG_ESP_VIDEO_ENABLE_LED_SUPPORT */
+
 #if CONFIG_ESP_VIDEO_ENABLE_CAMERA_MOTOR_CONTROLLER
 static esp_err_t create_cam_motor_video_device(esp_cam_sensor_device_t *cam, void *priv)
 {
     return esp_video_csi_video_device_add_motor((esp_cam_motor_device_t *)cam);
 }
+
+#if CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE && \
+    (CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_IRCUT_SUPPORT || CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER)
+static void cleanup_csi_motor(void)
+{
+    esp_video_cam_t video_cam;
+
+    if (!(s_video_device_inited_flags & ESP_VIDEO_INIT_FLAGS_MOTOR)) {
+        return;
+    }
+
+    if (esp_video_device_common_get_video_cam(CSI_NAME, &video_cam) != ESP_OK || !video_cam.motor) {
+        ESP_LOGE(TAG, "CSI motor is not initialized");
+        s_video_device_inited_flags &= ~ESP_VIDEO_INIT_FLAGS_MOTOR;
+        return;
+    }
+
+    esp_sccb_io_handle_t sccb_handle = video_cam.motor->sccb_handle;
+    esp_err_t motor_ret = esp_cam_motor_del_dev(video_cam.motor);
+    if (motor_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to delete CSI motor: %s", esp_err_to_name(motor_ret));
+    }
+    if (sccb_handle) {
+        esp_err_t sccb_ret = esp_video_sccb_io_del(sccb_handle);
+        if (sccb_ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to delete SCCB device: %s", esp_err_to_name(sccb_ret));
+        }
+    }
+    s_video_device_inited_flags &= ~ESP_VIDEO_INIT_FLAGS_MOTOR;
+}
+#endif /* CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE && (IRCUT || ISP_PIPELINE) */
 
 #endif /* CONFIG_ESP_VIDEO_ENABLE_CAMERA_MOTOR_CONTROLLER */
 
@@ -495,6 +777,41 @@ static esp_err_t create_csi_video_device(esp_cam_sensor_device_t *cam, void *pri
     }
 #endif /* CONFIG_ESP_VIDEO_ENABLE_CAMERA_MOTOR_CONTROLLER */
 
+#if CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_IRCUT_SUPPORT
+    {
+        esp_err_t ircut_ret = init_cam_ircut(config->csi->ircut_config, esp_video_csi_video_device_add_ircut);
+        if (ircut_ret != ESP_OK) {
+#if CONFIG_ESP_VIDEO_ENABLE_CAMERA_MOTOR_CONTROLLER
+            cleanup_csi_motor();
+#endif
+            esp_video_destroy_csi_video_device();
+            ESP_LOGE(TAG, "Failed to initialize IR-Cut");
+            return ircut_ret;
+        }
+    }
+#endif /* CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_IRCUT_SUPPORT */
+
+#if CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_LED_SUPPORT
+    {
+        esp_err_t led_ret = init_cam_led(config->csi->led_config, esp_video_csi_video_device_add_led);
+        if (led_ret != ESP_OK) {
+#if CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_IRCUT_SUPPORT
+            esp_err_t ircut_ret = deinit_cam_ircut(CSI_NAME);
+            if (ircut_ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to delete CSI IR-Cut after LED init failure: %s",
+                         esp_err_to_name(ircut_ret));
+            }
+#endif
+#if CONFIG_ESP_VIDEO_ENABLE_CAMERA_MOTOR_CONTROLLER
+            cleanup_csi_motor();
+#endif
+            esp_video_destroy_csi_video_device();
+            ESP_LOGE(TAG, "Failed to initialize LED");
+            return led_ret;
+        }
+    }
+#endif /* CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_LED_SUPPORT */
+
 #if CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER
     if (cam->cur_format && cam->cur_format->isp_info) {
         const esp_ipa_config_t *ipa_config = esp_ipa_pipeline_get_config(cam->name);
@@ -507,27 +824,22 @@ static esp_err_t create_csi_video_device(esp_cam_sensor_device_t *cam, void *pri
 
             esp_err_t ret = esp_video_isp_pipeline_init(&isp_config);
             if (ret != ESP_OK) {
-#if CONFIG_ESP_VIDEO_ENABLE_CAMERA_MOTOR_CONTROLLER
-                if (motor_inited) {
-                    esp_video_cam_t video_cam;
-                    ESP_RETURN_ON_ERROR(esp_video_device_common_get_video_cam(CSI_NAME, &video_cam), TAG, "Failed to get CSI video device camera");
-
-                    esp_cam_motor_device_t *motor_dev = video_cam.motor;
-                    ESP_RETURN_ON_FALSE(motor_dev, ESP_ERR_INVALID_STATE, TAG, "CSI motor is not initialized");
-                    esp_sccb_io_handle_t sccb_handle = motor_dev->sccb_handle;
-                    esp_err_t motor_ret = esp_cam_motor_del_dev(motor_dev);
-                    if (motor_ret != ESP_OK) {
-                        ESP_LOGE(TAG, "Failed to delete CSI motor after ISP pipeline failure: %s",
-                                 esp_err_to_name(motor_ret));
-                    }
-                    if (sccb_handle) {
-                        esp_err_t sccb_ret = esp_sccb_del_i2c_io(sccb_handle);
-                        if (sccb_ret != ESP_OK) {
-                            ESP_LOGE(TAG, "Failed to delete SCCB device: %s", esp_err_to_name(sccb_ret));
-                        }
-                    }
-                    s_video_device_inited_flags &= ~ESP_VIDEO_INIT_FLAGS_MOTOR;
+#if CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_LED_SUPPORT
+                esp_err_t led_ret = deinit_cam_led(CSI_NAME);
+                if (led_ret != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to delete CSI LED after ISP pipeline failure: %s",
+                             esp_err_to_name(led_ret));
                 }
+#endif
+#if CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_IRCUT_SUPPORT
+                esp_err_t ircut_ret = deinit_cam_ircut(CSI_NAME);
+                if (ircut_ret != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to delete CSI IR-Cut after ISP pipeline failure: %s",
+                             esp_err_to_name(ircut_ret));
+                }
+#endif
+#if CONFIG_ESP_VIDEO_ENABLE_CAMERA_MOTOR_CONTROLLER
+                cleanup_csi_motor();
 #endif
                 esp_video_destroy_csi_video_device();
                 ESP_LOGE(TAG, "Failed to initialize ISP pipeline controller");
@@ -555,7 +867,7 @@ static esp_err_t destroy_csi_video_device(void)
     esp_video_cam_t cam;
     ESP_RETURN_ON_ERROR(esp_video_device_common_get_video_cam(CSI_NAME, &cam), TAG, "Failed to get CSI video device camera");
     ESP_RETURN_ON_FALSE(cam.sensor, ESP_ERR_INVALID_STATE, TAG, "CSI sensor is NULL");
-    ESP_RETURN_ON_ERROR(esp_sccb_del_i2c_io(cam.sensor->sccb_handle), TAG, "Failed to delete SCCB device");
+    ESP_RETURN_ON_ERROR(esp_video_sccb_io_del(cam.sensor->sccb_handle), TAG, "Failed to delete SCCB device");
     ESP_RETURN_ON_ERROR(destroy_cam_device(cam.sensor), TAG, "Failed to delete CSI sensor");
 
 #if CONFIG_ESP_VIDEO_ENABLE_CAMERA_MOTOR_CONTROLLER
@@ -564,11 +876,18 @@ static esp_err_t destroy_csi_video_device(void)
          * Motor uses the same I2C bus as the CSI sensor.
          */
         ESP_RETURN_ON_FALSE(cam.motor, ESP_ERR_INVALID_STATE, TAG, "CSI motor is not initialized");
-        ESP_RETURN_ON_ERROR(esp_sccb_del_i2c_io(cam.motor->sccb_handle), TAG, "Failed to delete SCCB device");
+        ESP_RETURN_ON_ERROR(esp_video_sccb_io_del(cam.motor->sccb_handle), TAG, "Failed to delete SCCB device");
         ESP_RETURN_ON_ERROR(esp_cam_motor_del_dev(cam.motor), TAG, "Failed to delete CSI motor");
         s_video_device_inited_flags &= ~ESP_VIDEO_INIT_FLAGS_MOTOR;
     }
 #endif /* CONFIG_ESP_VIDEO_ENABLE_CAMERA_MOTOR_CONTROLLER */
+
+#if CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_LED_SUPPORT
+    ESP_RETURN_ON_ERROR(deinit_cam_led(CSI_NAME), TAG, "Failed to delete CSI LED");
+#endif
+#if CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_IRCUT_SUPPORT
+    ESP_RETURN_ON_ERROR(deinit_cam_ircut(CSI_NAME), TAG, "Failed to delete CSI IR-Cut");
+#endif
 
     ESP_RETURN_ON_ERROR(esp_video_destroy_csi_video_device(), TAG, "Failed to destroy CSI video device");
 
@@ -605,7 +924,11 @@ static esp_err_t deinit_dvp_clk_func(void *priv)
 
 static esp_err_t create_dvp_video_device(esp_cam_sensor_device_t *cam, void *priv)
 {
-    return esp_video_create_dvp_video_device(cam);
+    (void)priv;
+
+    ESP_RETURN_ON_ERROR(esp_video_create_dvp_video_device(cam), TAG, "Failed to create DVP video device");
+
+    return ESP_OK;
 }
 
 static esp_err_t destroy_dvp_video_device(void)
@@ -615,7 +938,7 @@ static esp_err_t destroy_dvp_video_device(void)
 
     ESP_RETURN_ON_ERROR(esp_video_device_common_get_video_cam(DVP_NAME, &cam), TAG, "Failed to get DVP video device camera");
     ESP_RETURN_ON_FALSE(cam.sensor, ESP_ERR_INVALID_STATE, TAG, "DVP sensor is NULL");
-    ESP_RETURN_ON_ERROR(esp_sccb_del_i2c_io(cam.sensor->sccb_handle), TAG, "Failed to delete SCCB device");
+    ESP_RETURN_ON_ERROR(esp_video_sccb_io_del(cam.sensor->sccb_handle), TAG, "Failed to delete SCCB device");
     ESP_RETURN_ON_ERROR(destroy_cam_device(cam.sensor), TAG, "Failed to delete DVP sensor");
     ESP_RETURN_ON_ERROR(esp_video_destroy_dvp_video_device(), TAG, "Failed to destroy DVP video device");
     ESP_RETURN_ON_ERROR(esp_cam_ctlr_dvp_deinit(dvp_ctlr_id), TAG, "Failed to deinit DVP port");
@@ -853,6 +1176,20 @@ fail0:
         }
     }
     memset(s_i2c_dev, 0, sizeof(s_i2c_dev));
+#if ESP_SCCB_I3C_SUPPORTED
+    if (s_i3c_dev.owned && s_i3c_dev.i3c_handle) {
+        ESP_LOGD(TAG, "Deinitializing I3C master bus");
+        esp_err_t i3c_ret = i3c_del_master_bus(s_i3c_dev.i3c_handle);
+        if (i3c_ret == ESP_OK) {
+            memset(&s_i3c_dev, 0, sizeof(s_i3c_dev));
+        } else {
+            ESP_LOGW(TAG, "I3C master bus still in use, keep it: %s", esp_err_to_name(i3c_ret));
+        }
+    } else {
+        memset(&s_i3c_dev, 0, sizeof(s_i3c_dev));
+    }
+#endif
+    memset(s_sccb_ios, 0, sizeof(s_sccb_ios));
 #endif
 
 #if CONFIG_ESP_VIDEO_ENABLE_SPI_VIDEO_DEVICE

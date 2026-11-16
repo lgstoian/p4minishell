@@ -219,7 +219,12 @@ def run(dev, ctx):
         if tui_shot is not None:
             c.equals("TUI screenshot width", tui_shot.width, disp_w)
             c.equals("TUI screenshot height", tui_shot.height, disp_h)
-            bright = tui_shot.count_near(0, 40, 1024, 480, (200, 204, 200), tol=32)
+            # The TUI text is drawn with DOS colour 15 (bright white). Count
+            # near-white pixels in the TUI transcript area (below the header),
+            # which is board-agnostic and independent of what else is drawn.
+            bright = tui_shot.count_near(0, 42, tui_shot.width,
+                                         tui_shot.height - 42,
+                                         (255, 255, 255), tol=48)
             c.check("TUI text visible on screen", bright > 0, "white px=%d" % bright)
         dev.run("draw close")
 

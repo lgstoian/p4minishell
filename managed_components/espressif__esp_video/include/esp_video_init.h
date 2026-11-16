@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: ESPRESSIF MIT
  */
@@ -9,7 +9,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "soc/soc_caps.h"
 #include "driver/i2c_master.h"
+#if ESP_SCCB_I3C_SUPPORTED
+#include "driver/i3c_master.h"
+#endif
 #if CONFIG_ESP_VIDEO_ENABLE_DVP_VIDEO_DEVICE
 #include "esp_cam_ctlr_dvp.h"
 #endif
@@ -24,6 +28,9 @@
 #endif
 #include "esp_video_caps.h"
 #include "esp_cam_sensor_xclk.h"
+#if CONFIG_ESP_VIDEO_ENABLE_LED_SUPPORT
+#include "esp_cam_led_types.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -64,12 +71,50 @@ extern "C" {
 #endif
 
 /**
+ * @brief IR-Cut initialization configuration
+ */
+#if CONFIG_ESP_VIDEO_ENABLE_IRCUT_SUPPORT
+typedef struct esp_video_init_ircut_config {
+    uint8_t ircut_chip_id;                      /*!< IR-Cut chip ID, if hardware has no IR-Cut chip, set ircut_chip_id to be -1 */
+    gpio_num_t fbc_pin;                         /*!< FBC (Filter Block Control) pin, if hardware has no FBC pin, set fbc_pin to be -1 */
+    gpio_num_t en_pin;                          /*!< EN (Enable) pin, if hardware has no EN pin, set en_pin to be -1 */
+} esp_video_init_ircut_config_t;
+#endif /* CONFIG_ESP_VIDEO_ENABLE_IRCUT_SUPPORT */
+
+/**
+ * @brief Supplemental LED initialization configuration
+ *
+ * Night IR-CUT mode turns the LED on. Day IR-CUT mode turns it off.
+ * With the IPA white light algorithm, the brightness follows the IPA white light metadata.
+ */
+#if CONFIG_ESP_VIDEO_ENABLE_LED_SUPPORT
+typedef struct esp_video_init_led_config {
+    gpio_num_t gpio_ctrl;                       /*!< LED control pin. Set to -1 if the hardware has no LED */
+    gpio_num_t gpio_en;                         /*!< LED enable pin passed to the driver. Set to -1 if not used.
+                                                     IR2835 does not drive this pin. A later LED driver may. */
+    esp_cam_led_hw_type_t type;                 /*!< LED hardware type, it selects the LED driver. Default 0 is ESP_CAM_LED_HW_TYPE_GPIO */
+} esp_video_init_led_config_t;
+#endif /* CONFIG_ESP_VIDEO_ENABLE_LED_SUPPORT */
+
+/**
+ * @brief SCCB bus implementation
+ *
+ * @note Zero means I2C, so existing initializers keep using the I2C master.
+ */
+#if ESP_VIDEO_ENABLE_SCCB_DEVICE && ESP_SCCB_I3C_SUPPORTED
+typedef enum {
+    ESP_VIDEO_SCCB_BUS_I2C = 0,                 /*!< I2C master */
+    ESP_VIDEO_SCCB_BUS_I3C,                     /*!< I3C master, legacy I2C device mode */
+} esp_video_sccb_bus_type_t;
+#endif
+
+/**
  * @brief SCCB initialization configuration
  */
 #if ESP_VIDEO_ENABLE_SCCB_DEVICE
 typedef struct esp_video_init_sccb_config {
-    bool init_sccb;                             /*!< true:  SCCB I2C is not initialized and esp_video_init function will initialize SCCB I2C with given parameters i2c_config.
-                                                     false: SCCB I2C is initialized and esp_video_init function can use i2c_handle directly */
+    bool init_sccb;                             /*!< true:  SCCB bus is not initialized and esp_video_init function will initialize it with i2c_config or i3c_config.
+                                                     false: SCCB bus is initialized and esp_video_init function uses i2c_handle or i3c_handle directly */
     union {
         struct {
             uint8_t port;                       /*!< SCCB I2C port */
@@ -78,9 +123,20 @@ typedef struct esp_video_init_sccb_config {
         } i2c_config;                           /*!< SCCB I2C configuration */
 
         i2c_master_bus_handle_t i2c_handle;     /*!< SCCB I2C handle */
+#if ESP_SCCB_I3C_SUPPORTED
+        struct {
+            gpio_num_t scl_pin;                 /*!< SCCB I3C SCL pin */
+            gpio_num_t sda_pin;                 /*!< SCCB I3C SDA pin */
+        } i3c_config;                           /*!< SCCB I3C configuration. I3C has no port number. */
+
+        i3c_master_bus_handle_t i3c_handle;     /*!< SCCB I3C handle */
+#endif
     };
 
-    uint32_t freq;                              /*!< SCCB I2C frequency */
+    uint32_t freq;                              /*!< SCCB clock frequency, in Hz */
+#if ESP_SCCB_I3C_SUPPORTED
+    esp_video_sccb_bus_type_t bus_type;         /*!< SCCB bus implementation. Leave zero to use I2C. */
+#endif
 } esp_video_init_sccb_config_t;
 #endif /* ESP_VIDEO_ENABLE_SCCB_DEVICE */
 
@@ -90,6 +146,13 @@ typedef struct esp_video_init_sccb_config {
 #if CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE
 typedef struct esp_video_init_csi_config {
     esp_video_init_sccb_config_t sccb_config;   /*!< Camera sensor SCCB configuration */
+
+#if CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_IRCUT_SUPPORT
+    esp_video_init_ircut_config_t *ircut_config; /*!< IR-Cut initialization configuration, if hardware has no IR-Cut chip, set ircut_config to be NULL */
+#endif
+#if CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_LED_SUPPORT
+    esp_video_init_led_config_t *led_config;    /*!< Supplemental LED configuration. NULL or gpio_ctrl -1 skips LED initialization */
+#endif
 
     gpio_num_t  reset_pin;                      /*!< Camera sensor reset pin, if hardware has no reset pin, set reset_pin to be -1 */
     gpio_num_t  pwdn_pin;                       /*!< Camera sensor power down pin, if hardware has no power down pin, set pwdn_pin to be -1 */

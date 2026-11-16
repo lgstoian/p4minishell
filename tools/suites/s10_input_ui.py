@@ -250,24 +250,65 @@ def run(dev, ctx):
             if cur.rstrip() in ("", "PS /sdcard>", "PS /sdcard> "):
                 break
             time.sleep(0.3)
+        prompt = cur.rstrip()
         dev.session.reset_input()
         time.sleep(0.3)
         # Type "co" one key at a time, confirming each key actually landed
         # before sending the next. The OSK event path can drop a key while the
         # UI is busy after a heavy preceding suite; retry each character until
         # the input line reflects it (bounded).
-        typed = ""
-        typed_input = ""
-        for idx, want in enumerate(("c", "co")):
-            deadline = time.time() + 10.0
+        def typed_line():
+            st = _ui_state(dev)
+            return (_between(st, "input", "ghost") or "").rstrip(), st
+
+        def type_prefix(prefix):
+            """Type `prefix` one verified character at a time."""
+            for idx in range(len(prefix)):
+                want = prefix[:idx + 1]
+                deadline = time.time() + 10.0
+                while time.time() < deadline:
+                    before, _ = typed_line()
+                    dev.run("ui key %s" % want[-1], timeout=15)
+                    # Confirm the line actually GREW before sending anything else.
+                    # The old endswith() test also accepted a duplicated character
+                    # ("cc" ends with "c"), and a repaint-lagged read could break the
+                    # loop after the first of two identical keys - the second then
+                    # landed afterwards and corrupted the prefix to "coo", which has no
+                    # ghost completion.
+                    grew = False
+                    until = time.time() + 2.0
+                    while time.time() < until:
+                        time.sleep(0.2)
+                        cur, _ = typed_line()
+                        if len(cur) > len(before):
+                            grew = True
+                            break
+                    if grew:
+                        break
+
+        def clear_and_retype():
+            """Submit the OSK line to clear it, then type `prefix` again.
+
+            The OSK line is only cleared by submitting it (the enter key); Ctrl+C
+            clears the shell line, not OSK-typed text, so it must not be used here.
+            """
+            dev.run("ui key \uf8a2", timeout=15)
+            deadline = time.time() + 8.0
             while time.time() < deadline:
-                dev.run("ui key %s" % want[-1], timeout=15)
-                time.sleep(0.4)
-                typed = _ui_state(dev)
-                typed_input = (_between(typed, "input", "ghost") or "").rstrip()
-                if typed_input.endswith(want):
+                cur, _ = typed_line()
+                if cur in ("", "PS /sdcard>", "PS /sdcard> "):
                     break
                 time.sleep(0.3)
+            type_prefix("co")
+
+        type_prefix("co")
+        typed_input, typed = typed_line()
+        if typed_input != prompt + "co":
+            # A key event delivered late made the resend duplicate a character
+            # ("coo") or dropped one. Retype once from a clean line; the ghost hint
+            # must still appear for an exact "co".
+            clear_and_retype()
+            typed_input, typed = typed_line()
         c.expect("ui key typed prefix", "co", typed_input)
         # The ghost hint is computed asynchronously after the input line
         # repaints; poll briefly instead of sampling the same instant.
@@ -281,19 +322,16 @@ def run(dev, ctx):
             time.sleep(0.3)
             ghost, typed = ghost_now()
         if not ghost:
-            # The completion cache can be cold after the editor suite. Clear
-            # and retype once (still a real assertion: the hint must appear).
-            dev.session.write(b"\x03")
-            time.sleep(0.6)
-            dev.read_for(0.4)
-            dev.run("ui key c", timeout=15)
-            dev.run("ui key o", timeout=15)
+            # The completion cache can be cold after the editor suite. Clear the
+            # line and retype once (still a real assertion: the hint must appear).
+            # Uses the OSK enter key, not Ctrl+C - Ctrl+C clears the shell line,
+            # not OSK-typed text, which is how the prefix used to get corrupted.
+            clear_and_retype()
+            ghost, typed = ghost_now()
             deadline = time.time() + 3.0
             while not ghost and time.time() < deadline:
-                ghost, typed = ghost_now()
-                if ghost:
-                    break
                 time.sleep(0.3)
+                ghost, typed = ghost_now()
         c.check("ghost completion shown", len(ghost) > 0,
                 "ghost=%r state=%s" % (ghost, typed[-200:]))
         # Submit the pending input line (OSK enter) so the shell starts clean.
