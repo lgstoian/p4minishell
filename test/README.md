@@ -5,11 +5,11 @@ the Unity framework (included in ESP-IDF) and run in two places:
 
 - **On the P4 target** - the authoritative run (`tools/unit_run.py COM3 COM6`).
 - **On the host** - a hardware-free pre-gate for the pure logic (`test/host/`,
-  ESP-IDF `linux` target, 240 of the 644 cases). See `harness.md` 2.2 and
+  ESP-IDF `linux` target, 240 of the 645 cases). See `harness.md` 2.2 and
   section "Host suite" below.
 
-Current baseline: **637 tests, 0 failures, 2 ignored** on COM3 and COM6. The
-static case count is **695** (what `tools/green_guard.py` sees in
+Current baseline: **638 tests, 0 failures, 2 ignored** on COM3 and COM6. The
+static case count is **696** (what `tools/green_guard.py` sees in
 `test/main/test_*.c`); the difference is cases that only compile for the
 target. The runner completes cleanly with `=== All tests completed ===` and no
 reboot; if the board is reset-looping, check for a newly added test that calls
@@ -129,7 +129,7 @@ python ..\tools\unit_run.py COM3 COM6
 
 The same sources also build natively with ESP-IDF's preview `linux` target
 (`test/host/`), so the pure-logic cases run on the host and in CI without a
-board. Coverage today is **240 of 644 cases** — the leaf components with no board
+board. Coverage today is **240 of 645 cases** — the leaf components with no board
 dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`), the
 hardware-free halves of the shell (`shell_core.c` for text/scanning/history/
 abort/help, `shell_transcript.c` for the transcript model behind an optional
