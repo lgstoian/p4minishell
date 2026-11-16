@@ -3131,6 +3131,31 @@ void shell_uart_console_print_prompt(void)
     }
 }
 
+/* Capture verbs are meta-commands: their transcript echo is suppressed so a
+ * screenshot never contains the harness's own command line. */
+static bool shell_command_is_capture_verb(const char *line)
+{
+    static const char *const verbs[] = {"screenshot", "scr", "capture",
+                                       "cls", "clear"};
+    char word[16];
+    size_t i = 0;
+
+    if (line == NULL) {
+        return false;
+    }
+    while (line[i] != '\0' && line[i] != ' ' && line[i] != '\t' && i < sizeof(word) - 1) {
+        word[i] = line[i];
+        i++;
+    }
+    word[i] = '\0';
+    for (size_t v = 0; v < sizeof(verbs) / sizeof(verbs[0]); v++) {
+        if (shell_text_equals_ignore_case(word, verbs[v])) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void shell_uart_console_submit_command(const char *command)
 {
     /* Both copies are command-sized and would dominate the UART console
@@ -3176,8 +3201,13 @@ void shell_uart_console_submit_command(const char *command)
      * prompt use. The old static SHELL_PROMPT always showed "\" regardless of
      * the cwd, so a serial command's transcript line disagreed with the prompt
      * (and a harness marker could not be found reliably). Build into a local
-     * buffer: shell_prompt_render_plain() returns a shared static. */
-    {
+     * buffer: shell_prompt_render_plain() returns a shared static.
+     *
+     * The capture verbs are meta-commands: echoing them puts the harness's own
+     * `screenshot` line into the very frame it is capturing (a race that makes
+     * two captures of the same screen differ) and into a user's scrollback.
+     * They run exactly like any other command, only without the echo. */
+    if (!shell_command_is_capture_verb(transcript_command)) {
         char prompt_buf[SHELL_PROMPT_RENDER_BYTES];
 
         shell_prompt_expand(prompt_buf, sizeof(prompt_buf), false);

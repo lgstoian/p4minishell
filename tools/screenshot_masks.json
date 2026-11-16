@@ -1,0 +1,24 @@
+{
+  "note": [
+    "Regions excluded from the pixel-exact screenshot comparison.",
+    "",
+    "Two things in this UI are genuinely transient and cannot be frozen by a",
+    "command: the header bar's live telemetry (heap/CPU/battery/link readouts)",
+    "and the text caret, which LVGL blinks on its own timer and which a theme",
+    "change re-creates. Both have their own tests (s01_smoke, header/OSK",
+    "suites, visual_sweep); the docs gate masks them and compares everything",
+    "else byte for byte.",
+    "",
+    "Add a shot-specific region only with a reason. Coordinates are",
+    "[x0, y0, x1, y1], end-exclusive."
+  ],
+  "default": [[0, 0, 4096, 34]],
+  "shots": {
+    "shell-idle": [[612, 353, 638, 381]],
+    "shell-help": [[612, 353, 638, 381]],
+    "shell-dir": [[612, 353, 638, 381]],
+    "apps-launch": [[612, 353, 638, 381]],
+    "theme-amber": [[612, 353, 638, 381]],
+    "tui-boxes": [[612, 563, 638, 591]]
+  }
+}
