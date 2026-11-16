@@ -311,6 +311,33 @@ open bugs see [`bugs.md`](bugs.md).
 
 ---
 
+### Hardware verification (v1.4.2)
+
+- **Unit suite:** 638 tests, 0 failures, 2 ignored on COM3 (jc1060p470c) and
+  COM6 (M5Stack Tab5). The two ignored cases are the `tmpfile()` history-file
+  cases ESP-IDF does not provide.
+- **Fast tier (both boards, concurrent):** smoke 34, storage 59, batch 253,
+  connectivity 23, power-audio 49/45 - no board differential.
+- **Full tier, COM3:** every suite except the two environment-gated ones
+  (`s11_chat` needs a second board, `s16_netsvc` a LAN broker): smoke 34,
+  storage 59, batch 253, data 107, display 102, editor 36, input-ui 79,
+  connectivity 23, power-audio 49, perf 10, apps 127, p4sync 19, browser 10,
+  http 6, app-features 31, website 7, wikipedia 13.
+- **Full tier, COM6:** the same set. `s09_editor` hit the known Tab5
+  console-state flake on the first pass (the marker was swallowed while the
+  prompt streamed) and passed 36/36 after a reset; the browser and website
+  suites passed on both boards, and the app push/launch suites passed after
+  the board was reset.
+- **Browser acceptance:** `s17_browser`, `s20_website` and `s21_wikipedia` pass
+  on both boards. `s21` renders a trimmed `en.wikipedia.org/wiki/ESP32` fixture
+  (infobox, table, list, links, a PNG and a JPEG) and asserts the rendered
+  structure, link colour, missing-image alt text and a BMP capture; its live
+  HTTPS leg is opt-in (`P4_WIFI_LIVE=1`, credentials from
+  `tools/wifi_local.json`) and needs the bench AP.
+- **Screenshots:** all 11 documentation states refreshed and pixel-checked
+  (`tools/screenshot_gate.py --update`, then a fresh-boot comparison); the
+  browser dashboard shot was regenerated after the BMP-probe fix.
+
 ## [1.4.1] - 2026-10-21
 
 ### Fixed
