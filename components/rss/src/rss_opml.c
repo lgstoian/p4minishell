@@ -17,6 +17,7 @@
  */
 
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -161,6 +162,23 @@ static const char *opml_attr(const char **atts, const char *wanted)
     return NULL;
 }
 
+/** Parse a bounded decimal attribute. @return false on non-numeric/overflow. */
+static bool opml_attr_int(const char *value, long min, long max, int *out)
+{
+    char *end = NULL;
+    long parsed;
+
+    if (value == NULL || value[0] == '\0' || out == NULL) {
+        return false;
+    }
+    parsed = strtol(value, &end, 10);
+    if (end == NULL || *end != '\0' || parsed < min || parsed > max) {
+        return false;
+    }
+    *out = (int)parsed;
+    return true;
+}
+
 static void XMLCALL opml_start_element(void *user_data, const char *name,
                                        const char **atts)
 {
@@ -195,46 +213,79 @@ static void XMLCALL opml_start_element(void *user_data, const char *name,
 
     memset(&parsed, 0, sizeof(parsed));
     strncpy(parsed.name, candidate, sizeof(parsed.name) - 1);
+    /* An xmlUrl that cannot be stored verbatim must not be truncated: a
+     * truncated feed URL would point at a different resource. Skip it. */
+    if (strlen(xml_url) >= sizeof(parsed.url)) {
+        return;
+    }
     strncpy(parsed.url, xml_url, sizeof(parsed.url) - 1);
     parsed.enabled = true;
     parsed.interval_min = 0;
 
     value = opml_attr(atts, "p4AuthType");
     if (value != NULL) {
-        parsed.auth_type = (rss_auth_type_t)atoi(value);
-        if (parsed.auth_type < RSS_AUTH_NONE || parsed.auth_type > RSS_AUTH_BEARER) {
-            parsed.auth_type = RSS_AUTH_NONE;
+        int auth = 0;
+
+        if (opml_attr_int(value, RSS_AUTH_NONE, RSS_AUTH_BEARER, &auth)) {
+            parsed.auth_type = (rss_auth_type_t)auth;
         }
     }
     value = opml_attr(atts, "p4User");
     if (value != NULL) {
+        if (strlen(value) >= sizeof(parsed.auth_user)) {
+            return;
+        }
         strncpy(parsed.auth_user, value, sizeof(parsed.auth_user) - 1);
     }
     value = opml_attr(atts, "p4Token");
     if (value != NULL) {
+        if (strlen(value) >= sizeof(parsed.auth_token)) {
+            return;
+        }
         strncpy(parsed.auth_token, value, sizeof(parsed.auth_token) - 1);
     }
     value = opml_attr(atts, "p4Etag");
     if (value != NULL) {
+        if (strlen(value) >= sizeof(parsed.etag)) {
+            return;
+        }
         strncpy(parsed.etag, value, sizeof(parsed.etag) - 1);
     }
     value = opml_attr(atts, "p4Modified");
     if (value != NULL) {
+        if (strlen(value) >= sizeof(parsed.last_modified)) {
+            return;
+        }
         strncpy(parsed.last_modified, value, sizeof(parsed.last_modified) - 1);
     }
     value = opml_attr(atts, "p4Interval");
     if (value != NULL) {
-        parsed.interval_min = atoi(value);
+        int interval = 0;
+
+        if (opml_attr_int(value, 0, 525600, &interval)) {
+            parsed.interval_min = interval;
+        }
     }
     value = opml_attr(atts, "p4Enabled");
     if (value != NULL) {
-        parsed.enabled = (atoi(value) != 0);
+        int enabled = 0;
+
+        if (opml_attr_int(value, 0, 1, &enabled)) {
+            parsed.enabled = (enabled != 0);
+        }
     }
 
-    /* Existing names win: an import never clobbers a configured feed. */
+    /* Existing names win: an import never clobbers a configured feed. Also
+     * collapse duplicate names inside one document, so the caller's "added"
+     * count matches what the store actually accepted. */
     if (!rss_store_name_ok(parsed.name) ||
         rss_store_find(parsed.name) >= 0) {
         return;
+    }
+    for (int i = 0; i < ctx->count; i++) {
+        if (strcasecmp(ctx->out[i].name, parsed.name) == 0) {
+            return;
+        }
     }
     ctx->out[ctx->count++] = parsed;
 }
@@ -248,6 +299,9 @@ esp_err_t rss_opml_parse(const char *text, size_t len,
 
     if (text == NULL || out == NULL || max <= 0 || out_count == NULL) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (len > (size_t)INT_MAX) {
+        return ESP_ERR_INVALID_SIZE;    /* XML_Parse takes an int length */
     }
     ctx.out = out;
     ctx.max = max;

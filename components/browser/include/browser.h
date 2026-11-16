@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 /**
- * @file browser_cache.h
+ * @file browser.h
  * @module browser
  * @layer leaf
  * @domain ui

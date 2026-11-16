@@ -55,7 +55,15 @@ typedef struct {
 /**
  * Sniff the format and (for PNG/JPEG) read the native dimensions without
  * decoding. @p native_w/@p native_h are optional.
- * @return the format; IMGDEC_FMT_UNKNOWN when the data is not PNG/JPEG/BMP.
+ *
+ * PNG/JPEG are reported only when their native dimensions are within
+ * `P4_CONFIG_IMGDEC_MAX_W/H`; a larger image is reported as
+ * `IMGDEC_FMT_UNKNOWN` because the decoder would have to materialise the
+ * native RGBA/RGB888 buffer first. The caller degrades to its documented
+ * fallback (alt text in the browser, an error line for `image`/`gfx`).
+ *
+ * @return the format; IMGDEC_FMT_UNKNOWN when the data is not PNG/JPEG/BMP or
+ *         is a PNG/JPEG outside the native decode cap.
  */
 imgdec_format_t imgdec_probe(const uint8_t *data, size_t len,
                              int *native_w, int *native_h);
@@ -76,6 +84,13 @@ bool imgdec_decode_scaled(const uint8_t *data, size_t len,
 
 /** Free the pixels returned by imgdec_decode_scaled(). NULL-safe. */
 void imgdec_free(imgdec_image_t *img);
+
+/**
+ * Convert one 0xRRGGBB pixel to RGB565 (the same packing the decoders use).
+ * Pure and unit-tested: callers that map a decoded surface to the TUI cell
+ * ramp must use this, so there is exactly one channel mapping in the firmware.
+ */
+uint16_t imgdec_rgb888_to_565(uint32_t rgb);
 
 #ifdef __cplusplus
 }

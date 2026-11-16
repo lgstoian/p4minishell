@@ -66,6 +66,7 @@ idf_component_register(
         test_userial.c        test_asset.c
         test_pkg.c
         test_rss_store.c
+        test_rss_opml.c
         test_browser_cache.c
         test_epub.c
         test_chat.c

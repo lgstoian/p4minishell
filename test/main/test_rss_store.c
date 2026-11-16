@@ -147,6 +147,19 @@ void test_rss_store_record_rejects(void)
     /* FETCHED must be a unix-seconds integer. */
     make_record(line, sizeof(line), "n", "u", "0", "", "", "", "", "soon", "1", "0", "");
     TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_ARG, rss_store_parse_record(line, &out));
+    make_record(line, sizeof(line), "n", "u", "0", "", "", "", "", "-1", "1", "0", "");
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_ARG, rss_store_parse_record(line, &out));
+
+    /* An over-long URL is refused, never silently truncated (a truncated
+     * feed URL would point at a different resource). */
+    {
+        char long_url[P4_CONFIG_RSS_SUB_URL_BYTES + 8];
+
+        memset(long_url, 'u', sizeof(long_url) - 1);
+        long_url[sizeof(long_url) - 1] = '\0';
+        make_record(line, sizeof(line), "n", long_url, "0", "", "", "", "", "", "1", "0", "");
+        TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_ARG, rss_store_parse_record(line, &out));
+    }
 
     /* The name is validated, not just stored. */
     make_record(line, sizeof(line), "bad name", "u", "0", "", "", "", "", "", "1", "0", "");
@@ -176,6 +189,10 @@ void test_rss_store_render_rejects_separator(void)
     sub.auth_type = (rss_auth_type_t)9;
     TEST_ASSERT_FALSE(rss_store_render_record(&sub, line, sizeof(line)));
     sub.auth_type = RSS_AUTH_NONE;
+
+    /* A buffer too small for the whole record is refused, never truncated. */
+    TEST_ASSERT_TRUE(rss_store_render_record(&sub, line, sizeof(line)));
+    TEST_ASSERT_FALSE(rss_store_render_record(&sub, line, 8));
 
     /* Empty name / url. */
     sub.name[0] = '\0';

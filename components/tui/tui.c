@@ -1391,6 +1391,7 @@ void *tui_page_shot_capture(void)
     shot->rows = s_page_rows;
     shot->link_count = s_link_count;
     shot->link_offset = (uint32_t)(((sizeof(tui_page_shot_t) + cell_bytes) + 3u) & ~(size_t)3u);
+    shot->total_bytes = (uint32_t)total;   /* bounded by the TUI grid */
     memcpy(shot->address, s_address_bar, sizeof(shot->address));
 
     cells = (tui_cell_t *)(shot + 1);
@@ -1414,21 +1415,41 @@ bool tui_page_shot_restore(const void *blob)
         return false;
     }
     /* A snapshot from another grid (or a truncated blob) is refused, not
-     * blitted: the cell stride would be wrong and the page would be garbage. */
+     * blitted: the cell stride would be wrong and the page would be garbage.
+     * The recorded total size also makes every subsequent read bounded. */
     if (shot->cols != s_cols || shot->rows != s_page_rows) {
         return false;
     }
+    if (shot->total_bytes < sizeof(tui_page_shot_t)) {
+        return false;
+    }
     cell_bytes = (size_t)s_cols * (size_t)s_page_rows * sizeof(tui_cell_t);
-    if (shot->link_offset < sizeof(tui_page_shot_t) + cell_bytes) {
+    {
+        /* Upper bound: header + full grid (with the 4-byte alignment pad) +
+         * every link the page can hold. Rejecting anything larger keeps a
+         * corrupted blob from driving a huge memcpy. */
+        size_t max_total = sizeof(tui_page_shot_t) + cell_bytes + 4u +
+                           (size_t)TUI_MAX_LINKS * sizeof(tui_link_t);
+
+        if ((size_t)shot->total_bytes > max_total) {
+            return false;
+        }
+    }
+    if (shot->link_offset < sizeof(tui_page_shot_t) + cell_bytes ||
+        shot->link_offset > shot->total_bytes) {
+        return false;
+    }
+    count = shot->link_count;
+    if (count < 0 || count > TUI_MAX_LINKS) {
+        return false;
+    }
+    if ((size_t)shot->link_offset + (size_t)count * sizeof(tui_link_t) >
+        (size_t)shot->total_bytes) {
         return false;
     }
     cells = (const tui_cell_t *)(shot + 1);
     memcpy(s_page, cells, cell_bytes);
 
-    count = shot->link_count;
-    if (count < 0 || count > TUI_MAX_LINKS) {
-        count = TUI_MAX_LINKS;
-    }
     links = (const tui_link_t *)((const char *)shot + shot->link_offset);
     if (count > 0) {
         memcpy(s_links, links, (size_t)count * sizeof(tui_link_t));

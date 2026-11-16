@@ -12,10 +12,14 @@
 #include "gfx.h"
 #include "imgdec.h"
 #include "browser.h"
+#include "clock.h"
 #include "command.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 /* Persisted under the SD root. ALL SD I/O goes through components/storage (a
  * guarded session + atomic temp+rename); `sd:/` is the storage path alias, not
@@ -24,6 +28,10 @@
 #define BROWSER_BOOK_FILE  "sd:/BROWSER.BOOK"
 #define BROWSER_URL_LEN    P4_CONFIG_BROWSER_URL_BYTES
 #define BROWSER_NAME_LEN   64
+#define BROWSER_HIST_TEXT_BYTES \
+    ((size_t)P4_CONFIG_BROWSER_HISTORY_MAX * (BROWSER_URL_LEN + 1) + 1)
+#define BROWSER_BOOK_TEXT_BYTES \
+    ((size_t)P4_CONFIG_BROWSER_BOOKMARK_MAX * (BROWSER_NAME_LEN + BROWSER_URL_LEN + 2) + 1)
 
 /* Bulk tables live in PSRAM, allocated on first use, NOT in .bss: internal
  * SRAM is the scarce boot resource (see ai-context.md). */
@@ -59,8 +67,11 @@ static bool browser_bookmarks_ensure(void) {
 /* ---- History persistence ---- */
 
 /* Read a whole SD text file through the guarded session into a heap buffer.
- * Returns a NUL-terminated buffer (caller frees) or NULL when unavailable. */
-static char *browser_read_text_file(const char *path)
+ * @p max_bytes bounds the file: anything larger is refused instead of being
+ * silently truncated (a half-parsed page or a half-loaded history would be a
+ * false success). Returns a NUL-terminated buffer (caller frees) or NULL when
+ * unavailable, too large, or out of memory. */
+static char *browser_read_text_file(const char *path, size_t max_bytes)
 {
     char resolved[P4_CONFIG_SD_PATH_BYTES];
     shell_sd_session_t session;
@@ -70,6 +81,12 @@ static char *browser_read_text_file(const char *path)
     size_t len = 0;
     int c;
 
+    if (max_bytes < 2) {
+        return NULL;
+    }
+    if (cap > max_bytes) {
+        cap = max_bytes;
+    }
     if (shell_fs_resolve_path(path, resolved, sizeof(resolved)) != ESP_OK) {
         return NULL;
     }
@@ -90,9 +107,25 @@ static char *browser_read_text_file(const char *path)
     while ((c = fgetc(f)) != EOF) {
         if (len + 1 >= cap) {
             size_t ncap = cap * 2;
-            char *grown = realloc(buf, ncap);
+            char *grown;
+
+            if (ncap > max_bytes) {
+                ncap = max_bytes;
+            }
+            if (ncap <= cap) {
+                /* The file is larger than the caller's budget: refuse it
+                 * rather than returning a truncated document. */
+                free(buf);
+                fclose(f);
+                shell_sd_end(&session, "browser");
+                return NULL;
+            }
+            grown = realloc(buf, ncap);
             if (grown == NULL) {
-                break;
+                free(buf);
+                fclose(f);
+                shell_sd_end(&session, "browser");
+                return NULL;
             }
             buf = grown;
             cap = ncap;
@@ -110,7 +143,7 @@ static void browser_history_load(void) {
     if (s_history_loaded) return;
     s_history_loaded = true;
 
-    char *text = browser_read_text_file(BROWSER_HIST_FILE);
+    char *text = browser_read_text_file(BROWSER_HIST_FILE, BROWSER_HIST_TEXT_BYTES);
     if (text == NULL) return;
 
     char *line = text;
@@ -189,8 +222,11 @@ static const char *browser_forward(void) {
 
 static void browser_bookmarks_load(void) {
     if (!browser_bookmarks_ensure()) return;
+    /* The chapter is re-read on every `browser bookmark ...` command: reset the
+     * mirror first or each call would append a duplicate copy of the file. */
+    s_bookmark_count = 0;
 
-    char *text = browser_read_text_file(BROWSER_BOOK_FILE);
+    char *text = browser_read_text_file(BROWSER_BOOK_FILE, BROWSER_BOOK_TEXT_BYTES);
     if (text == NULL) return;
 
     char *line = text;
@@ -212,7 +248,8 @@ static void browser_bookmarks_load(void) {
             while (nl_url > 0 && url[nl_url - 1] == '\r') {
                 url[--nl_url] = '\0';
             }
-            if (nl_name > 0 && nl_url > 0) {
+            if (nl_name > 0 && nl_url > 0 &&
+                strlen(name) < BROWSER_NAME_LEN && strlen(url) < BROWSER_URL_LEN) {
                 strncpy(s_bookmarks[s_bookmark_count].name, name, BROWSER_NAME_LEN - 1);
                 s_bookmarks[s_bookmark_count].name[BROWSER_NAME_LEN - 1] = '\0';
                 strncpy(s_bookmarks[s_bookmark_count].url, url, BROWSER_URL_LEN - 1);
@@ -354,15 +391,30 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
 
     if (src == NULL || out == NULL || !P4_CONFIG_BROWSER_IMAGES) return false;
     memset(out, 0, sizeof(*out));
-    if (strncmp(src, "http://", 7) == 0 || strncmp(src, "https://", 8) == 0 ||
+    if (src[0] == '/' && src[1] == '/') {
+        /* Protocol-relative reference from an https page: the live Wikipedia
+         * markup uses this for upload.wikimedia.org images. */
+        if (snprintf(target, sizeof(target), "https:%s", src) >= (int)sizeof(target)) {
+            return false;
+        }
+    } else if (strncmp(src, "http://", 7) == 0 || strncmp(src, "https://", 8) == 0 ||
         strncmp(src, "sd:", 3) == 0 || src[0] == '/') {
-        snprintf(target, sizeof(target), "%s", src);
+        if (snprintf(target, sizeof(target), "%s", src) >= (int)sizeof(target)) {
+            return false;       /* a truncated URL would fetch the wrong object */
+        }
     } else {
         const char *slash = base != NULL ? strrchr(base, '/') : NULL;
+        int written;
+
         if (slash != NULL) {
-            snprintf(target, sizeof(target), "%.*s/%s", (int)(slash - base), base, src);
+            written = snprintf(target, sizeof(target), "%.*s/%s",
+                               (int)(slash - base), base, src);
         } else {
-            snprintf(target, sizeof(target), "%s/%s", base != NULL ? base : "sd:/", src);
+            written = snprintf(target, sizeof(target), "%s/%s",
+                               base != NULL ? base : "sd:/", src);
+        }
+        if (written < 0 || written >= (int)sizeof(target)) {
+            return false;
         }
     }
     /* The decoded-cell cache makes a re-render or a back/forward skip BOTH the
@@ -383,6 +435,12 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
         if (networking_http_get(target, &result) != ESP_OK) return false;
         data = result.body;
         len = result.body_size;
+        /* The documented browser image budget: the transport allows 512 KB for
+         * a page, but an <img> source is capped at IMAGE_MAX_BYTES (64 KB). */
+        if (len > P4_CONFIG_BROWSER_IMAGE_MAX_BYTES) {
+            free(data);
+            return false;
+        }
     } else if (command_load_file_psram(target, "browser image",
                                        P4_CONFIG_BROWSER_IMAGE_MAX_BYTES,
                                        &data, &len) != 0) {
@@ -661,9 +719,10 @@ static void browser_split_userinfo(const char *url, char *clean, size_t clean_si
 /* Offline page: render an SD HTML file directly. Useful for local docs and for
  * the deterministic website showcase (no AP or httpd needed). */
 static int browser_load_file(const char *path) {
-    char *html = browser_read_text_file(path);
+    char *html = browser_read_text_file(path, P4_CONFIG_HTTP_MAX_BODY_BYTES);
     if (html == NULL) {
-        shell_print_error("Failed to read %s", path);
+        shell_print_error("Failed to read %s (missing, unreadable, or over the %u byte page limit)",
+                          path, (unsigned)P4_CONFIG_HTTP_MAX_BODY_BYTES);
         return 1;
     }
     if (html[0] == '\0') {
@@ -681,13 +740,53 @@ static int browser_load_file(const char *path) {
     return 0;
 }
 
+/* TLS certificate validation needs a sane wall clock: a board that has just
+ * booted (or one without an RTC battery) reads 1970 and every HTTPS handshake
+ * fails with an opaque "certificate expired/not yet valid" error. The shell's
+ * clock task normally starts SNTP after Wi-Fi associates; this bounded wait
+ * covers the race where the browser is the first networked command. */
+static bool browser_ensure_tls_clock(void)
+{
+    if (time_is_set()) {
+        return true;
+    }
+    time_start_sntp();
+    for (int i = 0; i < 50; i++) {
+        if (time_is_set()) {
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    return time_is_set();
+}
+
 static int browser_load_url(const char *url) {
     char clean[512];
     char user[64];
     char pass[128];
+    char scheme_url[512];
     const char *auth_user = NULL;
     const char *auth_pass = NULL;
     networking_http_result_t result;
+
+    if (url == NULL || url[0] == '\0') {
+        shell_print_error("No URL");
+        return 1;
+    }
+    if (strlen(url) >= BROWSER_URL_LEN) {
+        shell_print_error("URL is longer than %d bytes", BROWSER_URL_LEN - 1);
+        return 1;
+    }
+    if (url[0] == '/' && url[1] == '/') {
+        /* Protocol-relative link from an https page: treat it as https, the
+         * same rule the image loader applies. */
+        if (snprintf(scheme_url, sizeof(scheme_url), "https:%s", url) >=
+            (int)sizeof(scheme_url)) {
+            shell_print_error("URL is too long");
+            return 1;
+        }
+        url = scheme_url;
+    }
 
     /* A cached page restores instantly - no fetch, parse or render - for both
      * http(s) and sd:/ pages. The viewport must exist for the snapshot restore
@@ -707,6 +806,10 @@ static int browser_load_url(const char *url) {
     if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0) {
         return browser_load_file(url);
     }
+    if (strncmp(url, "https://", 8) == 0 && !browser_ensure_tls_clock()) {
+        shell_print_error("TLS needs a valid clock; run 'sntp sync' or set 'date' first");
+        return 1;
+    }
 
     memset(&result, 0, sizeof(result));
     browser_split_userinfo(url, clean, sizeof(clean),
@@ -719,7 +822,18 @@ static int browser_load_url(const char *url) {
     esp_err_t err = networking_http_get_ex(clean, NULL, 0, auth_user, auth_pass,
                                            NULL, &result);
     if (err != ESP_OK) {
-        shell_print_error("Failed to fetch URL");
+        if (result.content_length > P4_CONFIG_HTTP_MAX_BODY_BYTES) {
+            /* A documented, bounded degradation: the transport refuses an
+             * oversized page instead of exhausting PSRAM, and the user gets
+             * the real reason rather than a generic fetch failure. */
+            shell_print_error("Page exceeds the %u byte fetch budget (%u bytes)",
+                              (unsigned)P4_CONFIG_HTTP_MAX_BODY_BYTES,
+                              (unsigned)result.content_length);
+        } else if (result.http_status >= 400) {
+            shell_print_error("Failed to fetch URL (HTTP %d)", result.http_status);
+        } else {
+            shell_print_error("Failed to fetch URL");
+        }
         return 1;
     }
     if (result.body_size == 0) {
@@ -883,6 +997,16 @@ int shell_command_browser(int argc, char **argv) {
             if (argc < 5) {
                 shell_print_usage("browser bookmark add <name> <url>");
                 return 2;
+            }
+            if (strlen(argv[3]) >= BROWSER_NAME_LEN) {
+                shell_print_error("bookmark: name is longer than %d bytes",
+                                  BROWSER_NAME_LEN - 1);
+                return 1;
+            }
+            if (strlen(argv[4]) >= BROWSER_URL_LEN) {
+                shell_print_error("bookmark: URL is longer than %d bytes",
+                                  BROWSER_URL_LEN - 1);
+                return 1;
             }
             if (browser_bookmark_add(argv[3], argv[4]) == 0) {
                 shell_print_ok("bookmark: added %s", argv[3]);

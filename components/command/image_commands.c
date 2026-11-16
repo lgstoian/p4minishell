@@ -68,7 +68,10 @@ int command_load_file_psram(const char *path_arg, const char *verb,
         shell_sd_end(&session, verb);
         return 1;
     }
-    if (size < 54 || (uint64_t)size > max_bytes) {
+    /* 4 bytes is the smallest buffer the format probes need; the decoders
+     * reject a short/invalid payload. (A valid 1x1 PNG is ~67 bytes, but a
+     * caller should get "not an image", not a misleading size error.) */
+    if (size < 4 || (uint64_t)size > max_bytes) {
         shell_print_error("%s: bad size %ld (max %u bytes)", verb, size,
                           (unsigned)max_bytes);
         fclose(file);
@@ -181,7 +184,8 @@ void shell_command_image(int argc, char **argv)
             }
         }
         if (!gfx_bmp_parse_header_ex(buf, got, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H)) {
-            shell_transcript_appendf_ansi(SH_ERR "image: not a 24/32-bit BMP/PNG/JPEG (%s)\n" SH_RST,
+            shell_transcript_appendf_ansi(SH_ERR "image: not a 24/32-bit BMP, or a PNG/JPEG that is malformed or exceeds the %dx%d decode cap (%s)\n" SH_RST,
+                                          P4_CONFIG_IMGDEC_MAX_W, P4_CONFIG_IMGDEC_MAX_H,
                                           resolved);
             heap_caps_free(buf);
             batch_set_errorlevel(1);

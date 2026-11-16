@@ -1762,10 +1762,22 @@ void shell_command_tui(int argc, char **argv)
         return;
     } else if (shell_text_equals_ignore_case(argv[1], "dump")) {
         /* Read-only text dump of the logical page (browser/TUI content) for
-         * host-side rendering assertions. `tui dump [from] [to]` (1-based rows).
+         * host-side rendering assertions. `tui dump [from] [to] [/a]` (1-based
+         * rows). `/a` appends one `NNN@start-end:fg ...` colour-run line per
+         * row so a suite can assert link/heading colouring without pixels.
          * Reuses tui_page_get_cell - no second page model. */
-        int from = (argc >= 3) ? atoi(argv[2]) : 1;
-        int to = (argc >= 4) ? atoi(argv[3]) : tui_viewport_get_page_rows();
+        bool attrs = false;
+        int argi = 2;
+        int from;
+        int to;
+
+        if (argc >= 3 && (shell_text_equals_ignore_case(argv[2], "/a") ||
+                          shell_text_equals_ignore_case(argv[2], "attrs"))) {
+            attrs = true;
+            argi = 3;
+        }
+        from = (argc > argi) ? atoi(argv[argi]) : 1;
+        to = (argc > argi + 1) ? atoi(argv[argi + 1]) : tui_viewport_get_page_rows();
         if (from < 1) from = 1;
         if (to < from) to = from;
         shell_transcript_appendf("tui.dump cols=%d from=%d to=%d\n",
@@ -1790,12 +1802,50 @@ void shell_command_tui(int argc, char **argv)
             }
             line[pos] = '\0';
             shell_transcript_appendf("%03d|%s\n", r, line);
+            if (attrs) {
+                char runs[P4_CONFIG_TUI_COLS * 20 + 1];
+                size_t rpos = 0;
+                int run_start = 1;
+                int run_fg = -1;
+                int run_end = 0;
+
+                runs[0] = '\0';
+                for (int c = 1; c <= P4_CONFIG_TUI_COLS; c++) {
+                    char u[8];
+                    uint8_t fg = 0;
+
+                    if (!tui_page_get_cell(c, r, u, sizeof(u), &fg, NULL, NULL)) {
+                        continue;
+                    }
+                    if (run_fg < 0) {
+                        run_start = c;
+                        run_fg = fg;
+                        run_end = c;
+                    } else if ((int)fg == run_fg) {
+                        run_end = c;
+                    } else {
+                        if (rpos + 24 < sizeof(runs)) {
+                            rpos += (size_t)snprintf(runs + rpos, sizeof(runs) - rpos,
+                                                     "%s%d-%d:%d", rpos ? " " : "",
+                                                     run_start, run_end, run_fg);
+                        }
+                        run_start = c;
+                        run_fg = fg;
+                        run_end = c;
+                    }
+                }
+                if (run_fg >= 0 && rpos + 24 < sizeof(runs)) {
+                    (void)snprintf(runs + rpos, sizeof(runs) - rpos, "%s%d-%d:%d",
+                                   rpos ? " " : "", run_start, run_end, run_fg);
+                }
+                shell_transcript_appendf("%03d@%s\n", r, runs);
+            }
         }
         shell_transcript_appendf("tui.dump.end\n");
         batch_set_errorlevel(0);
         return;
     }
-    shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear | tui selftest | tui dump [from] [to]");
+    shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear | tui selftest | tui dump [from] [to] [/a]");
     batch_set_errorlevel(2);
 }
 

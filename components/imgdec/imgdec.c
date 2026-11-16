@@ -78,6 +78,12 @@ static bool imgdec_jpeg_dims(const uint8_t *d, size_t n, int *w, int *h)
         {
             int seglen = ((int)d[i + 2] << 8) | (int)d[i + 3];
 
+            /* A length shorter than the length field itself cannot advance
+             * past the marker; treat it as a malformed stream instead of
+             * walking the buffer in 2-byte steps. */
+            if (seglen < 2) {
+                return false;
+            }
             if (marker >= 0xC0 && marker <= 0xCF && marker != 0xC4 &&
                 marker != 0xC8 && marker != 0xCC) {
                 if (i + 9 > n) {
@@ -124,11 +130,11 @@ imgdec_format_t imgdec_probe(const uint8_t *data, size_t len,
 /* ------------------------------------------------------------------------- */
 
 /** Convert one RGB888 pixel to RGB565. */
-static uint16_t imgdec_rgb888_to_565(uint32_t rgb)
+uint16_t imgdec_rgb888_to_565(uint32_t rgb)
 {
     return (uint16_t)(((rgb & 0xF80000u) >> 19) |
                       ((rgb & 0x00FC00u) >> 5) |
-                      ((rgb & 0x0000F8u) << 8));
+                      ((rgb & 0x0000F8u) >> 3));
 }
 
 static uint16_t *imgdec_scale_rgb888(const uint8_t *src, int src_w, int src_h,
@@ -236,6 +242,7 @@ typedef struct {
 typedef struct {
     uint8_t *pixels;    /* RGB888, native size */
     int width;
+    int height;
 } imgdec_jpeg_dst_t;
 
 typedef struct {
@@ -287,17 +294,29 @@ static int imgdec_jpeg_outfunc(JDEC *jd, void *bitmap, JRECT *rect)
     }
     block_w = (int)rect->right - (int)rect->left + 1;
     block_h = (int)rect->bottom - (int)rect->top + 1;
+    if (block_w <= 0 || block_h <= 0) {
+        return 1;                       /* nothing to draw, keep decoding */
+    }
+    /* TJpgDec normally clips to the frame size, but its output callback is the
+     * last place before a write: clamp both axes here so a malformed stream or
+     * a library edge case can never run past the RGB888 buffer. */
+    if ((int)rect->left >= ctx->dst.width || (int)rect->top >= ctx->dst.height) {
+        return 1;
+    }
     if ((int)rect->left + block_w > ctx->dst.width) {
-        return 0;
+        block_w = ctx->dst.width - (int)rect->left;
+    }
+    if ((int)rect->top + block_h > ctx->dst.height) {
+        block_h = ctx->dst.height - (int)rect->top;
+    }
+    if (block_w <= 0 || block_h <= 0) {
+        return 1;
     }
     for (y = 0; y < block_h; y++) {
         int row = (int)rect->top + y;
         uint8_t *dst_row;
         const uint8_t *src_row;
 
-        if (row < 0) {
-            continue;
-        }
         dst_row = ctx->dst.pixels +
                   ((size_t)row * (size_t)ctx->dst.width + (size_t)rect->left) * 3u;
         src_row = src + (size_t)y * (size_t)block_w * 3u;
@@ -337,6 +356,7 @@ static bool imgdec_jpeg_decode(const uint8_t *data, size_t len,
         return false;
     }
     ctx.dst.width = (int)jd.width;
+    ctx.dst.height = (int)jd.height;
     ctx.dst.pixels = p4heap_alloc_psram((size_t)ctx.dst.width * (size_t)jd.height * 3u);
     if (ctx.dst.pixels == NULL) {
         heap_caps_free(pool);
