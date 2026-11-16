@@ -27,6 +27,8 @@ set(HOST_TEST_SRCS
     "${HOST_TEST_DIR}/test_clipboard.c"
     "${HOST_TEST_DIR}/test_editor.c"
     "${HOST_TEST_DIR}/test_himem.c"
+    "${HOST_TEST_DIR}/test_batch_expr.c"
+    "${HOST_TEST_DIR}/test_svc.c"
     # Production sources that are hardware-free by construction (see each
     # file's @hard-rule): compiled directly so the lane exercises the real
     # code rather than a copy or a stub.
@@ -39,6 +41,17 @@ set(HOST_TEST_SRCS
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/batch_forf.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/calc.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/himem.c"
+    # The batch verbs under test: the evaluator + `set` helpers and the
+    # service/sync cores. Their outside-world contact (SD session, input
+    # source, INI registry, console line, header notification) goes through
+    # optional registration tables that the firmware installs and this lane
+    # leaves empty - no stub, no simulated filesystem.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/batch_io.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/batch_expr.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/sync.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/svc.c"
+    # Pure option parsers shared by the modal surfaces and `lock`/`wait`.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/modal/modal_args.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/header/header_layout.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/header/header_status.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/header/header_notify_queue.c"
@@ -66,6 +79,7 @@ idf_component_register(
         "../../../components/shell"
         "../../../components/storage"
         "../../../components/batch"
+        "../../../components/modal"
         "../../../components/header"
         "../../../components/font"
         "../../../components/clock"

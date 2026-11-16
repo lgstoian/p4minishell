@@ -25,10 +25,11 @@
  * @module components/shell
  * @layer shell
  * @domain shell
- * @provides shell_trim, shell_split_args, shell_split_chain, quote/escape scanner, group depth, history store, abort/busy flags, help registry
+ * @provides shell_trim, shell_join_args, shell_split_args, shell_split_chain, quote/escape scanner, group depth, history store, abort/busy/foreground-break flags, header-notification forwarder, help registry
  * @status stable
  * @test test/main/test_shell_quoting.c, test/main/test_shell_abort.c,
- *       test/main/test_history_file.c, test/main/test_history_search.c
+ *       test/main/test_history_file.c, test/main/test_history_search.c,
+ *       test/main/test_batch_expr.c, test/main/test_svc.c
  * @hard-rule pure C only - no LVGL, display, USB, storage or board BSP in this file
  */
 
@@ -37,6 +38,7 @@
 #include "p4minishell_config.h"
 
 #include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -409,6 +411,34 @@ int shell_count_args(const char *text)
     }
 
     return count;
+}
+
+/**
+ * Join argv[@p start_index..@p argc) with single spaces into @p output.
+ *
+ * Moved here from shell.c: it is string surgery, and the batch verbs (set /a,
+ * set /p) call it from the host-callable half of the engine. Behaviour is
+ * unchanged: a NULL argv/output or a zero size leaves @p output untouched
+ * except for its terminator, and truncation stops at the last whole copy.
+ */
+void shell_join_args(char **argv, int start_index, int argc, char *output, size_t output_size)
+{
+    int i;
+    size_t pos = 0;
+
+    if (argv == NULL || output == NULL || output_size == 0) {
+        return;
+    }
+
+    output[0] = '\0';
+
+    for (i = start_index; i < argc && pos < output_size - 1; i++) {
+        if (i > start_index) {
+            output[pos++] = ' ';
+            output[pos] = '\0';
+        }
+        pos += snprintf(output + pos, output_size - pos, "%s", argv[i]);
+    }
 }
 
 /* ========================================================================
@@ -909,6 +939,62 @@ void shell_set_command_busy(bool busy)
 bool shell_is_command_busy(void)
 {
     return s_command_busy;
+}
+
+/* Foreground break flag (see shell.h). Written from the LVGL task (USB
+ * Ctrl+C, Stop button), read on the command worker; a plain bool like the
+ * abort/busy flags above, and hardware-free by the same reasoning. The batch
+ * sync tables poll it, which is why it lives here rather than in shell.c. */
+static volatile bool s_foreground_break_seen;
+
+void shell_mark_foreground_break(void)
+{
+    s_foreground_break_seen = true;
+}
+
+bool shell_foreground_break_pending(void)
+{
+    return s_foreground_break_seen;
+}
+
+void shell_clear_foreground_break(void)
+{
+    s_foreground_break_seen = false;
+}
+
+/* ========================================================================
+ * HEADER NOTIFICATIONS (forwarder + optional sink)
+ * ========================================================================
+ * shell.h declares shell_header_notify_level()/shell_header_notify() for every
+ * notifier in the firmware (alarm, boot, storage, the batch service
+ * supervisor). The header widget they feed is LVGL-side, so it stays in
+ * header.c and shell.c installs it here from shell_init(). With no sink
+ * installed (the host unit-test lane, or before shell_init()) a notification
+ * is simply not displayed - there is no fake widget and nothing claims it
+ * was shown.
+ */
+
+static void (*s_header_notify)(header_notify_level_t level, const char *text,
+                              uint32_t timeout_ms) = NULL;
+
+void shell_core_set_header_notify(void (*notify)(header_notify_level_t level,
+                                                 const char *text,
+                                                 uint32_t timeout_ms))
+{
+    s_header_notify = notify;
+}
+
+void shell_header_notify_level(const char *text, uint32_t timeout_ms,
+                               header_notify_level_t level)
+{
+    if (s_header_notify != NULL) {
+        s_header_notify(level, text, timeout_ms);
+    }
+}
+
+void shell_header_notify(const char *text, uint32_t timeout_ms)
+{
+    shell_header_notify_level(text, timeout_ms, HEADER_NOTIFY_INFO);
 }
 
 /* ========================================================================

@@ -2440,25 +2440,9 @@ bool shell_is_batch_active(void)
     return s_batch_active;
 }
 
-/* Foreground break flag (see shell.h). Written from the LVGL task (USB
- * Ctrl+C, Stop button), read on the command worker; a plain bool like the
- * background kill flags. The abort/busy pair lives in shell_core.c. */
-static volatile bool s_foreground_break_seen;
-
-void shell_mark_foreground_break(void)
-{
-    s_foreground_break_seen = true;
-}
-
-bool shell_foreground_break_pending(void)
-{
-    return s_foreground_break_seen;
-}
-
-void shell_clear_foreground_break(void)
-{
-    s_foreground_break_seen = false;
-}
+/* The foreground-break flag lives in shell_core.c beside the abort/busy
+ * flags: it is the same kind of hardware-free state, and the sync tables
+ * (batch) poll it without pulling in this file's LVGL/display half. */
 
 /* ========================================================================
  * RUNTIME PROMPT TEMPLATE
@@ -5225,36 +5209,9 @@ bool shell_parse_size_arg(const char *text, size_t min_value, size_t max_value, 
     return true;
 }
 
-void shell_join_args(char **argv, int start_index, int argc, char *output, size_t output_size)
-{
-    int i;
-    size_t pos = 0;
-
-    if (argv == NULL || output == NULL || output_size == 0) {
-        return;
-    }
-
-    output[0] = '\0';
-
-    for (i = start_index; i < argc && pos < output_size - 1; i++) {
-        if (i > start_index) {
-            output[pos++] = ' ';
-            output[pos] = '\0';
-        }
-        pos += snprintf(output + pos, output_size - pos, "%s", argv[i]);
-    }
-}
-
-void shell_header_notify_level(const char *text, uint32_t timeout_ms,
-                               header_notify_level_t level)
-{
-    header_notify(level, text, timeout_ms);
-}
-
-void shell_header_notify(const char *text, uint32_t timeout_ms)
-{
-    shell_header_notify_level(text, timeout_ms, HEADER_NOTIFY_INFO);
-}
+/* shell_join_args() and the header-notification forwarders live in
+ * shell_core.c: they are pure C and are used by the batch/host-callable half
+ * of the shell, which must not pull in this file's LVGL/display half. */
 
 /* ========================================================================
  * LIFECYCLE
@@ -5265,6 +5222,13 @@ void shell_init(void)
     if (s_initialized) {
         return;
     }
+
+    /* Install the header-notification sink: shell_header_notify_level() is
+     * implemented in the hardware-free core (shell_core.c) and forwards here,
+     * so every notifier keeps reaching the header widget. The host unit-test
+     * lane installs nothing and stays silent - the same optional-sink contract
+     * the transcript model uses. */
+    shell_core_set_header_notify(header_notify);
 
     /* Initialize ANSI/VT color palette */
     ansi_init();

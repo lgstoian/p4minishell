@@ -53,6 +53,16 @@ extern void test_ansi_osc8_strip(void);
 extern void test_ansi_csi_trailing_complete(void);
 extern void test_ansi_csi_trailing_split(void);
 
+/* --- test_batch_expr.c --------------------------------------- */
+extern void test_batch_expr_literals(void);
+extern void test_batch_expr_arithmetic(void);
+extern void test_batch_expr_bitwise(void);
+extern void test_batch_expr_variables(void);
+extern void test_batch_expr_bracket_names(void);
+extern void test_batch_expr_comparisons(void);
+extern void test_batch_expr_logical(void);
+extern void test_batch_expr_errors(void);
+
 /* --- test_calc.c --------------------------------------------- */
 extern void test_calc_arithmetic(void);
 extern void test_calc_power_and_mod(void);
@@ -293,6 +303,14 @@ extern void test_shell_group_match(void);
 extern void test_shell_group_depth(void);
 extern void test_shell_chain_while_guard(void);
 
+/* --- test_svc.c ---------------------------------------------- */
+extern void test_sync_name_ok(void);
+extern void test_sync_mutex_take_release(void);
+extern void test_sync_mutex_foreign(void);
+extern void test_sync_event_once_and_timeout(void);
+extern void test_svc_registry_guards(void);
+extern void test_svc_bg_slot_helpers(void);
+
 /* --- test_theme.c -------------------------------------------- */
 extern void test_theme_registry(void);
 extern void test_theme_lookup(void);
@@ -323,6 +341,16 @@ void app_main(void)
     RUN_TEST(test_ansi_osc8_strip);
     RUN_TEST(test_ansi_csi_trailing_complete);
     RUN_TEST(test_ansi_csi_trailing_split);
+
+    /* test_batch_expr.c */
+    RUN_TEST(test_batch_expr_literals);
+    RUN_TEST(test_batch_expr_arithmetic);
+    RUN_TEST(test_batch_expr_bitwise);
+    RUN_TEST(test_batch_expr_variables);
+    RUN_TEST(test_batch_expr_bracket_names);
+    RUN_TEST(test_batch_expr_comparisons);
+    RUN_TEST(test_batch_expr_logical);
+    RUN_TEST(test_batch_expr_errors);
 
     /* test_calc.c */
     RUN_TEST(test_calc_arithmetic);
@@ -563,6 +591,14 @@ void app_main(void)
     RUN_TEST(test_shell_group_match);
     RUN_TEST(test_shell_group_depth);
     RUN_TEST(test_shell_chain_while_guard);
+
+    /* test_svc.c */
+    RUN_TEST(test_sync_name_ok);
+    RUN_TEST(test_sync_mutex_take_release);
+    RUN_TEST(test_sync_mutex_foreign);
+    RUN_TEST(test_sync_event_once_and_timeout);
+    RUN_TEST(test_svc_registry_guards);
+    RUN_TEST(test_svc_bg_slot_helpers);
 
     /* test_theme.c */
     RUN_TEST(test_theme_registry);

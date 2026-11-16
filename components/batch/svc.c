@@ -18,6 +18,12 @@
  * service job counts as unexpected and IS restarted. The pool that runs
  * jobs lives in components/command/ and is reached through the registered
  * batch_bg_ops_t table (same pattern as batch_command_ops_t).
+ *
+ * Registry I/O goes through the registered batch_io_ops_t table (batch_io.h):
+ * the firmware installs the storage INI core from batch_init(), the host
+ * unit-test lane installs nothing, and an empty backend reads as an empty
+ * registry / a refused install — the same result a board with no usable card
+ * produces. No INI data is ever invented.
  */
 
 #include "batch.h"
@@ -26,12 +32,13 @@
 #include <string.h>
 
 #include "ansi_palette.h"
+#include "batch_io.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/timers.h"
 #include "p4heap.h"
 #include "p4minishell_config.h"
 #include "shell.h"
-#include "storage.h"
+#include "storage_path.h"
 
 #ifndef SVC_TAG
 #define SVC_TAG "svc"
@@ -150,6 +157,7 @@ static bool svc_load_cb(const char *key, const char *value, void *ctx)
 static void svc_load(void)
 {
     char resolved[P4_CONFIG_SD_PATH_BYTES];
+    const batch_io_ops_t *io = batch_io_ops_get();
 
     if (!svc_ensure_mirror()) {
         return;
@@ -161,7 +169,11 @@ static void svc_load(void)
         svc_free_line(&s_svc[i]);
     }
     memset(s_svc, 0, sizeof(*s_svc) * (size_t)P4_CONFIG_SVC_MAX);
-    (void)storage_ini_file_foreach(resolved, svc_load_cb, NULL);
+    /* No I/O backend (host lane) is the same outcome as an unreadable
+     * registry on a card-less board: the mirror stays empty. */
+    if (io != NULL && io->ini_file_foreach != NULL) {
+        (void)io->ini_file_foreach(resolved, svc_load_cb, NULL);
+    }
     s_svc_loaded = true;
 }
 
@@ -219,6 +231,7 @@ void svc_slot_released(int slot)
 esp_err_t svc_install(const char *name, const char *line, bool restart, bool auto_start)
 {
     char resolved[P4_CONFIG_SD_PATH_BYTES];
+    const batch_io_ops_t *io = batch_io_ops_get();
     svc_entry_t *e;
 
     if (!sync_name_ok(name) || line == NULL || line[0] == '\0' ||
@@ -249,19 +262,24 @@ esp_err_t svc_install(const char *name, const char *line, bool restart, bool aut
     if (!svc_resolved(resolved, sizeof(resolved))) {
         return ESP_ERR_INVALID_STATE;
     }
+    /* Writing the registry needs the I/O backend; without it (host lane) the
+     * install fails exactly as it does on a board with no usable card. */
+    if (io == NULL || io->ini_file_set == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
     {
         char key[P4_CONFIG_SVC_NAME_BYTES + 8];
 
         snprintf(key, sizeof(key), "%s.line", name);
-        if (storage_ini_file_set(resolved, key, line) != ESP_OK) {
+        if (io->ini_file_set(resolved, key, line) != ESP_OK) {
             return ESP_ERR_INVALID_STATE;
         }
         snprintf(key, sizeof(key), "%s.restart", name);
-        if (storage_ini_file_set(resolved, key, restart ? "1" : "0") != ESP_OK) {
+        if (io->ini_file_set(resolved, key, restart ? "1" : "0") != ESP_OK) {
             return ESP_ERR_INVALID_STATE;
         }
         snprintf(key, sizeof(key), "%s.auto", name);
-        if (storage_ini_file_set(resolved, key, auto_start ? "1" : "0") != ESP_OK) {
+        if (io->ini_file_set(resolved, key, auto_start ? "1" : "0") != ESP_OK) {
             return ESP_ERR_INVALID_STATE;
         }
     }
@@ -285,6 +303,7 @@ esp_err_t svc_install(const char *name, const char *line, bool restart, bool aut
 esp_err_t svc_remove(const char *name)
 {
     char resolved[P4_CONFIG_SD_PATH_BYTES];
+    const batch_io_ops_t *io = batch_io_ops_get();
     svc_entry_t *e;
 
     if (name == NULL) {
@@ -304,15 +323,15 @@ esp_err_t svc_remove(const char *name)
     if (!svc_resolved(resolved, sizeof(resolved))) {
         return ESP_ERR_INVALID_STATE;
     }
-    {
+    if (io != NULL && io->ini_file_delete != NULL) {
         char key[P4_CONFIG_SVC_NAME_BYTES + 8];
 
         snprintf(key, sizeof(key), "%s.line", name);
-        (void)storage_ini_file_delete(resolved, key);
+        (void)io->ini_file_delete(resolved, key);
         snprintf(key, sizeof(key), "%s.restart", name);
-        (void)storage_ini_file_delete(resolved, key);
+        (void)io->ini_file_delete(resolved, key);
         snprintf(key, sizeof(key), "%s.auto", name);
-        (void)storage_ini_file_delete(resolved, key);
+        (void)io->ini_file_delete(resolved, key);
     }
     svc_free_line(e);
     memset(e, 0, sizeof(*e));

@@ -42,32 +42,9 @@
 
 /* ---- Shared helpers ---- */
 
-bool modal_parse_timeout_arg(const char *arg, uint32_t *timeout_ms_out)
-{
-    int secs;
-
-    if (arg == NULL || timeout_ms_out == NULL) {
-        return false;
-    }
-    if (strncasecmp(arg, "/t:", 3) != 0 || strlen(arg) <= 3) {
-        return false;
-    }
-    secs = atoi(arg + 3);
-    *timeout_ms_out = (secs > 0) ? (uint32_t)secs * 1000u : 0u;
-    return true;
-}
-
-bool modal_parse_var_arg(const char *arg, const char **name_out)
-{
-    if (arg == NULL || name_out == NULL) {
-        return false;
-    }
-    if (strncasecmp(arg, "/v:", 3) != 0 || strlen(arg) <= 3) {
-        return false;
-    }
-    *name_out = arg + 3;
-    return true;
-}
+/* modal_parse_timeout_arg() / modal_parse_var_arg() live in modal_args.c: pure
+ * option parsing shared with the batch verbs (`lock`/`wait`), kept out of this
+ * LVGL-coupled file so the host lane can link them. */
 
 static void surf_request_close(EventGroupHandle_t eg)
 {
