@@ -11,6 +11,13 @@
  * values) instead of writing s_errorlevel directly, and are exported
  * for shell_command_set(). The recursive-descent grammar, precedence,
  * and error semantics are unchanged.
+ *
+ * The evaluator itself is pure C. The only outside-world contact is inside
+ * `set /p` (a redirected file or the console), which goes through the
+ * registered `batch_io_ops_t` table (batch_io.h): the firmware installs the
+ * real SD/console calls from batch_init(), and the host unit-test lane
+ * installs nothing and sees the same "no data read" / "no input received"
+ * failures a board with no card and no key source reports.
  */
 
 #include <ctype.h>
@@ -21,8 +28,8 @@
 #include <string.h>
 
 #include "batch.h"
+#include "batch_io.h"
 #include "shell.h"
-#include "storage.h"
 #include "ansi.h"
 #include "ansi_palette.h"
 #include "p4minishell_config.h"
@@ -821,6 +828,7 @@ void shell_command_set_prompt(int argc, char **argv)
     {
         char *resolved = malloc(SHELL_SD_PATH_BYTES);
         shell_sd_session_t session;
+        const batch_io_ops_t *io = batch_io_ops_get();
 
         if (resolved == NULL) {
             shell_print_error("set: out of memory reading the input source");
@@ -828,11 +836,15 @@ void shell_command_set_prompt(int argc, char **argv)
             return;
         }
 
-        if (storage_resolve_input_source(NULL, resolved, SHELL_SD_PATH_BYTES) == ESP_OK) {
+        /* A missing backend (the host unit-test lane) has no input source,
+         * which is the same answer a board with no card and no `< file` gives:
+         * fall through to the interactive prompt below. */
+        if (io != NULL && io->resolve_input_source != NULL &&
+            io->resolve_input_source(NULL, resolved, SHELL_SD_PATH_BYTES) == ESP_OK) {
             FILE *file = NULL;
             bool stored = false;
 
-            if (shell_sd_begin(&session) == ESP_OK) {
+            if (io->sd_begin != NULL && io->sd_end != NULL && io->sd_begin(&session) == ESP_OK) {
                 file = fopen(resolved, "r");
                 if (file != NULL) {
                     if (fgets(input, sizeof(input), file) != NULL) {
@@ -847,7 +859,7 @@ void shell_command_set_prompt(int argc, char **argv)
                     }
                     fclose(file);
                 }
-                shell_sd_end(&session, "set");
+                io->sd_end(&session, "set");
             }
 
             if (!stored) {
@@ -913,8 +925,21 @@ void shell_command_set_prompt(int argc, char **argv)
     }
 
     {
-        bool got = hidden ? shell_read_line_hidden(input, sizeof(input), timeout_ms)
-                          : shell_read_line(input, sizeof(input), timeout_ms);
+        const batch_io_ops_t *io = batch_io_ops_get();
+        bool got = false;
+
+        /* The console is the other input source: with no backend installed
+         * (host lane) there is no key source, so the read reports "not got"
+         * exactly as it does on a board with no keyboard or UART attached. */
+        if (io != NULL) {
+            if (hidden) {
+                if (io->read_line_hidden != NULL) {
+                    got = io->read_line_hidden(input, sizeof(input), timeout_ms);
+                }
+            } else if (io->read_line != NULL) {
+                got = io->read_line(input, sizeof(input), timeout_ms);
+            }
+        }
 
         if (!got) {
             /* Cancelled, timed out, or no key source. DOS leaves the variable

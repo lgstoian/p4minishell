@@ -22,6 +22,7 @@
 
 #include "batch.h"
 #include "batch_env_internal.h"
+#include "batch_io.h"
 #include "error_strings.h"
 #include "storage.h"
 #include "filetype.h"
@@ -6236,12 +6237,28 @@ void batch_init(void)
         .release_sync = sync_release_owned,
         .release_service = svc_slot_released,
     };
+    /* The batch verbs' file/console I/O backend: the same calls the verbs
+     * made inline before (guarded SD session, input-source resolution, the
+     * INI state core, the interactive line reader), handed over as one table
+     * so the verbs themselves stay free of FATFS. The host unit-test lane
+     * never runs this and leaves the table empty. */
+    static const batch_io_ops_t s_io_ops = {
+        .sd_begin = shell_sd_begin,
+        .sd_end = shell_sd_end,
+        .resolve_input_source = storage_resolve_input_source,
+        .read_line = shell_read_line,
+        .read_line_hidden = shell_read_line_hidden,
+        .ini_file_set = storage_ini_file_set,
+        .ini_file_delete = storage_ini_file_delete,
+        .ini_file_foreach = storage_ini_file_foreach,
+    };
 
     if (s_initialized) {
         return;
     }
 
     batch_register_bg_cleanup_ops(&s_bg_cleanup_ops);
+    batch_register_io_ops(&s_io_ops);
 
     /* Class boundaries, the variable pool and the `start` slot pool live in
      * the hardware-free environment core (batch_env.c). A failed pool

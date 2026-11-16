@@ -47,6 +47,19 @@ extern "C" {
 extern shell_command_ops_t shell_core_command_ops;
 
 /* ========================================================================
+ * HEADER-NOTIFICATION SINK (shell_core.c / shell.c)
+ * ========================================================================
+ * shell_header_notify_level() lives in shell_core.c so notifiers that are
+ * hardware-free (the batch service supervisor, storage) link on the host lane.
+ * The widget it eventually drives is LVGL-side, so shell.c installs the real
+ * call (`header_notify`) from shell_init(); with no sink installed a
+ * notification is not displayed, which is the host lane's configuration.
+ */
+void shell_core_set_header_notify(void (*notify)(header_notify_level_t level,
+                                                 const char *text,
+                                                 uint32_t timeout_ms));
+
+/* ========================================================================
  * COMMAND HISTORY STORE (shell_core.c) / RECALL CURSOR (shell.c)
  * ========================================================================
  * The store itself is heap-backed and owned by shell_core.c. The recall

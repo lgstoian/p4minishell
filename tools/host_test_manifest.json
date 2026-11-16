@@ -12,7 +12,7 @@
   ],
   "phase": 1,
   "target": "linux",
-  "expected_cases": 226,
+  "expected_cases": 240,
   "prelude": [
     {
       "name": "batch_env_pool_init",
@@ -38,6 +38,7 @@
   ],
   "tests": [
     "test_ansi_format.c",
+    "test_batch_expr.c",
     "test_browser_cache.c",
     "test_calc.c",
     "test_clipboard.c",
@@ -55,6 +56,7 @@
     "test_shell_abort.c",
     "test_shell_parser.c",
     "test_shell_quoting.c",
+    "test_svc.c",
     "test_theme.c"
   ],
   "excluded": {
@@ -65,7 +67,6 @@
     "test_assoc.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_audio.c": "peripheral driver component (audio/power/I2C/USB/camera): no host backend",
     "test_batch_control.c": "batch: batch.c REQUIRES shell (display/LVGL), storage and board_bsp",
-    "test_batch_expr.c": "batch: batch.c REQUIRES shell (display/LVGL), storage and board_bsp",
     "test_bind.c": "batch: batch.c REQUIRES shell (display/LVGL), storage and board_bsp",
     "test_breadcrumb.c": "command layer: the breadcrumb formatter lives in components/command",
     "test_browser.c": "command layer: REQUIRES storage, display and networking at link time",
@@ -106,7 +107,6 @@
     "test_shell_variables.c": "shell core: shell.c is coupled to display/LVGL, USB-Serial-JTAG and the board BSP",
     "test_storage_format.c": "storage: REQUIRES SDMMC/FAT VFS (no filesystem on the host lane)",
     "test_storage_volumes.c": "storage: REQUIRES SDMMC/FAT VFS (no filesystem on the host lane)",
-    "test_svc.c": "batch: batch.c REQUIRES shell (display/LVGL), storage and board_bsp",
     "test_sw_gcm.c": "data store: REQUIRES storage + board_bsp for its on-disk backend",
     "test_task_sort.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_tcpterm.c": "networking/radio: REQUIRES ESP-Hosted C6 transport (no emulated radio)",

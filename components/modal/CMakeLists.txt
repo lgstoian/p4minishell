@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Stoian Alexandru
 # SPDX-License-Identifier: MIT
 idf_component_register(
-    SRCS "modal.c" "modal_surf.c"
+    SRCS "modal.c" "modal_args.c" "modal_surf.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         freertos

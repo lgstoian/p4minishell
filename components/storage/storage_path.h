@@ -21,10 +21,12 @@
  * @module storage
  * @layer storage
  * @domain fs
- * @provides cwd, path resolution, USB drive/slot mapping, USB ops registration
+ * @provides cwd, path resolution, USB drive/slot mapping, USB ops registration,
+ *           the guarded SD session handle (value type only)
  * @status stable
- * @test test/main/test_calc.c
- * @hard-rule pure string/path helpers only - no VFS, FATFS or SD access here
+ * @test test/main/test_calc.c, test/main/test_batch_expr.c, test/main/test_svc.c
+ * @hard-rule pure string/path helpers and value types only - no VFS, FATFS or
+ *            SD access here
  */
 
 #ifndef P4MINISHELL_STORAGE_PATH_H
@@ -87,6 +89,33 @@ int storage_usb_slot_for_drive(char letter);
  * base by bumping a trailing digit so a retargeted base keeps working).
  */
 void storage_usb_slot_base(int slot, char *out, size_t out_size);
+
+/* ========================================================================
+ * GUARDED SD SESSION HANDLE
+ * ========================================================================
+ * Value type only: the functions that fill and end the handle
+ * (`shell_sd_begin()` / `shell_sd_end()`) stay in storage.c. It lives here so
+ * callers that must not pull in esp_vfs_fat.h - the batch I/O seam, the host
+ * unit-test lane - can still hold one. storage.h includes this header, so the
+ * type keeps its historical spelling for every existing caller.
+ */
+
+/**
+ * Guarded SD access session handle.
+ *
+ * Every SD-touching command opens one of these so a mount failure can never
+ * leak mounted state or dereference missing card metadata.
+ */
+typedef struct {
+    bool mounted_here;  /**< true when this session performed the mount. */
+    uint32_t magic;     /**< set by shell_sd_begin; shell_sd_end ignores handles that never began. */
+    unsigned int saved_priority; /**< calling task priority saved on boost, restored on end. */
+    bool boosted;       /**< true when this session raised the task priority. */
+    int64_t op_start_us; /**< esp_timer timestamp taken on begin (timing probe). */
+} shell_sd_session_t;
+
+/** Magic stamped into shell_sd_session_t by shell_sd_begin(). */
+#define SHELL_SD_SESSION_MAGIC  0x53445353u
 
 /* ========================================================================
  * PATH RESOLUTION
