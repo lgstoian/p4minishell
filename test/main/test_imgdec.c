@@ -13,6 +13,7 @@
 
 #include "unity.h"
 #include "imgdec.h"
+#include "p4minishell_config.h"
 #include <string.h>
 
 /** Minimal PNG: 8-byte signature + IHDR with width at [16..19], height at [20..23]. */
@@ -83,4 +84,56 @@ void test_imgdec_probe_all(void)
     imgdec_case_png();
     imgdec_case_jpeg();
     imgdec_case_bmp_unknown();
+}
+
+/** Probe rejections: the documented native-size cap and malformed headers. */
+void test_imgdec_probe_rejects_out_of_range(void)
+{
+    uint8_t png[24] = {0};
+    uint8_t jpg[11] = {0};
+    static const uint8_t sig[8] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+    unsigned too_wide = (unsigned)P4_CONFIG_IMGDEC_MAX_W + 1u;
+
+    memcpy(png, sig, sizeof(sig));
+    png[16] = (uint8_t)(too_wide >> 24);
+    png[17] = (uint8_t)(too_wide >> 16);
+    png[18] = (uint8_t)(too_wide >> 8);
+    png[19] = (uint8_t)too_wide;
+    png[20] = 0x00; png[21] = 0x00; png[22] = 0x00; png[23] = 0x40;
+    /* A PNG past the native decode cap is refused, not decoded into a huge
+     * LVGL allocation. */
+    TEST_ASSERT_EQUAL_INT(IMGDEC_FMT_UNKNOWN,
+                          imgdec_probe(png, sizeof(png), NULL, NULL));
+
+    /* Same for a JPEG whose SOF exceeds the cap. */
+    jpg[0] = 0xFF; jpg[1] = 0xD8;
+    jpg[2] = 0xFF; jpg[3] = 0xC0;
+    jpg[4] = 0x00; jpg[5] = 0x11;
+    jpg[6] = 0x08;
+    jpg[7] = 0x00; jpg[8] = 0x40;
+    jpg[9] = (uint8_t)((P4_CONFIG_IMGDEC_MAX_W + 1) >> 8);
+    jpg[10] = (uint8_t)(P4_CONFIG_IMGDEC_MAX_W + 1);
+    TEST_ASSERT_EQUAL_INT(IMGDEC_FMT_UNKNOWN,
+                          imgdec_probe(jpg, sizeof(jpg), NULL, NULL));
+
+    /* A segment length below the 2-byte length field is malformed: the walker
+     * must stop instead of stepping through the buffer two bytes at a time. */
+    jpg[4] = 0x00; jpg[5] = 0x00;
+    TEST_ASSERT_EQUAL_INT(IMGDEC_FMT_UNKNOWN,
+                          imgdec_probe(jpg, sizeof(jpg), NULL, NULL));
+
+    /* A PNG needs the full 24-byte signature+IHDR prefix. */
+    TEST_ASSERT_EQUAL_INT(IMGDEC_FMT_UNKNOWN, imgdec_probe(png, 23, NULL, NULL));
+}
+
+/** The RGB888 -> RGB565 mapping is shared by PNG, JPEG and the browser cell
+ *  ramp; a wrong channel shift silently tints every decoded image. */
+void test_imgdec_rgb565_conversion(void)
+{
+    TEST_ASSERT_EQUAL_HEX16(0x0000, imgdec_rgb888_to_565(0x000000));
+    TEST_ASSERT_EQUAL_HEX16(0xFFFF, imgdec_rgb888_to_565(0xFFFFFF));
+    TEST_ASSERT_EQUAL_HEX16(0xF800, imgdec_rgb888_to_565(0xFF0000)); /* red   */
+    TEST_ASSERT_EQUAL_HEX16(0x07E0, imgdec_rgb888_to_565(0x00FF00)); /* green */
+    TEST_ASSERT_EQUAL_HEX16(0x001F, imgdec_rgb888_to_565(0x0000FF)); /* blue  */
+    TEST_ASSERT_EQUAL_HEX16(0x3333, imgdec_rgb888_to_565(0x336699));
 }

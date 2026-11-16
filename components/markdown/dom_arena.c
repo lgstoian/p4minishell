@@ -24,6 +24,17 @@ typedef struct dom_arena_block {
     uint8_t data[];
 } dom_arena_block_t;
 
+/** First 8-byte-aligned address inside a block's payload. p4heap returns an
+ *  aligned block, but `data` starts after the three header words (12 bytes),
+ *  so the payload itself can be off by four; align the payload base here so
+ *  `dom_arena_alloc`'s "8-byte aligned" contract is actually true. */
+static uint8_t *dom_arena_block_data(dom_arena_block_t *block)
+{
+    uintptr_t base = (uintptr_t)block->data;
+
+    return (uint8_t *)((base + 7u) & ~(uintptr_t)7u);
+}
+
 struct dom_arena {
     dom_arena_block_t *head;
     size_t total;
@@ -79,12 +90,19 @@ void *dom_arena_alloc(dom_arena_t *arena, size_t size)
 
     block = arena->head;
     if (block == NULL || block->used + size > block->capacity) {
+        uint8_t *data;
+        size_t pad;
+
         block = p4heap_alloc_psram(sizeof(*block) + P4_CONFIG_DOM_ARENA_BLOCK_BYTES);
         if (block == NULL) {
             return NULL;
         }
         memset(block, 0, sizeof(*block));
-        block->capacity = P4_CONFIG_DOM_ARENA_BLOCK_BYTES;
+        data = dom_arena_block_data(block);
+        pad = (size_t)(data - block->data);
+        block->capacity = P4_CONFIG_DOM_ARENA_BLOCK_BYTES > pad
+                              ? P4_CONFIG_DOM_ARENA_BLOCK_BYTES - pad
+                              : 0;
         block->next = arena->head;
         arena->head = block;
         arena->total += P4_CONFIG_DOM_ARENA_BLOCK_BYTES;
@@ -95,7 +113,7 @@ void *dom_arena_alloc(dom_arena_t *arena, size_t size)
         return NULL;
     }
     block->used = offset + size;
-    return block->data + offset;
+    return dom_arena_block_data(block) + offset;
 }
 
 size_t dom_arena_used(const dom_arena_t *arena)

@@ -244,13 +244,15 @@ void tui_viewport_scroll_by(int delta);
  * A snapshot is an opaque PSRAM blob holding the rendered page: the cell grid,
  * the link regions and the address bar. Restoring one is a memcpy, so going back
  * or forward to a cached page is instant and costs no network, parse or render
- * work. The blob is versioned by its dimensions: a snapshot taken under a
- * different grid is rejected rather than blitted into the wrong shape. */
+ * work. The blob carries its own total size and grid dimensions: a snapshot
+ * taken under a different grid, or a truncated/corrupted blob, is rejected
+ * rather than blitted into the wrong shape or read past its allocation. */
 typedef struct {
     int32_t cols;
     int32_t rows;
     int32_t link_count;
     uint32_t link_offset;      /* bytes from the header to the link array */
+    uint32_t total_bytes;      /* whole blob size, for restore bounds checks */
     char address[256];
 } tui_page_shot_t;
 

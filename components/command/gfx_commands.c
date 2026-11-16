@@ -889,7 +889,9 @@ bool shell_command_gfx(int argc, char **argv)
             }
         }
         if (!gfx_bmp_parse_header_ex(buf, got, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H)) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx image: not a 24/32-bit BMP/PNG/JPEG (%s)\n" SH_RST, argv[2]);
+            shell_transcript_appendf_ansi(SH_ERR "gfx image: not a 24/32-bit BMP, or a PNG/JPEG that is malformed or exceeds the %dx%d decode cap (%s)\n" SH_RST,
+                                          P4_CONFIG_IMGDEC_MAX_W, P4_CONFIG_IMGDEC_MAX_H,
+                                          argv[2]);
             heap_caps_free(buf);
             batch_set_errorlevel(1);
             return false;

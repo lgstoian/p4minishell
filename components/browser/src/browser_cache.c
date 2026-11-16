@@ -120,7 +120,11 @@ bool browser_image_cache_get(const char *url, dom_image_t *out)
         return false;
     }
     bytes = (size_t)hit->width * (size_t)hit->height;
-    copy = malloc(bytes ? bytes : 1);
+    if (hit->pixels == NULL || bytes == 0) {
+        cache_unlock();
+        return false;
+    }
+    copy = malloc(bytes);
     if (copy == NULL) {
         cache_unlock();
         return false;
@@ -203,7 +207,9 @@ bool browser_image_cache_put(const char *url, const dom_image_t *img)
     s_image_bytes += bytes;
     cache_unlock();
     return true;
-}void browser_image_cache_clear(void)
+}
+
+void browser_image_cache_clear(void)
 {
     if (s_images == NULL) {
         return;
@@ -324,7 +330,16 @@ bool browser_page_cache_put(const char *url)
         return false;
     }
     hdr = (const tui_page_shot_t *)shot;
-    bytes = (size_t)hdr->link_offset + (size_t)hdr->link_count * sizeof(tui_link_t);
+    bytes = (size_t)hdr->total_bytes;
+    if (bytes < sizeof(*hdr) ||
+        bytes != (size_t)hdr->link_offset +
+                 (size_t)hdr->link_count * sizeof(tui_link_t)) {
+        /* A capture that does not report its own size consistently is not a
+         * page snapshot we can account for. */
+        tui_page_shot_release(shot);
+        cache_unlock();
+        return false;
+    }
 
     /* Drop the previous blob only after the new one exists. */
     if (slot->shot != NULL) {
@@ -342,7 +357,9 @@ bool browser_page_cache_put(const char *url)
     s_page_bytes += bytes;
     cache_unlock();
     return true;
-}void browser_page_cache_clear(void)
+}
+
+void browser_page_cache_clear(void)
 {
     if (s_pages == NULL) {
         return;

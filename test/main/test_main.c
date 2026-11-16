@@ -618,12 +618,20 @@ extern void test_rss_store_record_rejects(void);
 extern void test_rss_store_render_rejects_separator(void);
 extern void test_rss_store_read_line(void);
 extern void test_rss_store_directives(void);
+extern void test_rss_opml_parse_standard(void);
+extern void test_rss_opml_parse_extensions(void);
+extern void test_rss_opml_parse_sanitizes_names(void);
+extern void test_rss_opml_parse_limits_and_duplicates(void);
+extern void test_rss_opml_parse_rejects(void);
+extern void test_rss_opml_parse_bounds(void);
+extern void test_rss_opml_write_null_safe(void);
 extern void test_browser_image_cache_roundtrip(void);
 extern void test_browser_image_cache_miss_and_null(void);
 extern void test_browser_image_cache_refresh_in_place(void);
 extern void test_browser_image_cache_lru_eviction(void);
 extern void test_browser_image_cache_clear(void);
 extern void test_browser_page_cache_degrades_without_a_page(void);
+extern void test_tui_page_shot_bounds(void);
 extern void test_pkg_sign_line(void);
 extern void test_pkg_sign_canonical(void);
 extern void test_pkg_sign_hash(void);
@@ -636,6 +644,8 @@ extern void test_pkg_sanitize_pipe_field(void);
 extern void test_pkg_services_parse(void);
 extern void test_store_path_parse(void);
 extern void test_imgdec_probe_all(void);
+extern void test_imgdec_probe_rejects_out_of_range(void);
+extern void test_imgdec_rgb565_conversion(void);
 extern void test_theme_registry(void);
 extern void test_theme_lookup(void);
 extern void test_theme_set_and_active(void);
@@ -1477,6 +1487,13 @@ void app_main(void)
     RUN_TEST(test_rss_store_render_rejects_separator);
     RUN_TEST(test_rss_store_read_line);
     RUN_TEST(test_rss_store_directives);
+    RUN_TEST(test_rss_opml_parse_standard);
+    RUN_TEST(test_rss_opml_parse_extensions);
+    RUN_TEST(test_rss_opml_parse_sanitizes_names);
+    RUN_TEST(test_rss_opml_parse_limits_and_duplicates);
+    RUN_TEST(test_rss_opml_parse_rejects);
+    RUN_TEST(test_rss_opml_parse_bounds);
+    RUN_TEST(test_rss_opml_write_null_safe);
 
     /* Browser PSRAM caches: image round-trip/miss/LRU/clear and the page cache's
      * no-page degradation path. */
@@ -1487,12 +1504,16 @@ void app_main(void)
     RUN_TEST(test_browser_image_cache_lru_eviction);
     RUN_TEST(test_browser_image_cache_clear);
     RUN_TEST(test_browser_page_cache_degrades_without_a_page);
+    /* Needs a live page: runs after the no-page cache test above. */
+    RUN_TEST(test_tui_page_shot_bounds);
     UNITY_END();
     UNITY_END();
 
     /* Image decode probe (imgdec component). */
     UNITY_BEGIN();
     RUN_TEST(test_imgdec_probe_all);
+    RUN_TEST(test_imgdec_probe_rejects_out_of_range);
+    RUN_TEST(test_imgdec_rgb565_conversion);
     UNITY_END();
 
     /* Theme registry (font component). */

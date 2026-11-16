@@ -279,6 +279,18 @@ esp_err_t rss_store_parse_record(const char *line, rss_subscription_t *out)
             return ESP_ERR_INVALID_ARG;
         }
     }
+    /* Refuse records whose fields cannot fit verbatim. Silently truncating a
+     * URL or an ETag would make the store point at the wrong resource; a
+     * hand-edited line is rejected instead (the loader skips it). */
+    if (strlen(fields[1]) >= sizeof(out->url) ||
+        strlen(fields[3]) >= sizeof(out->auth_user) ||
+        strlen(fields[4]) >= sizeof(out->auth_token) ||
+        strlen(fields[5]) >= sizeof(out->etag) ||
+        strlen(fields[6]) >= sizeof(out->last_modified) ||
+        strlen(fields[7]) >= sizeof(out->last_fetched) ||
+        strlen(fields[10]) >= sizeof(out->title)) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     type = (int)strtol(fields[2], &end, 10);
     if (end == NULL || *end != '\0' || type < 0 || type > 2) {
@@ -292,7 +304,11 @@ esp_err_t rss_store_parse_record(const char *line, rss_subscription_t *out)
     if (end == NULL || *end != '\0' || interval < 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (strtoull(fields[7], &end, 10), end == NULL || *end != '\0') {
+    if (fields[7][0] == '-') {
+        return ESP_ERR_INVALID_ARG;     /* unix seconds are unsigned */
+    }
+    (void)strtoull(fields[7], &end, 10);
+    if (end == NULL || *end != '\0') {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -446,6 +462,14 @@ static bool store_ready(void)
     return s_subs != NULL && s_line != NULL;
 }
 
+/** True when the bounded read/unread mirror is usable. A failed allocation
+ *  disables read-state persistence; mark/load paths must skip it instead of
+ *  dereferencing a NULL table. */
+static bool store_read_state_ready(void)
+{
+    return s_read_hash != NULL && s_read_name != NULL;
+}
+
 /** Open a guarded session and resolve a store path. On success the caller must
  *  shell_sd_end() the session. */
 static esp_err_t store_open(const char *path, shell_sd_session_t *session, char *resolved,
@@ -501,7 +525,8 @@ esp_err_t rss_store_load(void)
         shell_sd_end(&session, "rss store");
     }
 
-    if (store_open(P4_CONFIG_RSS_READ_FILE, &session, resolved, sizeof(resolved)) == ESP_OK) {
+    if (store_read_state_ready() &&
+        store_open(P4_CONFIG_RSS_READ_FILE, &session, resolved, sizeof(resolved)) == ESP_OK) {
         file = fopen(resolved, "r");
         if (file != NULL) {
             while (s_read_count < P4_CONFIG_RSS_READ_MAX &&
@@ -749,6 +774,9 @@ esp_err_t rss_store_remove(const char *name)
 {
     esp_err_t err;
 
+    if (name == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
     if (!store_ready()) {
         return ESP_ERR_NOT_FOUND;
     }
@@ -768,7 +796,17 @@ esp_err_t rss_store_remove(const char *name)
 
 esp_err_t rss_store_update(const rss_subscription_t *sub)
 {
-    if (sub == NULL || store_find_unlocked(sub->name) < 0) {
+    int index;
+
+    if (sub == NULL || !store_ready()) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    /* The lookup needs the store lock; rss_store_add() takes it again after
+     * this check, so release it before delegating. */
+    store_lock();
+    index = store_find_unlocked(sub->name);
+    store_unlock();
+    if (index < 0) {
         return ESP_ERR_NOT_FOUND;
     }
     return rss_store_add(sub);
@@ -778,6 +816,9 @@ esp_err_t rss_store_set_enabled(const char *name, bool enabled)
 {
     esp_err_t err;
 
+    if (name == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
     if (!store_ready()) {
         return ESP_ERR_NOT_FOUND;
     }
@@ -797,7 +838,7 @@ esp_err_t rss_store_set_interval(const char *name, int minutes)
 {
     esp_err_t err;
 
-    if (minutes < 0) {
+    if (name == NULL || minutes < 0) {
         return ESP_ERR_INVALID_ARG;
     }
     if (!store_ready()) {
@@ -1068,6 +1109,9 @@ void rss_store_mark_read(const char *name, const char *guid)
     if (name == NULL || guid == NULL || !s_save_read) {
         return;
     }
+    if (!store_read_state_ready()) {
+        return;             /* bounded degradation: no read-state mirror */
+    }
 
     store_lock();
     hash = store_hash_guid(guid);
@@ -1122,6 +1166,12 @@ int rss_store_unread_count(const char *name, const rss_feed_t *feed)
 
 esp_err_t rss_store_reset_read(const char *name)
 {
+    if (name == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!store_read_state_ready()) {
+        return ESP_ERR_INVALID_STATE;
+    }
     store_lock();
     for (int i = 0; i < s_read_count;) {
         if (strcasecmp(s_read_name[i], name) == 0) {

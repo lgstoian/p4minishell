@@ -115,6 +115,7 @@ void *tui_page_shot_capture(void)
     shot->rows = view.rows;
     shot->link_count = link_count;
     shot->link_offset = page_shot_link_offset(cell_bytes);
+    shot->total_bytes = (uint32_t)total;   /* bounded by the TUI grid */
     memset(shot->address, 0, sizeof(shot->address));
     snprintf(shot->address, sizeof(shot->address), "%s", view.address);
 
@@ -140,18 +141,42 @@ bool tui_page_shot_restore(const void *blob)
         return false;
     }
     /* A snapshot from another grid (or a truncated blob) is refused, not
-     * blitted: the cell stride would be wrong and the page would be garbage. */
+     * blitted: the cell stride would be wrong and the page would be garbage.
+     * The recorded total size also makes every subsequent read bounded. */
     if (shot->cols != view.cols || shot->rows != view.rows) {
         return false;
     }
+    if (shot->total_bytes < sizeof(tui_page_shot_t)) {
+        return false;
+    }
     cell_bytes = page_shot_cell_bytes(&view);
-    if (shot->link_offset < sizeof(tui_page_shot_t) + cell_bytes) {
+    {
+        /* Upper bound: header + full grid (with the 4-byte alignment pad) +
+         * every link the page can hold. Rejecting anything larger keeps a
+         * corrupted blob from driving a huge memcpy. */
+        size_t max_total = sizeof(tui_page_shot_t) + cell_bytes + 4u +
+                           (size_t)TUI_MAX_LINKS * sizeof(tui_link_t);
+
+        if ((size_t)shot->total_bytes > max_total) {
+            return false;
+        }
+    }
+    if (shot->link_offset < sizeof(tui_page_shot_t) + cell_bytes ||
+        shot->link_offset > shot->total_bytes) {
+        return false;
+    }
+
+    count = shot->link_count;
+    if (count < 0 || count > TUI_MAX_LINKS) {
+        return false;
+    }
+    if ((size_t)shot->link_offset + (size_t)count * sizeof(tui_link_t) >
+        (size_t)shot->total_bytes) {
         return false;
     }
 
     memcpy(view.cells, shot + 1, cell_bytes);
 
-    count = page_shot_link_count(shot->link_count);
     if (count > 0) {
         memcpy(view.links, (const char *)shot + shot->link_offset,
                (size_t)count * sizeof(tui_link_t));

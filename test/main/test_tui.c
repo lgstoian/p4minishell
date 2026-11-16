@@ -211,6 +211,55 @@ void test_tui_bound_cell_inactive(void)
     tui_bound_cell_info(NULL, NULL, NULL);
 }
 
+/** Page snapshots carry their own size: a truncated or corrupted blob is
+ *  refused instead of being memcpy'd past its allocation. The browser page
+ *  cache depends on this. */
+void test_tui_page_shot_bounds(void)
+{
+    void *blob;
+    tui_page_shot_t *hdr;
+    uint32_t total;
+
+    tui_viewport_init(P4_CONFIG_TUI_PAGE_ROWS);
+    TEST_ASSERT_EQUAL_INT(P4_CONFIG_TUI_PAGE_ROWS, tui_viewport_get_page_rows());
+
+    blob = tui_page_shot_capture();
+    TEST_ASSERT_NOT_NULL(blob);
+    hdr = (tui_page_shot_t *)blob;
+    TEST_ASSERT_EQUAL_INT(P4_CONFIG_TUI_COLS, hdr->cols);
+    TEST_ASSERT_EQUAL_INT(P4_CONFIG_TUI_PAGE_ROWS, hdr->rows);
+    TEST_ASSERT_TRUE(hdr->total_bytes >= sizeof(*hdr));
+    TEST_ASSERT_TRUE(tui_page_shot_restore(blob));
+
+    total = hdr->total_bytes;
+
+    /* No recorded size. */
+    hdr->total_bytes = 0;
+    TEST_ASSERT_FALSE(tui_page_shot_restore(blob));
+    hdr->total_bytes = total;
+
+    /* Link array starts past the end of the blob. */
+    hdr->link_offset = total + 1u;
+    TEST_ASSERT_FALSE(tui_page_shot_restore(blob));
+    hdr->link_offset = (uint32_t)(((sizeof(tui_page_shot_t) +
+                                   (size_t)hdr->cols * (size_t)hdr->rows * sizeof(tui_cell_t)) + 3u) &
+                                  ~(size_t)3u);
+
+    /* More links than the controller can hold. */
+    hdr->link_count = TUI_MAX_LINKS + 1;
+    TEST_ASSERT_FALSE(tui_page_shot_restore(blob));
+    hdr->link_count = 0;
+
+    /* A different grid is rejected (the cell stride would be wrong). */
+    hdr->cols = P4_CONFIG_TUI_COLS + 1;
+    TEST_ASSERT_FALSE(tui_page_shot_restore(blob));
+    hdr->cols = P4_CONFIG_TUI_COLS;
+
+    /* The repaired header is accepted again. */
+    TEST_ASSERT_TRUE(tui_page_shot_restore(blob));
+    tui_page_shot_release(blob);
+}
+
 /* ========================================================================
  * WORKSPACE (tui_pane.c) headless tests
  * ================================================================ */
