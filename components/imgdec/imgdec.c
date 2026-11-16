@@ -100,6 +100,30 @@ static bool imgdec_jpeg_dims(const uint8_t *d, size_t n, int *w, int *h)
     return false;
 }
 
+/* BMP dimensions: "BM" + BITMAPINFOHEADER width/height (negative = top-down). */
+static bool imgdec_bmp_dims(const uint8_t *data, size_t len, int *w, int *h)
+{
+    int32_t width;
+    int32_t height;
+
+    if (data == NULL || len < 26 || data[0] != 'B' || data[1] != 'M') {
+        return false;
+    }
+    width = (int32_t)((uint32_t)data[18] | ((uint32_t)data[19] << 8) |
+                      ((uint32_t)data[20] << 16) | ((uint32_t)data[21] << 24));
+    height = (int32_t)((uint32_t)data[22] | ((uint32_t)data[23] << 8) |
+                       ((uint32_t)data[24] << 16) | ((uint32_t)data[25] << 24));
+    if (height < 0) {
+        height = -height;
+    }
+    if (width < 1 || height < 1) {
+        return false;
+    }
+    if (w != NULL) *w = (int)width;
+    if (h != NULL) *h = (int)height;
+    return true;
+}
+
 imgdec_format_t imgdec_probe(const uint8_t *data, size_t len,
                              int *native_w, int *native_h)
 {
@@ -120,6 +144,14 @@ imgdec_format_t imgdec_probe(const uint8_t *data, size_t len,
         return IMGDEC_FMT_JPEG;
     }
     if (data[0] == 'B' && data[1] == 'M') {
+        /* The magic sniff stays lenient (a 4-byte "BM" is still a BMP to
+         * callers that only want the format); dimensions are filled when the
+         * header is complete, because the browser sizes its cell grid from
+         * them and a 0x0 result would collapse the image to one pixel. */
+        if (imgdec_bmp_dims(data, len, &w, &h)) {
+            if (native_w != NULL) *native_w = w;
+            if (native_h != NULL) *native_h = h;
+        }
         return IMGDEC_FMT_BMP;
     }
     return IMGDEC_FMT_UNKNOWN;

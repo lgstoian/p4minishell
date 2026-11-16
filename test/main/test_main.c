@@ -646,6 +646,7 @@ extern void test_store_path_parse(void);
 extern void test_imgdec_probe_all(void);
 extern void test_imgdec_probe_rejects_out_of_range(void);
 extern void test_imgdec_rgb565_conversion(void);
+extern void test_imgdec_probe_bmp_dims(void);
 extern void test_theme_registry(void);
 extern void test_theme_lookup(void);
 extern void test_theme_set_and_active(void);
@@ -1514,6 +1515,7 @@ void app_main(void)
     RUN_TEST(test_imgdec_probe_all);
     RUN_TEST(test_imgdec_probe_rejects_out_of_range);
     RUN_TEST(test_imgdec_rgb565_conversion);
+    RUN_TEST(test_imgdec_probe_bmp_dims);
     UNITY_END();
 
     /* Theme registry (font component). */

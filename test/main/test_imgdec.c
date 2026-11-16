@@ -137,3 +137,28 @@ void test_imgdec_rgb565_conversion(void)
     TEST_ASSERT_EQUAL_HEX16(0x001F, imgdec_rgb888_to_565(0x0000FF)); /* blue  */
     TEST_ASSERT_EQUAL_HEX16(0x3333, imgdec_rgb888_to_565(0x336699));
 }
+
+/** A BMP probe must report its dimensions: the browser sizes its cell grid
+ *  from them, and a 0x0 result collapses the image to a single pixel. */
+void test_imgdec_probe_bmp_dims(void)
+{
+    uint8_t hdr[54] = {0};
+    int w = 0;
+    int h = 0;
+
+    hdr[0] = 'B';
+    hdr[1] = 'M';
+    hdr[18] = 0x80;   /* width 128 */
+    hdr[22] = 0x30;   /* height 48 */
+    TEST_ASSERT_EQUAL_INT(IMGDEC_FMT_BMP, imgdec_probe(hdr, sizeof(hdr), &w, &h));
+    TEST_ASSERT_EQUAL_INT(128, w);
+    TEST_ASSERT_EQUAL_INT(48, h);
+
+    /* A negative height is a top-down bitmap; the magnitude is the height. */
+    hdr[22] = 0xCE;
+    hdr[23] = 0xFF;
+    hdr[24] = 0xFF;
+    hdr[25] = 0xFF;   /* -50 (0xFFFFFFCE) */
+    TEST_ASSERT_EQUAL_INT(IMGDEC_FMT_BMP, imgdec_probe(hdr, sizeof(hdr), &w, &h));
+    TEST_ASSERT_EQUAL_INT(50, h);
+}
