@@ -381,6 +381,15 @@ static void shell_transcript_sink_mirror(const char *text, size_t len)
     }
 }
 
+static bool shell_transcript_sink_schedule(const char *text)
+{
+    if (s_sink != NULL && s_sink->on_schedule != NULL) {
+        s_sink->on_schedule(s_sink_ctx, text);
+        return true;
+    }
+    return false;
+}
+
 /**
  * Append text to the transcript buffer and notify the view.
  *
@@ -538,6 +547,33 @@ void shell_transcript_appendf_ansi(const char *format, ...)
     va_end(args);
 
     shell_transcript_append_ansi(buffer);
+}
+
+void shell_transcript_schedule_appendf(const char *format, ...)
+{
+    /* Same 512-byte bound the view's async staging helper always used:
+     * messages longer than this were truncated there before, and the debug
+     * records are bounded well below it. */
+    char buffer[512];
+    va_list args;
+
+    if (format == NULL) {
+        return;
+    }
+
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+
+    if (buffer[0] == '\0') {
+        return;
+    }
+
+    if (!shell_transcript_sink_schedule(buffer)) {
+        /* No view (host lane / early boot): land the text in the buffers
+         * synchronously, exactly like the old helper's no-widget fallback. */
+        shell_transcript_append_text(buffer);
+    }
 }
 
 /* ========================================================================

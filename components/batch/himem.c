@@ -31,7 +31,7 @@
 #include "p4heap.h"
 #include "p4minishell_config.h"
 #include "shell.h"
-#include "storage.h"
+#include "storage_path.h"
 #include "strutil.h"
 
 #ifndef HIMEM_TAG

@@ -75,7 +75,6 @@
 #define SHELL_COMMAND_HISTORY_DEPTH     P4_CONFIG_COMMAND_HISTORY_DEPTH
 #define SHELL_HISTORY_TOTAL_BYTES       P4_CONFIG_HISTORY_TOTAL_BYTES
 #define SHELL_HEADER_REFRESH_PERIOD_MS  P4_CONFIG_HEADER_REFRESH_PERIOD_MS
-#define SHELL_DEBUG_LOG_DEPTH           P4_CONFIG_DEBUG_LOG_DEPTH
 #define SHELL_DEBUG_ENTRY_BYTES         P4_CONFIG_DEBUG_ENTRY_BYTES
 #define SHELL_WIFI_SSID_BYTES           P4_CONFIG_WIFI_SSID_BYTES
 #define SHELL_WIFI_PASSWORD_BYTES       P4_CONFIG_WIFI_PASSWORD_BYTES
@@ -252,16 +251,6 @@ static portMUX_TYPE s_async_transcript_lock = portMUX_INITIALIZER_UNLOCKED;
 /* The redirection-capture state and functions live with the transcript model
  * (shell_transcript.c); the command-history store lives in shell_core.c and is
  * reached through shell_core_internal.h. */
-
-/* Debug log */
-typedef struct {
-    char entries[SHELL_DEBUG_LOG_DEPTH][SHELL_DEBUG_ENTRY_BYTES];
-    size_t count;
-    size_t next_index;
-} shell_debug_log_t;
-
-static shell_debug_log_t s_debug_log;
-static size_t s_runtime_warning_count;
 
 /* UART console */
 static SemaphoreHandle_t s_uart_console_lock;
@@ -553,11 +542,22 @@ static void shell_transcript_sink_on_mirror(void *ctx, const char *text, size_t 
     shell_uart_console_write_text(text);
 }
 
+/* Staged async append; defined with the rest of the staging machinery below. */
+static void shell_async_transcript_schedule_text(const char *text);
+
+/** Deferred append requested by the hardware-free model (shell_log.c). */
+static void shell_transcript_sink_on_schedule(void *ctx, const char *text)
+{
+    (void)ctx;
+    shell_async_transcript_schedule_text(text);
+}
+
 static const shell_transcript_sink_t s_transcript_sink = {
     .on_pressure = shell_transcript_sink_on_pressure,
     .on_append = shell_transcript_sink_on_append,
     .on_text = shell_transcript_sink_on_text,
     .on_mirror = shell_transcript_sink_on_mirror,
+    .on_schedule = shell_transcript_sink_on_schedule,
 };
 
 /* The semantic print helpers (shell_print_heading/field/ok/error/...) live
@@ -614,22 +614,23 @@ static void shell_async_transcript_append_pending(const char *text)
     s_async_transcript[s_async_transcript_len] = '\0';
 }
 
-void shell_schedule_transcript_appendf(const char *format, ...)
+/**
+ * Stage already-formatted text and queue (at most) one flush.
+ *
+ * Shared by the view's own appendf helpers and the sink's `on_schedule`
+ * callback, so the async staging/flush ordering is identical no matter which
+ * path produced the line.
+ */
+static void shell_async_transcript_schedule_text(const char *text)
 {
-    char buffer[512];
-    va_list args;
     bool queue_flush = false;
 
-    if (format == NULL) {
+    if (text == NULL || text[0] == '\0') {
         return;
     }
 
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
-    va_end(args);
-
     portENTER_CRITICAL(&s_async_transcript_lock);
-    shell_async_transcript_append_pending(buffer);
+    shell_async_transcript_append_pending(text);
     if (!s_async_transcript_flush_queued && s_async_transcript_len > 0) {
         s_async_transcript_flush_queued = true;
         queue_flush = true;
@@ -653,11 +654,26 @@ void shell_schedule_transcript_appendf(const char *format, ...)
     }
 }
 
+void shell_schedule_transcript_appendf(const char *format, ...)
+{
+    char buffer[512];
+    va_list args;
+
+    if (format == NULL) {
+        return;
+    }
+
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+
+    shell_async_transcript_schedule_text(buffer);
+}
+
 void shell_schedule_transcript_appendf_ansi(const char *format, ...)
 {
     char buffer[512];
     va_list args;
-    bool queue_flush = false;
 
     if (format == NULL) {
         return;
@@ -667,24 +683,7 @@ void shell_schedule_transcript_appendf_ansi(const char *format, ...)
     ansi_vformat(buffer, sizeof(buffer), format, args);
     va_end(args);
 
-    portENTER_CRITICAL(&s_async_transcript_lock);
-    shell_async_transcript_append_pending(buffer);
-    if (!s_async_transcript_flush_queued && s_async_transcript_len > 0) {
-        s_async_transcript_flush_queued = true;
-        queue_flush = true;
-    }
-    portEXIT_CRITICAL(&s_async_transcript_lock);
-
-    if (queue_flush) {
-        if (windows_get_transcript() == NULL) {
-            shell_async_transcript_flush_cb(NULL);
-        } else if (lv_async_call(shell_async_transcript_flush_cb, NULL) != LV_RESULT_OK) {
-            portENTER_CRITICAL(&s_async_transcript_lock);
-            s_async_transcript_flush_queued = false;
-            portEXIT_CRITICAL(&s_async_transcript_lock);
-            ESP_LOGW(SHELL_TAG, "Failed to queue transcript flush");
-        }
-    }
+    shell_async_transcript_schedule_text(buffer);
 }
 
 static void shell_async_transcript_flush_cb(void *user_data)
@@ -1697,112 +1696,6 @@ void shell_transcript_update_anchor_position(const char *text)
  * DEBUG LOG
  * ======================================================================== */
 
-void shell_debug_log_push(const char *tag, const char *message)
-{
-    size_t index;
-
-    index = s_debug_log.next_index;
-    snprintf(s_debug_log.entries[index], SHELL_DEBUG_ENTRY_BYTES,
-             "%s: %s", tag != NULL ? tag : "log", message != NULL ? message : "");
-
-    s_debug_log.next_index = (s_debug_log.next_index + 1) % SHELL_DEBUG_LOG_DEPTH;
-    if (s_debug_log.count < SHELL_DEBUG_LOG_DEPTH) {
-        s_debug_log.count++;
-    }
-}
-
-void shell_record_errorf(const char *tag, int error, const char *format, ...)
-{
-    char message[SHELL_DEBUG_ENTRY_BYTES];
-    va_list args;
-
-    if (tag == NULL || format == NULL) {
-        return;
-    }
-
-    va_start(args, format);
-    vsnprintf(message, sizeof(message), format, args);
-    va_end(args);
-
-    shell_debug_log_push(tag, message);
-    ESP_LOGE(tag, "%s (0x%x)", message, (unsigned int)error);
-
-    /* Errors are also surfaced in the transcript so a user working purely
-     * from the on-screen shell sees the failure without running `debug`. */
-    shell_schedule_transcript_appendf("%s: %s: %s (0x%x)\n",
-                                      tag,
-                                      message,
-                                      esp_err_to_name((esp_err_t)error),
-                                      (unsigned int)error);
-}
-
-void shell_record_warningf(const char *tag, const char *format, ...)
-{
-    char message[SHELL_DEBUG_ENTRY_BYTES];
-    va_list args;
-
-    if (tag == NULL || format == NULL) {
-        return;
-    }
-
-    va_start(args, format);
-    vsnprintf(message, sizeof(message), format, args);
-    va_end(args);
-
-    s_runtime_warning_count++;
-    shell_debug_log_push(tag, message);
-    ESP_LOGW(tag, "%s", message);
-}
-
-void shell_record_infof(const char *tag, const char *format, ...)
-{
-    char message[SHELL_DEBUG_ENTRY_BYTES];
-    va_list args;
-
-    if (tag == NULL || format == NULL) {
-        return;
-    }
-
-    va_start(args, format);
-    vsnprintf(message, sizeof(message), format, args);
-    va_end(args);
-
-    shell_debug_log_push(tag, message);
-    ESP_LOGI(tag, "%s", message);
-}
-
-size_t shell_get_warning_count(void)
-{
-    return s_runtime_warning_count;
-}
-
-/** Oldest-entry slot: the ring overwrites from next_index, so a full ring
- *  starts there and a partial ring starts at 0. Shared by the transcript
- *  printer and the `debug save` exporter so both agree on ordering. */
-static size_t shell_debug_oldest_slot(void)
-{
-    return s_debug_log.count >= SHELL_DEBUG_LOG_DEPTH
-           ? s_debug_log.next_index
-           : 0;
-}
-
-size_t shell_debug_get_count(void)
-{
-    return s_debug_log.count;
-}
-
-bool shell_debug_get_entry(size_t index, char *out, size_t out_size)
-{
-    size_t slot;
-
-    if (out == NULL || out_size == 0 || index >= s_debug_log.count) {
-        return false;
-    }
-    slot = (shell_debug_oldest_slot() + index) % SHELL_DEBUG_LOG_DEPTH;
-    snprintf(out, out_size, "%s", s_debug_log.entries[slot]);
-    return true;
-}
-
 bool shell_debug_parse_hex_addr(const char *text, uint32_t *addr_out)
 {
     char *end;
@@ -2189,22 +2082,24 @@ int shell_command_debug(int argc, char **argv)
 
     {
         size_t i;
-        size_t start = shell_debug_oldest_slot();
+        size_t entry_count = shell_debug_get_count();
+        char entry[SHELL_DEBUG_ENTRY_BYTES];
 
         shell_transcript_appendf_ansi(SH_LBL "debug.log:" SH_RST " %u entries, " SH_WARN "%u warnings" SH_RST "\n",
-                                 (unsigned int)s_debug_log.count,
-                                 (unsigned int)s_runtime_warning_count);
+                                 (unsigned int)entry_count,
+                                 (unsigned int)shell_get_warning_count());
         shell_transcript_appendf_ansi(SH_LBL "transcript trims:" SH_RST " " SH_NUM "%u" SH_RST " (internal guard)\n",
                                  (unsigned int)s_transcript_trim_count);
 
-        if (s_debug_log.count == 0) {
+        if (entry_count == 0) {
             shell_transcript_appendf_ansi(SH_MUTE "debug.log: (empty)" SH_RST "\n");
             return 0;
         }
 
-        for (i = 0; i < s_debug_log.count; i++) {
-            size_t index = (start + i) % SHELL_DEBUG_LOG_DEPTH;
-            const char *entry = s_debug_log.entries[index];
+        for (i = 0; i < entry_count; i++) {
+            if (!shell_debug_get_entry(i, entry, sizeof(entry))) {
+                break;
+            }
             /* Color errors red, warnings yellow */
             if (strstr(entry, "ERROR") != NULL) {
                 shell_transcript_appendf_ansi("  " SH_MUTE "[%u]" SH_RST " " SH_ERR "%s" SH_RST "\n", (unsigned int)i, entry);
@@ -5420,8 +5315,7 @@ void shell_init(void)
     shell_core_command_history_count = 0;
     shell_core_command_history_cursor = -1;
     shell_core_history_draft[0] = '\0';
-    memset(&s_debug_log, 0, sizeof(s_debug_log));
-    s_runtime_warning_count = 0;
+    shell_debug_log_reset();
 
     s_initialized = true;
 

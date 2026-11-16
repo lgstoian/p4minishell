@@ -10,6 +10,7 @@ set(HOST_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../main")
 
 set(HOST_TEST_SRCS
     "${HOST_TEST_DIR}/test_ansi_format.c"
+    "${HOST_TEST_DIR}/test_calc.c"
     "${HOST_TEST_DIR}/test_json.c"
     "${HOST_TEST_DIR}/test_markdown.c"
     "${HOST_TEST_DIR}/test_html.c"
@@ -25,12 +26,19 @@ set(HOST_TEST_SRCS
     "${HOST_TEST_DIR}/test_shell_parser.c"
     "${HOST_TEST_DIR}/test_clipboard.c"
     "${HOST_TEST_DIR}/test_editor.c"
+    "${HOST_TEST_DIR}/test_himem.c"
     # Production sources that are hardware-free by construction (see each
     # file's @hard-rule): compiled directly so the lane exercises the real
     # code rather than a copy or a stub.
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/shell/shell_core.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/shell/shell_print.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/shell/shell_log.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/shell/shell_transcript.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/storage/storage_path.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/batch_env.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/batch_forf.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/calc.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/himem.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/header/header_layout.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/header/header_status.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/header/header_notify_queue.c"
@@ -56,6 +64,8 @@ idf_component_register(
         # NOT built here (it pulls display/USB/networking).
         "../../../components/command"
         "../../../components/shell"
+        "../../../components/storage"
+        "../../../components/batch"
         "../../../components/header"
         "../../../components/font"
         "../../../components/clock"

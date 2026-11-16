@@ -33,9 +33,14 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 #include "unity.h"
 
+
+/* --- manifest prelude (init before any suite runs) */
+/* batch_init() allocates the variable pool on the board; the host runner needs the same table for set/get/setlocal */
+extern bool batch_env_pool_init(void);
 
 /* --- test_ansi_format.c -------------------------------------- */
 extern void test_ansi_format_basic(void);
@@ -47,6 +52,42 @@ extern void test_ansi_image_ramp(void);
 extern void test_ansi_osc8_strip(void);
 extern void test_ansi_csi_trailing_complete(void);
 extern void test_ansi_csi_trailing_split(void);
+
+/* --- test_calc.c --------------------------------------------- */
+extern void test_calc_arithmetic(void);
+extern void test_calc_power_and_mod(void);
+extern void test_calc_hex_literals(void);
+extern void test_calc_math_functions(void);
+extern void test_calc_trig_degrees(void);
+extern void test_calc_trig_radians(void);
+extern void test_calc_math_errors(void);
+extern void test_calc_new_math_functions(void);
+extern void test_calc_new_math_errors(void);
+extern void test_calc_string_functions(void);
+extern void test_calc_instr(void);
+extern void test_calc_string_numbers(void);
+extern void test_calc_string_errors(void);
+extern void test_calc_base_and_units(void);
+extern void test_calc_env_variables(void);
+extern void test_calc_command_assignment(void);
+extern void test_calc_pol_rec_side_effects(void);
+extern void test_calc_random(void);
+extern void test_calc_format_number(void);
+extern void test_calc_syntax_errors(void);
+extern void test_forf_options_defaults(void);
+extern void test_forf_parse_options(void);
+extern void test_forf_parse_star(void);
+extern void test_forf_parse_errors(void);
+extern void test_forf_split_line(void);
+extern void test_forf_command_set(void);
+extern void test_arg_apply_modifiers(void);
+extern void test_calc_financial_tvm(void);
+extern void test_calc_financial_npv_irr(void);
+extern void test_calc_financial_depreciation(void);
+extern void test_calc_financial_errors(void);
+extern void test_calc_dates(void);
+extern void test_calc_date_today_roundtrip(void);
+extern void test_calc_date_errors(void);
 
 /* --- test_clipboard.c ---------------------------------------- */
 extern void test_clipboard_set_get(void);
@@ -167,6 +208,17 @@ extern void test_header_notify_queue_clear_and_blank(void);
 extern void test_header_refresh_priority(void);
 extern void test_header_refresh_clock_and_idle_off(void);
 
+/* --- test_himem.c -------------------------------------------- */
+extern void test_himem_parse_size_plain(void);
+extern void test_himem_parse_size_suffix(void);
+extern void test_himem_parse_size_hex(void);
+extern void test_himem_parse_size_rejects(void);
+extern void test_himem_parse_handle(void);
+extern void test_strutil_crc32_vectors(void);
+extern void test_himem_alloc_free_bounds(void);
+extern void test_himem_quota_and_owner(void);
+extern void test_himem_env_overlay_isolation(void);
+
 /* --- test_history_file.c ------------------------------------- */
 extern void test_history_file_roundtrip(void);
 extern void test_history_file_skips_blanks(void);
@@ -256,6 +308,9 @@ void app_main(void)
 
     printf("\n=== P4MiniShell Host Unit Tests ===\n\n");
 
+    /* Manifest prelude: same init app_main does on the board. */
+    (void)batch_env_pool_init();
+
     UNITY_BEGIN();
 
     /* test_ansi_format.c */
@@ -268,6 +323,42 @@ void app_main(void)
     RUN_TEST(test_ansi_osc8_strip);
     RUN_TEST(test_ansi_csi_trailing_complete);
     RUN_TEST(test_ansi_csi_trailing_split);
+
+    /* test_calc.c */
+    RUN_TEST(test_calc_arithmetic);
+    RUN_TEST(test_calc_power_and_mod);
+    RUN_TEST(test_calc_hex_literals);
+    RUN_TEST(test_calc_math_functions);
+    RUN_TEST(test_calc_trig_degrees);
+    RUN_TEST(test_calc_trig_radians);
+    RUN_TEST(test_calc_math_errors);
+    RUN_TEST(test_calc_new_math_functions);
+    RUN_TEST(test_calc_new_math_errors);
+    RUN_TEST(test_calc_string_functions);
+    RUN_TEST(test_calc_instr);
+    RUN_TEST(test_calc_string_numbers);
+    RUN_TEST(test_calc_string_errors);
+    RUN_TEST(test_calc_base_and_units);
+    RUN_TEST(test_calc_env_variables);
+    RUN_TEST(test_calc_command_assignment);
+    RUN_TEST(test_calc_pol_rec_side_effects);
+    RUN_TEST(test_calc_random);
+    RUN_TEST(test_calc_format_number);
+    RUN_TEST(test_calc_syntax_errors);
+    RUN_TEST(test_forf_options_defaults);
+    RUN_TEST(test_forf_parse_options);
+    RUN_TEST(test_forf_parse_star);
+    RUN_TEST(test_forf_parse_errors);
+    RUN_TEST(test_forf_split_line);
+    RUN_TEST(test_forf_command_set);
+    RUN_TEST(test_arg_apply_modifiers);
+    RUN_TEST(test_calc_financial_tvm);
+    RUN_TEST(test_calc_financial_npv_irr);
+    RUN_TEST(test_calc_financial_depreciation);
+    RUN_TEST(test_calc_financial_errors);
+    RUN_TEST(test_calc_dates);
+    RUN_TEST(test_calc_date_today_roundtrip);
+    RUN_TEST(test_calc_date_errors);
 
     /* test_clipboard.c */
     RUN_TEST(test_clipboard_set_get);
@@ -387,6 +478,17 @@ void app_main(void)
     RUN_TEST(test_header_notify_queue_clear_and_blank);
     RUN_TEST(test_header_refresh_priority);
     RUN_TEST(test_header_refresh_clock_and_idle_off);
+
+    /* test_himem.c */
+    RUN_TEST(test_himem_parse_size_plain);
+    RUN_TEST(test_himem_parse_size_suffix);
+    RUN_TEST(test_himem_parse_size_hex);
+    RUN_TEST(test_himem_parse_size_rejects);
+    RUN_TEST(test_himem_parse_handle);
+    RUN_TEST(test_strutil_crc32_vectors);
+    RUN_TEST(test_himem_alloc_free_bounds);
+    RUN_TEST(test_himem_quota_and_owner);
+    RUN_TEST(test_himem_env_overlay_isolation);
 
     /* test_history_file.c */
     RUN_TEST(test_history_file_roundtrip);

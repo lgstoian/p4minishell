@@ -63,9 +63,34 @@ HEADER = '''/*
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 #include "unity.h"
 '''
+
+
+def prelude_entries(manifest: dict) -> list:
+    """Normalize the optional "prelude" list.
+
+    Each entry names a function the host runner calls before UNITY_BEGIN, so a
+    suite sees the same initialized state the firmware's own init path gives
+    it. A bare string means a `void` function; the object form carries an
+    explicit return type (e.g. the bool init hooks).
+    """
+    entries = []
+    for item in manifest.get("prelude", []):
+        if isinstance(item, str):
+            entry = {"name": item, "returns": "void", "comment": None}
+        else:
+            entry = {
+                "name": item["name"],
+                "returns": item.get("returns", "void"),
+                "comment": item.get("comment"),
+            }
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", entry["name"]):
+            raise SystemExit("host_gen_runner: bad prelude name: %r" % entry["name"])
+        entries.append(entry)
+    return entries
 
 
 def cases_for(name: str) -> list:
@@ -87,6 +112,13 @@ def render(manifest: dict) -> tuple:
         total += len(cases)
 
     out = [HEADER]
+    prelude = prelude_entries(manifest)
+    if prelude:
+        out.append("\n/* --- manifest prelude (init before any suite runs) */")
+        for entry in prelude:
+            if entry["comment"]:
+                out.append("/* %s */" % entry["comment"])
+            out.append("extern %s %s(void);" % (entry["returns"], entry["name"]))
     for name, cases in groups:
         out.append("\n/* --- %s %s */" % (name, "-" * max(3, 56 - len(name))))
         for case in cases:
@@ -102,6 +134,10 @@ def render(manifest: dict) -> tuple:
     out.append("")
     out.append("    printf(\"\\n=== P4MiniShell Host Unit Tests ===\\n\\n\");")
     out.append("")
+    for entry in prelude:
+        out.append("    /* Manifest prelude: same init app_main does on the board. */")
+        out.append("    (void)%s();" % entry["name"])
+        out.append("")
     out.append("    UNITY_BEGIN();")
     for name, cases in groups:
         out.append("")

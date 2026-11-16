@@ -28,12 +28,9 @@
 #include "driver/gpio.h"
 
 // ---- Board identity ----
-// BOARD_CFG_ID is the machine-readable profile slug used by the host tools to
-// map a COM port to a board (see tools/board_ports.py + PORTING.md). It must
-// match the boards/<name>/ directory name and the -DP4_BOARD= value.
-#define BOARD_CFG_ID "m5stack_tab5"
-#define BOARD_CFG_NAME "M5Stack Tab5"
-#define BOARD_CFG_DETECTED_NAME "M5Stack Tab5"
+// The identity strings (and the SD mount point) live in board_identity.h so
+// hardware-free code can name the board without pulling driver/gpio.h in.
+#include "board_identity.h"
 
 // ---- BSP backend selector ----
 // 0 = ESP32-P4 Function EV Board managed BSP (espressif__esp32_p4_function_ev_board).
@@ -149,7 +146,7 @@
 #define BOARD_CFG_LVGL_FULL_REFRESH 0
 #define BOARD_CFG_LVGL_DIRECT_MODE 0
 
-#define BOARD_CFG_SD_MOUNT_POINT "/sdcard"
+/* BOARD_CFG_SD_MOUNT_POINT lives in board_identity.h (see the top). */
 #define BOARD_CFG_SD_FORMAT_ON_MOUNT_FAIL 0
 // microSD power rail: on-chip LDO channel 4 (LDO_VO4 -> SD_VDD). The BSP owns
 // the channel (acquired at this IO voltage) instead of letting the SDMMC

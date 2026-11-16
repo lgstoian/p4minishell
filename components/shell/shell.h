@@ -838,6 +838,11 @@ size_t shell_debug_get_count(void);
  *  layer, mirroring shell_history_save_lines). */
 bool shell_debug_get_entry(size_t index, char *out, size_t out_size);
 
+/** Clear the debug log ring and the runtime warning counter.
+ *  Called once from `shell_init()`; exposed so boot-time state can be reset
+ *  from the shell core without reaching into the ring's storage. */
+void shell_debug_log_reset(void);
+
 /** Print the debug log to the transcript.
  *
  * Extended DEBUG equivalent: bare `debug` prints the ring as before;

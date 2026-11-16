@@ -81,6 +81,16 @@ typedef struct {
      * @p text is NUL-terminated; @p len is `strlen(text)`.
      */
     void (*on_mirror)(void *ctx, const char *text, size_t len);
+
+    /**
+     * Called by `shell_transcript_schedule_appendf()` with a fully formatted
+     * line. The view stages it in its async buffer and schedules one repaint,
+     * preserving the producer/consumer split that keeps LVGL work on the UI
+     * task. When no sink is installed (host lane, early boot) the caller
+     * appends the text synchronously instead.
+     * @p text is NUL-terminated.
+     */
+    void (*on_schedule)(void *ctx, const char *text);
 } shell_transcript_sink_t;
 
 /**
@@ -90,6 +100,20 @@ typedef struct {
  * producer task exists. Passing NULL is the host/test configuration.
  */
 void shell_transcript_set_sink(const shell_transcript_sink_t *sink, void *ctx);
+
+/**
+ * Format one line and hand it to the view's deferred append path.
+ *
+ * On the target this reaches the sink's `on_schedule` callback, which stages
+ * the text and queues the same LVGL async flush as before. With no sink
+ * installed (host unit-test lane, or callers before `shell_init()`) the text
+ * is appended synchronously, which is exactly what the old view-side helper
+ * did when no transcript widget existed.
+ *
+ * This is the hardware-free entry point `shell_record_errorf()` uses, so the
+ * debug log ring no longer lives in the LVGL-coupled shell.c.
+ */
+void shell_transcript_schedule_appendf(const char *format, ...);
 
 /**
  * Allocate the scrollback and clipboard buffers (PSRAM-first) and clear them.
