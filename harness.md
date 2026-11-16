@@ -318,6 +318,14 @@ logic (`tools/README.md` has the full list).
 Some failures leave no serial trace; these use a webcam and prefer observation
 over guessing (`ai-context.md` §5):
 
+- **`tools/screenshot_gate.py`** — the deterministic docs-screenshot gate (no
+  camera): renders the curated states from `tools/capture_docs.py` and compares
+  each frame with `docs/assets/<name>.png` pixel for pixel. `--update` refreshes
+  the baselines and immediately proves them reproducible; a plain run compares
+  against them and writes `screenshots/visual/<name>.diff.png` (differences in
+  red). `tools/screenshot_masks.json` documents the two masked transient
+  regions: the header's live telemetry and the LVGL caret. Run it after any
+  change that can move a pixel (theme, font, layout, header, OSK, gfx).
 - **`tools/display_glitch_watch.py`** — detects the MIPI-DSI "BSOD" blue
   flash by tracking `mean(blue) − mean(red)` over a panel ROI and saving peak
   frames. Flags: `--calibrate`, `--preview`, `--roi`, `--index`, `--device`,

@@ -136,6 +136,13 @@ holder per port.
   - Screenshots: `grab_screenshot.py` (`--port/--out/--crop-transcript`,
     BMPX binary protocol), `capture_tui.py` (`--port`, TUI regression +
     goldens), `get_screenshot.py`, `save_to_sd.py` (legacy helpers).
+  - Docs screenshots: `tools/capture_docs.py` drives the curated states and
+    writes `docs/assets/*.png`; `tools/screenshot_gate.py --update` does the
+    same and then proves the frames are reproducible, while a plain
+    `screenshot_gate.py` compares a fresh capture with the committed baseline
+    pixel for pixel (`tools/screenshot_masks.json` documents the two masked
+    transient regions: header telemetry and the caret). A mismatch writes
+    `screenshots/visual/<name>.diff.png` with the differing pixels in red.
   - Static tree checks (no hardware): `verify.py`, `final_check.py`,
     `final_verify.py` — run from the repo root.
 - `apps/companion/` drivers (not here, same conventions): `deep_test.py`

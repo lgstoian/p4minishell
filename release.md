@@ -245,6 +245,10 @@ Release is ready when **all** boxes below are true:
       section updated; `bugs.md` header current.
 - [ ] Zero build warnings on both boards (firmware + `test/`).
 - [ ] Unit suite green on both boards; `test/README.md` count refreshed.
+- [ ] Documentation screenshots refreshed and pixel-checked
+      (`python tools/screenshot_gate.py --update`, then
+      `python tools/screenshot_gate.py`; the browser dashboard shot comes from
+      `s20_website`).
 - [ ] `p4test` full sweep + `regression.py` + `boot_regression` green on both boards.
 - [ ] F27 closed (or the release explicitly documents it as a known issue with a
       repro) and deferred-hardware features verified or labelled experimental.
