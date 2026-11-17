@@ -267,6 +267,24 @@ uint32_t ansi_get_default_bg(void);
  */
 void ansi_set_palette_color(ansi_color_index_t index, uint32_t color);
 
+/**
+ * Classic CGA/DOS 16-colour RGB value (0xRRGGBB).
+ *
+ * This is the *fixed* DOS palette, not the themeable ANSI one above: the TUI
+ * cell grid, `gfx` pixels and HTML/CSS colour quantisation all agree on these
+ * values, so an `rgba()` background matches the cell drawn beside it. Index 16
+ * (and anything above 15) means "unset/transparent" and returns black; wrap
+ * with the index check at the call site.
+ */
+uint32_t ansi_cga_color(uint8_t index);
+
+/**
+ * Nearest classic CGA/DOS index for a 24-bit RGB value (sqeuclidean).
+ * The one nearest-colour implementation: CSS quantisation and the TUI both
+ * call it, so a colour cannot map differently on the two surfaces.
+ */
+uint8_t ansi_cga_nearest(uint32_t rgb);
+
 /* ========================================================================
  * ANSI FORMAT STRING BUILDER
  * ======================================================================== */

@@ -1,4 +1,5 @@
 #include "dom.h"
+#include "css_color.h"
 #include "html.h"
 #include "strutil.h"
 #include "p4minishell_config.h"
@@ -610,70 +611,14 @@ void dom_set_text(dom_node_t *node, const char *text) {
  * 16 is "default" (no explicit color). Shared by every style application. */
 static int dom_css_color(const char *value)
 {
-    static const struct { const char *name; uint8_t color; } names[] = {
-        {"black", 0}, {"red", 4}, {"green", 2}, {"yellow", 6},
-        {"blue", 1}, {"magenta", 5}, {"fuchsia", 5}, {"cyan", 3},
-        {"aqua", 3}, {"white", 15}, {"gray", 8}, {"grey", 8},
-        {"darkgray", 8}, {"darkgrey", 8}, {"lightgray", 7},
-        {"lightgrey", 7}, {"silver", 7}, {"maroon", 4},
-        {"olive", 6}, {"navy", 1}, {"teal", 3}, {"purple", 5},
-        {"lime", 2}, {"orange", 6}, {"brown", 6}, {"transparent", 16},
-    };
-    static const uint8_t dos_rgb[16][3] = {
-        {0,0,0},{0,0,170},{0,170,0},{0,170,170},
-        {170,0,0},{170,0,170},{170,85,0},{170,170,170},
-        {85,85,85},{85,85,255},{85,255,85},{85,255,255},
-        {255,85,85},{255,85,255},{255,255,85},{255,255,255}
-    };
-    unsigned long r = 0, g = 0, b = 0;
-    size_t i;
+    css_rgba_t color;
 
-    if (value == NULL || value[0] == '\0') return 16;
-    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-        if (strcasecmp(value, names[i].name) == 0) return names[i].color;
-    }
-    if (value[0] == '#') {
-        const char *hex = value + 1;
-        size_t len = strlen(hex);
-        unsigned long rgb;
-        if (len == 3) {
-            rgb = strtoul(hex, NULL, 16);
-            r = ((rgb >> 8) & 0xF) * 17;
-            g = ((rgb >> 4) & 0xF) * 17;
-            b = (rgb & 0xF) * 17;
-        } else if (len >= 6) {
-            rgb = strtoul(hex, NULL, 16);
-            r = (rgb >> 16) & 0xFF;
-            g = (rgb >> 8) & 0xFF;
-            b = rgb & 0xFF;
-        } else {
-            return 16;
-        }
-    } else if (strncasecmp(value, "rgb(", 4) == 0) {
-        if (sscanf(value, "rgb(%lu,%lu,%lu)", &r, &g, &b) != 3) return 16;
-    } else if (isdigit((unsigned char)value[0])) {
-        int n = atoi(value);
-        return (n >= 0 && n <= 16) ? n : 16;
-    } else {
+    if (!css_color_parse(value, &color)) {
         return 16;
     }
-    {
-        int best = 0;
-        unsigned long best_d = 0xFFFFFFFFul;
-        int c;
-        for (c = 0; c < 16; c++) {
-            long dr = (long)r - dos_rgb[c][0];
-            long dg = (long)g - dos_rgb[c][1];
-            long db = (long)b - dos_rgb[c][2];
-            unsigned long d = (unsigned long)(dr * dr + dg * dg + db * db);
-            if (d < best_d) { best_d = d; best = c; }
-        }
-        return best;
-    }
+    return css_color_to_dos(&color);
 }
 
-/** CSS `background-image: url(...)` / `background: color url(...)`: keep the
- *  URL for the page backdrop and any solid colour alongside it. */
 static void dom_css_background(dom_node_t *node, const char *value)
 {
     const char *url;

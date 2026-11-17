@@ -17,6 +17,8 @@
 
 #include "js_canvas.h"
 
+#include "css_color.h"
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -796,150 +798,20 @@ int js_canvas_fill_text(js_canvas_t *canvas, const char *text, float x, float y,
     return advance;
 }
 
-static int canvas_hex_digit(char c)
-{
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
-static bool canvas_color_component(const char **p, uint32_t *out)
-{
-    char *end = NULL;
-    long value;
-
-    while (**p == ' ' || **p == ',') {
-        (*p)++;
-    }
-    value = strtol(*p, &end, 10);
-    if (end == *p) {
-        return false;
-    }
-    *p = end;
-    if (**p == '%') {
-        (*p)++;
-        value = (value * 255) / 100;
-    }
-    if (value < 0) value = 0;
-    if (value > 255) value = 255;
-    *out = (uint32_t)value;
-    return true;
-}
-
 bool js_canvas_parse_color(const char *text, js_canvas_rgba_t *out)
 {
-    char buf[64];
-    size_t len;
+    /* One parser for the whole firmware: CSS, canvas and the TUI all agree on
+     * what a colour string means (see components/markdown/css_color.h). */
+    css_rgba_t color;
 
-    if (text == NULL || out == NULL) {
+    if (!css_color_parse(text, &color)) {
         return false;
     }
-    while (*text == ' ' || *text == '\t') {
-        text++;
-    }
-    len = strlen(text);
-    while (len > 0 && (text[len - 1] == ' ' || text[len - 1] == '\t')) {
-        len--;
-    }
-    if (len == 0 || len >= sizeof(buf)) {
-        return false;
-    }
-    for (size_t i = 0; i < len; i++) {
-        char c = text[i];
-
-        if (c >= 'A' && c <= 'Z') {
-            c = (char)(c - 'A' + 'a');
-        }
-        buf[i] = c;
-    }
-    buf[len] = '\0';
-
-    if (strcmp(buf, "transparent") == 0) {
-        *out = (js_canvas_rgba_t){ 0, 0, 0, 0 };
-        return true;
-    }
-    if (buf[0] == '#') {
-        size_t n = strlen(buf + 1);
-        int v[8];
-        int count = (n == 3 || n == 4) ? (int)n : (n == 6 || n == 8) ? (int)n : 0;
-
-        if (count == 0) {
-            return false;
-        }
-        for (int i = 0; i < count; i++) {
-            v[i] = canvas_hex_digit(buf[1 + i]);
-            if (v[i] < 0) {
-                return false;
-            }
-        }
-        if (count == 3 || count == 4) {
-            out->r = (uint8_t)(v[0] * 17);
-            out->g = (uint8_t)(v[1] * 17);
-            out->b = (uint8_t)(v[2] * 17);
-            out->a = count == 4 ? (uint8_t)(v[3] * 17) : 255;
-        } else {
-            out->r = (uint8_t)(v[0] * 16 + v[1]);
-            out->g = (uint8_t)(v[2] * 16 + v[3]);
-            out->b = (uint8_t)(v[4] * 16 + v[5]);
-            out->a = count == 8 ? (uint8_t)(v[6] * 16 + v[7]) : 255;
-        }
-        return true;
-    }
-    if (strncmp(buf, "rgb(", 4) == 0 || strncmp(buf, "rgba(", 5) == 0) {
-        const char *p = strchr(buf, '(');
-        uint32_t r = 0, g = 0, b = 0, a = 255;
-
-        p++;
-        if (!canvas_color_component(&p, &r) ||
-            !canvas_color_component(&p, &g) ||
-            !canvas_color_component(&p, &b)) {
-            return false;
-        }
-        if (strncmp(buf, "rgba(", 5) == 0) {
-            while (*p == ' ' || *p == ',') p++;
-            {
-                char *end = NULL;
-                double ca = strtod(p, &end);
-
-                if (end != p) {
-                    if (*end == '%') {
-                        ca /= 100.0;
-                    }
-                    if (ca < 0.0) ca = 0.0;
-                    if (ca > 1.0) ca = 1.0;
-                    a = (uint32_t)(ca * 255.0 + 0.5);
-                }
-            }
-        }
-        out->r = (uint8_t)r;
-        out->g = (uint8_t)g;
-        out->b = (uint8_t)b;
-        out->a = (uint8_t)a;
-        return true;
-    }
-    {
-        static const struct {
-            const char *name;
-            uint8_t r, g, b;
-        } named[] = {
-            { "black", 0, 0, 0 },       { "white", 255, 255, 255 },
-            { "red", 255, 0, 0 },       { "green", 0, 128, 0 },
-            { "blue", 0, 0, 255 },      { "gray", 128, 128, 128 },
-            { "grey", 128, 128, 128 },  { "yellow", 255, 255, 0 },
-            { "cyan", 0, 255, 255 },    { "magenta", 255, 0, 255 },
-            { "orange", 255, 165, 0 },  { "purple", 128, 0, 128 },
-            { "navy", 0, 0, 128 },      { "silver", 192, 192, 192 },
-        };
-
-        for (size_t i = 0; i < sizeof(named) / sizeof(named[0]); i++) {
-            if (strcmp(buf, named[i].name) == 0) {
-                *out = (js_canvas_rgba_t){ named[i].r, named[i].g, named[i].b, 255 };
-                return true;
-            }
-        }
-    }
-    return false;
+    out->r = color.r;
+    out->g = color.g;
+    out->b = color.b;
+    out->a = color.a;
+    return true;
 }
 
 /* ---------------------------------------------------------------------- */

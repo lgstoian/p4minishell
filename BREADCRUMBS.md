@@ -318,6 +318,8 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/led/led.h` :: module=led :: layer=leaf :: domain=platform :: status=stable :: rules=ai-context.md#module-layering-rules
 - `components/markdown/css.c` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
 - `components/markdown/css.h` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
+- `components/markdown/css_color.c` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
+- `components/markdown/css_color.h` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
 - `components/markdown/dom.c` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
 - `components/markdown/dom.h` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules
 - `components/markdown/dom_arena.c` :: module=markdown :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_markdown.c,test/main/test_html.c :: rules=ai-context.md#module-layering-rules

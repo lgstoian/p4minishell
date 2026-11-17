@@ -345,6 +345,14 @@ extern void test_theme_registry(void);
 extern void test_theme_lookup(void);
 extern void test_theme_set_and_active(void);
 
+/* --- test_css_color.c ---------------------------------------- */
+extern void test_css_color_hex_forms(void);
+extern void test_css_color_rgb_and_alpha(void);
+extern void test_css_color_transparent_and_named(void);
+extern void test_css_color_dos_quantisation(void);
+extern void test_css_color_blend(void);
+extern void test_css_color_is_the_canvas_parser(void);
+
 /* --- test_js_canvas.c ---------------------------------------- */
 extern void test_js_canvas_fill_rect_and_clear(void);
 extern void test_js_canvas_global_alpha(void);
@@ -673,6 +681,14 @@ void app_main(void)
     RUN_TEST(test_theme_registry);
     RUN_TEST(test_theme_lookup);
     RUN_TEST(test_theme_set_and_active);
+
+    /* test_css_color.c */
+    RUN_TEST(test_css_color_hex_forms);
+    RUN_TEST(test_css_color_rgb_and_alpha);
+    RUN_TEST(test_css_color_transparent_and_named);
+    RUN_TEST(test_css_color_dos_quantisation);
+    RUN_TEST(test_css_color_blend);
+    RUN_TEST(test_css_color_is_the_canvas_parser);
 
     /* test_js_canvas.c */
     RUN_TEST(test_js_canvas_fill_rect_and_clear);

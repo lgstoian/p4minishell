@@ -30,6 +30,7 @@ set(HOST_TEST_SRCS
     "${HOST_TEST_DIR}/test_batch_expr.c"
     "${HOST_TEST_DIR}/test_svc.c"
     "${HOST_TEST_DIR}/test_usb_hid_layout.c"
+    "${HOST_TEST_DIR}/test_css_color.c"
     "${HOST_TEST_DIR}/test_js_canvas.c"
     # Production sources that are hardware-free by construction (see each
     # file's @hard-rule): compiled directly so the lane exercises the real

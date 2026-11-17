@@ -731,40 +731,16 @@ void tui_fill(int x, int y, int w, int h, char ch, uint8_t fg, uint8_t bg)
 void tui_set_default_color(uint8_t fg, uint8_t bg) { s_def_fg = fg; s_def_bg = bg; }
 void tui_get_default_color(uint8_t *fg_out, uint8_t *bg_out) { if (fg_out) *fg_out = s_def_fg; if (bg_out) *bg_out = s_def_bg; }
 
-/* Classic CGA/DOS 16-color RGB values (0-7 dim, 8-15 bright). */
-static const uint32_t s_dos_rgb[16] = {
-    0x000000, 0x0000AA, 0x00AA00, 0x00AAAA,
-    0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
-    0x555555, 0x5555FF, 0x55FF55, 0x55FFFF,
-    0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
-};
-
 uint32_t tui_dos_color_rgb(uint8_t index)
 {
-    return s_dos_rgb[index & 15];
+    /* One classic CGA/DOS table for the whole firmware (ansi_cga_color);
+     * the shell's own themeable ANSI palette is a different thing. */
+    return ansi_cga_color(index);
 }
 
 uint8_t tui_rgb_to_dos(uint32_t rgb)
 {
-    uint8_t best = 7;
-    uint32_t best_d = (uint32_t)-1;
-    int r = (int)((rgb >> 16) & 0xFF);
-    int g = (int)((rgb >> 8) & 0xFF);
-    int b = (int)(rgb & 0xFF);
-    int i;
-
-    for (i = 0; i < 16; i++) {
-        int dr = r - (int)((s_dos_rgb[i] >> 16) & 0xFF);
-        int dg = g - (int)((s_dos_rgb[i] >> 8) & 0xFF);
-        int db = b - (int)(s_dos_rgb[i] & 0xFF);
-        uint32_t d = (uint32_t)(dr * dr + dg * dg + db * db);
-
-        if (d < best_d) {
-            best_d = d;
-            best = (uint8_t)i;
-        }
-    }
-    return best;
+    return ansi_cga_nearest(rgb);
 }
 
 void tui_draw_image(int x, int y, int w, int h, const gfx_surface_t *img)

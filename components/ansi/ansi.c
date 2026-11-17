@@ -125,6 +125,45 @@ void ansi_set_palette_color(ansi_color_index_t index, uint32_t color)
 }
 
 /* ========================================================================
+ * CLASSIC CGA/DOS PALETTE (fixed, shared by TUI / gfx / CSS)
+ * ======================================================================== */
+
+/** 0-7 dim, 8-15 bright. Never themed: these are the colours a DOS cell has. */
+static const uint32_t s_cga_rgb[16] = {
+    0x000000, 0x0000AA, 0x00AA00, 0x00AAAA,
+    0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
+    0x555555, 0x5555FF, 0x55FF55, 0x55FFFF,
+    0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
+};
+
+uint32_t ansi_cga_color(uint8_t index)
+{
+    return s_cga_rgb[index & 15];
+}
+
+uint8_t ansi_cga_nearest(uint32_t rgb)
+{
+    uint8_t best = 0;
+    uint32_t best_d = (uint32_t)-1;
+    int r = (int)((rgb >> 16) & 0xFF);
+    int g = (int)((rgb >> 8) & 0xFF);
+    int b = (int)(rgb & 0xFF);
+
+    for (int i = 0; i < 16; i++) {
+        int dr = r - (int)((s_cga_rgb[i] >> 16) & 0xFF);
+        int dg = g - (int)((s_cga_rgb[i] >> 8) & 0xFF);
+        int db = b - (int)(s_cga_rgb[i] & 0xFF);
+        uint32_t d = (uint32_t)(dr * dr + dg * dg + db * db);
+
+        if (d < best_d) {
+            best_d = d;
+            best = (uint8_t)i;
+        }
+    }
+    return best;
+}
+
+/* ========================================================================
  * SGR CODE TO COLOR INDEX MAPPING
  * ======================================================================== */
 

@@ -39,12 +39,12 @@ extern "C" {
 #define JS_CANVAS_MAX_PATH    512
 #define JS_CANVAS_SAVE_DEPTH  8
 
-typedef struct {
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
-    uint8_t a;
-} js_canvas_rgba_t;
+#include "css_color.h"
+
+/** Canvas colours are the project RGBA type: there is exactly one CSS colour
+ *  parser (components/markdown/css_color.c), shared by <canvas>, CSS and the
+ *  TUI. This alias keeps the canvas API spelling stable. */
+typedef css_rgba_t js_canvas_rgba_t;
 
 typedef struct js_canvas js_canvas_t;
 

@@ -12,7 +12,7 @@
   ],
   "phase": 1,
   "target": "linux",
-  "expected_cases": 268,
+  "expected_cases": 274,
   "prelude": [
     {
       "name": "batch_env_pool_init",
@@ -59,6 +59,7 @@
     "test_svc.c",
     "test_usb_hid_layout.c",
     "test_theme.c",
+    "test_css_color.c",
     "test_js_canvas.c"
   ],
   "excluded": {
