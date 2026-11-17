@@ -74,6 +74,11 @@ size_t markdown_render_html(const char *md, char *out, size_t out_size);
 size_t markdown_render_html_page(const char *md, const char *title,
                                  char *out, size_t out_size);
 
+/** Same body as markdown_render_html(), but XHTML-safe: void elements are
+ *  self-closed (`<hr/>`, `<img .../>`) so the fragment can be embedded in an
+ *  EPUB chapter (XML, not HTML5). The EPUB writer wraps it. */
+size_t markdown_render_html_xhtml(const char *md, char *out, size_t out_size);
+
 /** File extension (no dot) of the HTML export MIME/type hint, for reference. */
 #define MARKDOWN_HTML_EXT "html"
 

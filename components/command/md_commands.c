@@ -19,6 +19,7 @@
 #include "shell.h"
 #include "batch.h"
 #include "markdown.h"
+#include "epub_export.h"
 #include "storage.h"
 #include "ansi_palette.h"
 #include "command.h"
@@ -33,7 +34,7 @@
 
 static void shell_command_markdown_usage(void)
 {
-    shell_transcript_appendf_ansi("Usage: markdown <file> | markdown -e <text> | markdown on | off | markdown export <src> <out> [text|html|print]\n");
+    shell_transcript_appendf_ansi("Usage: markdown <file> | markdown -e <text> | markdown on | off | markdown export <src> <out> [text|html|print|epub]\n");
     shell_transcript_appendf_ansi("  <file>  - render a Markdown file (fences, tables, lists)\n");
     shell_transcript_appendf_ansi("  -e      - render inline text\n");
     shell_transcript_appendf_ansi("  on|off  - auto-render echo/type output (default on; echo /raw bypasses)\n");
@@ -151,24 +152,25 @@ void shell_command_markdown(int argc, char **argv)
         int i;
 
         if (argc < 4) {
-            shell_transcript_appendf_ansi(SH_ERR "markdown export: usage: markdown export <src.md> <out> [text|html|print]\n" SH_RST);
+            shell_transcript_appendf_ansi(SH_ERR "markdown export: usage: markdown export <src.md> <out> [text|html|print|epub]\n" SH_RST);
             batch_set_errorlevel(2);
             return;
         }
         for (i = 4; i < argc; i++) {
             if (shell_text_equals_ignore_case(argv[i], "text") ||
                 shell_text_equals_ignore_case(argv[i], "html") ||
-                shell_text_equals_ignore_case(argv[i], "print")) {
+                shell_text_equals_ignore_case(argv[i], "print") ||
+                shell_text_equals_ignore_case(argv[i], "epub")) {
                 format = argv[i];
                 format_count++;
             } else {
-                shell_transcript_appendf_ansi(SH_ERR "markdown export: unknown format '%s' (text|html|print)\n" SH_RST, argv[i]);
+                shell_transcript_appendf_ansi(SH_ERR "markdown export: unknown format '%s' (text|html|print|epub)\n" SH_RST, argv[i]);
                 batch_set_errorlevel(2);
                 return;
             }
         }
         if (format_count > 1) {
-            shell_transcript_appendf_ansi(SH_ERR "markdown export: pick one format (text|html|print)\n" SH_RST);
+            shell_transcript_appendf_ansi(SH_ERR "markdown export: pick one format (text|html|print|epub)\n" SH_RST);
             batch_set_errorlevel(2);
             return;
         }
@@ -215,6 +217,26 @@ void shell_command_markdown(int argc, char **argv)
         }
         md_export_title(argv[2], title, sizeof(title));
 
+        if (shell_text_equals_ignore_case(format, "epub")) {
+            /* Writerdeck EPUB: the archive writer takes the Markdown source
+             * and renders one XHTML chapter with the same HTML writer, so an
+             * exported book opens in this device's own `epub` reader. */
+            if (epub_export_write(out_resolved, title, input) != ESP_OK) {
+                shell_print_error("markdown export: write failed for %s",
+                                  argv[3]);
+                batch_set_errorlevel(1);
+            } else {
+                shell_transcript_appendf_ansi(
+                    SH_LBL "markdown:" SH_RST " exported " SH_PATH "%s" SH_RST
+                    " -> " SH_PATH "%s" SH_RST " (epub)\n",
+                    argv[2], argv[3]);
+                batch_set_errorlevel(0);
+            }
+            free(input);
+            free(rendered);
+            free(plain);
+            return;
+        }
         if (shell_text_equals_ignore_case(format, "html")) {
             need = markdown_render_html_page(input, title, rendered,
                                              P4_CONFIG_MD_EXPORT_MAX_BYTES + 1);

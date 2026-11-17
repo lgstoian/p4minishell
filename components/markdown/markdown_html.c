@@ -47,6 +47,7 @@ typedef struct {
     size_t cap;     /**< destination size including NUL. */
     size_t len;     /**< bytes that should be written (excl. NUL). */
     bool overflow;  /**< destination was too small. */
+    bool xhtml;     /**< self-close void elements (EPUB chapter output). */
 } html_writer_t;
 
 static void html_raw(html_writer_t *w, const char *s, size_t n)
@@ -528,7 +529,7 @@ static const char *html_parse_image(html_writer_t *w, const char *p,
         html_escape(w, url, (size_t)(ue - url));
         html_str(w, "\" alt=\"");
         html_escape(w, p + 2, (size_t)(alt_end - (p + 2)));
-        html_str(w, "\">");
+        html_str(w, w->xhtml ? "\"/>" : "\">");
     }
     return url_close + 1;
 }
@@ -1431,7 +1432,7 @@ static void html_render_body(html_writer_t *w, const char *md)
         if (html_is_hr(trim, line_end)) {
             html_close_lists(w, list, &list_depth);
             html_close_quotes(w, &quote_depth);
-            html_str(w, "<hr>\n");
+            html_str(w, w->xhtml ? "<hr/>\n" : "<hr>\n");
             continue;
         }
 
@@ -1495,6 +1496,26 @@ size_t markdown_render_html(const char *md, char *out, size_t out_size)
     w.cap = (out != NULL && out_size > 0) ? out_size : 0;
     w.len = 0;
     w.overflow = false;
+    w.xhtml = false;
+    if (w.out != NULL) {
+        w.out[0] = '\0';
+    }
+    html_render_body(&w, md);
+    return html_finish(&w);
+}
+
+size_t markdown_render_html_xhtml(const char *md, char *out, size_t out_size)
+{
+    html_writer_t w;
+
+    if (md == NULL) {
+        return 0;
+    }
+    w.out = (out != NULL && out_size > 0) ? out : NULL;
+    w.cap = (out != NULL && out_size > 0) ? out_size : 0;
+    w.len = 0;
+    w.overflow = false;
+    w.xhtml = true;
     if (w.out != NULL) {
         w.out[0] = '\0';
     }
@@ -1515,6 +1536,7 @@ size_t markdown_render_html_page(const char *md, const char *title,
     w.cap = (out != NULL && out_size > 0) ? out_size : 0;
     w.len = 0;
     w.overflow = false;
+    w.xhtml = false;
     if (w.out != NULL) {
         w.out[0] = '\0';
     }

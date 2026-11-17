@@ -838,6 +838,17 @@ esp_err_t storage_replace_file(const char *tmp, const char *dest);
  *  resolved path in @p buf (the file is created so the path is reserved). */
 esp_err_t storage_temp_path(char *buf, size_t size, const char *ext);
 
+/**
+ * Path of the card's temp directory (created on first use). This is the one
+ * scratch location (`/tmp` on the SD mount); anything that needs a writable
+ * working directory - the EPUB reader's extraction, for example - asks here
+ * instead of hard-coding a mount point that may not exist.
+ *
+ * @param buf  Destination (at least SHELL_SD_PATH_BYTES).
+ * @return ESP_OK, or ESP_ERR_INVALID_STATE when the card is not writable.
+ */
+esp_err_t storage_temp_dir(char *buf, size_t size);
+
 /** Reserve `<tmpdir>/<stem>.<ext>` (creating it empty) and return the path
  *  in @p buf. Same directory, same boot cleanup as storage_temp_path, but
  *  with a caller-chosen stem for deterministic per-owner names (pipeline

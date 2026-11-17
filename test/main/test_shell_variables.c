@@ -256,6 +256,26 @@ void test_variable_numeric_names_rejected(void)
  * NULL SAFETY
  * ======================================================================== */
 
+/** A `for %v` loop variable is not a variable reference.
+ *
+ * The expander used to pair the first `%` with the one in the loop body and
+ * treat the sentence between them as a name (undefined -> empty), so an
+ * interactive `for %f in (*.TXT) do echo %f` silently did nothing. Only a
+ * name-shaped token may expand; a sentence must stay literal.
+ */
+void test_variable_expansion_for_loop_var(void)
+{
+    char out[256];
+
+    shell_expand_variables("for %f in (A.TXT) do echo [%f]", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("for %f in (A.TXT) do echo [%f]", out);
+
+    /* A real reference still expands, and the loop variable survives. */
+    shell_env_set("MYVAR", "x");
+    shell_expand_variables("for %f in (%MYVAR%) do echo %f", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("for %f in (x) do echo %f", out);
+}
+
 void test_variable_expansion_null_input(void)
 {
     char out[32];

@@ -24,6 +24,7 @@
 #include "shell.h"
 #include "storage.h"
 #include "strutil.h"
+#include "esp_log.h"
 #include "p4minishell_config.h"
 #include <string.h>
 #include <stdlib.h>
@@ -76,10 +77,16 @@ static esp_err_t epub_cmd_open(int argc, char *argv[])
     if (meta.author[0]) shell_print_muted("Author: %s", meta.author);
     if (meta.language[0]) shell_print_muted("Language: %s", meta.language);
 
-    epub_chapter_t ch[16];
-    int count;
-    epub_get_spine(s_epub_handle, ch, 16, &count);
-    shell_print_muted("Chapters: %d", count);
+    /* Heap, not the stack: 16 spine items are ~7 KB, and the command worker's
+     * stack cannot take that on top of its own frames. */
+    epub_chapter_t *ch = calloc(16, sizeof(*ch));
+    int count = 0;
+
+    if (ch != NULL) {
+        epub_get_spine(s_epub_handle, ch, 16, &count);
+        shell_print_muted("Chapters: %d", count);
+        free(ch);
+    }
 
     return 0;
 }
@@ -127,29 +134,58 @@ static esp_err_t epub_cmd_info(int argc, char *argv[])
 /* ---- epub toc ---- */
 static esp_err_t epub_cmd_toc(int argc, char *argv[])
 {
-    (void)argc; (void)argv;
-
     if (!s_epub_handle) {
         shell_print_error("epub: no book open");
         return 1;
     }
+    /* `epub toc` lists; `epub toc <n>` jumps. The table used to carry TWO
+     * "toc" entries, so the jump form was unreachable and always listed. */
+    if (argc >= 2) {
+        return epub_cmd_toc_goto(argc, argv);
+    }
 
-    epub_toc_entry_t toc[64];
-    int count;
-    epub_get_toc(s_epub_handle, toc, 64, &count);
+    /* 64 entries are ~25 KB: allocate them. The stack array overflowed the
+     * command worker's stack on every `epub toc`, even when the guard above
+     * returned first (the frame is reserved on entry), so a bookless `epub
+     * toc` rebooted the board. */
+    const int max_entries = 64;
+    epub_toc_entry_t *toc = calloc((size_t)max_entries, sizeof(*toc));
+    int count = 0;
+
+    if (toc == NULL) {
+        shell_print_error("epub: out of memory");
+        return 1;
+    }
+    epub_get_toc(s_epub_handle, toc, max_entries, &count);
 
     if (count == 0) {
         shell_print_muted("epub: no table of contents");
+        free(toc);
         return 0;
     }
 
     for (int i = 0; i < count; i++) {
-        shell_print_muted("%3d %*s%s @ %s",
-                           i, toc[i].depth * 2, "",
+        /* Explicit indent string: `%*s` inside the transcript formatter was a
+         * way to wedge the command worker (the shell stopped responding and
+         * the task watchdog fired), so the width is built here. */
+        char indent[24];
+        int level = toc[i].depth * 2;
+
+        if (level < 0) {
+            level = 0;
+        }
+        if (level > (int)sizeof(indent) - 1) {
+            level = (int)sizeof(indent) - 1;
+        }
+        memset(indent, ' ', (size_t)level);
+        indent[level] = '\0';
+        shell_print_muted("%3d %s%s @ %s",
+                           i, indent,
                            toc[i].label[0] ? toc[i].label : "(untitled)",
                            toc[i].href[0] ? toc[i].href : "(no href)");
     }
 
+    free(toc);
     return 0;
 }
 
@@ -323,12 +359,12 @@ static const shell_command_entry_t s_epub_commands[] = {
     { "open",   epub_cmd_open,   "epub open <file> — open an EPUB file" },
     { "close",  epub_cmd_close,  "epub close — close current EPUB" },
     { "info",   epub_cmd_info,   "epub info — show book metadata" },
-    { "toc",    epub_cmd_toc,    "epub toc — show table of contents" },
+    { "toc",    epub_cmd_toc,    "epub toc - show the table of contents, or toc <n> to jump" },
     { "read",   epub_cmd_read,   "epub read — render current chapter" },
     { "next",   epub_cmd_next,   "epub next — next chapter" },
     { "prev",   epub_cmd_prev,   "epub prev — previous chapter" },
     { "goto",   epub_cmd_goto,   "epub goto <n> — go to chapter n" },
-    { "toc",    epub_cmd_toc_goto, "epub toc <n> — go to TOC entry n" },
+
     { "extract", epub_cmd_extract, "epub extract <n> <file> — extract resource" },
 };
 

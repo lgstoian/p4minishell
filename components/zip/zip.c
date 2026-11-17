@@ -425,7 +425,7 @@ static esp_err_t zip_extract_stored(FILE *f, const zip_entry_internal_t *e, cons
     if (!buf) { fclose(out); return ESP_ERR_NO_MEM; }
 
     uint32_t remaining = e->compressed_size;
-    uint32_t crc = 0;
+    uint32_t crc = 0xFFFFFFFFu;   /* ZIP CRC-32 seed (inverted below) */
     while (remaining > 0) {
         size_t to_read = (remaining > ZIP_CHUNK_SIZE) ? ZIP_CHUNK_SIZE : remaining;
         size_t read = fread(buf, 1, to_read, f);
@@ -438,8 +438,9 @@ static esp_err_t zip_extract_stored(FILE *f, const zip_entry_internal_t *e, cons
     free(buf);
     fclose(out);
 
-    if (crc != e->crc32) {
-        ESP_LOGW(ZIP_TAG, "CRC mismatch for %s: expected 0x%08x, got 0x%08x", e->path, e->crc32, crc);
+    if ((~crc) != e->crc32) {
+        ESP_LOGW(ZIP_TAG, "CRC mismatch for %s: expected 0x%08x, got 0x%08x", e->path,
+                 e->crc32, (unsigned)(~crc));
         return ESP_FAIL;
     }
     return ESP_OK;
@@ -468,7 +469,7 @@ static esp_err_t zip_extract_deflate(FILE *f, const zip_entry_internal_t *e, con
     if (!in_buf || !out_buf) { free(in_buf); free(out_buf); inflateEnd(&strm); fclose(out); return ESP_ERR_NO_MEM; }
 
     uint32_t remaining = e->compressed_size;
-    uint32_t crc = 0;
+    uint32_t crc = 0xFFFFFFFFu;   /* ZIP CRC-32 seed (inverted below) */
     int ret = Z_OK;
 
     while (remaining > 0 || strm.avail_in > 0) {
@@ -501,8 +502,9 @@ static esp_err_t zip_extract_deflate(FILE *f, const zip_entry_internal_t *e, con
     fclose(out);
 
     if (ret != Z_STREAM_END) return ESP_FAIL;
-    if (crc != e->crc32) {
-        ESP_LOGW(ZIP_TAG, "CRC mismatch for %s: expected 0x%08x, got 0x%08x", e->path, e->crc32, crc);
+    if ((~crc) != e->crc32) {
+        ESP_LOGW(ZIP_TAG, "CRC mismatch for %s: expected 0x%08x, got 0x%08x", e->path,
+                 e->crc32, (unsigned)(~crc));
         return ESP_FAIL;
     }
     return ESP_OK;

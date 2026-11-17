@@ -159,6 +159,7 @@ extern void test_variable_expansion_no_batch_frame(void);
 extern void test_variable_expansion_tilde_modifiers(void);
 extern void test_variable_expansion_substring(void);
 extern void test_variable_expansion_replace(void);
+extern void test_variable_expansion_for_loop_var(void);
 extern void test_variable_expansion_array_names(void);
 extern void test_variable_expansion_delayed(void);
 extern void test_variable_expansion_delayed_scope(void);
@@ -446,6 +447,9 @@ extern void test_tui_selftest_coverage_clean(void);
 extern void test_tui_selftest_metrics_clean(void);
 extern void test_tui_selftest_check_clean(void);
 extern void test_tui_bound_cell_inactive(void);
+extern void test_tui_grid_resolve_portrait(void);
+extern void test_tui_grid_resolve_landscape(void);
+extern void test_tui_grid_resolve_tiny(void);
 extern void test_ws_pane_add_close(void);
 extern void test_ws_pane_duplicate_rejected(void);
 extern void test_ws_pane_focus_cycle(void);
@@ -961,6 +965,7 @@ void app_main(void)
     RUN_TEST(test_variable_expansion_tilde_modifiers);
     RUN_TEST(test_variable_expansion_substring);
     RUN_TEST(test_variable_expansion_replace);
+    RUN_TEST(test_variable_expansion_for_loop_var);
     RUN_TEST(test_variable_expansion_array_names);
     RUN_TEST(test_variable_expansion_delayed);
     RUN_TEST(test_variable_expansion_delayed_scope);
@@ -1305,6 +1310,9 @@ void app_main(void)
     RUN_TEST(test_tui_selftest_metrics_clean);
     RUN_TEST(test_tui_selftest_check_clean);
     RUN_TEST(test_tui_bound_cell_inactive);
+    RUN_TEST(test_tui_grid_resolve_portrait);
+    RUN_TEST(test_tui_grid_resolve_landscape);
+    RUN_TEST(test_tui_grid_resolve_tiny);
 
     RUN_TEST(test_ws_pane_add_close);
     RUN_TEST(test_ws_pane_duplicate_rejected);

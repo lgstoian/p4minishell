@@ -576,6 +576,18 @@ static esp_err_t storage_temp_ensure_dir(void)
     return (stat(dir, &st) == 0 && S_ISDIR(st.st_mode)) ? ESP_OK : ESP_FAIL;
 }
 
+esp_err_t storage_temp_dir(char *buf, size_t size)
+{
+    if (buf == NULL || size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (storage_temp_ensure_dir() != ESP_OK) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    storage_temp_dir_path(buf, size);
+    return ESP_OK;
+}
+
 esp_err_t storage_temp_path(char *buf, size_t size, const char *ext)
 {
     char dir[SHELL_SD_PATH_BYTES];

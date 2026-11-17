@@ -19,6 +19,7 @@
 #include "p4minishell_config.h"
 #include "strutil.h"
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <esp_log.h>
@@ -36,7 +37,8 @@
 
 #define EPUB_MAX_ENTRIES     512
 #define EPUB_LOG_TAG "epub"
-#define EPUB_TEMP_DIR        "/sd/tmp/epub_XXXXXX"
+/** Extraction subdirectory inside the card's temp dir (one book at a time). */
+#define EPUB_TEMP_SUBDIR     "epub"
 
 /* ------------------------------------------------------------------------- */
 /* XML parsing callbacks (Expat)                                            */
@@ -279,7 +281,9 @@ static bool epub_find_container_xml(epub_t *epub)
 {
     void *zip = epub->zip_handle;
     zip_entry_t entry;
+
     if (zip_find_entry(zip, "META-INF/container.xml", &entry) != ESP_OK) {
+        ESP_LOGE("epub", "container.xml not found in the archive");
         return false;
     }
 
@@ -287,11 +291,14 @@ static bool epub_find_container_xml(epub_t *epub)
     char tmp_path[256];
     snprintf(tmp_path, sizeof(tmp_path), "%s/container.xml", epub->temp_dir);
     if (zip_extract_entry(zip, &entry, tmp_path) != ESP_OK) {
+        ESP_LOGE("epub", "container.xml extract to %s failed", tmp_path);
         return false;
     }
 
     FILE *f = fopen(tmp_path, "r");
-    if (!f) return false;
+    if (!f) {
+        return false;
+    }
 
     char buf[4096];
     size_t len = fread(buf, 1, sizeof(buf) - 1, f);
@@ -416,19 +423,156 @@ static bool epub_parse_opf_file(epub_t *epub)
 /* Public API                                                                */
 /* ------------------------------------------------------------------------- */
 
+/** Read one manifest item into a heap string (NUL-terminated), or NULL.
+ *
+ * The reader already extracts small XML members through the temp directory
+ * (container.xml, package.opf); the TOC documents take the same path so there
+ * is one extraction mechanism, not two. */
+static char *epub_read_item_text(epub_t *epub, const char *href,
+                                 size_t max_bytes, size_t *out_len)
+{
+    char resolved[EPUB_PATH_MAX];
+    char tmp[320];
+    zip_entry_t entry;
+    FILE *file;
+    long len;
+    char *text;
+
+    if (!epub_resolve_href(epub->opf_dir, href, resolved, sizeof(resolved))) {
+        return NULL;
+    }
+    if (zip_find_entry(epub->zip_handle, resolved, &entry) != ESP_OK) {
+        return NULL;
+    }
+    snprintf(tmp, sizeof(tmp), "%s/toc_part.xml", epub->temp_dir);
+    if (zip_extract_entry(epub->zip_handle, &entry, tmp) != ESP_OK) {
+        return NULL;
+    }
+    file = fopen(tmp, "rb");
+    if (file == NULL) {
+        return NULL;
+    }
+    fseek(file, 0, SEEK_END);
+    len = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    if (len <= 0 || (size_t)len > max_bytes) {
+        fclose(file);
+        return NULL;
+    }
+    text = malloc((size_t)len + 1);
+    if (text == NULL) {
+        fclose(file);
+        return NULL;
+    }
+    if (fread(text, 1, (size_t)len, file) != (size_t)len) {
+        free(text);
+        fclose(file);
+        return NULL;
+    }
+    fclose(file);
+    text[len] = '\0';
+    if (out_len != NULL) {
+        *out_len = (size_t)len;
+    }
+    return text;
+}
+
+/** Map each TOC href onto its spine index so `epub toc <n>` can jump, and
+ *  give a chapter the TOC label when the OPF had no title for it. */
+static void epub_toc_link_spine(epub_t *epub)
+{
+    for (int i = 0; i < epub->toc_count; i++) {
+        const char *href = epub->toc[i].href;
+
+        while (*href == '.') {
+            href++;
+        }
+        if (*href == '/') {
+            href++;
+        }
+        for (int s = 0; s < epub->spine_count; s++) {
+            const char *spine_href = epub->spine[s].href;
+
+            if (strcasecmp(spine_href, href) == 0 ||
+                (strlen(spine_href) > strlen(href) &&
+                 strcasecmp(spine_href + strlen(spine_href) - strlen(href),
+                            href) == 0)) {
+                epub->toc[i].chapter_index = s;
+                if (epub->spine[s].title[0] == '\0' &&
+                    epub->toc[i].label[0] != '\0') {
+                    strlcpy(epub->spine[s].title, epub->toc[i].label,
+                            sizeof(epub->spine[s].title));
+                }
+                break;
+            }
+        }
+    }
+}
+
+/** Load the table of contents: NCX first (EPUB2), then nav.xhtml (EPUB3).
+ *
+ * The component shipped parsers for both but never called them, so `epub toc`
+ * was always empty and `epub toc <n>` refused every entry.
+ */
+static void epub_load_toc(epub_t *epub)
+{
+    const epub_manifest_item_internal_t *ncx = NULL;
+    const epub_manifest_item_internal_t *nav = NULL;
+
+    for (int i = 0; i < epub->manifest_count; i++) {
+        if (ncx == NULL &&
+            strstr(epub->manifest[i].media_type, "dtbncx") != NULL) {
+            ncx = &epub->manifest[i];
+        }
+        if (nav == NULL &&
+            strstr(epub->manifest[i].href, "nav.xhtml") != NULL) {
+            nav = &epub->manifest[i];
+        }
+    }
+    if (ncx != NULL) {
+        size_t len = 0;
+        char *xml = epub_read_item_text(epub, ncx->href, 512 * 1024, &len);
+
+        if (xml != NULL) {
+            (void)epub_parse_ncx(xml, len, epub->toc, EPUB_MAX_TOC,
+                                 &epub->toc_count);
+            free(xml);
+        }
+    }
+    if (epub->toc_count == 0 && nav != NULL) {
+        size_t len = 0;
+        char *xml = epub_read_item_text(epub, nav->href, 512 * 1024, &len);
+
+        if (xml != NULL) {
+            (void)epub_parse_nav(xml, len, epub->toc, EPUB_MAX_TOC,
+                                 &epub->toc_count);
+            free(xml);
+        }
+    }
+    if (epub->toc_count > 0) {
+        epub_toc_link_spine(epub);
+    }
+}
+
 esp_err_t epub_open(const char *archive_path, epub_handle_t **out_handle)
 {
     if (!archive_path || !out_handle) return ESP_ERR_INVALID_ARG;
+    /* A failed open must never leave the caller holding a stale pointer. */
+    *out_handle = NULL;
 
-    /* Create temp directory for extraction */
-    char temp_dir[64];
-    snprintf(temp_dir, sizeof(temp_dir), EPUB_TEMP_DIR);
-    if (!storage_mkdir_p(temp_dir)) {
-        /* Try unique name */
-        for (int i = 0; i < 100; i++) {
-            snprintf(temp_dir, sizeof(temp_dir), "/sd/tmp/epub_%04d", i);
-            if (storage_mkdir_p(temp_dir)) break;
-        }
+    /* Extraction happens in the card's temp directory (the one scratch area
+     * every writerdeck path shares). This used to hard-code `/sd/tmp/...`,
+     * a mount point this firmware never creates, so every open failed. */
+    char temp_dir[300];
+    char card_temp[256];
+    if (storage_temp_dir(card_temp, sizeof(card_temp)) != ESP_OK) {
+        ESP_LOGE("epub", "no writable temp directory on the card");
+        return ESP_FAIL;
+    }
+    snprintf(temp_dir, sizeof(temp_dir), "%s/%s", card_temp, EPUB_TEMP_SUBDIR);
+    if (storage_mkdir_p(temp_dir) != ESP_OK) {
+        ESP_LOGE("epub", "cannot create %s", temp_dir);
+        return ESP_FAIL;
     }
 
     epub_t *epub = calloc(1, sizeof(epub_t));
@@ -460,7 +604,13 @@ esp_err_t epub_open(const char *archive_path, epub_handle_t **out_handle)
         return ESP_FAIL;
     }
 
-    /* TODO: Parse NCX/nav for TOC */
+    epub_load_toc(epub);
+
+    /* Open on the first chapter: `epub read` right after `epub open` is
+     * the obvious flow, and the old -1 answered "no chapter selected". */
+    if (epub->spine_count > 0) {
+        (void)epub_set_chapter(epub, 0);
+    }
 
     *out_handle = epub;
     return ESP_OK;
@@ -626,53 +776,6 @@ esp_err_t epub_extract_resource(const epub_handle_t *handle,
     }
 
     return zip_extract_entry(zip, &entry, dest_path);
-}
-
-bool epub_parse_opf(const char *xml, size_t len,
-                    epub_metadata_t *out_meta,
-                    epub_chapter_t *out_chapters,
-                    int max_chapters,
-                    int *out_count)
-{
-    /* This would need a full parser instance - use the internal parser above */
-    return false; /* Not implemented as standalone - use epub_open */
-}
-
-bool epub_parse_ncx(const char *xml, size_t len,
-                    epub_toc_entry_t *out_toc,
-                    int max_entries,
-                    int *out_count)
-{
-    /* NCX parsing - similar to OPF but for navMap/navPoint */
-    return false; /* TODO */
-}
-
-bool epub_parse_nav(const char *xml, size_t len,
-                    epub_toc_entry_t *out_toc,
-                    int max_entries,
-                    int *out_count)
-{
-    /* nav.xhtml parsing */
-    return false; /* TODO */
-}
-
-bool epub_parse_manifest(const char *xml, size_t len,
-                         epub_manifest_item_t *out_items,
-                         int max_items,
-                         int *out_count)
-{
-    /* Extract manifest from OPF - use internal parser */
-    return false; /* Not standalone */
-}
-
-const epub_manifest_item_t *epub_find_manifest_by_id(const epub_manifest_item_t *items,
-                                                      int count,
-                                                      const char *id)
-{
-    for (int i = 0; i < count; i++) {
-        if (strcmp(items[i].id, id) == 0) return &items[i];
-    }
-    return NULL;
 }
 
 bool epub_resolve_href(const char *opf_dir, const char *href,
