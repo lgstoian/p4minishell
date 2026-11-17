@@ -20,11 +20,20 @@ Fixed entries are removed at each reset (their history lives in
 
 **v1.4.3 round (2026-11-17):** firmware and `test/` build clean on both board
 profiles; on-board unit suite **682/0/2 on COM3 and COM6**; host lane 284/284;
-COM3 hardware spot-checks (`emoji`, `help html`/`html`, `launch /list`) and
-`s20_website` 7/7, `s21_wikipedia` 13/13, `s22_canvas` 13/13; the SD half of
-the drive-aware app path verified with a probe (`drive=sd: root=sd:/APPS`).
-`s23_apps_usb` needs a USB stick, which was not attached; run it on a bench
-with one. No new defects were opened by this round.
+fast suite tier green on both boards. Release suites: `s14_apps` 127/127,
+`s19_app_features` 37/37, `s20_website` 7/7, `s21_wikipedia` 13/13,
+`s22_canvas` 13/13, `s23_apps_usb` 9/9 (ADATA stick on COM6),
+`s24_render_alpha` 31/31. Hardware spot-checks: colour pack emoji in the
+transcript and TUI, `emoji list/check/path`, blocking `html` (command rejected
+while the page is up, `q` restores the prompt), `html /no`, and a service
+installed from USB listing `usb:/APPS/DSVC.BAT`.
+
+Two real defects were found and fixed by this round (details in the changelog):
+USB `APPS` discovery used the SD-only wildcard matcher, and the LVGL emoji
+wrapper returned an image pointer for base-font glyphs. `s24` also documents a
+pre-existing stale-surface quirk (alpha blends read black after a long session
+until a power-cycle); it needs its own investigation and is not a v1.4.3
+regression.
 
 ---
 
