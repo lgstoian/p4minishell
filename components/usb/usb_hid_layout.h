@@ -71,6 +71,36 @@ void usb_mouse_parse_layout(const uint8_t *desc, size_t len,
 int32_t usb_hid_field_value(const uint8_t *data, size_t len,
                             const usb_hid_field_t *field);
 
+/** One Consumer Page (0x0C) usage field: a media key. Arrays carry the usage
+ *  code as the field value; variable descriptors carry one bit per usage. */
+typedef struct {
+    uint8_t byte;
+    uint8_t bit;
+    uint8_t bits;
+    uint8_t report_id;
+    uint16_t usage;
+    bool valid;
+} usb_consumer_field_t;
+
+typedef struct {
+    usb_consumer_field_t fields[16];
+    int count;
+    bool is_array;       /**< one 16-bit usage code (common media-key layout) */
+    bool has_report_id;
+    bool valid;
+} usb_consumer_layout_t;
+
+/** Locate Consumer Page usages in a report descriptor. Supports the two
+ *  common media-key shapes: a 16-bit array of usage codes, and variable
+ *  one-bit usages (volume up/down/mute/play). */
+void usb_consumer_parse_layout(const uint8_t *desc, size_t len,
+                               usb_consumer_layout_t *out);
+
+/** Decode the media usage in one report. Returns 0 when the report contains no
+ *  (new) usage; the caller decides what to do with it. */
+uint16_t usb_consumer_report_usage(const uint8_t *data, size_t len,
+                                   const usb_consumer_layout_t *layout);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1245,7 +1245,7 @@ const shell_help_entry_t shell_core_help_entries[] = {
     { "rtc",      "rtc [anchor] - RTC backup status (source, anchor age, ext chip)" },
     { "wifi",     "wifi status | scan [/b] | diag | connect [ssid pass] | disconnect | setup [on|off]" },
     { "bluetooth", "bluetooth | bt status | scan [limit] | advertise <on [name]|off> | connect <addr> | disconnect | mouse <on|off|cursor <on|off>|click <on|off>>" },
-    { "usb",      "usb status | ls [path] | keyboard <on|off> | mouse <on|off|cursor <on|off>|click <on|off>> | userial <status|open|close|send|recv|term>" },
+    { "usb",      "usb status | ls [path] | keyboard <on|off> | mouse <on|off|cursor <on|off>|click <on|off>> | media <layout|desc> | userial <status|open|close|send|recv|term>" },
     { "httpd",    "httpd status | start | stop - HTTP file server on port 80" },
     { "certs",    "certs [info|list|add <file>|remove <name>|rebuild|clear|reload] - TLS trust store" },
     { "netstat",  "netstat - active TCP/UDP connections and listeners" },

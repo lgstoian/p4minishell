@@ -1319,14 +1319,22 @@ Owns ESP-IDF USB Host Library with two class drivers:
   Enumeration (`msc_host_install_device()`) runs with `s_usb_lock` released — it performs
   blocking SCSI transfers, and holding the module lock across them stalls every other USB
   operation behind one slow stick.
-- **HID (Human Interface Device)**: Keyboard and mouse with opt-in transcript echo.
+- **HID (Human Interface Device)**: Keyboard, mouse and media keys with opt-in transcript echo.
   Pointing devices run **report protocol** and their report descriptor is decoded
   (`usb_hid_layout.c`, host-tested) into button/X/Y/wheel offsets, so 16-bit axes,
   report IDs, padding and the wheel work; boot protocol has no wheel byte at all.
   A wheel notch always scrolls the transcript; the right-button edge is delivered
-  as Esc (dismiss/cancel) instead of being dropped. Echo is coalesced to ~10 Hz so
-  a 1 kHz mouse cannot bury the UI; `usb mouse desc|layout` dump the descriptor and
-  map and `usb.hid.mouse.events` counts real reports.
+  as Esc (dismiss/cancel, clears the shell input) instead of being dropped.
+  Cursor tracking and button-1 taps auto-enable on attach (`usb mouse cursor|click
+  off` disables them for the session). Echo is coalesced to ~10 Hz so a 1 kHz
+  mouse cannot bury the UI; `usb mouse desc|layout` dump the descriptor and map
+  and `usb.hid.mouse.events` counts real reports.
+- **Media keys**: a composite keyboard's Consumer Page (0x0C) interface is claimed
+  alongside the typing interface and decoded as a 16-bit usage array or variable
+  one-bit usages (`usb media layout|desc`). Volume Up/Down, Mute/Unmute and
+  Play/Pause act on the audio module and raise a header notification. Only one
+  keyboard and one media interface are claimed, preventing extra HID interfaces
+  from exhausting DWC endpoints.
 - **USB keyboard auto-detect**: Automatically detects USB HID keyboard on plug-in; routes keystrokes to CLI input line via `shell_usb_keyboard_input()` bridge
 - **Full US key map**: 60+ USB HID key codes including symbols, keypad, navigation, function keys, and modifier-aware shifted characters
 - **On-screen keyboard auto-hide**: hidden only after a USB keyboard interface has

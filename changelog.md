@@ -20,7 +20,7 @@ open bugs see [`bugs.md`](bugs.md).
 
 - **Hardware-free host unit lane.** `test/host/` builds the pure-logic Unity
   sources against ESP-IDF's preview `linux` target and runs them natively
-  (265 of 663 cases today, ~50 ms), so a logic regression is caught on every
+  (268 of 666 cases today, ~50 ms), so a logic regression is caught on every
   PR without a board. `tools/host_test_manifest.json` is the single source of
   truth - every `test_*.c` is either included or excluded with the component
   reason it cannot run yet; `tools/host_gen_runner.py` generates the runner
@@ -76,10 +76,13 @@ open bugs see [`bugs.md`](bugs.md).
   New `apps/website/canvas.html` demo and `s22_canvas` pixel gate.
 - **USB HID report protocol + board-to-board BLE chat.** Pointing devices now
   run report protocol and decode their HID report descriptor (16-bit axes,
-  report IDs, padding, wheel); the wheel works, right-click delivers Esc, echo is
-  coalesced to 10 Hz, and the OSK only hides after a real key report. The P4
-  USB-DWC DMA buffers moved to PSRAM, fixing `HCD Pipe alloc error` on the
-  reference board. BLE gained a connectable 0xFFF2 chat GATT service (RX write /
+  report IDs, padding, wheel); the wheel works, right-click delivers Esc (and
+  clears the shell input), echo is coalesced to 10 Hz, and cursor/click
+  tracking auto-enable on attach. Consumer-control media keys are claimed and
+  decoded (volume, mute, play/pause) with header feedback; only one keyboard
+  and one media interface are opened. The P4 USB-DWC DMA buffers moved to
+  PSRAM on both boards, fixing `HCD Pipe alloc error` / endpoint exhaustion.
+  `usb media layout|desc` diagnose the media map. BLE gained a connectable 0xFFF2 chat GATT service (RX write /
   TX notify) so two boards chat without Wi-Fi, a broker or a cable; services are
   registered before the NimBLE host starts.
 - **MCP (Model Context Protocol) client.** New `components/mcp/` leaf
@@ -333,7 +336,7 @@ open bugs see [`bugs.md`](bugs.md).
 
 ### Hardware verification (v1.4.2)
 
-- **Unit suite:** 663 tests, 0 failures, 2 ignored on COM3 (jc1060p470c) and
+- **Unit suite:** 666 tests, 0 failures, 2 ignored on COM3 (jc1060p470c) and
   COM6 (M5Stack Tab5). The two ignored cases are the `tmpfile()` history-file
   cases ESP-IDF does not provide.
 - **Fast tier (both boards, concurrent):** smoke 34, storage 59, batch 253,
@@ -356,10 +359,12 @@ open bugs see [`bugs.md`](bugs.md).
   credentials from `tools/wifi_local.json`).
 - **USB / Bluetooth hardware:** the ADATA USB stick enumerates, mounts at
   `usb:/`, reads/writes/deletes and returns to its original contents; the USB
-  mouse delivers motion, left/right buttons and wheel (counter evidence
-  motion=792, left=2, right=1, wheel=69) with the OSK still usable; the two
-  boards exchange BLE chat messages in both directions (MTU 256, rx/tx counters
-  and the rendered `[bt] ...` lines).
+  mouse shows its cursor automatically and delivers motion, left/right buttons
+  and wheel (motion/left/wheel counters and the Esc effect on the input line);
+  the USB keyboard types into the shell and its media interface reports
+  Volume Up/Down (50% -> 55% -> 50%), Mute (0%), Unmute and Play/Pause with
+  header feedback; the two boards exchange BLE chat messages in both
+  directions (MTU 256, rx/tx counters and the rendered `[bt] ...` lines).
 - **Screenshots:** all 11 documentation states refreshed and pixel-checked
   (`tools/screenshot_gate.py --update`, then a fresh-boot comparison); the
   browser dashboard shot was regenerated after the BMP-probe fix.

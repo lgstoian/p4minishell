@@ -5098,6 +5098,8 @@ errorlevel. Timeouts are bounded so the worker task is never hung.
 | usb mouse off | Disable mouse transcript echo |
 | usb mouse desc | Dump the connected mouse's HID report descriptor (hex) for diagnostics |
 | usb mouse layout | Print the decoded report map (button/X/Y/wheel byte, bit and width, report ID) |
+| usb media layout | Print the Consumer Page (media-key) report map, counters and last usage |
+| usb media desc | Dump the captured media-interface report descriptor |
 | usb mouse cursor <on\|off> | Track motion with a visible cursor (shared pointer with BLE; default off) |
 | usb mouse click <on\|off> | Deliver button-1 presses as taps at the cursor (shared; default off) |
 | usb mouse move <x> <y> | Place the cursor at native-panel pixels (clamped; needs cursor on) — serial cursor simulation |
@@ -5111,11 +5113,13 @@ errorlevel. Timeouts are bounded so the worker task is never hung.
 
 ### HID mouse cursor + click (shared USB/BLE pointer)
 Both transports feed one display-owned LVGL pointer indev with native-panel
-deltas (LVGL rotates them like touch). Motion only tracks and button-1 only
-taps while opted in — both default off, so a plugged mouse keeps the
-historical scroll-only behavior until enabled. A tap behaves exactly like a
-touch tap (modal buttons, list rows, transcript anchors). Cursor and click
-are one shared state: `usb mouse` and `bluetooth mouse` toggle the same
+deltas (LVGL rotates them like touch). Motion tracking and button-1 tap
+delivery are enabled automatically when a mouse attaches, so a plugged mouse
+does not need a command; `usb mouse cursor off` / `usb mouse click off` turn
+either off for the session. A tap behaves exactly like a touch tap (modal
+buttons, list rows, transcript anchors). The right button is delivered as
+Esc: it dismisses a modal/pager/editor and clears the shell input. Cursor and
+click are one shared state: `usb mouse` and `bluetooth mouse` toggle the same
 switches. `usb status` reports them (`usb.hid.mouse.ptr:
 cursor=on click=off x=512 y=300`, native pixels). Cursor size is
 `P4_CONFIG_MOUSE_CURSOR_PX`.
@@ -5135,6 +5139,16 @@ A composite device can expose a keyboard interface that never types (gaming
 mice often do). The on-screen-keyboard auto-hide therefore keys off a **real key
 report** (`usb.hid.keyboard.typed: yes`), not mere enumeration, so plugging such
 a mouse does not take the OSK away.
+
+**Media keys.** A composite keyboard's Consumer Page (0x0C) interface is
+opened alongside the typing interface and decoded as either a 16-bit usage
+array or variable one-bit usages (`usb media layout` / `usb media desc`
+show the map and descriptor). Volume Up/Down change the speaker volume,
+Mute/Unmute restore the previous level, and Play/Pause pauses active
+playback or reports that no media is loaded; every action shows a header
+notification. Only one keyboard and one media interface are claimed, so a
+composite keyboard's extra HID interfaces cannot exhaust the DWC endpoints
+(the P4 USB DMA buffers live in PSRAM).
 
 Serial cursor simulation needs no physical mouse: with the switches on,
 `usb mouse move <x> <y>` places the cursor (native panel pixels — read them

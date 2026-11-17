@@ -336,6 +336,9 @@ extern void test_usb_hid_layout_extract_axis_extremes(void);
 extern void test_usb_hid_layout_without_wheel(void);
 extern void test_usb_hid_layout_report_id(void);
 extern void test_usb_hid_layout_rejects_bad_descriptor(void);
+extern void test_usb_consumer_array_layout(void);
+extern void test_usb_consumer_variable_layout(void);
+extern void test_usb_consumer_rejects_bad_descriptor(void);
 
 /* --- test_theme.c -------------------------------------------- */
 extern void test_theme_registry(void);
@@ -662,6 +665,9 @@ void app_main(void)
     RUN_TEST(test_usb_hid_layout_without_wheel);
     RUN_TEST(test_usb_hid_layout_report_id);
     RUN_TEST(test_usb_hid_layout_rejects_bad_descriptor);
+    RUN_TEST(test_usb_consumer_array_layout);
+    RUN_TEST(test_usb_consumer_variable_layout);
+    RUN_TEST(test_usb_consumer_rejects_bad_descriptor);
 
     /* test_theme.c */
     RUN_TEST(test_theme_registry);

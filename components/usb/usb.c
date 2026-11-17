@@ -35,6 +35,7 @@
 #include "usb_hid_layout.h"
 #include "ansi.h"
 #include "ansi_palette.h"
+#include "audio.h"
 #include "display.h"
 #include "p4minishell_config.h"
 
@@ -184,6 +185,7 @@ static usb_msc_state_t s_usb_msc[P4_CONFIG_USB_MSC_MAX_DEVICES];
 static bool s_usb_msc_automount;
 static usb_hid_slot_t s_usb_keyboard;
 static usb_hid_slot_t s_usb_mouse;
+static usb_hid_slot_t s_usb_consumer;   /* HID consumer/media-key interface */
 static hid_keyboard_input_report_boot_t s_prev_keyboard_report;
 static int s_mouse_x;
 static int s_mouse_y;
@@ -206,6 +208,18 @@ static usb_keyboard_input_cb_t s_keyboard_input_cb;
 #define USB_MOUSE_ECHO_INTERVAL_US 100000
 
 static usb_mouse_layout_t s_mouse_layout;
+static usb_consumer_layout_t s_consumer_layout;
+static uint16_t s_consumer_last_usage;
+static uint32_t s_consumer_reports;
+static uint16_t s_consumer_last_active;
+static uint16_t s_consumer_history[8];
+static int s_consumer_history_pos;
+static uint8_t s_consumer_last_raw[8];
+static size_t s_consumer_last_len;
+static uint8_t s_consumer_desc[256];
+static size_t s_consumer_desc_len;
+static uint8_t s_mouse_last_buttons;
+static int s_consumer_saved_volume = 50;
 /* Copy of the connected mouse's report descriptor for the `usb mouse desc`
  * diagnostic (the driver's pointer is only valid while the device is open). */
 static uint8_t s_mouse_desc[256];
@@ -580,6 +594,8 @@ static void usb_print_usage(void)
     usb_emit_syncf("  usb mouse cursor <on|off>\n");
     usb_emit_syncf("  usb mouse click <on|off>\n");
     usb_emit_syncf("  usb mouse move <x> <y>\n");
+    usb_emit_syncf("  usb mouse desc | layout\n");
+    usb_emit_syncf("  usb media layout | desc\n");
     usb_emit_syncf("  usb mouse click [ms]\n");
     usb_emit_syncf("Paths: usb:/file.txt, usbN:/file.txt, /usbN/file.txt, or relative-to-/usb0\n");
 }
@@ -902,10 +918,12 @@ static void usb_handle_mouse_input_locked(const usb_module_event_t *event)
         dx = (int)report.x_displacement;
         dy = (int)report.y_displacement;
         buttons = report.buttons.val;
+        s_mouse_last_buttons = buttons;
         if (length >= sizeof(report) + 1) {
             wheel = (int)(int8_t)data[sizeof(report)];
         }
     }
+    s_mouse_last_buttons = buttons;
 
     /* Scroll the transcript regardless of echo mode: one wheel notch moves the
      * view by the configured step, positive wheel scrolling up (negative delta
@@ -980,6 +998,80 @@ static void usb_handle_mouse_input_locked(const usb_module_event_t *event)
             s_mouse_echo_acc_wheel = 0;
             s_mouse_echo_last_us = now;
         }
+    }
+}
+
+/** Media keys (Consumer Page): volume, mute and transport. An array report
+ *  carries the usage code; variable reports set one bit per usage. Act on the
+ *  press edge only (the release reports 0), so holding a key does not spin. */
+static void usb_handle_consumer_input_locked(const usb_module_event_t *event)
+{
+    uint16_t usage = usb_consumer_report_usage(event->data.hid_input.data,
+                                               event->data.hid_input.length,
+                                               &s_consumer_layout);
+    int volume;
+
+    s_consumer_reports++;
+    s_consumer_last_len = event->data.hid_input.length < sizeof(s_consumer_last_raw)
+                             ? event->data.hid_input.length
+                             : sizeof(s_consumer_last_raw);
+    memcpy(s_consumer_last_raw, event->data.hid_input.data, s_consumer_last_len);
+    if (usage == s_consumer_last_usage) {
+        return;
+    }
+    s_consumer_last_usage = usage;
+    if (usage == 0) {
+        return;
+    }
+    s_consumer_last_active = usage;
+    s_consumer_history[s_consumer_history_pos++ % 8] = usage;
+
+    switch (usage) {
+    case 0x00E9:   /* Volume Increment */
+    case 0x00EA:   /* Volume Decrement */
+        volume = audio_get_volume() + (usage == 0x00E9 ? 5 : -5);
+        if (volume < 0) volume = 0;
+        if (volume > 100) volume = 100;
+        (void)audio_set_volume(volume);
+        usb_emit_asyncf("usb keyboard: volume %d%%\n", volume);
+        usb_notify_headerf(2000, "Volume %d%%", volume);
+        break;
+    case 0x00E2:   /* Mute */
+        volume = audio_get_volume();
+        if (volume > 0) {
+            s_consumer_saved_volume = volume;
+            (void)audio_set_volume(0);
+            usb_emit_asyncf("usb keyboard: mute\n");
+            usb_notify_headerf(2000, "Mute");
+        } else {
+            int restored = s_consumer_saved_volume > 0
+                               ? s_consumer_saved_volume : 50;
+
+            (void)audio_set_volume(restored);
+            usb_emit_asyncf("usb keyboard: unmute %d%%\n", restored);
+            usb_notify_headerf(2000, "Volume %d%%", restored);
+        }
+        break;
+    case 0x00CD:   /* Play/Pause */
+        if (audio_busy()) {
+            audio_stop();
+            usb_emit_asyncf("usb keyboard: pause\n");
+            usb_notify_headerf(2000, "Pause");
+        } else {
+            usb_emit_asyncf("usb keyboard: play (no media loaded)\n");
+            usb_notify_headerf(2000, "Play: no media loaded");
+        }
+        break;
+    case 0x00B0:
+    case 0x00B3:
+    case 0x00B4:
+    case 0x00B5:
+    case 0x00B6:
+        usb_emit_asyncf("usb keyboard: media 0x%04X\n", (unsigned)usage);
+        break;
+    default:
+        usb_emit_asyncf("usb keyboard: media 0x%04X\n", (unsigned)usage);
+        break;
     }
 }
 
@@ -1112,8 +1204,24 @@ static void usb_module_task(void *arg)
             }
 
             slot = usb_slot_for_proto(params.proto);
+            if (slot == NULL && params.proto == HID_PROTOCOL_NONE) {
+                /* Consumer-control interfaces (media keys) have no boot
+                 * protocol, so their bInterfaceProtocol is 0. */
+                slot = &s_usb_consumer;
+            }
             if (slot == NULL) {
                 usb_record_infof("USB HID interface connected with unsupported protocol %u", (unsigned int)params.proto);
+                break;
+            }
+            /* Composite keyboards expose several interfaces (typing, media,
+             * system control, NKRO). Claim one of each kind: opening every
+             * interface exhausts the DWC endpoint/FIFO budget and one failure
+             * can take the whole keyboard down. */
+            if ((slot == &s_usb_keyboard && s_usb_keyboard.attached) ||
+                (slot == &s_usb_mouse && s_usb_mouse.attached) ||
+                (slot == &s_usb_consumer && s_usb_consumer.attached)) {
+                usb_record_infof("USB HID duplicate interface ignored (protocol %u)",
+                                 (unsigned int)params.proto);
                 break;
             }
 
@@ -1123,14 +1231,46 @@ static void usb_module_task(void *arg)
                 break;
             }
 
+            /* Classify from the descriptor before starting: a media-key
+             * interface can also advertise protocol KEYBOARD (1), and then it
+             * would otherwise steal the typing keyboard's slot. */
+            {
+                size_t desc_len = 0;
+                uint8_t *desc = hid_host_get_report_descriptor(
+                    event.data.hid_connected.handle, &desc_len);
+                usb_consumer_layout_t consumer;
+
+                usb_consumer_parse_layout(desc, desc_len, &consumer);
+                if (slot == &s_usb_keyboard && s_usb_keyboard.attached &&
+                    consumer.valid) {
+                    slot = &s_usb_consumer;
+                } else if (params.proto == HID_PROTOCOL_NONE && !consumer.valid) {
+                    usb_record_infof("USB HID interface with no consumer map (protocol 0 ignored)");
+                    (void)hid_host_device_close(event.data.hid_connected.handle);
+                    break;
+                }
+                if (slot == &s_usb_consumer) {
+                    s_consumer_layout = consumer;
+                    s_consumer_desc_len = desc_len < sizeof(s_consumer_desc)
+                                              ? desc_len : sizeof(s_consumer_desc);
+                    if (desc != NULL && s_consumer_desc_len > 0) {
+                        memcpy(s_consumer_desc, desc, s_consumer_desc_len);
+                    }
+                    if (!consumer.valid) {
+                        usb_record_warningf("USB media interface: consumer report map not decoded");
+                    }
+                }
+            }
+
             if (params.sub_class == HID_SUBCLASS_BOOT_INTERFACE) {
                 /* Boot protocol has no wheel byte and no report IDs. A mouse
                  * therefore runs report protocol and is decoded through its
-                 * report descriptor; a keyboard keeps the boot layout, which
-                 * is what its parser expects and is identical on every
-                 * boot-capable keyboard. */
+                 * report descriptor; a media-key interface is not a boot device
+                 * either. A keyboard keeps the boot layout, which is what its
+                 * parser expects and is identical on every boot-capable
+                 * keyboard. */
                 hid_report_protocol_t requested =
-                    (params.proto == HID_PROTOCOL_MOUSE)
+                    (params.proto == HID_PROTOCOL_MOUSE || slot == &s_usb_consumer)
                         ? HID_REPORT_PROTOCOL_REPORT
                         : HID_REPORT_PROTOCOL_BOOT;
 
@@ -1174,6 +1314,18 @@ static void usb_module_task(void *arg)
                 break;
             }
 
+            /* A plugged mouse should work without commands. Motion tracking and
+             * button-1 tap delivery are on by default; `usb mouse cursor off` /
+             * `usb mouse click off` still turn either off for the session. */
+            if (slot == &s_usb_mouse) {
+                if (display_mouse_cursor_enable() == ESP_OK) {
+                    usb_record_infof("USB mouse: cursor tracking enabled on attach");
+                }
+                if (display_mouse_click_enable() == ESP_OK) {
+                    usb_record_infof("USB mouse: click delivery enabled on attach");
+                }
+            }
+
             if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) != pdTRUE) {
                 /* No handle recorded, so close it here or it leaks. */
                 (void)hid_host_device_stop(event.data.hid_connected.handle);
@@ -1183,15 +1335,22 @@ static void usb_module_task(void *arg)
             slot->attached = true;
             slot->handle = event.data.hid_connected.handle;
             slot->params = params;
-            if (params.proto == HID_PROTOCOL_KEYBOARD) {
+            if (slot == &s_usb_keyboard) {
                 memset(&s_prev_keyboard_report, 0, sizeof(s_prev_keyboard_report));
-            } else {
+            } else if (slot == &s_usb_mouse) {
                 s_mouse_x = 0;
                 s_mouse_y = 0;
+            } else {
+                s_consumer_last_usage = 0;
             }
-            usb_emit_asyncf("usb: HID %s connected\n", params.proto == HID_PROTOCOL_KEYBOARD ? "keyboard" : "mouse");
+            usb_emit_asyncf("usb: HID %s connected\n",
+                            slot == &s_usb_keyboard ? "keyboard"
+                            : slot == &s_usb_mouse ? "mouse"
+                                                   : "media keys");
             usb_notify_headerf(3500,
-                               params.proto == HID_PROTOCOL_KEYBOARD ? "USB keyboard connected" : "USB mouse connected");
+                               slot == &s_usb_keyboard ? "USB keyboard connected"
+                               : slot == &s_usb_mouse ? "USB mouse connected"
+                                                      : "USB media keys connected");
             xSemaphoreGive(s_usb_lock);
             break;
         }
@@ -1199,9 +1358,14 @@ static void usb_module_task(void *arg)
             if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) != pdTRUE) {
                 break;
             }
-            if (event.data.hid_input.proto == HID_PROTOCOL_KEYBOARD) {
+            if (s_usb_consumer.attached &&
+                event.data.hid_input.handle == s_usb_consumer.handle) {
+                usb_handle_consumer_input_locked(&event);
+            } else if (s_usb_keyboard.attached &&
+                       event.data.hid_input.handle == s_usb_keyboard.handle) {
                 usb_handle_keyboard_input_locked(&event);
-            } else if (event.data.hid_input.proto == HID_PROTOCOL_MOUSE) {
+            } else if (s_usb_mouse.attached &&
+                       event.data.hid_input.handle == s_usb_mouse.handle) {
                 usb_handle_mouse_input_locked(&event);
             }
             xSemaphoreGive(s_usb_lock);
@@ -1229,11 +1393,24 @@ static void usb_module_task(void *arg)
                 usb_emit_asyncf("usb: HID mouse disconnected\n");
                 usb_notify_headerf(3500, "USB mouse disconnected");
             }
+            if (s_usb_consumer.handle == event.data.hid_interface.handle) {
+                (void)hid_host_device_stop(s_usb_consumer.handle);
+                (void)hid_host_device_close(s_usb_consumer.handle);
+                usb_clear_hid_slot(&s_usb_consumer);
+                memset(&s_consumer_layout, 0, sizeof(s_consumer_layout));
+                s_consumer_last_usage = 0;
+                usb_emit_asyncf("usb: HID media keys disconnected\n");
+                usb_notify_headerf(3500, "USB media keys disconnected");
+            }
             xSemaphoreGive(s_usb_lock);
             break;
         case USB_MODULE_EVENT_HID_TRANSFER_ERROR:
             usb_record_warningf("USB HID transfer error on %s",
-                                event.data.hid_interface.proto == HID_PROTOCOL_KEYBOARD ? "keyboard" : "mouse");
+                                event.data.hid_interface.handle == s_usb_keyboard.handle
+                                    ? "keyboard"
+                                : event.data.hid_interface.handle == s_usb_mouse.handle
+                                    ? "mouse"
+                                    : "media keys");
             break;
         default:
             break;
@@ -1512,6 +1689,33 @@ void usb_status(void)
     usb_emit_syncf("usb.hid.mouse: attached=%s echo=%s\n",
                    s_usb_mouse.attached ? "yes" : "no",
                    s_usb_mouse.echo_enabled ? "on" : "off");
+    usb_emit_syncf("usb.hid.consumer: attached=%s map=%s last=0x%04X reports=%lu\n",
+                   s_usb_consumer.attached ? "yes" : "no",
+                   s_consumer_layout.valid
+                       ? (s_consumer_layout.is_array ? "array" : "variable")
+                       : "none",
+                   (unsigned)s_consumer_last_usage,
+                   (unsigned long)s_consumer_reports);
+    {
+        char raw[8 * 3 + 1];
+        size_t used = 0;
+
+        raw[0] = '\0';
+        for (size_t i = 0; i < s_consumer_last_len && used + 4 < sizeof(raw); i++) {
+            used += (size_t)snprintf(raw + used, sizeof(raw) - used, "%02X ",
+                                     s_consumer_last_raw[i]);
+        }
+        usb_emit_syncf("usb.hid.consumer.raw: len=%u %s\n",
+                       (unsigned)s_consumer_last_len, raw);
+        usb_emit_syncf("usb.hid.consumer.active: last=0x%04X history=",
+                       (unsigned)s_consumer_last_active);
+        for (int i = 0; i < 8; i++) {
+            if (s_consumer_history[i] != 0) {
+                usb_emit_syncf("0x%04X ", (unsigned)s_consumer_history[i]);
+            }
+        }
+        usb_emit_syncf("\n");
+    }
     /* Shared display pointer state (same switches as `bluetooth mouse
      * cursor|click`); position in native panel pixels. */
     {
@@ -1524,10 +1728,10 @@ void usb_status(void)
                        (unsigned long)s_mouse_ev_left,
                        (unsigned long)s_mouse_ev_right,
                        (unsigned long)s_mouse_ev_wheel);
-        usb_emit_syncf("usb.hid.mouse.ptr: cursor=%s click=%s x=%d y=%d\n",
+        usb_emit_syncf("usb.hid.mouse.ptr: cursor=%s click=%s x=%d y=%d last=0x%02X\n",
                        display_mouse_cursor_enabled() ? "on" : "off",
                        display_mouse_click_enabled() ? "on" : "off",
-                       (int)cursor_x, (int)cursor_y);
+                       (int)cursor_x, (int)cursor_y, s_mouse_last_buttons);
     }
 
     xSemaphoreGive(s_usb_lock);
@@ -2064,6 +2268,44 @@ static void usb_mouse_print_descriptor(void)
     }
 }
 
+static void usb_media_print_layout(void)
+{
+    usb_emit_syncf("usb.media.layout: attached=%d map=%s fields=%d reports=%lu last=0x%04X\n",
+                   s_usb_consumer.attached ? 1 : 0,
+                   s_consumer_layout.valid
+                       ? (s_consumer_layout.is_array ? "array" : "variable")
+                       : "none",
+                   s_consumer_layout.count,
+                   (unsigned long)s_consumer_reports,
+                   (unsigned)s_consumer_last_usage);
+    for (int i = 0; i < s_consumer_layout.count; i++) {
+        const usb_consumer_field_t *f = &s_consumer_layout.fields[i];
+
+        usb_emit_syncf("  f%d usage=0x%04X byte=%u bit=%u bits=%u rid=%u\n",
+                       i, (unsigned)f->usage, (unsigned)f->byte, (unsigned)f->bit,
+                       (unsigned)f->bits, (unsigned)f->report_id);
+    }
+}
+
+static void usb_media_print_descriptor(void)
+{
+    if (s_consumer_desc_len == 0) {
+        usb_emit_syncf("usb.media.desc: no descriptor captured\n");
+        return;
+    }
+    usb_emit_syncf("usb.media.desc: %u bytes\n", (unsigned)s_consumer_desc_len);
+    for (size_t pos = 0; pos < s_consumer_desc_len; pos += 16) {
+        char line[16 * 3 + 1];
+        size_t used = 0;
+
+        for (size_t i = 0; i < 16 && pos + i < s_consumer_desc_len; i++) {
+            used += (size_t)snprintf(line + used, sizeof(line) - used, "%02X ",
+                                     s_consumer_desc[pos + i]);
+        }
+        usb_emit_syncf("  %s\n", line);
+    }
+}
+
 void usb_handle_command(char *command)
 {
     char buffer[USB_PATH_BYTES];
@@ -2085,6 +2327,15 @@ void usb_handle_command(char *command)
 
     if (strutil_text_equals_ignore_case(argv[1], "status")) {
         usb_status();
+        return;
+    }
+
+    if (strutil_text_equals_ignore_case(argv[1], "media")) {
+        if (argc >= 3 && strutil_text_equals_ignore_case(argv[2], "desc")) {
+            usb_media_print_descriptor();
+        } else {
+            usb_media_print_layout();
+        }
         return;
     }
 

@@ -1558,6 +1558,7 @@
       "provides": "USB host: MSC/HID/CDC + userial",
       "requires": [
         "ansi",
+        "audio",
         "display",
         "strutil",
         "usb_host_hid",

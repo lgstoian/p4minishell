@@ -57,6 +57,7 @@ idf_component_register(
     PRIV_INCLUDE_DIRS ${priv_includes}
     REQUIRES
         ansi
+        audio
         display
         strutil
         usb_host_hid
