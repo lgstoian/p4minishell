@@ -17,7 +17,13 @@ P4MiniShell is a single-user hobby firmware. It assumes:
 - the **SD card is portable storage**, readable on any host — there is no
   full-disk encryption;
 - the **LAN may be hostile** once Wi-Fi is connected (`httpd`, `tcpterm`,
-  `net` MQTT without `net tls on`).
+  `net` MQTT without `net tls on`);
+- an **emoji pack is untrusted data**: `EMOJI/EMOJI.INI` on SD/USB is parsed
+  with the shared INI reader into a bounded table (128 entries, 6 hex digits,
+  `cells` clamped to 1-2), and entry values may not contain `/`, `\` or a
+  path separator, so a pack can only reference files inside `EMOJI/`. Images
+  go through the same size-capped `imgdec`/`gfx` path as every other picture;
+  a malformed pack is ignored, never fatal.
 
 It defends against casual snooping (shoulder surfing, shared photos of the
 screen, a borrowed device) and against remote LAN access to the file server.

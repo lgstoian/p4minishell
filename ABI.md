@@ -121,6 +121,8 @@ Flat `KEY=VALUE`, the same shape as any INI file (read through the shared
 | `requires` | no | Dependency (`APP>=1.2`, `APP=1.2`, `APP>1.2`); enforced at install. |
 | `services` | no | Comma-separated dependency list (`APP>=1.2`, `APP=2`, `APP>3`, or a bare `APP` = any version); enforced at install (every declared service must be installed and satisfy its version). Additive metadata — no ABI bump. |
 | `min_fw` | no | Minimum firmware (`1.4.0`); enforced at install, never bypassed by `/force`. |
+| `alpha` | no | Opt-in TUI/modal transparency, 0-255 or `0-100%` (255 = opaque). `launch` applies it to the whole TUI surface and every modal panel for the app's lifetime, then restores the default. (v1.4.3) |
+| `scrim` | no | Opt-in modal backdrop dimming, 0-255 or `0-100%` (0 = none). Black at that opacity behind modal panels; only meaningful with a translucent panel. (v1.4.3) |
 
 New keys are additive metadata only — they never change the entry ABI, so
 no `P4_CONFIG_NATIVE_ABI` bump is required to adopt them.

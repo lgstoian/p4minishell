@@ -1109,6 +1109,73 @@ int tui_selftest_check(const char **fail_out);    /* aggregate: palette + covera
 - `draw` batch verb (`components/command/command.c`) auto-enters TUI via `tui_init` when no TUI/modal surface is active, otherwise reuses the active buffer; batch verbs `draw box`/`line`/`fill`/`text`/`clear`/`window`/`fullscreen` map directly to these primitives.
 - Prompt fixed: `main.c:112` input line and `modal_surf.c:412` `ask` placeholder use `shell_prompt_render_plain()` (`components/shell/shell.c:412`); screenshot debug loop `grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py` crops to transcript rect for pixel-perfect verification.
 
+## Colour, alpha and emoji APIs (v1.4.3)
+
+Three small leaf APIs own the rendered-UI decisions; every surface calls them
+instead of keeping its own table.
+
+### `components/markdown/css_color.h`
+
+```c
+typedef struct { uint8_t r, g, b, a; } css_rgba_t;   /* a: 0 transparent .. 255 */
+
+bool      css_color_parse(const char *text, css_rgba_t *out);
+             /* #rgb #rgba #rrggbb #rrggbbaa, rgb()/rgba() (0-255 or %),
+              * `transparent`, basic named colours; false = unsupported */
+uint8_t   css_color_to_dos(const css_rgba_t *color); /* nearest CGA index, 16 = none */
+css_rgba_t css_color_from_dos(uint8_t dos);
+css_rgba_t css_color_blend(css_rgba_t fg, css_rgba_t bg, uint8_t alpha);
+```
+
+`js_canvas_rgba_t` is a typedef of `css_rgba_t`; `js_canvas_parse_color()`
+delegates here, and `dom_css_color()` is a DOS-index wrapper. The classic
+palette itself is `ansi_cga_color(uint8_t)` / `ansi_cga_nearest(uint32_t)`
+(`components/ansi/ansi.h`); `tui_dos_color_rgb()` delegates to it.
+
+### `components/font/emoji_core.h`
+
+```c
+bool     emoji_is_codepoint(uint32_t cp);    /* emoji-presentation ranges */
+bool     emoji_is_modifier(uint32_t cp);     /* ZWJ, VS15/16, keycap, skin tones */
+uint32_t emoji_dos_glyph(uint32_t cp);       /* CP437 fallback codepoint, 0 = none */
+size_t   emoji_fallback_utf8(uint32_t cp, char out[5]);
+size_t   emoji_utf8_encode(uint32_t cp, char out[5]);
+size_t   emoji_utf8_decode(const char *text, uint32_t *cp_out);
+```
+
+`font_get()` chains a per-role glyph-remapping link built on this core, so
+LVGL labels get the fallback automatically. TUI/HTML text calls
+`emoji_fallback_utf8()` (`tui_print_at`) or the `dom_render` hooks.
+
+### `components/emoji/emoji.h`
+
+```c
+void emoji_pack_init(void);        /* lazy: sd:/EMOJI/EMOJI.INI then usb:/ */
+void emoji_pack_reload(void);
+void emoji_pack_free(void);
+int  emoji_pack_count(void);
+const char *emoji_pack_source(void);            /* "sd", "usb", "" */
+bool emoji_pack_lookup(uint32_t cp, char *path, size_t path_size, int *cells);
+const gfx_surface_t *emoji_pack_image(uint32_t cp, int *cells);
+     /* cells*8 x 8 RGB565, owned by a 4-slot PSRAM cache; NULL on miss */
+```
+
+### Surface additions
+
+- `dom_render_ops_t`: `fill_bg(ctx,...,bg,alpha)`, `base_bg`,
+  `put_emoji(ctx,col,row,seq,len,&cells)` and
+  `emoji_fallback(ctx,seq,len,buf)` (all optional; the markdown leaf stays
+  dependency-free).
+- DOM nodes: `fg_alpha`, `bg_alpha`, `opacity` (255 defaults). `opacity`
+  multiplies the subtree; `background-color: transparent` sets `bg_alpha = 0`.
+- `tui.h`: `tui_page_bg_rect(col,row,w,h,bg,alpha)`,
+  `tui_page_draw_image(col,row,w,h,surf)`,
+  `tui_set_background_alpha(uint8_t)` / `tui_get_background_alpha()`.
+- `modal_surf.h`: `modal_surf_set_alpha(panel_alpha, scrim_alpha)` /
+  `modal_surf_get_alpha()`.
+- `storage_path.h`: `storage_shell_path(path, out, size)` maps a VFS path back
+  to `sd:/`/`usb:/` (used to publish `APPROOT`).
+
 ## Batch Module API
 
 Declared in `components/batch/batch.h`.

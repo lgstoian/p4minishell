@@ -25,8 +25,8 @@ Complete reference of all file formats supported by P4MiniShell, including viewi
 | Extension | Format | View | Edit | Render | Notes |
 |-----------|--------|------|------|--------|-------|
 | `.bmp` | BMP | ✅ | ❌ | ✅ | 24/32-bit BI_RGB, top-down/bottom-up, fit-to-screen decode |
-| `.png` | PNG | ⚠️ | ❌ | ⚠️ | Via external tools only |
-| `.jpg` / `.jpeg` | JPEG | ⚠️ | ❌ | ⚠️ | Via external tools only |
+| `.png` | PNG | ✅ | ❌ | ✅ | Native decode via `imgdec` (LodePNG), scaled to RGB565; also used by emoji packs |
+| `.jpg` / `.jpeg` | JPEG | ✅ | ❌ | ✅ | Native decode via `imgdec` (TJpgDec), scaled to RGB565; also used by emoji packs |
 | `.gif` | GIF | ⚠️ | ❌ | ⚠️ | Via external tools only |
 
 **Legend:** ✅ = Full support, ⚠️ = Partial/External, ❌ = Not supported
@@ -98,6 +98,19 @@ Complete reference of all file formats supported by P4MiniShell, including viewi
 | `.p4a` | P4MiniShell archive | Backup/restore | `archive`, `backup` |
 
 ---
+
+## Emoji Packs (v1.4.3)
+
+| Path | Format | Meaning |
+|------|--------|---------|
+| `EMOJI/EMOJI.INI` | INI (shared core) | Index: `HEXCODEPOINT=FILE`, optional `HEXCODEPOINT.cells=1|2` |
+| `EMOJI/*.BMP` | BMP | Pack glyph, decoded by `imgdec`/`gfx` and drawn as cell-ramp pixels |
+| `EMOJI/*.PNG` | PNG | Same, with alpha composited by the shared decoder |
+
+The pack lives at the root of SD or USB (SD wins). No pack is required: the
+firmware's built-in retro MS-DOS/CP437 map is the default look. Single
+codepoints only; ZWJ sequences, flags and skin tones fall back to their
+components.
 
 ## Font Formats
 
@@ -206,6 +219,11 @@ To add a new file format:
 ---
 
 ## Version History
+
+- **v1.4.3** - emoji packs (`EMOJI/EMOJI.INI` + BMP/PNG) and the built-in
+  retro fallback; CSS alpha (`rgba()`, `transparent`, `opacity`) in HTML and
+  the canvas; PNG/JPEG rows corrected (native decode has shipped since the
+  `imgdec` round).
 
 | Version | Date | Changes |
 |---------|------|---------|
