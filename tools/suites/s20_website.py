@@ -79,5 +79,20 @@ def run(dev, ctx):
         except Exception as exc:  # noqa: BLE001
             c.check("showcase screenshot captured", False, str(exc))
 
+    # `html` is the blocking modal form of the same engine (Esc/q closes).
+    # While it is up the shell is inside the modal, so the only probe is that a
+    # following command runs once `q` is sent.
+    dev.session.write_line("html sd:/WEB/INDEX.HTML")
+    time.sleep(4)
+    dev.session.write_line("q")
+    try:
+        out = dev.run("echo html-modal-closed", timeout=20)
+        c.expect("blocking html modal closes on q", "html-modal-closed", out)
+        c.check("blocking html did not print an error",
+                "[M-WEB-FAIL]" not in out and "Unknown command" not in out,
+                out[-300:])
+    except Exception as exc:  # noqa: BLE001 - a stuck modal is a failure
+        c.check("blocking html modal closes on q", False, str(exc))
+
     dev.run("del /f WEB/SHOT.BMP", timeout=30)
     return c

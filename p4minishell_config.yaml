@@ -729,6 +729,11 @@ tui:
     type: int
     description: "Logical TUI grid rows (DOS 25 is the default; pixel height scales to the live transcript region)"
     range: "15..40"
+  page_rows:
+    value: 2000
+    type: int
+    description: "Rows a rendered page holds in PSRAM (the browser/html page buffer). The visible grid stays 25 rows; touch/wheel scrolling walks this buffer, and 2000 rows covers a full Wikipedia article."
+    range: "200..4000"
   list_max_items:
     value: 64
     type: int
