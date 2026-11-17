@@ -12,7 +12,7 @@
   ],
   "phase": 1,
   "target": "linux",
-  "expected_cases": 283,
+  "expected_cases": 284,
   "prelude": [
     {
       "name": "batch_env_pool_init",

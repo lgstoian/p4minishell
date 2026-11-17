@@ -690,6 +690,7 @@ extern void test_emoji_detects_modifiers(void);
 extern void test_emoji_fallback_map(void);
 extern void test_emoji_utf8_round_trip(void);
 extern void test_emoji_fallback_is_valid_utf8(void);
+extern void test_emoji_glyphs_are_in_font(void);
 extern void test_theme_registry(void);
 extern void test_theme_lookup(void);
 extern void test_theme_set_and_active(void);
@@ -1602,6 +1603,7 @@ void app_main(void)
     RUN_TEST(test_emoji_fallback_map);
     RUN_TEST(test_emoji_utf8_round_trip);
     RUN_TEST(test_emoji_fallback_is_valid_utf8);
+    RUN_TEST(test_emoji_glyphs_are_in_font);
     UNITY_END();
 
     /* Theme registry (font component). */

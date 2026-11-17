@@ -14,40 +14,40 @@
 
 #include "emoji_core.h"
 
-/* CP437 codepoints the fallback uses. unscii (the terminal font) covers the
- * whole CP437 set, which is why the fallback is guaranteed to have a glyph. */
+/* The fallback codepoints MUST exist in the shipped cell/terminal font
+ * (`lv_font_unscii_16`: ASCII, U+2500-257F, U+2600-26FF). Anything outside
+ * those ranges renders as the font's placeholder, which is the tofu this
+ * feature exists to avoid, so the map is deliberately restricted to the
+ * 2600-26FF symbol block (plus the ASCII smileys' block). */
 #define DOS_SMILE       0x263A  /* ☺ */
 #define DOS_SMILE_INV   0x263B  /* ☻ */
 #define DOS_HEART       0x2665  /* ♥ */
 #define DOS_DIAMOND     0x2666  /* ♦ */
 #define DOS_CLUB        0x2663  /* ♣ */
 #define DOS_SPADE       0x2660  /* ♠ */
-#define DOS_BULLET      0x2022  /* • */
-#define DOS_CIRCLE      0x25CB  /* ○ */
 #define DOS_MALE        0x2642  /* ♂ */
 #define DOS_FEMALE      0x2640  /* ♀ */
 #define DOS_NOTE        0x266A  /* ♪ */
 #define DOS_NOTES       0x266B  /* ♫ */
 #define DOS_SUN         0x263C  /* ☼ */
-#define DOS_RIGHT       0x25BA  /* ► */
-#define DOS_LEFT        0x25C4  /* ◄ */
-#define DOS_UP          0x2191  /* ↑ */
-#define DOS_DOWN        0x2193  /* ↓ */
-#define DOS_ARROW_R     0x2192  /* → */
-#define DOS_ARROW_L     0x2190  /* ← */
-#define DOS_ARROW_LR    0x2194  /* ↔ */
-#define DOS_UPDOWN      0x2195  /* ↕ */
-#define DOS_DOUBLE_BANG 0x203C  /* ‼ */
-#define DOS_PILCROW     0x00B6  /* ¶ */
-#define DOS_SECTION     0x00A7  /* § */
-#define DOS_ANGLE       0x221F  /* ∟ */
-#define DOS_TRI_UP      0x25B2  /* ▲ */
-#define DOS_TRI_DOWN    0x25BC  /* ▼ */
-#define DOS_SQUARE      0x25A0  /* ■ */
 #define DOS_STAR        0x2605  /* ★ */
-#define DOS_CHECK       0x221A  /* √ */
-#define DOS_HALF        0x00BD  /* ½ */
-#define DOS_PLUSMINUS   0x00B1  /* ± */
+#define DOS_STAR_OPEN   0x2606  /* ☆ */
+#define DOS_CIRCLE      0x2610  /* ☐ (ballot box: generic object) */
+#define DOS_TRI_UP      0x2605  /* ★ */
+#define DOS_TRI_DOWN    0x2606  /* ☆ */
+#define DOS_RIGHT       0x2605  /* ★ */
+#define DOS_LEFT        0x2606  /* ☆ */
+#define DOS_UP          0x2605  /* ★ */
+#define DOS_DOWN        0x2606  /* ☆ */
+#define DOS_ARROW_LR    0x263C  /* ☼ */
+#define DOS_UPDOWN      0x2605  /* ★ */
+#define DOS_DOUBLE_BANG 0x26A0  /* ⚠ warning */
+#define DOS_CHECK       0x2611  /* ☑ ballot box with check */
+#define DOS_ANGLE       0x2612  /* ☒ ballot box with X */
+#define DOS_SECTION     0x2663  /* ♣ (plants) */
+#define DOS_SQUARE      0x2610  /* ☐ */
+#define DOS_BULLET      0x2605  /* ★ */
+#define DOS_CHESS       0x265F  /* ♟ (pawn: game) */
 
 /** Curated single-codepoint fallbacks: the emoji a chat/notes page uses most.
  *  Kept small and ordered; anything not listed falls to a range default. */
@@ -55,8 +55,7 @@ static const struct {
     uint32_t cp;
     uint32_t glyph;
 } s_fallbacks[] = {
-    /* Faces and people: CP437 had two smileys, so happy/sad/neutral map to
-     * them and the rest to the up/down triangles and hearts. */
+    /* Faces and people. */
     { 0x1F600, DOS_SMILE },      /* 😀 grinning */
     { 0x1F601, DOS_SMILE },      /* 😁 beaming */
     { 0x1F602, DOS_SMILE },      /* 😂 tears of joy */
@@ -78,7 +77,7 @@ static const struct {
     { 0x1F642, DOS_SMILE },      /* 🙂 slight smile */
     { 0x1F643, DOS_SMILE_INV },  /* 🙃 upside down */
     { 0x1F644, DOS_SMILE_INV },  /* 🙄 eye roll */
-    /* Hands: a check for yes/ok, a cross-like angle for no. */
+    /* Hands. */
     { 0x1F44D, DOS_CHECK },      /* 👍 */
     { 0x1F44E, DOS_ANGLE },      /* 👎 */
     { 0x1F44F, DOS_STAR },       /* 👏 */
@@ -104,7 +103,7 @@ static const struct {
     { 0x26A0, DOS_DOUBLE_BANG }, /* ⚠ */
     { 0x2757, DOS_DOUBLE_BANG }, /* ❗ */
     { 0x2753, DOS_DOUBLE_BANG }, /* ❓ */
-    { 0x1F4A1, DOS_BULLET },     /* 💡 */
+    { 0x1F4A1, DOS_STAR },       /* 💡 */
     { 0x1F525, DOS_TRI_UP },     /* 🔥 */
     { 0x1F4A5, DOS_DOUBLE_BANG },/* 💥 */
     { 0x1F389, DOS_STAR },       /* 🎉 */
@@ -118,9 +117,10 @@ static const struct {
     { 0x1F4F7, DOS_CIRCLE },     /* 📷 */
     { 0x1F4F9, DOS_RIGHT },      /* 📹 */
     { 0x1F4FE, DOS_RIGHT },      /* 📾 */
-    { 0x1F550, DOS_CIRCLE },     /* 🕐 */
-    { 0x23F0, DOS_CIRCLE },      /* ⏰ */
-    { 0x23F3, DOS_CIRCLE },      /* ⏳ */
+    { 0x1F550, DOS_SUN },        /* 🕐 clock */
+    { 0x23F0, DOS_SUN },         /* ⏰ alarm clock */
+    { 0x23F3, DOS_SUN },         /* ⏳ hourglass */
+    { 0x2328, DOS_CIRCLE },      /* ⌨ keyboard */
     /* Weather and nature. */
     { 0x2600, DOS_SUN },         /* ☀ */
     { 0x2601, DOS_CIRCLE },      /* ☁ */
@@ -130,7 +130,7 @@ static const struct {
     { 0x1F30D, DOS_CIRCLE },     /* 🌍 */
     { 0x1F30E, DOS_CIRCLE },     /* 🌎 */
     { 0x1F30F, DOS_CIRCLE },     /* 🌏 */
-    { 0x1F319, DOS_CIRCLE },     /* 🌙 */
+    { 0x1F319, DOS_SUN },        /* 🌙 moon */
     { 0x1F31E, DOS_SUN },        /* 🌞 */
     { 0x1F332, DOS_TRI_UP },     /* 🌲 */
     { 0x1F33F, DOS_SECTION },    /* 🌿 */
@@ -140,12 +140,12 @@ static const struct {
     { 0x1F339, DOS_HEART },      /* 🌹 */
     { 0x1F33B, DOS_SUN },        /* 🌻 */
     /* Food and drink. */
-    { 0x1F354, DOS_BULLET },     /* 🍔 */
+    { 0x1F354, DOS_CIRCLE },     /* 🍔 */
     { 0x1F355, DOS_CIRCLE },     /* 🍕 */
-    { 0x1F35A, DOS_BULLET },     /* 🍚 */
-    { 0x1F363, DOS_BULLET },     /* 🍣 */
+    { 0x1F35A, DOS_CIRCLE },     /* 🍚 */
+    { 0x1F363, DOS_CIRCLE },     /* 🍣 */
     { 0x1F36A, DOS_CIRCLE },     /* 🍪 */
-    { 0x1F36B, DOS_SQUARE },     /* 🍫 */
+    { 0x1F36B, DOS_CIRCLE },     /* 🍫 */
     { 0x1F369, DOS_CIRCLE },     /* 🍩 */
     { 0x2615, DOS_CIRCLE },      /* ☕ */
     { 0x1F37A, DOS_CIRCLE },     /* 🍺 */
@@ -161,46 +161,45 @@ static const struct {
     { 0x2708, DOS_RIGHT },       /* ✈ */
     { 0x1F680, DOS_RIGHT },      /* 🚀 */
     { 0x1F6A2, DOS_RIGHT },      /* 🚢 */
-    { 0x1F3E0, DOS_SQUARE },     /* 🏠 */
-    { 0x1F3E2, DOS_SQUARE },     /* 🏢 */
-    { 0x1F3EB, DOS_SQUARE },     /* 🏫 */
+    { 0x1F3E0, DOS_CIRCLE },     /* 🏠 */
+    { 0x1F3E2, DOS_CIRCLE },     /* 🏢 */
+    { 0x1F3EB, DOS_CIRCLE },     /* 🏫 */
     { 0x1F5FB, DOS_TRI_UP },     /* 🗻 */
     /* Objects and tech. */
-    { 0x1F4BB, DOS_SQUARE },     /* 💻 */
-    { 0x1F4F1, DOS_SQUARE },     /* 📱 */
-    { 0x2328, DOS_SQUARE },      /* ⌨ */
-    { 0x1F5A5, DOS_SQUARE },     /* 🖥 */
-    { 0x1F4BE, DOS_SQUARE },     /* 💾 */
-    { 0x1F4C1, DOS_SQUARE },     /* 📁 */
-    { 0x1F4C4, DOS_SQUARE },     /* 📄 */
-    { 0x1F4DA, DOS_SQUARE },     /* 📚 */
-    { 0x1F4D6, DOS_SQUARE },     /* 📖 */
-    { 0x1F4E7, DOS_SQUARE },     /* 📧 */
-    { 0x1F4E8, DOS_SQUARE },     /* 📨 */
+    { 0x1F4BB, DOS_CIRCLE },     /* 💻 */
+    { 0x1F4F1, DOS_CIRCLE },     /* 📱 */
+    { 0x1F5A5, DOS_CIRCLE },     /* 🖥 */
+    { 0x1F4BE, DOS_CIRCLE },     /* 💾 */
+    { 0x1F4C1, DOS_CIRCLE },     /* 📁 */
+    { 0x1F4C4, DOS_CIRCLE },     /* 📄 */
+    { 0x1F4DA, DOS_CLUB },       /* 📚 books */
+    { 0x1F4D6, DOS_CLUB },       /* 📖 */
+    { 0x1F4E7, DOS_CIRCLE },     /* 📧 */
+    { 0x1F4E8, DOS_CIRCLE },     /* 📨 */
     { 0x1F4E4, DOS_RIGHT },      /* 📤 */
     { 0x1F4E5, DOS_LEFT },       /* 📥 */
-    { 0x1F50B, DOS_SQUARE },     /* 🔋 */
-    { 0x1F50C, DOS_SQUARE },     /* 🔌 */
+    { 0x1F50B, DOS_CIRCLE },     /* 🔋 */
+    { 0x1F50C, DOS_CIRCLE },     /* 🔌 */
     { 0x1F511, DOS_HEART },      /* 🔑 */
-    { 0x1F512, DOS_SQUARE },     /* 🔒 */
-    { 0x1F513, DOS_SQUARE },     /* 🔓 */
+    { 0x1F512, DOS_CIRCLE },     /* 🔒 */
+    { 0x1F513, DOS_CIRCLE },     /* 🔓 */
     { 0x1F527, DOS_ANGLE },      /* 🔧 */
     { 0x1F528, DOS_ANGLE },      /* 🔨 */
     { 0x1F6E0, DOS_ANGLE },      /* 🛠 */
     { 0x1F52C, DOS_CIRCLE },     /* 🔬 */
     { 0x1F52D, DOS_CIRCLE },     /* 🔭 */
     /* Marks used in lists/status text. */
-    { 0x1F4CC, DOS_BULLET },     /* 📌 */
-    { 0x1F4CD, DOS_BULLET },     /* 📍 */
-    { 0x1F4C5, DOS_SQUARE },     /* 📅 */
-    { 0x1F4C6, DOS_SQUARE },     /* 📆 */
-    { 0x1F5D3, DOS_SQUARE },     /* 🗓 */
-    { 0x1F4CA, DOS_SQUARE },     /* 📊 */
+    { 0x1F4CC, DOS_STAR },       /* 📌 */
+    { 0x1F4CD, DOS_STAR },       /* 📍 */
+    { 0x1F4C5, DOS_CIRCLE },     /* 📅 */
+    { 0x1F4C6, DOS_CIRCLE },     /* 📆 */
+    { 0x1F5D3, DOS_CIRCLE },     /* 🗓 */
+    { 0x1F4CA, DOS_CIRCLE },     /* 📊 */
     { 0x1F4C8, DOS_TRI_UP },     /* 📈 */
     { 0x1F4C9, DOS_TRI_DOWN },   /* 📉 */
     { 0x1F3AF, DOS_CIRCLE },     /* 🎯 */
-    { 0x1F3AE, DOS_RIGHT },      /* 🎮 */
-    { 0x1F3B2, DOS_SQUARE },     /* 🎲 */
+    { 0x1F3AE, DOS_CHESS },      /* 🎮 */
+    { 0x1F3B2, DOS_CIRCLE },     /* 🎲 */
 };
 
 bool emoji_is_codepoint(uint32_t cp)

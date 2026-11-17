@@ -361,6 +361,7 @@ extern void test_css_color_is_the_canvas_parser(void);
 extern void test_emoji_detects_ranges(void);
 extern void test_emoji_detects_modifiers(void);
 extern void test_emoji_fallback_map(void);
+extern void test_emoji_glyphs_are_in_font(void);
 extern void test_emoji_utf8_round_trip(void);
 extern void test_emoji_fallback_is_valid_utf8(void);
 
@@ -709,6 +710,7 @@ void app_main(void)
     RUN_TEST(test_emoji_detects_ranges);
     RUN_TEST(test_emoji_detects_modifiers);
     RUN_TEST(test_emoji_fallback_map);
+    RUN_TEST(test_emoji_glyphs_are_in_font);
     RUN_TEST(test_emoji_utf8_round_trip);
     RUN_TEST(test_emoji_fallback_is_valid_utf8);
 

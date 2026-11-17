@@ -46,18 +46,57 @@ void test_emoji_fallback_map(void)
      * every time it is opened. */
     TEST_ASSERT_EQUAL_UINT32(0x263A, emoji_dos_glyph(0x1F600));  /* ☺ */
     TEST_ASSERT_EQUAL_UINT32(0x2665, emoji_dos_glyph(0x2764));   /* ♥ */
-    TEST_ASSERT_EQUAL_UINT32(0x221A, emoji_dos_glyph(0x1F44D));  /* √ */
+    TEST_ASSERT_EQUAL_UINT32(0x2611, emoji_dos_glyph(0x1F44D));  /* ☑ */
     TEST_ASSERT_EQUAL_UINT32(0x2605, emoji_dos_glyph(0x2B50));   /* ★ */
     TEST_ASSERT_EQUAL_UINT32(0x263C, emoji_dos_glyph(0x2600));   /* ☼ */
 
     /* Unlisted emoji fall back by range, never to zero (no tofu). */
-    TEST_ASSERT_EQUAL_UINT32(0x25CB, emoji_dos_glyph(0x1F9A5));  /* sloth */
-    TEST_ASSERT_EQUAL_UINT32(0x25BA, emoji_dos_glyph(0x1F6F0));  /* satellite */
-    TEST_ASSERT_EQUAL_UINT32(0x25A0, emoji_dos_glyph(0x1F1E9));  /* flag */
+    TEST_ASSERT_EQUAL_UINT32(0x2610, emoji_dos_glyph(0x1F9A5));  /* sloth */
+    TEST_ASSERT_EQUAL_UINT32(0x2605, emoji_dos_glyph(0x1F6F0));  /* satellite */
+    TEST_ASSERT_EQUAL_UINT32(0x2610, emoji_dos_glyph(0x1F1E9));  /* flag */
 
     /* Non-emoji text has no fallback: it renders as itself. */
     TEST_ASSERT_EQUAL_UINT32(0, emoji_dos_glyph('A'));
     TEST_ASSERT_EQUAL_UINT32(0, emoji_dos_glyph(0x2500));
+}
+
+/** Every fallback must be drawable by the shipped cell font.
+ *
+ * `lv_font_unscii_16` covers ASCII, U+2500-U+257F and U+2600-U+26FF only; a
+ * fallback outside those ranges renders as the font's placeholder, which is
+ * exactly the tofu this feature exists to prevent. This walks every codepoint
+ * the core recognises and pins the invariant, so adding a pretty-looking
+ * symbol from another block fails here instead of on the panel.
+ */
+void test_emoji_glyphs_are_in_font(void)
+{
+    static const uint32_t ranges[][2] = {
+        { 0x1F000, 0x1FAFF },
+        { 0x2300, 0x2BFF },
+        { 0x2000, 0x206F },
+    };
+    int checked = 0;
+
+    for (size_t r = 0; r < sizeof(ranges) / sizeof(ranges[0]); r++) {
+        for (uint32_t cp = ranges[r][0]; cp <= ranges[r][1]; cp++) {
+            uint32_t glyph;
+
+            if (!emoji_is_codepoint(cp)) {
+                continue;
+            }
+            glyph = emoji_dos_glyph(cp);
+            if (glyph == 0) {
+                continue;   /* no substitute: renders as itself */
+            }
+            checked++;
+            TEST_ASSERT_TRUE_MESSAGE(
+                (glyph >= 32 && glyph <= 126) ||
+                (glyph >= 0x2500 && glyph <= 0x257F) ||
+                (glyph >= 0x2600 && glyph <= 0x26FF),
+                "fallback outside the shipped font's cmap");
+        }
+    }
+    TEST_ASSERT_GREATER_THAN_INT(100, checked);
 }
 
 void test_emoji_utf8_round_trip(void)
