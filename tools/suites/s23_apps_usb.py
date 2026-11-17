@@ -72,11 +72,24 @@ def _run(dev, c, label, cmd, timeout=60.0):
 
 
 def _usb_ready(dev, c):
+    """Require a real mounted MSC volume.
+
+    `dir usb:` alone is not enough: with no stick it answers "path not found"
+    through the shell path resolver, which must not read as success (that was
+    a false-green in the first draft of this suite). `usb status` states the
+    connection and mount explicitly.
+    """
+    out = _run(dev, c, "usb msc status", "usb status", timeout=25)
+    low = out.lower()
+    ok = ("usb.msc: connected=yes" in low and "mounted=yes" in low)
+    c.check("USB stick mounted (usb.msc mounted=yes)", ok, out[-400:])
+    if not ok:
+        c.note("s23 needs a USB stick in the P4 host port; skipped rest of run")
+        return False
     out = _run(dev, c, "list the USB root", "dir usb:", timeout=25)
-    ok = ("error" not in out.lower() and "not mounted" not in out.lower()
-          and "no usb" not in out.lower())
-    c.check("USB stick mounted (usb: resolves)", ok, out[-300:])
-    return ok
+    listed = "error" not in out.lower() and "not found" not in out.lower()
+    c.check("USB root lists", listed, out[-300:])
+    return listed
 
 
 def run(dev, ctx):

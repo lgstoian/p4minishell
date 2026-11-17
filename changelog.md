@@ -103,7 +103,10 @@ open bugs see [`bugs.md`](bugs.md).
 - COM3 hardware spot-checks: `version` reports v1.4.3, `emoji` prints the
   retro map and pack status, `help html`/`html` resolve, `launch /list` lists
   the deployed apps, `s20_website` 7/7, `s21_wikipedia` 13/13 (including the
-  header-only screenshot gate), `s22_canvas` 13/13.
+  header-only screenshot gate), `s22_canvas` 13/13. The drive-aware path was
+  verified on SD with a probe (`drive=sd: root=sd:/APPS name=SDPROBE`);
+  `s23_apps_usb` requires a USB stick, which was not attached to the bench for
+  this run, so its USB half remains to be recorded.
 - Static DIRAM dropped from 396,950 to 315,022 bytes used (48,442 -> 130,370
   free) with the image size unchanged.
 
