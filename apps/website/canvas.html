@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Canvas 2D + CSS backgrounds</title>
+<style>
+/* CSS Backgrounds and Borders Level 3 subset: page background colour and a
+   block background colour. The palette is the 16-colour DOS table, so these
+   values are exact palette entries (no quantisation surprises). */
+body { background-color: #00aaaa; color: #ffffff; }
+.banner { background-color: #aa0000; color: #ffff55; padding: 1px; }
+</style>
+</head>
+<body>
+<h1>Canvas 2D + CSS backgrounds</h1>
+<p id="diag">canvas size</p>
+<div class="banner">A div with an explicit CSS background.</div>
+<canvas id="c" width="96" height="48">
+<p>Canvas fallback: this surface does not execute scripts.</p>
+</canvas>
+<script>
+/* WHATWG HTML Living Standard 4.12.5.1 subset: fillStyle, fillRect, font,
+   fillText. The browser rasterizes this into the same cell image path as
+   images; the editor preview, print-to-HTML and EPUB show the fallback text. */
+var c = document.getElementById('c');
+document.getElementById('diag').textContent = 'CW=' + c.width + 'x' + c.height;
+var g = c.getContext('2d');
+g.fillStyle = '#ff5555'; g.fillRect(0, 0, 48, 24);
+g.fillStyle = '#55ff55'; g.fillRect(48, 0, 48, 24);
+g.fillStyle = '#55ffff'; g.fillRect(0, 24, 96, 24);
+g.fillStyle = '#000000'; g.font = '16px sans-serif'; g.fillText('P4', 8, 44);
+</script>
+</body>
+</html>

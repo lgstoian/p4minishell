@@ -37,8 +37,16 @@ typedef struct {
     int row;
     int col;
     int indent;
+    int depth;              /* nested block depth (render_block recursion) */
     bool done;
 } render_ctx_t;
+
+/** Deepest block nesting the renderer follows before flattening the rest to
+ *  text. Real pages nest a few dozen <div>s; a malformed or hostile document
+ *  can nest thousands, and a per-level recursion would exhaust the shell
+ *  worker's 28 KB stack (the live Wikipedia page did). 32 levels is far more
+ *  than any readable layout needs and keeps the stack bounded. */
+#define DOM_RENDER_MAX_DEPTH 32
 
 static size_t utf8_seq_len(const char *p)
 {
@@ -61,7 +69,7 @@ static bool is_skip_tag(const char *tag)
 static bool is_block_tag(const char *tag)
 {
     static const char *tags[] = {
-        "address", "article", "aside", "blockquote", "body", "div", "dl",
+        "address", "article", "aside", "blockquote", "body", "canvas", "div", "dl",
         "dt", "dd", "fieldset", "figcaption", "figure", "footer", "form",
         "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main",
         "nav", "ol", "p", "pre", "section", "table", "tbody", "td",
@@ -182,40 +190,151 @@ static void emit_text(render_ctx_t *c, const char *text, const style_t *st)
 }
 
 /* Concatenate a node's text descendants into @p out (spaces between runs). */
-static void node_plain_text(const dom_node_t *node, char *out, size_t out_size)
+static void node_plain_text_append(const dom_node_t *node, char *out, size_t out_size,
+                                   size_t *pos, bool *wrote, int depth)
 {
-    size_t pos = 0;
-
-    if (out == NULL || out_size == 0) return;
-    out[0] = '\0';
-    if (node == NULL) return;
+    if (node == NULL || depth > 64) {
+        return;
+    }
     for (const dom_node_t *ch = node->first_child; ch != NULL; ch = ch->next_sibling) {
         if (ch->type == DOM_NODE_TEXT) {
             size_t len = strlen(ch->text);
-            if (pos + len + 1 >= out_size) len = out_size - pos - 1;
-            memcpy(out + pos, ch->text, len);
-            pos += len;
-            out[pos] = '\0';
-        } else if (!is_skip_tag(ch->tag)) {
-            char sub[1024];
-            node_plain_text(ch, sub, sizeof(sub));
-            if (sub[0] != '\0') {
-                if (pos > 0 && out[pos - 1] != ' ' && pos + 1 < out_size) {
-                    out[pos++] = ' ';
-                }
-                {
-                    size_t len = strlen(sub);
-                    if (pos + len + 1 >= out_size) len = out_size - pos - 1;
-                    memcpy(out + pos, sub, len);
-                    pos += len;
-                    out[pos] = '\0';
-                }
+
+            if (len == 0) {
+                continue;
             }
+            if (*wrote && *pos + 1 < out_size && out[*pos - 1] != ' ') {
+                out[(*pos)++] = ' ';
+            }
+            if (*pos + len + 1 >= out_size) {
+                len = out_size - *pos - 1;
+            }
+            memcpy(out + *pos, ch->text, len);
+            *pos += len;
+            out[*pos] = '\0';
+            *wrote = true;
+        } else if (!is_skip_tag(ch->tag)) {
+            /* Same buffer, no per-level 1 KB temporary: a deeply nested page
+             * pushed this helper over the shell worker's stack. */
+            node_plain_text_append(ch, out, out_size, pos, wrote, depth + 1);
         }
     }
 }
 
+static void node_plain_text(const dom_node_t *node, char *out, size_t out_size)
+{
+    size_t pos = 0;
+    bool wrote = false;
+
+    if (out == NULL || out_size == 0) return;
+    out[0] = '\0';
+    node_plain_text_append(node, out, out_size, &pos, &wrote, 0);
+}
+
+typedef struct {
+    size_t len;
+    char last;
+    bool wrote;
+} text_len_t;
+
+static void node_plain_text_measure(const dom_node_t *node, text_len_t *acc, int depth)
+{
+    if (node == NULL || depth > 64) {
+        return;
+    }
+    for (const dom_node_t *ch = node->first_child; ch != NULL; ch = ch->next_sibling) {
+        if (ch->type == DOM_NODE_TEXT) {
+            size_t len = strlen(ch->text);
+
+            if (len == 0) {
+                continue;
+            }
+            if (acc->wrote && acc->last != ' ') {
+                acc->len++;
+            }
+            acc->len += len;
+            acc->last = ch->text[len - 1];
+            acc->wrote = true;
+        } else if (!is_skip_tag(ch->tag)) {
+            node_plain_text_measure(ch, acc, depth + 1);
+        }
+    }
+}
+
+/** Length of node_plain_text()'s result without materializing it: the centering
+ *  branches only need the width, and a 1 KB stack buffer per nested block was
+ *  what overflowed the shell worker on a real Wikipedia page. */
+static size_t node_plain_text_len(const dom_node_t *node)
+{
+    text_len_t acc = { 0, '\0', false };
+
+    node_plain_text_measure(node, &acc, 0);
+    return acc.len;
+}
+
 static void render_inline_node(render_ctx_t *c, dom_node_t *node, style_t st);
+static void render_children(render_ctx_t *c, dom_node_t *node, style_t st, int indent);
+
+static bool render_packed_image(render_ctx_t *c, const style_t *st,
+                               const dom_image_t *img, int max_cell_w)
+{
+    int cell_w = c->ops->cols - c->col - 2;
+    int cell_h;
+    int x, y;
+    int saved_indent = c->indent;
+
+    if (max_cell_w > 0 && cell_w > max_cell_w) {
+        cell_w = max_cell_w;
+    }
+    if (cell_w < 4) cell_w = 4;
+    cell_h = (cell_w * img->height) / (img->width * 2);
+    if (cell_h < 2) cell_h = 2;
+    if (cell_h > 20) cell_h = 20;
+    if (c->row + cell_h + 2 > c->ops->rows) {
+        return false;
+    }
+    /* A centered image shifts the whole box (border included) so it sits in
+     * the page's content column instead of hugging the left edge. The indent
+     * makes newline() restart each row at the box's left cell. */
+    if (c->ops->tui && st->align == 1) {
+        c->indent = (c->ops->cols - (cell_w + 2)) / 2;
+        if (c->indent < 0) c->indent = 0;
+        c->col = c->indent + 1;
+    }
+    /* ASCII border/cells: the TUI font's box/block glyphs are full-width,
+     * which breaks the 80-column grid; ASCII is monospace. */
+    emit_text(c, "+", st);
+    for (x = 0; x < cell_w && !c->done; x++) emit_text(c, "-", st);
+    emit_text(c, "+", st);
+    newline(c);
+    for (y = 0; y < cell_h && !c->done; y++) {
+        emit_text(c, "|", st);
+        for (x = 0; x < cell_w; x++) {
+            int sx = (x * img->width) / cell_w;
+            int sy = (y * img->height) / cell_h;
+            uint8_t packed = img->pixels[sy * img->width + sx];
+            style_t cell = *st;
+            /* The TUI label renders only the foreground colour and LVGL
+             * treats a literal '#' as the recolor delimiter, so the ramp
+             * MUST NOT contain '#' (see ansi_image_glyph). */
+            char glyph[2];
+
+            glyph[0] = ansi_image_glyph(packed & 0x0F);
+            glyph[1] = '\0';
+            cell.fg = (uint8_t)(packed >> 4);
+            cell.bg = 16;
+            emit_text(c, glyph, &cell);
+        }
+        emit_text(c, "|", st);
+        newline(c);
+    }
+    emit_text(c, "+", st);
+    for (x = 0; x < cell_w && !c->done; x++) emit_text(c, "-", st);
+    emit_text(c, "+", st);
+    newline(c);
+    c->indent = saved_indent;
+    return true;
+}
 
 static void render_image(render_ctx_t *c, dom_node_t *node, const style_t *st)
 {
@@ -225,69 +344,40 @@ static void render_image(render_ctx_t *c, dom_node_t *node, const style_t *st)
     if (c->ops->load_image != NULL && node->src[0] != '\0' &&
         c->ops->load_image(c->ops->ctx, node->src, &img) &&
         img.pixels != NULL && img.width > 0 && img.height > 0) {
-        int cell_w = c->ops->cols - c->col - 2;
-        int cell_h;
-        int x, y;
-        int saved_indent = c->indent;
+        bool drawn = render_packed_image(c, st, &img, 32);
 
-        if (cell_w > 32) cell_w = 32;
-        if (cell_w < 4) cell_w = 4;
-        cell_h = (cell_w * img.height) / (img.width * 2);
-        if (cell_h < 2) cell_h = 2;
-        if (cell_h > 6) cell_h = 6;
-        if (c->row + cell_h + 2 > c->ops->rows) {
-            free(img.pixels);
-            goto alt_text;
-        }
-        /* A centered image shifts the whole box (border included) so it sits in
-         * the page's content column instead of hugging the left edge. The indent
-         * makes newline() restart each row at the box's left cell. */
-        if (c->ops->tui && st->align == 1) {
-            c->indent = (c->ops->cols - (cell_w + 2)) / 2;
-            if (c->indent < 0) c->indent = 0;
-            c->col = c->indent + 1;
-        }
-        /* ASCII border/cells: the TUI font's box/block glyphs are full-width,
-         * which breaks the 80-column grid; ASCII is monospace. */
-        emit_text(c, "+", st);
-        for (x = 0; x < cell_w && !c->done; x++) emit_text(c, "-", st);
-        emit_text(c, "+", st);
-        newline(c);
-        for (y = 0; y < cell_h && !c->done; y++) {
-            emit_text(c, "|", st);
-            for (x = 0; x < cell_w; x++) {
-                int sx = (x * img.width) / cell_w;
-                int sy = (y * img.height) / cell_h;
-                uint8_t packed = img.pixels[sy * img.width + sx];
-                style_t cell = *st;
-                /* The TUI label renders only the foreground colour and LVGL
-                 * treats a literal '#' as the recolor delimiter, so the ramp
-                 * MUST NOT contain '#' (see ansi_image_glyph): a '#' cell would
-                 * be drawn in the label's base colour and lose its colour. */
-                char glyph[2];
-                glyph[0] = ansi_image_glyph(packed & 0x0F);
-                glyph[1] = '\0';
-                cell.fg = (uint8_t)(packed >> 4);
-                cell.bg = 16;
-                emit_text(c, glyph, &cell);
-            }
-            emit_text(c, "|", st);
-            newline(c);
-        }
-        emit_text(c, "+", st);
-        for (x = 0; x < cell_w && !c->done; x++) emit_text(c, "-", st);
-        emit_text(c, "+", st);
-        newline(c);
-        c->indent = saved_indent;
         free(img.pixels);
-        return;
+        if (drawn) {
+            return;
+        }
     }
-alt_text:
     {
         char alt[300];
+
         snprintf(alt, sizeof(alt), "[%s]", node->alt[0] ? node->alt : "image");
         emit_text(c, alt, st);
     }
+}
+
+/** <canvas>: the browser supplies the bitmap (load_canvas); a no-JS surface
+ *  (editor preview, print-to-HTML, EPUB) leaves the callback unset and gets
+ *  the element's fallback content, exactly as the HTML spec requires. */
+static void render_canvas(render_ctx_t *c, dom_node_t *node, const style_t *st)
+{
+    dom_image_t img;
+
+    memset(&img, 0, sizeof(img));
+    if (c->ops->load_canvas != NULL &&
+        c->ops->load_canvas(c->ops->ctx, node, &img) &&
+        img.pixels != NULL && img.width > 0 && img.height > 0) {
+        bool drawn = render_packed_image(c, st, &img, 60);
+
+        free(img.pixels);
+        if (drawn) {
+            return;
+        }
+    }
+    render_children(c, node, *st, c->indent);
 }
 
 static void render_inline_node(render_ctx_t *c, dom_node_t *node, style_t st)
@@ -364,6 +454,24 @@ static void render_block(render_ctx_t *c, dom_node_t *node, style_t st, int inde
 static void render_list(render_ctx_t *c, dom_node_t *node, style_t st,
                         int indent, bool ordered);
 
+static void render_flat_text(render_ctx_t *c, dom_node_t *node, style_t st, int budget)
+{
+    if (node == NULL || c->done || budget <= 0) {
+        return;
+    }
+    if (node->type == DOM_NODE_TEXT) {
+        emit_text(c, node->text, &st);
+        return;
+    }
+    if (node->display == DOM_DISPLAY_NONE || is_skip_tag(node->tag)) {
+        return;
+    }
+    for (dom_node_t *ch = node->first_child; ch != NULL && !c->done;
+         ch = ch->next_sibling) {
+        render_flat_text(c, ch, st, budget - 1);
+    }
+}
+
 static void render_children(render_ctx_t *c, dom_node_t *node, style_t st, int indent)
 {
     for (dom_node_t *ch = node->first_child; ch != NULL && !c->done; ch = ch->next_sibling) {
@@ -373,7 +481,16 @@ static void render_children(render_ctx_t *c, dom_node_t *node, style_t st, int i
         }
         if (ch->display == DOM_DISPLAY_NONE || is_skip_tag(ch->tag)) continue;
         if (is_block_tag(ch->tag)) {
-            render_block(c, ch, st, indent);
+            if (c->depth >= DOM_RENDER_MAX_DEPTH) {
+                /* Documented degradation: beyond the cap the subtree's text is
+                 * emitted inline instead of laid out as nested blocks. No
+                 * crash, no unbounded stack, no content silently dropped. */
+                render_flat_text(c, ch, st, 64);
+            } else {
+                c->depth++;
+                render_block(c, ch, st, indent);
+                c->depth--;
+            }
         } else {
             render_inline_node(c, ch, st);
         }
@@ -523,15 +640,13 @@ static void render_block(render_ctx_t *c, dom_node_t *node, style_t st, int inde
         node->tag[2] == '\0') {
         static const uint8_t head_color[6] = {15, 14, 11, 13, 12, 10};
         int level = node->tag[1] - '1';
-        char text[512];
         int len;
         int start = 1;
 
         st.bold = true;
         if (st.fg == 16) st.fg = head_color[level];
         if (st.font_scale < 2) st.font_scale = 2;
-        node_plain_text(node, text, sizeof(text));
-        len = (int)strlen(text);
+        len = (int)node_plain_text_len(node);
         newline(c);
         if (st.align == 1) {
             start = 1 + (c->ops->cols - len) / 2;
@@ -557,17 +672,31 @@ static void render_block(render_ctx_t *c, dom_node_t *node, style_t st, int inde
         strcmp(node->tag, "main") == 0 || strcmp(node->tag, "nav") == 0 ||
         strcmp(node->tag, "aside") == 0 || strcmp(node->tag, "form") == 0) {
         newline(c);
-        if (st.align == 1) {
-            char text[1024];
-            node_plain_text(node, text, sizeof(text));
-            {
-                int len = (int)strlen(text);
+        for (int pad = 0; pad < node->padding_top; pad++) {
+            newline(c);
+        }
+        {
+            int bg_row = c->row;
+
+            if (st.align == 1) {
+                int len = (int)node_plain_text_len(node);
                 int start = 1 + (c->ops->cols - len) / 2;
+
                 if (start < 1) start = 1;
                 c->col = start;
             }
+            render_children(c, node, st, indent);
+            for (int pad = 0; pad < node->padding_bottom; pad++) {
+                newline(c);
+            }
+            if (node->bg_set && st.bg != 16 && c->ops->fill_bg != NULL) {
+                /* CSS block background: the whole box width behind the text,
+                 * not just the glyph cells. fill_bg changes only the colour,
+                 * so text already drawn keeps its glyph and foreground. */
+                c->ops->fill_bg(c->ops->ctx, 1, bg_row, c->ops->cols,
+                                c->row - bg_row + 1, st.bg);
+            }
         }
-        render_children(c, node, st, indent);
         newline(c);
         return;
     }
@@ -613,6 +742,11 @@ static void render_block(render_ctx_t *c, dom_node_t *node, style_t st, int inde
         newline(c);
         return;
     }
+    if (strcmp(node->tag, "canvas") == 0) {
+        render_canvas(c, node, &st);
+        newline(c);
+        return;
+    }
     if (strcmp(node->tag, "img") == 0) {
         render_image(c, node, &st);
         newline(c);
@@ -629,10 +763,33 @@ static void render_block(render_ctx_t *c, dom_node_t *node, style_t st, int inde
     newline(c);
 }
 
+/** Find the first <main> element (reader focus). Mobile Wikipedia wraps the
+ *  article in <main id="content"> and puts its navigation chrome before it;
+ *  on an 80x25 page that chrome otherwise fills the whole viewport and the
+ *  article is never reached. A page without <main> renders its body. */
+static dom_node_t *dom_find_main(dom_node_t *node, int depth)
+{
+    if (node == NULL || depth > 64) {
+        return NULL;
+    }
+    if (node->type == DOM_NODE_ELEMENT && strcmp(node->tag, "main") == 0) {
+        return node;
+    }
+    for (dom_node_t *ch = node->first_child; ch != NULL; ch = ch->next_sibling) {
+        dom_node_t *found = dom_find_main(ch, depth + 1);
+
+        if (found != NULL) {
+            return found;
+        }
+    }
+    return NULL;
+}
+
 void dom_render_tree(dom_tree_t *tree, const dom_render_ops_t *ops)
 {
     render_ctx_t ctx;
     style_t st;
+    dom_node_t *root;
 
     if (tree == NULL || ops == NULL || tree->body == NULL) return;
     memset(&ctx, 0, sizeof(ctx));
@@ -644,7 +801,16 @@ void dom_render_tree(dom_tree_t *tree, const dom_render_ops_t *ops)
     ctx.row = 1;
     ctx.col = 1;
     ctx.indent = 0;
+    ctx.depth = 0;
     ctx.done = false;
+    root = tree->body;
+    {
+        dom_node_t *main_node = dom_find_main(tree->body, 0);
+
+        if (main_node != NULL && main_node->first_child != NULL) {
+            root = main_node;
+        }
+    }
     /* Paint the page background from the body's CSS background-color. The
      * cells the layout writes later keep their own colors. */
     if (ops->tui && ops->put_cell != NULL && tree->body->bg != 16) {
@@ -654,5 +820,40 @@ void dom_render_tree(dom_tree_t *tree, const dom_render_ops_t *ops)
             }
         }
     }
-    render_children(&ctx, tree->body, st, 0);
+    /* CSS background-image on the page (body/main): tile the image's colours
+     * behind the content. Text cells keep their own background, so the image
+     * reads as the page backdrop around the text rather than fighting it. */
+    if (ops->fill_bg != NULL && ops->load_background != NULL) {
+        const char *bg_src = tree->body->bg_src[0] != '\0'
+                                 ? tree->body->bg_src
+                                 : root->bg_src;
+
+        if (bg_src[0] != '\0') {
+            dom_image_t bg;
+
+            memset(&bg, 0, sizeof(bg));
+            if (ops->load_background(ops->ctx, bg_src, &bg) &&
+                bg.pixels != NULL && bg.width > 0 && bg.height > 0) {
+                for (int r = 0; r < ops->rows; r++) {
+                    for (int c = 0; c < ops->cols; c++) {
+                        uint8_t packed = bg.pixels[(r % bg.height) * bg.width +
+                                                   (c % bg.width)];
+                        uint8_t color = (uint8_t)(packed >> 4);
+
+                        if (color != 16) {
+                            ops->fill_bg(ops->ctx, c + 1, r + 1, 1, 1, color);
+                        }
+                    }
+                }
+                free(bg.pixels);
+            }
+        }
+    }
+    render_children(&ctx, root, st, 0);
+    /* Paint the body background after the content so blank cells (including
+     * the gaps inside paragraphs) carry the colour, not only the margins.
+     * fill_bg never overwrites a glyph, so the text stays intact. */
+    if (ops->fill_bg != NULL && tree->body->bg != 16) {
+        ops->fill_bg(ops->ctx, 1, 1, ops->cols, ops->rows, tree->body->bg);
+    }
 }

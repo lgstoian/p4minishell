@@ -211,6 +211,12 @@ static void parse_attributes(const char **p, dom_node_t *node) {
             strncpy(node->onclick, attr_value, sizeof(node->onclick) - 1);
         } else if (strcmp(attr_name, "onload") == 0) {
             strncpy(node->onload, attr_value, sizeof(node->onload) - 1);
+        } else if (strcmp(attr_name, "width") == 0 &&
+                   strcmp(node->tag, "canvas") == 0) {
+            node->canvas_w = atoi(attr_value);
+        } else if (strcmp(attr_name, "height") == 0 &&
+                   strcmp(node->tag, "canvas") == 0) {
+            node->canvas_h = atoi(attr_value);
         }
         skip_whitespace(p);
     }
@@ -225,7 +231,7 @@ static bool is_void_element(const char *tag) {
 }
 
 static bool is_block_element(const char *tag) {
-    static const char *block_tags[] = {"address","article","aside","blockquote","body","br","dd","div","dl","dt","fieldset","figcaption","figure","footer","form","h1","h2","h3","h4","h5","h6","header","hr","html","li","main","nav","ol","p","pre","section","table","tbody","td","tfoot","th","thead","tr","ul",NULL};
+    static const char *block_tags[] = {"address","article","aside","blockquote","body","br","dd","div","dl","dt","fieldset","figcaption","figure","footer","form","canvas","h1","h2","h3","h4","h5","h6","header","hr","html","li","main","nav","ol","p","pre","section","table","tbody","td","tfoot","th","thead","tr","ul",NULL};
     for (int i = 0; block_tags[i]; i++) {
         if (strcmp(tag, block_tags[i]) == 0) return true;
     }
@@ -306,6 +312,57 @@ static dom_node_t *parse_element(const char **p, dom_node_t *parent, int depth,
     }
     if (depth >= DOM_MAX_DEPTH) {
         skip_element_content(p, node->tag);
+        return node;
+    }
+    /* <script> and <style> are raw-text elements (HTML "script data" and
+     * "RAWTEXT" states): their content is text until the matching close tag,
+     * even if it contains '<', '>' or something that looks like a tag. A JS
+     * comparison or an `</...>` inside a string comment must not create DOM
+     * nodes (a "<img>" in a script comment used to truncate the script). */
+    if (strcmp(node->tag, "script") == 0 || strcmp(node->tag, "style") == 0) {
+        const char *content = *p;
+        const char *close = content;
+
+        while (*close != '\0') {
+            if (close[0] == '<' && close[1] == '/') {
+                size_t i = 0;
+
+                while (node->tag[i] != '\0' &&
+                       tolower((unsigned char)close[2 + i]) == node->tag[i]) {
+                    i++;
+                }
+                if (node->tag[i] == '\0' &&
+                    (close[2 + i] == '>' || close[2 + i] == ' ' ||
+                     close[2 + i] == '\t' || close[2 + i] == '\r' ||
+                     close[2 + i] == '\n')) {
+                    break;
+                }
+            }
+            close++;
+        }
+        {
+            size_t len = (size_t)(close - content);
+
+            if (len > 0) {
+                dom_node_t *text_node = dom_node_new_in(arena, DOM_NODE_TEXT);
+                if (text_node != NULL) {
+                    if (len >= sizeof(text_node->text)) {
+                        len = sizeof(text_node->text) - 1;
+                    }
+                    memcpy(text_node->text, content, len);
+                    text_node->text[len] = '\0';
+                    (*node_count)++;
+                    dom_node_append_child(node, text_node);
+                }
+            }
+        }
+        *p = close;
+        while (**p != '\0' && **p != '>') {
+            (*p)++;
+        }
+        if (**p == '>') {
+            (*p)++;
+        }
         return node;
     }
     while (**p) {
@@ -615,6 +672,52 @@ static int dom_css_color(const char *value)
     }
 }
 
+/** CSS `background-image: url(...)` / `background: color url(...)`: keep the
+ *  URL for the page backdrop and any solid colour alongside it. */
+static void dom_css_background(dom_node_t *node, const char *value)
+{
+    const char *url;
+    uint8_t color;
+
+    if (node == NULL || value == NULL) {
+        return;
+    }
+    url = strstr(value, "url(");
+    if (url == NULL) {
+        color = dom_css_color(value);
+        if (color != 16) {
+            node->bg = color;
+            node->bg_set = true;
+        }
+        return;
+    }
+    url += 4;
+    while (*url == ' ' || *url == '\'' || *url == '"') {
+        url++;
+    }
+    {
+        size_t i = 0;
+
+        while (url[i] != '\0' && url[i] != ')' && url[i] != '\'' &&
+               url[i] != '"' && i + 1 < sizeof(node->bg_src)) {
+            node->bg_src[i] = url[i];
+            i++;
+        }
+        node->bg_src[i] = '\0';
+    }
+    {
+        const char *close = strchr(url, ')');
+
+        if (close != NULL) {
+            color = dom_css_color(close + 1);
+            if (color != 16) {
+                node->bg = color;
+                node->bg_set = true;
+            }
+        }
+    }
+}
+
 void dom_set_style(dom_node_t *node, const char *property, const char *value) {
     if (!node || !property || !value) return;
     if (strcmp(property, "display") == 0) {
@@ -623,9 +726,17 @@ void dom_set_style(dom_node_t *node, const char *property, const char *value) {
         else if (strcmp(value, "inline") == 0) node->display = DOM_DISPLAY_INLINE;
     } else if (strcmp(property, "color") == 0) {
         node->fg = (uint8_t)dom_css_color(value);
-    } else if (strcmp(property, "background-color") == 0 ||
-               strcmp(property, "background") == 0) {
-        node->bg = (uint8_t)dom_css_color(value);
+    } else if (strcmp(property, "background-color") == 0) {
+        uint8_t color = (uint8_t)dom_css_color(value);
+
+        if (color != 16) {
+            node->bg = color;
+            node->bg_set = true;
+        }
+    } else if (strcmp(property, "background-image") == 0) {
+        dom_css_background(node, value);
+    } else if (strcmp(property, "background") == 0) {
+        dom_css_background(node, value);
     } else if (strcmp(property, "text-align") == 0) {
         if (strcmp(value, "center") == 0) node->align = 1;
         else if (strcmp(value, "right") == 0) node->align = 2;

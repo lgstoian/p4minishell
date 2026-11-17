@@ -29,6 +29,8 @@ set(HOST_TEST_SRCS
     "${HOST_TEST_DIR}/test_himem.c"
     "${HOST_TEST_DIR}/test_batch_expr.c"
     "${HOST_TEST_DIR}/test_svc.c"
+    "${HOST_TEST_DIR}/test_usb_hid_layout.c"
+    "${HOST_TEST_DIR}/test_js_canvas.c"
     # Production sources that are hardware-free by construction (see each
     # file's @hard-rule): compiled directly so the lane exercises the real
     # code rather than a copy or a stub.
@@ -70,6 +72,12 @@ set(HOST_TEST_SRCS
     # only through the public tui_page_shot_* API above.
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/browser/src/browser_cache.c"
     "${HOST_TEST_DIR}/test_browser_cache.c"
+    # HID report-descriptor decode: pure, no USB/LVGL. The firmware compiles
+    # the same TU, so the offsets a real mouse needs are tested with no mouse.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/usb/usb_hid_layout.c"
+    # Canvas 2D rasterizer: pure, no QuickJS/LVGL. The JS bindings are
+    # the thin layer on top; the drawing model is tested here.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/jsengine/js_canvas.c"
     # Host-lane backing for the two storage-backed spellchecker calls (the
     # lane has no SD card). Never part of the firmware image.
     "host_spell_storage.c"
@@ -95,6 +103,8 @@ idf_component_register(
         "../../../components/editor"
         "../../../components/browser/include"
         "../../../components/tui"
+        "../../../components/usb"
+        "../../../components/jsengine/include"
     REQUIRES
         unity
         strutil

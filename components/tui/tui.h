@@ -278,6 +278,9 @@ void tui_page_set_cell(int col, int row, const char *utf8, uint8_t fg, uint8_t b
 bool tui_page_get_cell(int col, int row, char *utf8_out, size_t out_size,
                        uint8_t *fg_out, uint8_t *bg_out, uint8_t *attr_out);
 void tui_page_clear(void);
+/** Paint a CSS background rectangle behind the cell grid (1-based cells).
+ *  Real LVGL rectangles, so text and spaces stay untouched; no-op headless. */
+void tui_page_bg_rect(int col, int row, int w, int h, uint8_t bg);
 void tui_page_render(void);
 
 void tui_link_register(int x, int y, int w, int h, const char *url);

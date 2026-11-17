@@ -113,10 +113,13 @@ the host regression runners are green. See
   `ping`/`dns`/`httpget`/`tcpterm`, `httpd` file server, `netstat`/`ipconfig`,
   **`browser`** (HTML/CSS pages over HTTP or from an SD file, navigation
   history, bookmarks, Basic auth, in-page JavaScript, native PNG/JPEG/BMP images,
-  and PSRAM image/page caches that make back and forward instant), **`httpget`
+  PSRAM image/page caches that make back and forward instant, a stripped-down
+  HTML5 subset with Canvas 2D and CSS backgrounds, and `<main>` reader focus),
+  **`httpget`
   flags** (`/h:`, `/post`, `/stream`, `/cookie` with a persisted cookie jar),
   USB host (MSC, HID, CDC-ACM `usb userial`), **board-to-board `chat` over
-  SoftAP + HTTP**, and C6 OTA.
+  SoftAP + HTTP**, **`bluetooth chat` over BLE GATT** (no AP or broker), and C6
+  OTA.
 - **Internationalization:** locale-aware date/time/number formatting
   (`locale`, `config LOCALE=` persisted in CONFIG.SYS) and an embedded
   JavaScript engine (`js eval|run|call`).
@@ -359,9 +362,11 @@ lane is a **pre-gate only**: hardware sign-off still comes from
 - **`download <url> <path> [/resume] [/progress]`** streams a resource to SD
   (defaults into `sd:/DOWNLOAD/`) with a `Range`-header resume and coalesced
   progress, through the ONE HTTP client.
-- **Bluetooth** runs BLE central + HID host, and `bluetooth gatt on|off` adds a
+- **Bluetooth** runs BLE central + HID host, `bluetooth gatt on|off` adds a
   GATT server (Device Information + a P4MiniShell status characteristic) with
-  connectable advertising.
+  connectable advertising, and **`bluetooth chat`** adds a board-to-board
+  GATT service (RX write / TX notify) so two boards talk without Wi-Fi, a
+  broker or a cable.
 - **RSS reader** — RSS 2.0 / Atom 1.0 / JSON Feed with conditional GET and
   Basic/Bearer auth. `rss add|remove|enable|interval|refresh|read|open|reset|
   import|export|set`; subscriptions persist in `sd:/RSS/SUBS.INI`, read state in

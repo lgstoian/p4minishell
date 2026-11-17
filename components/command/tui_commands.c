@@ -28,6 +28,7 @@
 #include "tui.h"
 #include "tui_pane.h"
 #include "tui_fonts.h"
+#include "dom_render.h"   /* DOM_CELL_ATTR_BG_FILL for readable page dumps */
 #include "windows.h"
 #include "storage.h"
 #include "ansi.h"
@@ -1767,17 +1768,28 @@ void shell_command_tui(int argc, char **argv)
          * row so a suite can assert link/heading colouring without pixels.
          * Reuses tui_page_get_cell - no second page model. */
         bool attrs = false;
-        int argi = 2;
+        int positions[2] = { 0, 0 };
+        int position_count = 0;
         int from;
         int to;
 
-        if (argc >= 3 && (shell_text_equals_ignore_case(argv[2], "/a") ||
-                          shell_text_equals_ignore_case(argv[2], "attrs"))) {
-            attrs = true;
-            argi = 3;
+        /* `/a` (or `attrs`) may appear anywhere: the documented form is
+         * `tui dump [from] [to] [/a]`, while older callers put it first. */
+        for (int i = 2; i < argc; i++) {
+            if (shell_text_equals_ignore_case(argv[i], "/a") ||
+                shell_text_equals_ignore_case(argv[i], "attrs")) {
+                attrs = true;
+                argv[i] = NULL;
+            }
         }
-        from = (argc > argi) ? atoi(argv[argi]) : 1;
-        to = (argc > argi + 1) ? atoi(argv[argi + 1]) : tui_viewport_get_page_rows();
+        for (int i = 2; i < argc && position_count < 2; i++) {
+            if (argv[i] != NULL) {
+                positions[position_count++] = i;
+            }
+        }
+        from = position_count > 0 ? atoi(argv[positions[0]]) : 1;
+        to = position_count > 1 ? atoi(argv[positions[1]])
+                                : tui_viewport_get_page_rows();
         if (from < 1) from = 1;
         if (to < from) to = from;
         shell_transcript_appendf("tui.dump cols=%d from=%d to=%d\n",

@@ -112,6 +112,14 @@ CONFIG_FATFS_USE_LABEL=y
 CONFIG_FATFS_API_ENCODING_UTF_8=y
 
 # USB host defaults required by the local usb component override.
+#
+# The P4's internal DRAM is almost fully committed (display buffers, ESP-Hosted
+# SDIO, USB host itself), so the USB-DWC's transfer descriptor lists and URB
+# buffers must come from PSRAM. Without this, attaching a HID mouse/ keyboard
+# fails enumeration with "HCD Pipe alloc error: ESP_ERR_NO_MEM" even though
+# tens of KB of PSRAM are free. The P4 USB-DWC DMA can address external RAM;
+# the cost is a small throughput overhead on MSC reads.
+CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM=y
 CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=256
 CONFIG_USB_HOST_HW_BUFFER_BIAS_BALANCED=y
 CONFIG_USB_HOST_DEBOUNCE_DELAY_MS=250

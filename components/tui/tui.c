@@ -47,6 +47,23 @@ static lv_obj_t *s_tui_container = NULL;
  * inactive). Reported by `tui status` / `tui selftest` so a wrong-font
  * report is diagnosable on sight. */
 static const tui_font_cell_t *s_bound_cell = NULL;
+
+/* CSS background rectangles behind the cell label (browser page renderer).
+ * Cell coordinates are 1-based; the label is transparent, so a rectangle shows
+ * through the glyph gaps and spaces without touching the text. */
+#define TUI_MAX_BG_RECTS 24
+typedef struct {
+    int col;
+    int row;
+    int w;
+    int h;
+    uint8_t bg;
+    lv_obj_t *obj;
+} tui_bg_rect_t;
+static tui_bg_rect_t s_bg_rects[TUI_MAX_BG_RECTS];
+static int s_bg_rect_count;
+static void tui_bg_clear(void);
+static void tui_bg_relayout(void);
 /* Title-on-border overlay: the grid label markup carries foreground only,
  * so a title with an explicit background (bg < 16) gets a same-font overlay
  * label positioned over its cells. Tracked at draw time; any later write
@@ -192,6 +209,81 @@ static void tui_alloc_cells(void)
     if (s_cells) memset(s_cells, 0, bytes);
 }
 
+static void tui_bg_clear(void)
+{
+    for (int i = 0; i < s_bg_rect_count; i++) {
+        if (s_bg_rects[i].obj != NULL) {
+            lv_obj_del(s_bg_rects[i].obj);
+        }
+        s_bg_rects[i].obj = NULL;
+    }
+    s_bg_rect_count = 0;
+}
+
+/** Re-place the background rectangles after a font/viewport change. Runs with
+ *  the LVGL lock held (from tui_apply_layout or tui_page_bg_rect). */
+static void tui_bg_relayout(void)
+{
+    lv_coord_t cw;
+    lv_coord_t ch;
+    lv_coord_t ox;
+    lv_coord_t oy;
+
+    if (s_tui_container == NULL || s_tui_label == NULL || s_bound_cell == NULL) {
+        return;
+    }
+    cw = s_bound_cell->cell_w;
+    ch = s_bound_cell->cell_h;
+    ox = lv_obj_get_x(s_tui_label);
+    oy = lv_obj_get_y(s_tui_label);
+    for (int i = 0; i < s_bg_rect_count; i++) {
+        tui_bg_rect_t *rect = &s_bg_rects[i];
+
+        if (rect->obj == NULL) {
+            continue;
+        }
+        lv_obj_set_pos(rect->obj, ox + (rect->col - 1) * cw,
+                       oy + (rect->row - 1) * ch);
+        lv_obj_set_size(rect->obj, rect->w * cw, rect->h * ch);
+        lv_obj_move_background(rect->obj);
+    }
+}
+
+void tui_page_bg_rect(int col, int row, int w, int h, uint8_t bg)
+{
+    tui_bg_rect_t *rect;
+    lv_obj_t *obj;
+
+    if (!s_active || s_tui_container == NULL || bg == 16 || w <= 0 || h <= 0) {
+        return;
+    }
+    if (s_bg_rect_count >= TUI_MAX_BG_RECTS) {
+        return;   /* documented cap; the largest page backgrounds win */
+    }
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    obj = lv_obj_create(s_tui_container);
+    if (obj != NULL) {
+        lv_obj_remove_style_all(obj);
+        lv_obj_set_style_bg_color(obj, lv_color_hex(tui_dos_color_rgb(bg)), 0);
+        lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(obj, 0, 0);
+        lv_obj_set_style_border_width(obj, 0, 0);
+        lv_obj_set_style_pad_all(obj, 0, 0);
+        lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        rect = &s_bg_rects[s_bg_rect_count++];
+        rect->col = col;
+        rect->row = row;
+        rect->w = w;
+        rect->h = h;
+        rect->bg = bg;
+        rect->obj = obj;
+        tui_bg_relayout();
+    }
+    lvgl_port_unlock();
+}
+
 /**
  * Map the logical 80x25 grid onto the live transcript region.
  *
@@ -241,6 +333,7 @@ static void tui_apply_layout(void)
     lv_obj_set_size(s_tui_label, gw, gh);
     lv_obj_set_pos(s_tui_label, (cw - gw) / 2, (ch - gh) / 2);
     lv_obj_update_layout(s_tui_label);
+    tui_bg_relayout();
     ESP_LOGD(TUI_TAG, "tui layout: cell %dx%d grid %dx%d in %dx%d",
              best->cell_w, best->cell_h, (int)gw, (int)gh, (int)cw, (int)ch);
 }
@@ -307,9 +400,11 @@ void tui_deinit(void)
     if (!s_active) return;
     lvgl_port_lock(0);
     windows_set_surface_layout_cb(NULL);
+    tui_bg_clear();   /* delete background rectangles before their container */
     if (s_tui_label) { lv_obj_del(s_tui_label); s_tui_label = NULL; }
     if (s_title_label) { lv_obj_del(s_title_label); s_title_label = NULL; }
     s_title_visible = false;
+    s_bg_rect_count = 0;   /* the container delete frees the rectangle objects */
     windows_exit_tui_mode();
     s_tui_container = NULL;
     s_bound_cell = NULL;
@@ -1439,6 +1534,10 @@ bool tui_page_get_cell(int col, int row, char *utf8_out, size_t out_size,
 void tui_page_clear(void)
 {
     if (!s_page) return;
+    if (s_active && lvgl_port_lock(0)) {
+        tui_bg_clear();
+        lvgl_port_unlock();
+    }
     memset(s_page, 0, (size_t)s_cols * (size_t)s_page_rows * sizeof(tui_cell_t));
     s_scroll_offset = 0;
     s_link_count = 0;

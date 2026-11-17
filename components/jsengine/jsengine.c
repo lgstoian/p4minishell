@@ -1,5 +1,6 @@
 #include "jsengine.h"
 #include "quickjs.h"
+#include "js_canvas.h"
 #include "p4minishell_config.h"
 #include "shell.h"
 #include "batch.h"
@@ -19,6 +20,12 @@ struct dom_tree *g_dom_tree = NULL;
 
 void jsengine_set_dom_tree(struct dom_tree *tree)
 {
+    if (tree != NULL && g_dom_tree != tree) {
+        /* Binding a new page: canvas bitmaps belong to the previous page's
+         * nodes. Unbinding (NULL) after <script> execution must NOT clear
+         * them - the renderer still needs the bitmaps the scripts drew. */
+        js_canvas_clear_registry();
+    }
     g_dom_tree = tree;
 }
 

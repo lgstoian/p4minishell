@@ -28,11 +28,15 @@ typedef struct dom_node {
     char alt[256];
     char text[1024];
     char style[256];      /* raw style="..." attribute (inline CSS, applied last) */
+    char bg_src[512];     /* CSS background-image URL ("" = none) */
+    int canvas_w;         /* <canvas width> attribute (0 = spec default) */
+    int canvas_h;         /* <canvas height> attribute (0 = spec default) */
     char onclick[512];    /* inline click handler (JS) */
     char onload[512];     /* inline load handler (JS) */
     dom_display_t display;
     uint8_t fg;
     uint8_t bg;
+    bool bg_set;         /* an explicit CSS background colour (not inherited) */
     uint8_t align;        /* 0 left, 1 center, 2 right */
     uint8_t font_scale;   /* 1 normal, 2 heading/large */
     bool bold;

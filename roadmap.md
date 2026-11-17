@@ -198,9 +198,12 @@ Follow-on work from the study above, prioritising the browser:
   backlight persistence (`BRIGHTNESS=` in CONFIG.SYS), timezone (`timezone`).
 
 **Status in v1.4.2:** shipped - PNG/JPEG decode through the one image path,
-the browser PSRAM caches + DOM arena, and the RSS subscription/read-state/OPML
-surface. The rest of this list (download verb, bounded HTTP retry/streaming
-headers, provisioning JSON API, BLE GATT server) remains future work.
+the browser PSRAM caches + DOM arena, the RSS subscription/read-state/OPML
+surface, the stripped-down HTML5 subset (`<main>` focus, raw-text
+script/style, Canvas 2D, CSS backgrounds) shared by the browser and the
+ANSI reader, and the board-to-board BLE GATT chat. The rest of this list
+(download verb, bounded HTTP retry/streaming headers, provisioning JSON API)
+remains future work.
 
 **Not adopted from ESP-Brookesia:** the KV storage layer (we have `storage_ini`
 + NVS — a third store would be a duplicate), a generic tree-copy (xcopy /S

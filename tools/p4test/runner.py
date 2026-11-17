@@ -17,6 +17,16 @@ fail-fast) stops the other boards at the first failure.
 """
 from __future__ import annotations
 
+import sys
+try:
+    # Suites print rendered page dumps; a cell grid can contain block
+    # glyphs and the Windows console is cp1252. Never let console
+    # encoding turn a test result into a crash.
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
+except Exception:
+    pass
+
 import argparse
 import importlib
 import io

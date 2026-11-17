@@ -145,9 +145,24 @@ def _assert_page(c, dump):
     start = text.find(LINK_TEXT) + 1
     end = start + len(LINK_TEXT) - 1
     c.check("link text rendered", bool(row), "row=%r text=%r" % (row, text))
-    c.check("link is cyan (fg 11)",
-            bool(row) and _fg_run_covers(attrs.get(row, ""), start, end, LINK_FG),
-            "row=%r attrs=%r start=%d end=%d" % (row, attrs.get(row, ""), start, end))
+    def _fg_at(col):
+        for m in RUN_RE.finditer(attrs.get(row, "")):
+            lo, hi, got = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if lo <= col <= hi:
+                return got
+        return None
+
+    # CSS backgrounds show through the spaces between link words (a block cell
+    # with the page colour), so require every *glyph* of the link to be cyan
+    # rather than one unbroken run.
+    cyan_glyphs = bool(row) and all(
+        _fg_at(col) == LINK_FG
+        for col in range(start, end + 1)
+        if col - 1 < len(text) and text[col - 1] != " "
+    )
+    c.check("link is cyan (fg 11)", cyan_glyphs,
+            "row=%r attrs=%r start=%d end=%d"
+            % (row, attrs.get(row, ""), start, end))
 
     # Image alt-text fallback for the intentionally missing source.
     c.expect("missing image degrades to alt text", MISSING_ALT, dump)

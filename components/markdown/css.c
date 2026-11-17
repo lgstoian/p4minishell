@@ -78,6 +78,14 @@ void css_parse_block(const char *css_text, css_ruleset_t *rules) {
     const char *p = css_text;
     while (*p) {
         skip_ws(&p);
+        /* CSS comments are not rules: skip them (a comment before the first
+         * selector otherwise becomes part of that selector and the rule is
+         * silently lost). */
+        if (p[0] == '/' && p[1] == '*') {
+            const char *end = strstr(p + 2, "*/");
+            p = (end != NULL) ? end + 2 : p + strlen(p);
+            continue;
+        }
         if (!*p) break;
         const char *brace = strchr(p, '{');
         if (!brace) break;

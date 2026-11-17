@@ -3186,13 +3186,16 @@ static void command_bg_pool_init(void)
 }
 
 /**
- * True when ANY physical keyboard is attached: a USB HID keyboard, a connected
- * Bluetooth HID keyboard, or the M5Stack Tab5 keyboard module. The shell hides
- * the on-screen keyboard while this holds.
+ * True when a physical keyboard is usable: a USB HID keyboard that has sent a
+ * key, a connected Bluetooth HID keyboard, or the M5Stack Tab5 keyboard module.
+ * The shell hides the on-screen keyboard while this holds.
  */
 static bool command_physical_keyboard_present(void)
 {
-    if (usb_is_keyboard_attached()) {
+    /* A key report, not just an enumerated interface: composite mice expose a
+     * keyboard collection that never types, and hiding the OSK for it would
+     * remove the only working input on a touch board. */
+    if (usb_keyboard_input_seen()) {
         return true;
     }
     if (bluetooth_is_device_connected()) {

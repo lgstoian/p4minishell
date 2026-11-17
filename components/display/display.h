@@ -314,13 +314,30 @@ esp_err_t display_mouse_click_disable(void);
 bool display_mouse_click_enabled(void);
 
 /**
+ * Secondary-button (right-click) handler, called on the LVGL task on each
+ * button-2 press edge. The shell installs one at init (it delivers Esc, the
+ * same cancel/back key every modal, pager and editor already honours), so a
+ * mouse with a second button does something useful instead of having the
+ * press silently dropped. With no handler installed the edge is ignored.
+ *
+ * The edge fires regardless of the cursor/click switches: a right-click is a
+ * deliberate press, not pointer motion, and it never moves the cursor.
+ */
+typedef void (*display_mouse_secondary_cb_t)(void *ctx);
+
+/** Install (or clear, with NULL) the right-click handler. */
+void display_mouse_set_secondary_handler(display_mouse_secondary_cb_t cb, void *ctx);
+
+/**
  * Feed one HID boot-mouse motion sample. Safe from any task context (USB
  * module task, BLE task); the LVGL read callback consumes it under a
  * spinlock. Ignored unless cursor or click tracking is on.
  *
  * @param dx       Signed X displacement in native panel pixels.
  * @param dy       Signed Y displacement in native panel pixels.
- * @param buttons  Button byte, bit 0 = left (only left clicks).
+ * @param buttons  Button byte, bit 0 = left, bit 1 = right. Left clicks are
+ *                 delivered as taps when enabled; a right-button edge always
+ *                 reaches the installed secondary handler (Esc by default).
  */
 void display_mouse_report(int dx, int dy, uint8_t buttons);
 

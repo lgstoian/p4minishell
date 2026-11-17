@@ -8,6 +8,8 @@ idf_component_register(
         "jsengine.c"
         "js_bindings.c"
         "js_dom.c"
+        "js_canvas.c"
+        "js_canvas_js.c"
     INCLUDE_DIRS
         "include"
     PRIV_INCLUDE_DIRS
@@ -18,6 +20,8 @@ idf_component_register(
         batch
         storage
         markdown
+        gfx
+        p4heap
         rss
         json
         tui

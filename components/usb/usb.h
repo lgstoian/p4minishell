@@ -221,6 +221,16 @@ bool usb_is_keyboard_attached(void);
 bool usb_is_mouse_attached(void);
 
 /**
+ * True when the attached USB keyboard interface has actually delivered a key.
+ *
+ * `usb_is_keyboard_attached()` only says an interface enumerated, and a
+ * composite pointing device (or a gaming mouse's macro-key collection) can
+ * expose one that never types. The on-screen-keyboard auto-hide policy uses
+ * this stricter signal, so such a device does not take the OSK away.
+ */
+bool usb_keyboard_input_seen(void);
+
+/**
  * Register a callback to receive USB keyboard input events.
  * The callback is invoked from the USB module task context.
  * Pass NULL to unregister.

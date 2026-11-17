@@ -64,6 +64,7 @@ components/gfx/                 RGB565 raster core + BMP parse/decode/scale + 8x
 components/imgdec/              PNG (LodePNG) + JPEG (TJpgDec) decode to scaled RGB565
 components/filetype/            Central extension -> kind registry
 components/markdown/            CommonMark-subset renderer (ANSI) + HTML serializer + print paginator + HTML reader + unified DOM renderer (TUI/ANSI)
+components/jsengine/            QuickJS engine + DOM/FS/shell bindings + Canvas 2D RGBA rasterizer (js_canvas) + HID-free HTML5 subset glue
 components/mcp/                 MCP (Model Context Protocol) JSON-RPC client (networking + json)
 components/font/                Font registry (roles/sizes/fallbacks), SD TTF loader, CJK attach, themes
 components/db/                  Palm-OS-style SD record store (sd:/DBS/<name>.DB)
@@ -1284,7 +1285,27 @@ Owns hosted NimBLE Bluetooth on ESP32-C6:
   | Page cache | PSRAM | 6 × ~112 KB ≈ 672 KB |
   | History | PSRAM | 150 × 512 B = 75 KB |
   | Bookmarks | PSRAM | 32 × 576 B = 18 KB |
-  | **Total** | | **≈ 1.5 MB typical, ≤ 6.2 MB worst case, of the 32 MB pool** |
+  | Canvas RGBA (2 max) | PSRAM | 2 × 320 × 200 × 4 B ≈ 512 KB |
+  | **Total** | | **≈ 2 MB typical, ≤ 6.7 MB worst case, of the 32 MB pool** |
+- **HTML5 subset (browser + one renderer)**: the browser's `dom_render.c` is the
+  only cell renderer. It now handles `<main>` reader focus, raw-text
+  `<script>`/`<style>`, a 32-level nesting cap (deeper subtrees flatten to
+  text), CSS backgrounds (`background-color`, `background` colour,
+  `background-image` page backdrop) and `<canvas>` bitmaps. Canvas 2D lives in
+  `components/jsengine/js_canvas.c` (pure RGBA software rasterizer, host-tested)
+  with the QuickJS bindings in `js_canvas_js.c`; the browser snapshots the
+  bitmap into the same packed cell image `<img>` uses. No-JS surfaces (editor
+  preview, print-to-HTML, EPUB) keep the single-pass ANSI reader and show a
+  canvas's fallback content, per the HTML spec. Backgrounds are solid block
+  cells in the TUI grid (marked so dumps read them as spaces); ANSI surfaces
+  keep text colours only. The supported API and its WHATWG/CSS Backgrounds 3
+  references are listed in [`command.md`](command.md#browser-url--back--forward--swipe-backforward--js-id--css--cache-clear--bookmark-addlistdel-).
+- **Board-to-board BLE chat**: the one GATT table also carries service 0xFFF2
+  (RX 0xFFF3 write, TX 0xFFF4 notify). `bluetooth chat on` registers it before
+  the NimBLE host starts and advertises connectably; the peer `chat join`s,
+  discovers, subscribes and writes RX. Messages are capped to MTU-3 and printed
+  as plain text so remote palette escapes cannot inject colours. No Wi-Fi, AP,
+  broker or cable is used.
 - **Status reporting**: Colour-coded report of controller readiness, NimBLE sync state,
   advertising state (with active name), connected HID device (name/address), C6 firmware version,
   and last error
@@ -1298,14 +1319,28 @@ Owns ESP-IDF USB Host Library with two class drivers:
   Enumeration (`msc_host_install_device()`) runs with `s_usb_lock` released — it performs
   blocking SCSI transfers, and holding the module lock across them stalls every other USB
   operation behind one slow stick.
-- **HID (Human Interface Device)**: Keyboard and mouse with opt-in transcript echo
+- **HID (Human Interface Device)**: Keyboard and mouse with opt-in transcript echo.
+  Pointing devices run **report protocol** and their report descriptor is decoded
+  (`usb_hid_layout.c`, host-tested) into button/X/Y/wheel offsets, so 16-bit axes,
+  report IDs, padding and the wheel work; boot protocol has no wheel byte at all.
+  A wheel notch always scrolls the transcript; the right-button edge is delivered
+  as Esc (dismiss/cancel) instead of being dropped. Echo is coalesced to ~10 Hz so
+  a 1 kHz mouse cannot bury the UI; `usb mouse desc|layout` dump the descriptor and
+  map and `usb.hid.mouse.events` counts real reports.
 - **USB keyboard auto-detect**: Automatically detects USB HID keyboard on plug-in; routes keystrokes to CLI input line via `shell_usb_keyboard_input()` bridge
 - **Full US key map**: 60+ USB HID key codes including symbols, keypad, navigation, function keys, and modifier-aware shifted characters
-- **On-screen keyboard auto-hide**: LVGL keyboard automatically hidden when USB keyboard attached; restored on detach
+- **On-screen keyboard auto-hide**: hidden only after a USB keyboard interface has
+  actually sent a key (`usb_keyboard_input_seen()`), not merely enumerated. A
+  composite mouse with a macro-key collection therefore does not take the OSK away;
+  the keyboard is restored on detach.
 - **External input mode API**: `keyboard_set_external_input()`, `keyboard_force_visible()`, `keyboard_clear_force_visible()`
 - **Input callback**: `usb_register_keyboard_input_callback()` for shell CLI integration
 - **Public key mapping**: `usb_key_to_ascii_full()`, `usb_key_name_full()` for external consumers
-- **Command family**: `usb status|ls|keyboard on|off|mouse on|off|cursor <on|off>|click <on|off>|move <x> <y>|click [ms]` (cursor/click share one display-owned pointer with BLE; `usb status` reports `usb.hid.mouse.ptr`; `move`/`click [ms]` simulate the pointer over serial for the harness)
+- **Command family**: `usb status|ls|keyboard on|off|mouse on|off|desc|layout|cursor <on|off>|click <on|off>|move <x> <y>|click [ms]` (cursor/click share one display-owned pointer with BLE; `usb status` reports `usb.hid.mouse.ptr` and counters; `move`/`click [ms]` simulate the pointer over serial for the harness)
+- **USB DMA memory**: the P4 USB-DWC transfer descriptors and URB buffers are
+  allocated from PSRAM (`CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM=y`); the
+  internal DRAM left by the display/hosted radio otherwise makes the first HID
+  pipe allocation fail with `HCD Pipe alloc error: ESP_ERR_NO_MEM`.
 - **Bounded output**: Directory listings and file previews mirror SD command style
 - **Transcript integration**: Uses dedicated host bridge functions in main.c
 

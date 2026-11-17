@@ -12,7 +12,7 @@
   ],
   "phase": 1,
   "target": "linux",
-  "expected_cases": 240,
+  "expected_cases": 265,
   "prelude": [
     {
       "name": "batch_env_pool_init",
@@ -57,7 +57,9 @@
     "test_shell_parser.c",
     "test_shell_quoting.c",
     "test_svc.c",
-    "test_theme.c"
+    "test_usb_hid_layout.c",
+    "test_theme.c",
+    "test_js_canvas.c"
   ],
   "excluded": {
     "test_alarm.c": "data store: REQUIRES storage + board_bsp for its on-disk backend",

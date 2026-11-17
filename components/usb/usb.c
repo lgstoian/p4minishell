@@ -32,6 +32,7 @@
 #include "usb/usb_host.h"
 
 #include "usb.h"
+#include "usb_hid_layout.h"
 #include "ansi.h"
 #include "ansi_palette.h"
 #include "display.h"
@@ -148,6 +149,9 @@ typedef struct {
 typedef struct {
     bool attached;
     bool echo_enabled;
+    bool input_seen;   /**< a key report has actually arrived (not just an
+                            interface that enumerated, e.g. a gaming mouse's
+                            macro-key collection) */
     hid_host_device_handle_t handle;
     hid_host_dev_params_t params;
 } usb_hid_slot_t;
@@ -183,7 +187,29 @@ static usb_hid_slot_t s_usb_mouse;
 static hid_keyboard_input_report_boot_t s_prev_keyboard_report;
 static int s_mouse_x;
 static int s_mouse_y;
+/* HID report bookkeeping: counters make a physical mouse verifiable from
+ * `usb status` without the transcript, and the accumulators let the echo
+ * coalesce 1 kHz report streams into at most 10 lines/second. All are
+ * written from the USB module task only. */
+static uint32_t s_mouse_ev_motion;
+static uint32_t s_mouse_ev_left;
+static uint32_t s_mouse_ev_right;
+static uint32_t s_mouse_ev_wheel;
+static int s_mouse_echo_acc_x;
+static int s_mouse_echo_acc_y;
+static int s_mouse_echo_acc_wheel;
+static uint8_t s_mouse_echo_buttons;
+static int64_t s_mouse_echo_last_us;
 static usb_keyboard_input_cb_t s_keyboard_input_cb;
+
+/** Minimum interval between coalesced motion echo lines (10 Hz). */
+#define USB_MOUSE_ECHO_INTERVAL_US 100000
+
+static usb_mouse_layout_t s_mouse_layout;
+/* Copy of the connected mouse's report descriptor for the `usb mouse desc`
+ * diagnostic (the driver's pointer is only valid while the device is open). */
+static uint8_t s_mouse_desc[256];
+static size_t s_mouse_desc_len;
 
 static void usb_record_errorf(esp_err_t error, const char *format, ...)
 {
@@ -782,6 +808,10 @@ static void usb_handle_keyboard_input_locked(const usb_module_event_t *event)
         if (key_code == 0) {
             continue;
         }
+        /* A key report, not just an enumerated interface: composite mice expose
+         * a macro-key collection that never types, and it must not hide the
+         * on-screen keyboard. Idle reports (all zeros) do not count either. */
+        s_usb_keyboard.input_seen = true;
 
         /* New key press (not in previous report) */
         if (!usb_keyboard_key_present(s_prev_keyboard_report.key, key_code)) {
@@ -833,20 +863,48 @@ static void usb_handle_keyboard_input_locked(const usb_module_event_t *event)
 
 static void usb_handle_mouse_input_locked(const usb_module_event_t *event)
 {
-    hid_mouse_input_report_boot_t report = { 0 };
-    int8_t wheel = 0;
+    const uint8_t *data = event->data.hid_input.data;
+    size_t length = event->data.hid_input.length;
+    int dx = 0;
+    int dy = 0;
+    int wheel = 0;
+    uint8_t buttons = 0;
+    uint8_t report_id = 0;
 
-    if (event->data.hid_input.length < sizeof(report)) {
-        return;
-    }
+    if (s_mouse_layout.valid) {
+        if (length == 0) {
+            return;
+        }
+        report_id = s_mouse_layout.has_report_id ? data[0] : 0u;
+        if (!s_mouse_layout.has_report_id ||
+            s_mouse_layout.x.report_id == report_id) {
+            dx = (int)usb_hid_field_value(data, length, &s_mouse_layout.x);
+            dy = (int)usb_hid_field_value(data, length, &s_mouse_layout.y);
+        }
+        if (!s_mouse_layout.has_report_id ||
+            s_mouse_layout.buttons.report_id == report_id) {
+            buttons = (uint8_t)(usb_hid_field_value(data, length,
+                                                    &s_mouse_layout.buttons) & 0xFF);
+        }
+        if (s_mouse_layout.wheel.valid &&
+            (!s_mouse_layout.has_report_id ||
+             s_mouse_layout.wheel.report_id == report_id)) {
+            wheel = (int)usb_hid_field_value(data, length, &s_mouse_layout.wheel);
+        }
+    } else {
+        /* Boot protocol: buttons(1) + x(1) + y(1), optional wheel(1). */
+        hid_mouse_input_report_boot_t report = { 0 };
 
-    memcpy(&report, event->data.hid_input.data, sizeof(report));
-
-    /* Boot-protocol mouse report is buttons(1) + x(1) + y(1) + wheel(1); the
-     * ESP-IDF struct omits the wheel byte, so read it from the raw report when
-     * the device sends it. Positive wheel = scroll up (toward older output). */
-    if (event->data.hid_input.length >= sizeof(report) + 1) {
-        wheel = (int8_t)event->data.hid_input.data[sizeof(report)];
+        if (length < sizeof(report)) {
+            return;
+        }
+        memcpy(&report, data, sizeof(report));
+        dx = (int)report.x_displacement;
+        dy = (int)report.y_displacement;
+        buttons = report.buttons.val;
+        if (length >= sizeof(report) + 1) {
+            wheel = (int)(int8_t)data[sizeof(report)];
+        }
     }
 
     /* Scroll the transcript regardless of echo mode: one wheel notch moves the
@@ -859,21 +917,70 @@ static void usb_handle_mouse_input_locked(const usb_module_event_t *event)
 
     /* Shared cursor: motion + buttons feed the display pointer indev, which
      * self-gates (ignored unless cursor/click tracking is opted in). */
-    display_mouse_report((int)report.x_displacement,
-                         (int)report.y_displacement,
-                         report.buttons.val);
+    display_mouse_report(dx, dy, buttons);
+
+    /* Report counters: physical verification without the transcript (the echo
+     * can be off and a 1 kHz stream is coalesced). Press edges, not levels, so
+     * holding a button does not inflate the count. */
+    {
+        bool left_edge = (buttons & 0x01u) != 0 &&
+                         !(s_mouse_echo_buttons & 0x01u);
+        bool right_edge = (buttons & 0x02u) != 0 &&
+                          !(s_mouse_echo_buttons & 0x02u);
+
+        if (dx != 0 || dy != 0) {
+            s_mouse_ev_motion++;
+        }
+        if (left_edge) {
+            s_mouse_ev_left++;
+        }
+        if (right_edge) {
+            s_mouse_ev_right++;
+        }
+        if (wheel != 0) {
+            s_mouse_ev_wheel++;
+        }
+    }
 
     if (!s_usb_mouse.echo_enabled) {
+        s_mouse_x += dx;
+        s_mouse_y += dy;
+        s_mouse_echo_buttons = buttons;
         return;
     }
 
-    s_mouse_x += report.x_displacement;
-    s_mouse_y += report.y_displacement;
-    usb_emit_asyncf("usb mouse: X=%06d Y=%06d |%c|%c|\n",
-                    s_mouse_x,
-                    s_mouse_y,
-                    report.buttons.button1 ? 'o' : ' ',
-                    report.buttons.button2 ? 'o' : ' ');
+    s_mouse_x += dx;
+    s_mouse_y += dy;
+    /* Coalesce: a 1 kHz gaming mouse used to append ~1000 transcript lines
+     * per second, which buried the UI and could stall it. Motion is echoed at
+     * most every 100 ms; button edges and wheel notches are immediate because
+     * they are discrete events. */
+    s_mouse_echo_acc_x += dx;
+    s_mouse_echo_acc_y += dy;
+    s_mouse_echo_acc_wheel += wheel;
+    {
+        bool button_change = buttons != s_mouse_echo_buttons;
+        bool has_delta = s_mouse_echo_acc_x != 0 || s_mouse_echo_acc_y != 0 ||
+                         s_mouse_echo_acc_wheel != 0;
+        int64_t now = esp_timer_get_time();
+        bool due = (now - s_mouse_echo_last_us) >= USB_MOUSE_ECHO_INTERVAL_US;
+
+        s_mouse_echo_buttons = buttons;
+        if (button_change || wheel != 0 || (due && has_delta)) {
+            usb_emit_asyncf("usb mouse: X=%06d Y=%06d dx=%+d dy=%+d |%c|%c| wheel=%+d\n",
+                            s_mouse_x,
+                            s_mouse_y,
+                            s_mouse_echo_acc_x,
+                            s_mouse_echo_acc_y,
+                            (buttons & 0x01u) ? 'o' : ' ',
+                            (buttons & 0x02u) ? 'o' : ' ',
+                            s_mouse_echo_acc_wheel);
+            s_mouse_echo_acc_x = 0;
+            s_mouse_echo_acc_y = 0;
+            s_mouse_echo_acc_wheel = 0;
+            s_mouse_echo_last_us = now;
+        }
+    }
 }
 
 static void usb_module_task(void *arg)
@@ -1017,11 +1124,46 @@ static void usb_module_task(void *arg)
             }
 
             if (params.sub_class == HID_SUBCLASS_BOOT_INTERFACE) {
-                error = hid_class_request_set_protocol(event.data.hid_connected.handle, HID_REPORT_PROTOCOL_BOOT);
+                /* Boot protocol has no wheel byte and no report IDs. A mouse
+                 * therefore runs report protocol and is decoded through its
+                 * report descriptor; a keyboard keeps the boot layout, which
+                 * is what its parser expects and is identical on every
+                 * boot-capable keyboard. */
+                hid_report_protocol_t requested =
+                    (params.proto == HID_PROTOCOL_MOUSE)
+                        ? HID_REPORT_PROTOCOL_REPORT
+                        : HID_REPORT_PROTOCOL_BOOT;
+
+                error = hid_class_request_set_protocol(event.data.hid_connected.handle,
+                                                       requested);
                 if (error != ESP_OK) {
-                    usb_record_warningf("USB HID boot protocol request failed for protocol %u: %s",
+                    usb_record_warningf("USB HID protocol request failed for protocol %u: %s",
                                         (unsigned int)params.proto,
                                         esp_err_to_name(error));
+                }
+            }
+
+            if (params.proto == HID_PROTOCOL_MOUSE) {
+                size_t desc_len = 0;
+                uint8_t *desc = hid_host_get_report_descriptor(
+                    event.data.hid_connected.handle, &desc_len);
+
+                usb_mouse_parse_layout(desc, desc_len, &s_mouse_layout);
+                s_mouse_desc_len = desc_len < sizeof(s_mouse_desc)
+                                       ? desc_len
+                                       : sizeof(s_mouse_desc);
+                if (desc != NULL && s_mouse_desc_len > 0) {
+                    memcpy(s_mouse_desc, desc, s_mouse_desc_len);
+                }
+                if (!s_mouse_layout.valid) {
+                    usb_record_warningf("USB mouse: report descriptor not decoded; "
+                                        "using the boot layout (wheel unavailable)");
+                } else {
+                    usb_record_infof("USB mouse: descriptor decoded (report id=%u, wheel %u bits)",
+                                     (unsigned int)s_mouse_layout.x.report_id,
+                                     s_mouse_layout.wheel.valid
+                                         ? (unsigned int)s_mouse_layout.wheel.bits
+                                         : 0u);
                 }
             }
 
@@ -1080,6 +1222,8 @@ static void usb_module_task(void *arg)
                 (void)hid_host_device_stop(s_usb_mouse.handle);
                 (void)hid_host_device_close(s_usb_mouse.handle);
                 usb_clear_hid_slot(&s_usb_mouse);
+                memset(&s_mouse_layout, 0, sizeof(s_mouse_layout));
+                s_mouse_desc_len = 0;
                 s_mouse_x = 0;
                 s_mouse_y = 0;
                 usb_emit_asyncf("usb: HID mouse disconnected\n");
@@ -1361,6 +1505,10 @@ void usb_status(void)
     usb_emit_syncf("usb.hid.keyboard: attached=%s echo=%s\n",
                    s_usb_keyboard.attached ? "yes" : "no",
                    s_usb_keyboard.echo_enabled ? "on" : "off");
+    usb_emit_syncf("usb.hid.keyboard.typed: %s\n",
+                   (s_usb_keyboard.attached && s_usb_keyboard.input_seen)
+                       ? "yes"
+                       : "no");
     usb_emit_syncf("usb.hid.mouse: attached=%s echo=%s\n",
                    s_usb_mouse.attached ? "yes" : "no",
                    s_usb_mouse.echo_enabled ? "on" : "off");
@@ -1371,6 +1519,11 @@ void usb_status(void)
         int32_t cursor_y = 0;
 
         display_mouse_position(&cursor_x, &cursor_y);
+        usb_emit_syncf("usb.hid.mouse.events: motion=%lu left=%lu right=%lu wheel=%lu\n",
+                       (unsigned long)s_mouse_ev_motion,
+                       (unsigned long)s_mouse_ev_left,
+                       (unsigned long)s_mouse_ev_right,
+                       (unsigned long)s_mouse_ev_wheel);
         usb_emit_syncf("usb.hid.mouse.ptr: cursor=%s click=%s x=%d y=%d\n",
                        display_mouse_cursor_enabled() ? "on" : "off",
                        display_mouse_click_enabled() ? "on" : "off",
@@ -1834,6 +1987,21 @@ bool usb_is_mouse_attached(void)
     return attached;
 }
 
+bool usb_keyboard_input_seen(void)
+{
+    bool seen = false;
+
+    if (!s_usb_initialized) {
+        return false;
+    }
+    if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+    seen = s_usb_keyboard.attached && s_usb_keyboard.input_seen;
+    xSemaphoreGive(s_usb_lock);
+    return seen;
+}
+
 void usb_register_keyboard_input_callback(usb_keyboard_input_cb_t cb)
 {
     if (xSemaphoreTake(s_usb_lock, portMAX_DELAY) != pdTRUE) {
@@ -1841,6 +2009,59 @@ void usb_register_keyboard_input_callback(usb_keyboard_input_cb_t cb)
     }
     s_keyboard_input_cb = cb;
     xSemaphoreGive(s_usb_lock);
+}
+
+static void usb_mouse_print_layout(void)
+{
+    usb_emit_syncf("usb.mouse.layout: valid=%d has_report_id=%d desc_bytes=%u\n",
+                   s_mouse_layout.valid ? 1 : 0,
+                   s_mouse_layout.has_report_id ? 1 : 0,
+                   (unsigned int)s_mouse_desc_len);
+    usb_emit_syncf("  buttons: byte=%u bit=%u bits=%u rid=%u valid=%d\n",
+                   (unsigned int)s_mouse_layout.buttons.byte,
+                   (unsigned int)s_mouse_layout.buttons.bit,
+                   (unsigned int)s_mouse_layout.buttons.bits,
+                   (unsigned int)s_mouse_layout.buttons.report_id,
+                   s_mouse_layout.buttons.valid ? 1 : 0);
+    usb_emit_syncf("  x: byte=%u bit=%u bits=%u rid=%u valid=%d\n",
+                   (unsigned int)s_mouse_layout.x.byte,
+                   (unsigned int)s_mouse_layout.x.bit,
+                   (unsigned int)s_mouse_layout.x.bits,
+                   (unsigned int)s_mouse_layout.x.report_id,
+                   s_mouse_layout.x.valid ? 1 : 0);
+    usb_emit_syncf("  y: byte=%u bit=%u bits=%u rid=%u valid=%d\n",
+                   (unsigned int)s_mouse_layout.y.byte,
+                   (unsigned int)s_mouse_layout.y.bit,
+                   (unsigned int)s_mouse_layout.y.bits,
+                   (unsigned int)s_mouse_layout.y.report_id,
+                   s_mouse_layout.y.valid ? 1 : 0);
+    usb_emit_syncf("  wheel: byte=%u bit=%u bits=%u rid=%u valid=%d\n",
+                   (unsigned int)s_mouse_layout.wheel.byte,
+                   (unsigned int)s_mouse_layout.wheel.bit,
+                   (unsigned int)s_mouse_layout.wheel.bits,
+                   (unsigned int)s_mouse_layout.wheel.report_id,
+                   s_mouse_layout.wheel.valid ? 1 : 0);
+}
+
+static void usb_mouse_print_descriptor(void)
+{
+    size_t pos;
+
+    if (s_mouse_desc_len == 0) {
+        usb_emit_syncf("usb.mouse.desc: no descriptor captured\n");
+        return;
+    }
+    usb_emit_syncf("usb.mouse.desc: %u bytes\n", (unsigned int)s_mouse_desc_len);
+    for (pos = 0; pos < s_mouse_desc_len; pos += 16) {
+        char line[16 * 3 + 1];
+        size_t used = 0;
+
+        for (size_t i = 0; i < 16 && pos + i < s_mouse_desc_len; i++) {
+            used += (size_t)snprintf(line + used, sizeof(line) - used, "%02X ",
+                                     s_mouse_desc[pos + i]);
+        }
+        usb_emit_syncf("  %s\n", line);
+    }
 }
 
 void usb_handle_command(char *command)
@@ -1904,6 +2125,14 @@ void usb_handle_command(char *command)
     }
 
     if (strutil_text_equals_ignore_case(argv[1], "mouse")) {
+        if (argc >= 3 && strutil_text_equals_ignore_case(argv[2], "desc")) {
+            usb_mouse_print_descriptor();
+            return;
+        }
+        if (argc >= 3 && strutil_text_equals_ignore_case(argv[2], "layout")) {
+            usb_mouse_print_layout();
+            return;
+        }
         if (argc >= 3 && strutil_text_equals_ignore_case(argv[2], "on")) {
             usb_hid_mouse_enable();
             return;

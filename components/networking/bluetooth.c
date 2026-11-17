@@ -109,6 +109,56 @@ typedef struct {
 
 static ble_hid_state_t s_ble_hid;
 
+/* ---- BLE chat (board-to-board) ---------------------------------------- *
+ * A tiny GATT service, no Wi-Fi, broker or cable:
+ *   0xFFF2  service
+ *   0xFFF3  RX: peer writes a message here (server prints it)
+ *   0xFFF4  TX: server notifies a message here (client subscribes)
+ * One board runs the connectable server (`bluetooth chat on`), the other
+ * joins by address (`bluetooth chat join <addr>`) and both can send.
+ * Messages are capped to the negotiated ATT MTU minus the 3-byte header. */
+#define BT_CHAT_SVC_UUID   0xFFF2
+#define BT_CHAT_RX_UUID    0xFFF3
+#define BT_CHAT_TX_UUID    0xFFF4
+#define BT_CHAT_MSG_BYTES  160
+
+/** What the pending/active BLE connection is for. The GAP event handler is
+ *  shared, so this decides whether a connection starts HID discovery, chat
+ *  client discovery, or is an inbound chat-server peer. */
+typedef enum {
+    BT_LINK_NONE = 0,
+    BT_LINK_HID,
+    BT_LINK_CHAT_CLIENT,
+} bt_link_role_t;
+
+typedef struct {
+    bool server_enabled;    /**< Connectable chat server is running. */
+    bool peer_connected;    /**< A chat peer is connected (either role). */
+    bool client;            /**< We initiated (central) the chat link. */
+    uint16_t conn_handle;
+    uint16_t rx_handle;     /**< 0xFFF3 (client: discovered). */
+    uint16_t tx_handle;     /**< 0xFFF4 (server: NimBLE sets on registration). */
+    uint16_t ccc_handle;    /**< TX CCCD (client: discovered). */
+    uint16_t svc_start;
+    uint16_t svc_end;
+    bool discovery_done;
+    uint16_t mtu;           /**< Negotiated ATT MTU (23 until exchanged). */
+    char peer[BLUETOOTH_ADDR_BYTES];
+    char name[BLUETOOTH_NAME_BYTES];
+    uint32_t rx_count;
+    uint32_t tx_count;
+} bt_chat_state_t;
+
+static bt_chat_state_t s_chat;
+static bt_link_role_t s_bt_link_role;
+static uint16_t s_chat_server_tx_handle;  /* 0xFFF4 value handle, set at registration */
+static const ble_uuid16_t s_chat_svc_uuid = BLE_UUID16_INIT(BT_CHAT_SVC_UUID);
+
+static int bluetooth_gatt_chat_rx(uint16_t conn_handle, uint16_t attr_handle,
+                                  struct ble_gatt_access_ctxt *ctxt, void *arg);
+static void bluetooth_chat_start_discovery(uint16_t conn_handle);
+static void bluetooth_chat_cleanup(void);
+
 /* Forward declarations for GATT client callbacks (defined after the GAP handler). */
 static int bluetooth_disc_svc_cb(uint16_t conn_handle,
                                   const struct ble_gatt_error *error,
@@ -363,6 +413,73 @@ static int bluetooth_gatt_read_status(uint16_t conn_handle, uint16_t attr_handle
     return 0;
 }
 
+/** Notify-only characteristic access callback: reads return an empty value.
+ *  NimBLE requires a non-NULL callback even when only NOTIFY is allowed. */
+static int bluetooth_gatt_read_none(uint16_t conn_handle, uint16_t attr_handle,
+                                    struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)ctxt;
+    (void)arg;
+    return 0;
+}
+
+/** Print one received chat line as plain text. Remote content is untrusted:
+ *  control bytes become '.', and the plain sink is used so a `@R` sequence in
+ *  a message cannot inject ANSI palette commands. */
+static void bluetooth_chat_print_rx(const char *text)
+{
+    char line[BT_CHAT_MSG_BYTES + 16];
+    size_t out = 0;
+    size_t i;
+
+    out = (size_t)snprintf(line, sizeof(line), "[bt] ");
+    if (text != NULL) {
+        for (i = 0; text[i] != '\0' && out + 1 < sizeof(line) - 1; i++) {
+            unsigned char c = (unsigned char)text[i];
+
+            line[out++] = (c < 0x20 && c != '\t') ? '.' : (char)c;
+        }
+    }
+    line[out++] = '\n';
+    line[out] = '\0';
+    if (s_host_ops.transcript_append_text != NULL) {
+        s_host_ops.transcript_append_text(line);
+    } else {
+        bluetooth_appendf("%s", line);
+    }
+}
+
+/** 0xFFF3 write handler: the peer sent a message. */
+static int bluetooth_gatt_chat_rx(uint16_t conn_handle, uint16_t attr_handle,
+                                  struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    char text[BT_CHAT_MSG_BYTES];
+    uint16_t len;
+    uint16_t copy;
+
+    (void)attr_handle;
+    (void)arg;
+    if (ctxt == NULL || ctxt->om == NULL) {
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+    len = OS_MBUF_PKTLEN(ctxt->om);
+    copy = (uint16_t)((len < sizeof(text) - 1) ? len : sizeof(text) - 1);
+    os_mbuf_copydata(ctxt->om, 0, copy, text);
+    text[copy] = '\0';
+    if (copy == 0) {
+        return 0;
+    }
+
+    s_chat.rx_count++;
+    s_chat.conn_handle = conn_handle;
+    s_chat.peer_connected = true;
+    bluetooth_chat_print_rx(text);
+    bluetooth_notify_headerf(3000, "Bluetooth message");
+    return 0;
+}
+
 static const struct ble_gatt_svc_def g_bluetooth_gatt_svcs[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
@@ -393,8 +510,43 @@ static const struct ble_gatt_svc_def g_bluetooth_gatt_svcs[] = {
             { 0 },
         },
     },
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = BLE_UUID16_DECLARE(BT_CHAT_SVC_UUID),
+        .characteristics = (struct ble_gatt_chr_def[]) {
+            { .uuid = BLE_UUID16_DECLARE(BT_CHAT_RX_UUID),
+              .access_cb = bluetooth_gatt_chat_rx,
+              .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP },
+            { .uuid = BLE_UUID16_DECLARE(BT_CHAT_TX_UUID),
+              .access_cb = bluetooth_gatt_read_none,
+              .flags = BLE_GATT_CHR_F_NOTIFY,
+              .val_handle = &s_chat_server_tx_handle },
+            { 0 },
+        },
+    },
     { 0 },
 };
+
+static bool bluetooth_gatt_register(void)
+{
+    int rc;
+
+    if (s_bluetooth_gatt_registered) {
+        return true;
+    }
+    rc = ble_gatts_count_cfg(g_bluetooth_gatt_svcs);
+    if (rc != 0) {
+        bluetooth_record_errorf(ESP_FAIL, "GATT resource count failed (rc=%d)", rc);
+        return false;
+    }
+    rc = ble_gatts_add_svcs(g_bluetooth_gatt_svcs);
+    if (rc != 0) {
+        bluetooth_record_errorf(ESP_FAIL, "GATT service registration failed (rc=%d)", rc);
+        return false;
+    }
+    s_bluetooth_gatt_registered = true;
+    return true;
+}
 
 void bluetooth_gatt(bool enable)
 {
@@ -415,9 +567,11 @@ void bluetooth_gatt(bool enable)
     }
     s_bluetooth_gatt_enabled = true;
     if (s_bluetooth_state.synced) {
-        ble_gatts_count_cfg(g_bluetooth_gatt_svcs);
-        ble_gatts_add_svcs(g_bluetooth_gatt_svcs);
-        s_bluetooth_gatt_registered = true;
+        if (!bluetooth_gatt_register()) {
+            bluetooth_appendf(SH_ERR "bluetooth:" SH_RST
+                              " GATT server registration failed\n");
+            return;
+        }
         s_bluetooth_state.advertising_requested = true;
         if (bluetooth_start_advertising_ex(true) == ESP_OK) {
             bluetooth_appendf(SH_OK "bluetooth:" SH_RST
@@ -427,6 +581,11 @@ void bluetooth_gatt(bool enable)
                               " GATT server registered; advertising failed\n");
         }
     } else {
+        /* Remember the request: bluetooth_on_sync() starts advertising once
+         * the hosted controller finishes synchronizing. Without this a
+         * `chat on` issued immediately after boot would register the services
+         * but never advertise, so a peer could never find the board. */
+        s_bluetooth_state.advertising_requested = true;
         bluetooth_appendf(SH_PROMPT "bluetooth:" SH_RST
                           " waiting for BLE host sync before enabling the GATT server\n");
     }
@@ -458,9 +617,7 @@ static void bluetooth_on_sync(void)
     bluetooth_notify_headerf(3500, "Bluetooth synced with C6");
 
     if (s_bluetooth_gatt_enabled && !s_bluetooth_gatt_registered) {
-        ble_gatts_count_cfg(g_bluetooth_gatt_svcs);
-        ble_gatts_add_svcs(g_bluetooth_gatt_svcs);
-        s_bluetooth_gatt_registered = true;
+        (void)bluetooth_gatt_register();
     }
 
     if (s_bluetooth_state.advertising_requested && !s_bluetooth_state.advertising_active) {
@@ -520,8 +677,24 @@ static esp_err_t bluetooth_start_advertising_ex(bool connectable)
     fields.name = (uint8_t *)advertise_name;
     fields.name_len = strlen(advertise_name);
     fields.name_is_complete = 1;
+    if (s_chat.server_enabled) {
+        /* Advertise the chat service so a scanning peer can identify the
+         * board before connecting (and so this is not mistaken for the
+         * status-only GATT server). */
+        fields.uuids16 = &s_chat_svc_uuid;
+        fields.num_uuids16 = 1;
+        fields.uuids16_is_complete = 1;
+    }
 
     rc = ble_gap_adv_set_fields(&fields);
+    if (rc == BLE_HS_EMSGSIZE && s_chat.server_enabled) {
+        /* A long session name plus the UUID can exceed the 31-byte advert;
+         * keep the name (it is what a human scans for) and drop the UUID. */
+        fields.uuids16 = NULL;
+        fields.num_uuids16 = 0;
+        fields.uuids16_is_complete = 0;
+        rc = ble_gap_adv_set_fields(&fields);
+    }
     if (rc != 0) {
         return ESP_FAIL;
     }
@@ -678,8 +851,39 @@ static int bluetooth_gap_event(struct ble_gap_event *event, void *arg)
 #if CONFIG_BT_NIMBLE_ENABLED
     case BLE_GAP_EVENT_CONNECT: {
         /* A BLE connection was established (we initiated it) or failed. */
-        if (event->connect.status == 0) {
-            /* Connection successful. */
+        if (event->connect.status != 0) {
+            if (s_bt_link_role == BT_LINK_CHAT_CLIENT) {
+                bluetooth_appendf(SH_ERR "bluetooth:" SH_RST
+                                  " chat connection failed (status=%d)\n",
+                                  event->connect.status);
+                bluetooth_chat_cleanup();
+            } else {
+                bluetooth_appendf(SH_ERR "bluetooth:" SH_RST
+                                  " connection failed (status=%d)\n",
+                                  event->connect.status);
+                bluetooth_record_errorf(ESP_FAIL, "BLE connection failed (status=%d)",
+                                        event->connect.status);
+                bluetooth_hid_cleanup();
+            }
+            s_bt_link_role = BT_LINK_NONE;
+            return 0;
+        }
+
+        if (s_bt_link_role == BT_LINK_CHAT_CLIENT) {
+            s_chat.peer_connected = true;
+            s_chat.client = true;
+            s_chat.conn_handle = event->connect.conn_handle;
+            s_chat.discovery_done = false;
+            s_chat.mtu = 23;
+            s_chat.rx_handle = 0;
+            s_chat.tx_handle = 0;
+            s_chat.ccc_handle = 0;
+            bluetooth_appendf(SH_OK "bluetooth:" SH_RST " chat connected to "
+                              SH_VAL "%s" SH_RST " (handle %u)\n",
+                              s_chat.peer, event->connect.conn_handle);
+            bluetooth_notify_headerf(4000, "Bluetooth chat connected");
+            bluetooth_chat_start_discovery(event->connect.conn_handle);
+        } else if (s_bt_link_role == BT_LINK_HID) {
             s_ble_hid.connected = true;
             s_ble_hid.conn_handle = event->connect.conn_handle;
             s_ble_hid.discovery_state = 0;
@@ -693,24 +897,55 @@ static int bluetooth_gap_event(struct ble_gap_event *event, void *arg)
              * exchange adds no value and would start a second GATT procedure
              * while discovery is queued. */
             bluetooth_start_hid_discovery(event->connect.conn_handle);
+        } else if (s_chat.server_enabled) {
+            /* Inbound connection: this board is the chat server. */
+            s_chat.peer_connected = true;
+            s_chat.client = false;
+            s_chat.conn_handle = event->connect.conn_handle;
+            s_chat.discovery_done = true;
+            s_chat.mtu = 23;
+            {
+                struct ble_gap_conn_desc desc;
+
+                if (ble_gap_conn_find(event->connect.conn_handle, &desc) == 0) {
+                    bluetooth_format_address(&desc.peer_id_addr,
+                                             s_chat.peer, sizeof(s_chat.peer));
+                } else {
+                    snprintf(s_chat.peer, sizeof(s_chat.peer), "(unknown)");
+                }
+            }
+            bluetooth_appendf(SH_OK "bluetooth:" SH_RST " chat peer connected: "
+                              SH_VAL "%s" SH_RST "\n", s_chat.peer);
+            bluetooth_notify_headerf(4000, "Bluetooth chat peer connected");
         } else {
-            /* Connection failed. */
-            bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " connection failed (status=%d)\n",
-                              event->connect.status);
-            bluetooth_record_errorf(ESP_FAIL, "BLE connection failed (status=%d)", event->connect.status);
-            bluetooth_hid_cleanup();
+            bluetooth_appendf(SH_WARN "bluetooth:" SH_RST
+                              " rejected an unexpected BLE connection\n");
+            (void)ble_gap_terminate(event->connect.conn_handle,
+                                    BLE_ERR_REM_USER_CONN_TERM);
         }
+        s_bt_link_role = BT_LINK_NONE;
         return 0;
     }
 
     case BLE_GAP_EVENT_DISCONNECT: {
         /* A BLE connection was terminated. */
-        if (event->disconnect.conn.conn_handle == s_ble_hid.conn_handle) {
+        if (s_ble_hid.connected &&
+            event->disconnect.conn.conn_handle == s_ble_hid.conn_handle) {
             bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " BLE HID device disconnected (reason=%d)\n",
                               event->disconnect.reason);
             bluetooth_notify_headerf(4000, "BLE keyboard disconnected");
             bluetooth_record_infof("BLE HID disconnected (reason=%d)", event->disconnect.reason);
             bluetooth_hid_cleanup();
+        }
+        if (s_chat.peer_connected &&
+            event->disconnect.conn.conn_handle == s_chat.conn_handle) {
+            bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " chat peer disconnected (reason=%d)\n",
+                              event->disconnect.reason);
+            bluetooth_notify_headerf(4000, "Bluetooth chat disconnected");
+            bluetooth_chat_cleanup();
+            if (s_chat.server_enabled) {
+                (void)bluetooth_start_advertising_ex(true);
+            }
         }
         return 0;
     }
@@ -722,6 +957,24 @@ static int bluetooth_gap_event(struct ble_gap_event *event, void *arg)
          * (report-protocol devices need report-map parsing, which we do
          * not do — those bytes are ignored rather than misread). */
         uint16_t attr_handle = event->notify_rx.attr_handle;
+
+        if (s_chat.peer_connected &&
+            event->notify_rx.conn_handle == s_chat.conn_handle &&
+            attr_handle == s_chat.tx_handle &&
+            event->notify_rx.om != NULL) {
+            char text[BT_CHAT_MSG_BYTES];
+            uint16_t len = OS_MBUF_PKTLEN(event->notify_rx.om);
+
+            if (len > sizeof(text) - 1) {
+                len = sizeof(text) - 1;
+            }
+            os_mbuf_copydata(event->notify_rx.om, 0, len, text);
+            text[len] = '\0';
+            s_chat.rx_count++;
+            bluetooth_chat_print_rx(text);
+            bluetooth_notify_headerf(3000, "Bluetooth message");
+            return 0;
+        }
 
         if (s_ble_hid.connected &&
             event->notify_rx.conn_handle == s_ble_hid.conn_handle &&
@@ -752,6 +1005,10 @@ static int bluetooth_gap_event(struct ble_gap_event *event, void *arg)
     }
 
     case BLE_GAP_EVENT_MTU: {
+        if (s_chat.peer_connected &&
+            event->mtu.conn_handle == s_chat.conn_handle) {
+            s_chat.mtu = event->mtu.value;
+        }
         bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " MTU negotiated: %d bytes\n", event->mtu.value);
         return 0;
     }
@@ -865,6 +1122,23 @@ static esp_err_t bluetooth_ensure_ready_once(void)
              * does not call nimble_port_init() on an initialized stack. */
             nimble_port_deinit();
             return ESP_FAIL;
+        }
+
+        /* Attribute definitions must be added BEFORE the host task starts:
+         * ble_gatts_start() (called from ble_hs_start inside the task) builds
+         * the ATT database from them. Adding services after sync only appends
+         * definitions that are never registered, so the characteristics answer
+         * no handles and a peer discovers nothing. Registering every service
+         * here costs a few bytes and makes `gatt on`/`chat on` work whenever
+         * they are issued. */
+        rc = ble_gatts_count_cfg(g_bluetooth_gatt_svcs);
+        if (rc == 0) {
+            rc = ble_gatts_add_svcs(g_bluetooth_gatt_svcs);
+        }
+        if (rc != 0) {
+            bluetooth_record_errorf(ESP_FAIL, "GATT registration at init failed (rc=%d)", rc);
+        } else {
+            s_bluetooth_gatt_registered = true;
         }
 
         nimble_port_freertos_init(bluetooth_host_task);
@@ -1476,6 +1750,7 @@ esp_err_t bluetooth_connect(const char *addr_str)
 
     /* Remember the target address/name before the async connection callback
      * can fire, and reuse the name from a prior scan when available. */
+    s_bt_link_role = BT_LINK_HID;
     snprintf(s_ble_hid.address, sizeof(s_ble_hid.address), "%s", addr_str);
     s_ble_hid.name[0] = '\0';
     {
@@ -1497,6 +1772,7 @@ esp_err_t bluetooth_connect(const char *addr_str)
                           bluetooth_gap_event, NULL);
     if (rc != 0) {
         s_ble_hid.address[0] = '\0';
+        s_bt_link_role = BT_LINK_NONE;
         bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " connect failed (rc=%d)\n", rc);
         return ESP_FAIL;
     }
@@ -1539,6 +1815,340 @@ static void bluetooth_hid_cleanup(void)
     s_ble_hid.mouse_y = 0;
     memset(s_ble_hid_prev_keys, 0, sizeof(s_ble_hid_prev_keys));
 }
+
+/* ---- BLE chat: central-side discovery, send, and role control ---------- */
+
+static int bluetooth_chat_disc_dsc_cb(uint16_t conn_handle,
+                                      const struct ble_gatt_error *error,
+                                      uint16_t chr_val_handle,
+                                      const struct ble_gatt_dsc *dsc,
+                                      void *arg)
+{
+    (void)arg;
+    (void)chr_val_handle;
+    if (error->status == 0 && dsc != NULL) {
+        if (ble_uuid_u16(&dsc->uuid.u) == 0x2902) {
+            s_chat.ccc_handle = dsc->handle;
+        }
+        return 0;
+    }
+    if (error->status != BLE_HS_EDONE) {
+        return 0;
+    }
+    if (s_chat.ccc_handle == 0) {
+        bluetooth_appendf(SH_ERR "bluetooth:" SH_RST
+                          " chat TX characteristic has no CCC descriptor\n");
+        return 0;
+    }
+    {
+        uint8_t enable[2] = { 1, 0 };   /* notifications on */
+
+        if (ble_gattc_write_flat(conn_handle, s_chat.ccc_handle,
+                                 enable, sizeof(enable), NULL, NULL) != 0) {
+            bluetooth_appendf(SH_ERR "bluetooth:" SH_RST
+                              " could not subscribe to chat notifications\n");
+            return 0;
+        }
+    }
+    s_chat.discovery_done = true;
+    bluetooth_appendf(SH_OK "bluetooth:" SH_RST
+                      " chat ready (rx=%u tx=%u mtu=%u)\n",
+                      (unsigned int)s_chat.rx_handle,
+                      (unsigned int)s_chat.tx_handle,
+                      (unsigned int)s_chat.mtu);
+    bluetooth_notify_headerf(3500, "Bluetooth chat ready");
+    /* The subscription write must finish before the MTU procedure; NimBLE
+     * queues it, and the MTU event updates s_chat.mtu for long messages. */
+    (void)ble_gattc_exchange_mtu(conn_handle, NULL, NULL);
+    return 0;
+}
+
+static int bluetooth_chat_disc_chr_cb(uint16_t conn_handle,
+                                      const struct ble_gatt_error *error,
+                                      const struct ble_gatt_chr *chr,
+                                      void *arg)
+{
+    (void)arg;
+    if (error->status == 0 && chr != NULL) {
+        uint16_t uuid = ble_uuid_u16(&chr->uuid.u);
+
+        if (uuid == BT_CHAT_RX_UUID) {
+            s_chat.rx_handle = chr->val_handle;
+        } else if (uuid == BT_CHAT_TX_UUID) {
+            s_chat.tx_handle = chr->val_handle;
+        }
+        return 0;
+    }
+    if (error->status != BLE_HS_EDONE) {
+        return 0;
+    }
+    if (s_chat.rx_handle == 0 || s_chat.tx_handle == 0) {
+        bluetooth_appendf(SH_ERR "bluetooth:" SH_RST
+                          " chat service is missing its RX/TX characteristics\n");
+        return 0;
+    }
+    (void)ble_gattc_disc_all_dscs(conn_handle, s_chat.tx_handle,
+                                 s_chat.svc_end, bluetooth_chat_disc_dsc_cb, NULL);
+    return 0;
+}
+
+static int bluetooth_chat_disc_svc_cb(uint16_t conn_handle,
+                                      const struct ble_gatt_error *error,
+                                      const struct ble_gatt_svc *service,
+                                      void *arg)
+{
+    (void)arg;
+    if (error->status == 0 && service != NULL) {
+        s_chat.svc_start = service->start_handle;
+        s_chat.svc_end = service->end_handle;
+        return 0;
+    }
+    if (error->status != BLE_HS_EDONE) {
+        return 0;
+    }
+    if (s_chat.svc_start == 0) {
+        bluetooth_appendf(SH_ERR "bluetooth:" SH_RST
+                          " peer has no P4MiniShell chat service (0xFFF2);"
+                          " run `bluetooth chat on` there first\n");
+        return 0;
+    }
+    if (ble_gattc_disc_all_chrs(conn_handle, s_chat.svc_start, s_chat.svc_end,
+                                bluetooth_chat_disc_chr_cb, NULL) != 0) {
+        bluetooth_appendf(SH_ERR "bluetooth:" SH_RST
+                          " could not start characteristic discovery\n");
+    }
+    return 0;
+}
+
+static void bluetooth_chat_start_discovery(uint16_t conn_handle)
+{
+    ble_uuid16_t uuid = BLE_UUID16_INIT(BT_CHAT_SVC_UUID);
+
+    s_chat.svc_start = 0;
+    s_chat.svc_end = 0;
+    if (ble_gattc_disc_svc_by_uuid(conn_handle, &uuid.u,
+                                   bluetooth_chat_disc_svc_cb, NULL) != 0) {
+        bluetooth_appendf(SH_ERR "bluetooth:" SH_RST
+                          " could not start chat service discovery\n");
+    }
+}
+
+/** Reset the per-connection chat state. The server's TX value handle is a
+ *  registration property and deliberately survives a disconnect. */
+static void bluetooth_chat_cleanup(void)
+{
+    s_chat.peer_connected = false;
+    s_chat.discovery_done = false;
+    s_chat.conn_handle = 0;
+    s_chat.rx_handle = 0;
+    s_chat.tx_handle = 0;
+    s_chat.ccc_handle = 0;
+    s_chat.svc_start = 0;
+    s_chat.svc_end = 0;
+    s_chat.mtu = 23;
+}
+
+/** `bluetooth chat on [name]`: register the GATT server and advertise
+ *  connectably. Idempotent. */
+void bluetooth_chat_server(bool enable, const char *name)
+{
+    if (!enable) {
+        if (s_chat.peer_connected) {
+            (void)ble_gap_terminate(s_chat.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+            bluetooth_chat_cleanup();
+        }
+        s_chat.server_enabled = false;
+        if (s_bluetooth_state.advertising_active) {
+            (void)ble_gap_adv_stop();
+            s_bluetooth_state.advertising_active = false;
+        }
+        bluetooth_appendf(SH_MUTE "bluetooth:" SH_RST " chat server off\n");
+        return;
+    }
+
+    if (bluetooth_ensure_ready() != ESP_OK) {
+        bluetooth_report_not_available(s_bluetooth_state.last_error);
+        return;
+    }
+    if (name != NULL && name[0] != '\0') {
+        snprintf(s_bluetooth_state.session_advertise_name,
+                 sizeof(s_bluetooth_state.session_advertise_name), "%s", name);
+    }
+    s_chat.server_enabled = true;
+    s_chat.mtu = 23;
+    /* Registers the whole service table (Device Information, status, chat)
+     * and switches advertising to connectable with the chat UUID. */
+    bluetooth_gatt(true);
+}
+
+/** `bluetooth chat join <addr>`: connect as the GATT client. */
+esp_err_t bluetooth_chat_join(const char *addr_str)
+{
+    ble_addr_t addr;
+    struct ble_gap_conn_params conn_params;
+    unsigned int a[6];
+    int rc;
+
+    if (addr_str == NULL || addr_str[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_chat.peer_connected) {
+        bluetooth_appendf(SH_WARN "bluetooth:" SH_RST " chat already connected to "
+                          SH_VAL "%s" SH_RST "\n", s_chat.peer);
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (sscanf(addr_str, "%2x:%2x:%2x:%2x:%2x:%2x",
+               &a[0], &a[1], &a[2], &a[3], &a[4], &a[5]) != 6) {
+        bluetooth_appendf(SH_USAGE "Usage: bluetooth chat join XX:XX:XX:XX:XX:XX"
+                          SH_RST "\n");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (bluetooth_ensure_ready() != ESP_OK) {
+        bluetooth_report_not_available(s_bluetooth_state.last_error);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    addr.type = BLE_OWN_ADDR_PUBLIC;
+    addr.val[0] = (uint8_t)a[5];
+    addr.val[1] = (uint8_t)a[4];
+    addr.val[2] = (uint8_t)a[3];
+    addr.val[3] = (uint8_t)a[2];
+    addr.val[4] = (uint8_t)a[1];
+    addr.val[5] = (uint8_t)a[0];
+
+    memset(&conn_params, 0, sizeof(conn_params));
+    conn_params.scan_itvl = P4_CONFIG_BLE_CONN_SCAN_ITVL;
+    conn_params.scan_window = P4_CONFIG_BLE_CONN_SCAN_WINDOW;
+    conn_params.itvl_min = P4_CONFIG_BLE_CONN_ITVL_MIN;
+    conn_params.itvl_max = P4_CONFIG_BLE_CONN_ITVL_MAX;
+    conn_params.latency = P4_CONFIG_BLE_CONN_LATENCY;
+    conn_params.supervision_timeout = P4_CONFIG_BLE_CONN_SUPERVISION_TIMEOUT;
+
+    if (s_bluetooth_state.scan_active) {
+        (void)ble_gap_disc_cancel();
+        s_bluetooth_state.scan_active = false;
+    }
+    if (s_bluetooth_state.advertising_active) {
+        (void)ble_gap_adv_stop();
+        s_bluetooth_state.advertising_active = false;
+    }
+
+    snprintf(s_chat.peer, sizeof(s_chat.peer), "%s", addr_str);
+    s_chat.name[0] = '\0';
+    s_chat.mtu = 23;
+    for (size_t index = 0; index < s_bluetooth_state.discovered_count; index++) {
+        if (strutil_text_equals_ignore_case(s_bluetooth_state.discovered[index].address,
+                                            addr_str)) {
+            snprintf(s_chat.name, sizeof(s_chat.name), "%s",
+                     s_bluetooth_state.discovered[index].name);
+            break;
+        }
+    }
+
+    s_bt_link_role = BT_LINK_CHAT_CLIENT;
+    s_chat.client = true;
+    rc = ble_gap_connect(s_bluetooth_state.own_addr_type, &addr,
+                         P4_CONFIG_BLE_CONNECT_TIMEOUT_MS, &conn_params,
+                         bluetooth_gap_event, NULL);
+    if (rc != 0) {
+        s_bt_link_role = BT_LINK_NONE;
+        s_chat.client = false;
+        bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " chat connect failed (rc=%d)\n", rc);
+        return ESP_FAIL;
+    }
+    bluetooth_appendf(SH_PROMPT "bluetooth:" SH_RST " chat joining " SH_VAL "%s" SH_RST "...\n",
+                      addr_str);
+    return ESP_OK;
+}
+
+/** `bluetooth chat send <text>`: write to the server's RX or notify the
+ *  client's TX, depending on the role this board plays. */
+esp_err_t bluetooth_chat_send(const char *text)
+{
+    char message[BT_CHAT_MSG_BYTES];
+    size_t len;
+    size_t max_len;
+
+    if (text == NULL || text[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_chat.peer_connected) {
+        bluetooth_appendf(SH_WARN "bluetooth:" SH_RST " chat has no peer\n");
+        return ESP_ERR_INVALID_STATE;
+    }
+    max_len = (s_chat.mtu > 3) ? (size_t)(s_chat.mtu - 3) : 20u;
+    if (max_len > BT_CHAT_MSG_BYTES - 1) {
+        max_len = BT_CHAT_MSG_BYTES - 1;
+    }
+    len = strlen(text);
+    if (len > max_len) {
+        len = max_len;
+    }
+    memcpy(message, text, len);
+    message[len] = '\0';
+
+    if (s_chat.client) {
+        if (!s_chat.discovery_done || s_chat.rx_handle == 0) {
+            bluetooth_appendf(SH_WARN "bluetooth:" SH_RST
+                              " chat is still discovering the peer\n");
+            return ESP_ERR_INVALID_STATE;
+        }
+        if (ble_gattc_write_flat(s_chat.conn_handle, s_chat.rx_handle,
+                                 message, len, NULL, NULL) != 0) {
+            bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " chat send failed\n");
+            return ESP_FAIL;
+        }
+    } else {
+        struct os_mbuf *om;
+
+        if (s_chat_server_tx_handle == 0) {
+            bluetooth_appendf(SH_ERR "bluetooth:" SH_RST
+                              " chat server TX is not registered\n");
+            return ESP_ERR_INVALID_STATE;
+        }
+        om = ble_hs_mbuf_from_flat(message, len);
+        if (om == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+        if (ble_gatts_notify_custom(s_chat.conn_handle, s_chat_server_tx_handle,
+                                    om) != 0) {
+            os_mbuf_free_chain(om);
+            bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " chat notify failed\n");
+            return ESP_FAIL;
+        }
+    }
+
+    s_chat.tx_count++;
+    /* Plain %s: ansi_vformat does not implement the `.*` precision, which
+     * garbled the echo when it was `%.*s`. */
+    bluetooth_appendf(SH_BT "[me]" SH_RST " %s\n", message);
+    return ESP_OK;
+}
+
+void bluetooth_chat_status(void)
+{
+    bluetooth_appendf(SH_SUBHEAD SH_BOLD "Bluetooth chat:" SH_RST "\n");
+    bluetooth_appendf("  server=%s peer_connected=%s role=%s\n",
+                      s_chat.server_enabled ? "on" : "off",
+                      s_chat.peer_connected ? "yes" : "no",
+                      s_chat.peer_connected
+                          ? (s_chat.client ? "client" : "server")
+                          : "none");
+    if (s_chat.peer_connected) {
+        bluetooth_appendf("  peer=%s%s%s mtu=%u rx=%u tx=%u ready=%s\n",
+                          s_chat.peer,
+                          s_chat.name[0] != '\0' ? " " : "",
+                          s_chat.name[0] != '\0' ? s_chat.name : "",
+                          (unsigned int)s_chat.mtu,
+                          (unsigned int)s_chat.rx_handle,
+                          (unsigned int)(s_chat.client ? s_chat.tx_handle
+                                                       : s_chat_server_tx_handle),
+                          s_chat.discovery_done ? "yes" : "no");
+    }
+    bluetooth_appendf("  rx=%lu tx=%lu\n",
+                      (unsigned long)s_chat.rx_count,
+                      (unsigned long)s_chat.tx_count);
+}
 #else  /* !CONFIG_BT_NIMBLE_ENABLED */
 /* NimBLE is disabled: the BLE HID host compiles to no-ops so the shell command
  * surface stays link-complete (the verbs report unavailable). */
@@ -1555,6 +2165,31 @@ esp_err_t bluetooth_connect(const char *addr_str)
 
 void bluetooth_disconnect(void)
 {
+}
+
+void bluetooth_chat_server(bool enable, const char *name)
+{
+    (void)enable;
+    (void)name;
+    bluetooth_report_not_available(ESP_ERR_NOT_SUPPORTED);
+}
+
+esp_err_t bluetooth_chat_join(const char *addr_str)
+{
+    (void)addr_str;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t bluetooth_chat_send(const char *text)
+{
+    (void)text;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+void bluetooth_chat_status(void)
+{
+    bluetooth_appendf(SH_WARN "bluetooth:" SH_RST " BLE chat unavailable "
+                      "(NimBLE is not enabled)\n");
 }
 #endif /* CONFIG_BT_NIMBLE_ENABLED */
 
@@ -1573,12 +2208,60 @@ void bluetooth_handle_command(char *command)
         bluetooth_appendf("  " SH_CMD "bluetooth disconnect" SH_RST "       Disconnect from the current BLE device\n");
         bluetooth_appendf("  " SH_CMD "bluetooth mouse on|off" SH_RST "    Echo BLE mouse motion (wheel always scrolls)\n");
         bluetooth_appendf("  " SH_CMD "bluetooth mouse cursor|click <on|off>" SH_RST "    Shared pointer cursor/click (same switches as usb; default off)\n");
+        bluetooth_appendf("  " SH_CMD "bluetooth chat on" SH_RST " [name]      Start a connectable GATT chat server\n");
+        bluetooth_appendf("  " SH_CMD "bluetooth chat join" SH_RST " <addr>     Join another board's chat server\n");
+        bluetooth_appendf("  " SH_CMD "bluetooth chat send" SH_RST " <text>     Send a message to the peer\n");
+        bluetooth_appendf("  " SH_CMD "bluetooth chat off|status" SH_RST "       Stop the server / show the link\n");
         bluetooth_appendf("  " SH_CMD "bt ..." SH_RST "                      Alias for the bluetooth family\n");
         return;
     }
 
     if (strutil_text_equals_ignore_case(argv[1], "status")) {
         bluetooth_status();
+        return;
+    }
+
+    if (strutil_text_equals_ignore_case(argv[1], "chat")) {
+        if (argc < 3 || strutil_text_equals_ignore_case(argv[2], "status")) {
+            bluetooth_chat_status();
+            return;
+        }
+        if (strutil_text_equals_ignore_case(argv[2], "on")) {
+            bluetooth_chat_server(true, argc >= 4 ? argv[3] : NULL);
+            return;
+        }
+        if (strutil_text_equals_ignore_case(argv[2], "off")) {
+            bluetooth_chat_server(false, NULL);
+            return;
+        }
+        if (strutil_text_equals_ignore_case(argv[2], "join") && argc >= 4) {
+            esp_err_t error = bluetooth_chat_join(argv[3]);
+
+            if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+                bluetooth_appendf(SH_ERR "bluetooth:" SH_RST " chat join failed (%s)\n",
+                                  esp_err_to_name(error));
+            }
+            return;
+        }
+        if (strutil_text_equals_ignore_case(argv[2], "send") && argc >= 4) {
+            char text[BT_CHAT_MSG_BYTES];
+            size_t used = 0;
+
+            text[0] = '\0';
+            for (int i = 3; i < argc; i++) {
+                int written = snprintf(text + used, sizeof(text) - used, "%s%s",
+                                       i > 3 ? " " : "", argv[i]);
+
+                if (written < 0 || (size_t)written >= sizeof(text) - used) {
+                    break;
+                }
+                used += (size_t)written;
+            }
+            (void)bluetooth_chat_send(text);
+            return;
+        }
+        bluetooth_appendf(SH_USAGE "Usage: bluetooth chat <on [name]|off|join <addr>|"
+                          "send <text>|status>" SH_RST "\n");
         return;
     }
 
@@ -1700,5 +2383,5 @@ void bluetooth_handle_command(char *command)
     }
 #endif
 
-    bluetooth_appendf(SH_USAGE "Usage: bluetooth status | scan [limit] | advertise <on [name]|off> | connect <addr> | disconnect | mouse <on|off|cursor <on|off>|click <on|off>>" SH_RST "\n");
+    bluetooth_appendf(SH_USAGE "Usage: bluetooth status | scan [limit] | advertise <on [name]|off> | gatt <on|off> | chat <on [name]|off|join <addr>|send <text>|status> | connect <addr> | disconnect | mouse <on|off|cursor <on|off>|click <on|off>>" SH_RST "\n");
 }

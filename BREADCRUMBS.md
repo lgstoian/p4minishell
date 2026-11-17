@@ -291,8 +291,12 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/jsengine/cutils.h` :: module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules
 - `components/jsengine/dtoa.c` :: module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules
 - `components/jsengine/dtoa.h` :: module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules
+- `components/jsengine/include/js_canvas.h` :: module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules
 - `components/jsengine/include/jsengine.h` :: module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules
 - `components/jsengine/js_bindings.c` :: module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules
+- `components/jsengine/js_canvas.c` :: module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules
+- `components/jsengine/js_canvas_js.c` :: module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules
+- `components/jsengine/js_canvas_js.h` :: module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules
 - `components/jsengine/js_dom.c` :: module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules
 - `components/jsengine/jsengine.c` :: module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules
 - `components/jsengine/libregexp-opcode.h` :: module=jsengine :: layer=leaf :: domain=app :: status=stable :: rules=ai-context.md#module-layering-rules
@@ -424,6 +428,8 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/uitest/ui_test.c` :: module=uitest :: layer=leaf :: domain=ui :: status=stable :: rules=ai-context.md#module-layering-rules
 - `components/usb/usb.c` :: module=usb :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_userial.c :: rules=ai-context.md#module-layering-rules
 - `components/usb/usb.h` :: module=usb :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_userial.c :: rules=ai-context.md#module-layering-rules
+- `components/usb/usb_hid_layout.c` :: module=usb :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_userial.c :: rules=ai-context.md#module-layering-rules
+- `components/usb/usb_hid_layout.h` :: module=usb :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_userial.c :: rules=ai-context.md#module-layering-rules
 - `components/usb/userial.c` :: module=usb :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_userial.c :: rules=ai-context.md#module-layering-rules
 - `components/windows/windows.c` :: module=windows :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules
 - `components/windows/windows.h` :: module=windows :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules

@@ -5247,6 +5247,14 @@ bool shell_parse_size_arg(const char *text, size_t min_value, size_t max_value, 
  * LIFECYCLE
  * ======================================================================== */
 
+/** Right-click (HID button 2): deliver Esc, the cancel/back key every modal,
+ *  pager, browser and the editor already honour. Installed in shell_init(). */
+static void shell_mouse_secondary(void *ctx)
+{
+    (void)ctx;
+    shell_usb_keyboard_input(0x29u, 0u, true);
+}
+
 void shell_init(void)
 {
     if (s_initialized) {
@@ -5259,6 +5267,10 @@ void shell_init(void)
      * lane installs nothing and stays silent - the same optional-sink contract
      * the transcript model uses. */
     shell_core_set_header_notify(header_notify);
+
+    /* A mouse's right button has no pointer meaning in LVGL: route it to Esc
+     * so it dismisses a modal/pager and cancels input instead of vanishing. */
+    display_mouse_set_secondary_handler(shell_mouse_secondary, NULL);
 
     /* Initialize ANSI/VT color palette */
     ansi_init();

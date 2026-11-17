@@ -78,6 +78,7 @@ static struct {
     int32_t x;
     int32_t y;
     bool pressed;          /* button-1 currently down */
+    bool secondary;        /* button-2 currently down (for edge detection) */
     lv_indev_t *indev;
     lv_obj_t *cursor_obj;
 } s_mouse = {
@@ -86,9 +87,14 @@ static struct {
     .x = 0,
     .y = 0,
     .pressed = false,
+    .secondary = false,
     .indev = NULL,
     .cursor_obj = NULL,
 };
+
+/** Right-click handler (installed by the shell; NULL = ignore). */
+static display_mouse_secondary_cb_t s_mouse_secondary_cb;
+static void *s_mouse_secondary_ctx;
 
 /** Blocking guard for s_mouse.x/y/pressed (created lazily, like s_bg_lock:
  *  a creation race leaks one mutex at most and never corrupts state). */
@@ -1126,14 +1132,34 @@ bool display_mouse_click_enabled(void)
     return s_mouse.click_enabled;
 }
 
+void display_mouse_set_secondary_handler(display_mouse_secondary_cb_t cb, void *ctx)
+{
+    s_mouse_secondary_cb = cb;
+    s_mouse_secondary_ctx = ctx;
+}
+
+/** LVGL-task release for a right-click edge (the handler may touch widgets). */
+static void display_mouse_secondary_async(void *user_data)
+{
+    (void)user_data;
+    if (s_mouse_secondary_cb != NULL) {
+        s_mouse_secondary_cb(s_mouse_secondary_ctx);
+    }
+}
+
 void display_mouse_report(int dx, int dy, uint8_t buttons)
 {
     display_resolution_t native;
+    bool right = (buttons & 0x02u) != 0;
+    bool fire_secondary = false;
 
-    if (!s_mouse.cursor_enabled && !s_mouse.click_enabled) {
+    /* The right button is a deliberate press, not motion: track its edge even
+     * with the cursor/click switches off, so a second button is never silently
+     * dropped. Nothing else is sampled in that case. */
+    if (!s_mouse.cursor_enabled && !s_mouse.click_enabled &&
+        !right && !s_mouse.secondary) {
         return;
     }
-    native = display_get_native_resolution();
     display_mouse_lock_init();
     /* Bounded take: a dropped motion sample is invisible, a blocked
      * driver task is not. */
@@ -1141,20 +1167,28 @@ void display_mouse_report(int dx, int dy, uint8_t buttons)
         xSemaphoreTake(s_mouse_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
         return;
     }
-    s_mouse.x += (int32_t)dx;
-    if (s_mouse.x < 0) {
-        s_mouse.x = 0;
-    } else if (s_mouse.x >= native.native_width) {
-        s_mouse.x = native.native_width - 1;
+    fire_secondary = right && !s_mouse.secondary;
+    s_mouse.secondary = right;
+    if (s_mouse.cursor_enabled || s_mouse.click_enabled) {
+        native = display_get_native_resolution();
+        s_mouse.x += (int32_t)dx;
+        if (s_mouse.x < 0) {
+            s_mouse.x = 0;
+        } else if (s_mouse.x >= native.native_width) {
+            s_mouse.x = native.native_width - 1;
+        }
+        s_mouse.y += (int32_t)dy;
+        if (s_mouse.y < 0) {
+            s_mouse.y = 0;
+        } else if (s_mouse.y >= native.native_height) {
+            s_mouse.y = native.native_height - 1;
+        }
+        s_mouse.pressed = (buttons & 0x01u) != 0;
     }
-    s_mouse.y += (int32_t)dy;
-    if (s_mouse.y < 0) {
-        s_mouse.y = 0;
-    } else if (s_mouse.y >= native.native_height) {
-        s_mouse.y = native.native_height - 1;
-    }
-    s_mouse.pressed = (buttons & 0x01u) != 0;
     xSemaphoreGive(s_mouse_mutex);
+    if (fire_secondary) {
+        (void)lv_async_call(display_mouse_secondary_async, NULL);
+    }
     /* The box follows motion reports; without a mouse nothing moves and
      * nothing is scheduled. */
     if (s_mouse.cursor_enabled) {

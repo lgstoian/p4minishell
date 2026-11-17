@@ -1,6 +1,7 @@
 #include "p4minishell_config.h"
 #include "shell.h"
 #include "jsengine.h"
+#include "js_canvas.h"
 #include "dom.h"
 #include "dom_render.h"
 #include "css.h"
@@ -323,6 +324,9 @@ static size_t s_js_budget = 0;
 static void browser_page_release(void)
 {
     if (s_page_tree != NULL) {
+        /* Canvas bitmaps are keyed by DOM node pointers: drop them before the
+         * nodes are freed so a later page cannot inherit a stale bitmap. */
+        js_canvas_clear_registry();
         dom_free(s_page_tree);
         s_page_tree = NULL;
     }
@@ -564,6 +568,65 @@ static void browser_run_onload(dom_node_t *node)
     }
 }
 
+/** <canvas>: snapshot the RGBA bitmap the page's scripts drew and map it to
+ *  the same packed cell image `<img>` produces, so both go through the one
+ *  renderer. A canvas with no context returns false and the renderer shows the
+ *  element's fallback content. */
+static bool browser_load_canvas(void *ctx, dom_node_t *node, dom_image_t *out)
+{
+    js_canvas_t *canvas = js_canvas_find_node(node);
+    int max_w = P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH;
+    int max_h = P4_CONFIG_BROWSER_IMAGE_MAX_HEIGHT;
+    uint8_t *rgba;
+    int w = 0;
+    int h = 0;
+
+    (void)ctx;
+    if (canvas == NULL || out == NULL) {
+        return false;
+    }
+    rgba = malloc((size_t)max_w * (size_t)max_h * 4u);
+    if (rgba == NULL) {
+        return false;
+    }
+    if (!js_canvas_snapshot_rgba(canvas, max_w, max_h, rgba, &w, &h) ||
+        w <= 0 || h <= 0) {
+        free(rgba);
+        return false;
+    }
+    out->pixels = malloc((size_t)w * (size_t)h);
+    if (out->pixels == NULL) {
+        free(rgba);
+        return false;
+    }
+    for (int i = 0; i < w * h; i++) {
+        const uint8_t *src = rgba + (size_t)i * 4u;
+
+        if (src[3] < 64) {
+            out->pixels[i] = 0;       /* transparent / empty cell */
+        } else {
+            /* Premultiply against black is not needed: the cell ramp ignores
+             * alpha beyond the "is it visible" threshold, same as images. */
+            uint16_t rgb565 = (uint16_t)(((uint16_t)(src[0] >> 3) << 11) |
+                                         ((uint16_t)(src[1] >> 2) << 5) |
+                                         ((uint16_t)(src[2] >> 3)));
+            out->pixels[i] = browser_pixel_to_cell(rgb565);
+        }
+    }
+    out->width = w;
+    out->height = h;
+    free(rgba);
+    return true;
+}
+
+/** CSS background fill: a real LVGL rectangle behind the cell label, so the
+ *  text (including spaces) is untouched and the colour shows through. */
+static void browser_fill_bg(void *ctx, int col, int row, int w, int h, uint8_t bg)
+{
+    (void)ctx;
+    tui_page_bg_rect(col, row, w, h, bg);
+}
+
 static void browser_page_present(void)
 {
     tui_page_render();
@@ -589,6 +652,9 @@ static void browser_page_render(void)
     ops.put_cell = browser_put_cell;
     ops.put_link = browser_put_link;
     ops.load_image = browser_load_image;
+    ops.load_canvas = browser_load_canvas;
+    ops.fill_bg = browser_fill_bg;
+    ops.load_background = browser_load_image;
     ops.ctx = s_page_base;
     ops.cols = P4_CONFIG_TUI_COLS;
     ops.rows = P4_CONFIG_TUI_PAGE_ROWS;

@@ -111,7 +111,7 @@ python3 tools/host_unit_run.py --static   # manifest/orphan/case-count gates
 python3 tools/host_gen_runner.py --check  # generated runner is up to date
 ```
 
-- **Coverage today: 240 of 645 cases** — the leaf components with no board
+- **Coverage today: 265 of 663 cases** — the leaf components with no board
   dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`, plus the
   `strutil`/`p4heap` helpers they use), the hardware-free halves of the shell
   (`shell_core.c`: text helpers, statement scanner, history store, abort/busy,
@@ -217,6 +217,7 @@ Suites (`tools/suites/sNN_*.py`) and what they cover:
 | `s19_app_features` | the opt-in `APPLIB.BAT::probe` (`P4_APP_FEATURES=1`) across a nonstop app, a menu app and a demo; direct `js eval/run`; locale persistence through a real reboot |
 | `s20_website` | the offline browser dashboard: deploys `apps/website/` (HTML + BMP logo), renders `sd:/WEB/INDEX.HTML`, runs the JS event hook, captures `browser-website.bmp` for the docs |
 | `s21_wikipedia` | the browser acceptance gate: deploys a trimmed `en.wikipedia.org/wiki/ESP32` fixture (infobox, table, list, links, a PNG and a JPEG) and asserts the rendered structure, link colour, missing-image alt text and a BMP capture. `P4_WIFI_LIVE=1` adds a live HTTPS fetch (credentials from `tools/wifi_local.json`) |
+| `s22_canvas` | the HTML5 subset gate: renders `apps/website/canvas.html` (CSS page/banner backgrounds + a 96x48 canvas drawn through the 2D context), asserts the canvas width/height reached JS, the bitmap replaced the fallback, the red/green/cyan colour runs and pixels, background pixels, no panic, and a BMP capture |
 
 The framework (`tools/p4test/`): `session.py` (DTR-safe open, marker-synced
 `run()`, panic detection, byte-exact `BMPX`/`SDFX` framing, ANSI+OSC 8 strip

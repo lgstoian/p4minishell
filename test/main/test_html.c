@@ -13,7 +13,11 @@
 #include "unity.h"
 #include "html.h"
 #include "markdown.h"
+#include "dom.h"
+#include "dom_render.h"
+#include "css.h"
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -172,4 +176,273 @@ void test_html_render_malformed_is_tolerated(void)
     render_plain("<p>ok <notclosed and < 3 >end", plain, sizeof(plain));
     TEST_ASSERT_NOT_NULL(strstr(plain, "ok"));
     TEST_ASSERT_NOT_NULL(strstr(plain, "end"));
+}
+
+typedef struct {
+    char *buf;
+    size_t size;
+    int bg_calls;
+    int bg_last;
+} ansi_sink_t;
+
+static void sink_append_ansi(void *ctx, const char *text)
+{
+    ansi_sink_t *sink = (ansi_sink_t *)ctx;
+    size_t used = strlen(sink->buf);
+
+    if (used + 1 >= sink->size) {
+        return;
+    }
+    snprintf(sink->buf + used, sink->size - used, "%s", text);
+}
+
+/** A page that exposes <main> renders that subtree: mobile Wikipedia puts its
+ *  navigation chrome before <main>, and on an 80x25 page the chrome otherwise
+ *  filled the whole viewport so the article was never reached. */
+void test_dom_render_main_focus(void)
+{
+    dom_tree_t *tree = dom_parse(
+        "<html><body><nav>NAV-CHROME</nav>"
+        "<main><h1>Article Title</h1><p>Article body.</p></main>"
+        "</body></html>");
+    char ansi[2048] = { 0 };
+    char plain[2048];
+    ansi_sink_t sink = { ansi, sizeof(ansi) };
+    dom_render_ops_t ops = {
+        .put_ansi = sink_append_ansi,
+        .ctx = &sink,
+        .cols = 80,
+        .rows = 25,
+        .tui = false,
+    };
+
+    TEST_ASSERT_NOT_NULL(tree);
+    dom_render_tree(tree, &ops);
+    dom_free(tree);
+    markdown_strip_ansi(ansi, plain, sizeof(plain));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "Article Title"));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "Article body."));
+    TEST_ASSERT_NULL(strstr(plain, "NAV-CHROME"));
+}
+
+/** The single-pass ANSI HTML reader (editor preview, print, EPUB) has no JS:
+ *  a <canvas> therefore shows its fallback content, as the spec requires. */
+void test_html_canvas_fallback_ansi(void)
+{
+    char plain[256];
+
+    render_plain("<p>before</p><canvas width=\"32\" height=\"16\">"
+                 "<p>Canvas fallback text</p></canvas><p>after</p>",
+                 plain, sizeof(plain));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "before"));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "Canvas fallback text"));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "after"));
+}
+
+/** Beyond the nesting cap the subtree is flattened to text instead of
+ *  recursing per level (the real Wikipedia page exhausted the 28 KB shell
+ *  worker stack). Content is preserved, layout is not. */
+void test_dom_render_depth_cap_keeps_text(void)
+{
+    char html[4096];
+    size_t used = 0;
+    char ansi[2048] = { 0 };
+    char plain[2048];
+    ansi_sink_t sink = { ansi, sizeof(ansi) };
+    dom_render_ops_t ops = {
+        .put_ansi = sink_append_ansi,
+        .ctx = &sink,
+        .cols = 80,
+        .rows = 25,
+        .tui = false,
+    };
+    dom_tree_t *tree;
+
+    used += (size_t)snprintf(html + used, sizeof(html) - used, "<html><body>");
+    for (int i = 0; i < 40; i++) {
+        used += (size_t)snprintf(html + used, sizeof(html) - used, "<div>");
+    }
+    used += (size_t)snprintf(html + used, sizeof(html) - used, "DEEP-CONTENT");
+    for (int i = 0; i < 40; i++) {
+        used += (size_t)snprintf(html + used, sizeof(html) - used, "</div>");
+    }
+    used += (size_t)snprintf(html + used, sizeof(html) - used, "</body></html>");
+    TEST_ASSERT_TRUE(used < sizeof(html));
+
+    tree = dom_parse(html);
+    TEST_ASSERT_NOT_NULL(tree);
+    dom_render_tree(tree, &ops);
+    dom_free(tree);
+    markdown_strip_ansi(ansi, plain, sizeof(plain));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "DEEP-CONTENT"));
+}
+
+/** <canvas width height> attributes size the bitmap (HTML defaults are
+ *  300x150). The parser must keep them for getContext and the renderer. */
+void test_dom_canvas_attributes(void)
+{
+    dom_tree_t *tree = dom_parse(
+        "<html><body><canvas id=\"c\" width=\"96\" height=\"48\">"
+        "<p>fallback</p></canvas></body></html>");
+    dom_node_t *node;
+
+    TEST_ASSERT_NOT_NULL(tree);
+    node = dom_find_by_id(tree, "c");
+    TEST_ASSERT_NOT_NULL(node);
+    TEST_ASSERT_EQUAL_STRING("canvas", node->tag);
+    TEST_ASSERT_EQUAL_INT(96, node->canvas_w);
+    TEST_ASSERT_EQUAL_INT(48, node->canvas_h);
+    dom_free(tree);
+}
+
+static void sink_record_fill(void *ctx, int col, int row, int w, int h, uint8_t bg)
+{
+    ansi_sink_t *sink = (ansi_sink_t *)ctx;
+
+    (void)col; (void)row; (void)w; (void)h;
+    sink->bg_calls++;
+    sink->bg_last = bg;
+}
+
+static bool sink_load_canvas(void *ctx, dom_node_t *node, dom_image_t *out)
+{
+    (void)ctx; (void)node;
+    out->width = 2;
+    out->height = 2;
+    out->pixels = malloc(4);
+    if (out->pixels == NULL) return false;
+    memset(out->pixels, (12 << 4) | 9, 4);
+    return true;
+}
+
+/** <canvas> fallback content is what a no-JS surface (editor preview,
+ *  print-to-HTML, EPUB) shows, per the HTML spec. */
+void test_dom_render_canvas_fallback(void)
+{
+    dom_tree_t *tree = dom_parse(
+        "<html><body><canvas width=\"32\" height=\"16\">"
+        "<p>fallback text</p></canvas></body></html>");
+    char ansi[1024] = { 0 };
+    char plain[1024];
+    ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0 };
+    dom_render_ops_t ops = {
+        .put_ansi = sink_append_ansi,
+        .ctx = &sink,
+        .cols = 80,
+        .rows = 25,
+        .tui = false,
+    };
+
+    TEST_ASSERT_NOT_NULL(tree);
+    dom_render_tree(tree, &ops);
+    dom_free(tree);
+    markdown_strip_ansi(ansi, plain, sizeof(plain));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "fallback text"));
+}
+
+/** With a canvas bitmap the renderer draws the bitmap instead of the
+ *  fallback (the browser path). */
+void test_dom_render_canvas_bitmap(void)
+{
+    dom_tree_t *tree = dom_parse(
+        "<html><body><canvas width=\"32\" height=\"16\">"
+        "<p>fallback text</p></canvas></body></html>");
+    char ansi[1024] = { 0 };
+    char plain[1024];
+    ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0 };
+    dom_render_ops_t ops = {
+        .put_ansi = sink_append_ansi,
+        .load_canvas = sink_load_canvas,
+        .ctx = &sink,
+        .cols = 80,
+        .rows = 25,
+        .tui = false,
+    };
+
+    TEST_ASSERT_NOT_NULL(tree);
+    dom_render_tree(tree, &ops);
+    dom_free(tree);
+    markdown_strip_ansi(ansi, plain, sizeof(plain));
+    TEST_ASSERT_NULL(strstr(plain, "fallback text"));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "+"));   /* the image box */
+}
+
+/** CSS Backgrounds 3 subset: colour and background-image URL. */
+void test_dom_css_background_properties(void)
+{
+    dom_tree_t *tree = dom_parse(
+        "<html><body><div id=\"d\">x</div></body></html>");
+    dom_node_t *node;
+
+    TEST_ASSERT_NOT_NULL(tree);
+    node = dom_find_by_id(tree, "d");
+    TEST_ASSERT_NOT_NULL(node);
+    dom_set_style(node, "background-color", "#aa0000");
+    TEST_ASSERT_TRUE(node->bg_set);
+    TEST_ASSERT_EQUAL_INT(4, node->bg);   /* DOS red */
+    dom_set_style(node, "background-image", "url(\"BG.BMP\")");
+    TEST_ASSERT_EQUAL_STRING("BG.BMP", node->bg_src);
+    dom_free(tree);
+}
+
+/** A block with an explicit background asks the surface to fill it. */
+void test_dom_render_fill_bg_callback(void)
+{
+    dom_tree_t *tree = dom_parse(
+        "<html><body><div id=\"d\">x</div></body></html>");
+    dom_node_t *node;
+    char ansi[1024] = { 0 };
+    char plain[1024];
+    ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0 };
+    dom_render_ops_t ops = {
+        .put_ansi = sink_append_ansi,
+        .fill_bg = sink_record_fill,
+        .ctx = &sink,
+        .cols = 80,
+        .rows = 25,
+        .tui = false,
+    };
+
+    TEST_ASSERT_NOT_NULL(tree);
+    node = dom_find_by_id(tree, "d");
+    TEST_ASSERT_NOT_NULL(node);
+    dom_set_style(node, "background-color", "#aa0000");
+    dom_render_tree(tree, &ops);
+    dom_free(tree);
+    markdown_strip_ansi(ansi, plain, sizeof(plain));
+    TEST_ASSERT_GREATER_THAN_INT(0, sink.bg_calls);
+    TEST_ASSERT_EQUAL_INT(4, sink.bg_last);
+}
+
+/** <script>/<style> are raw text: '<' inside JS/CSS is not a tag. */
+void test_dom_raw_text_script_style(void)
+{
+    dom_tree_t *tree = dom_parse(
+        "<html><head><style>/* a<b */ body{color:red}</style></head>"
+        "<body><script>if (a < b && c > d) { s = '<img>'; }</script>"
+        "</body></html>");
+    dom_node_t *script;
+
+    TEST_ASSERT_NOT_NULL(tree);
+    script = dom_find_first_by_tag(tree, "script");
+    TEST_ASSERT_NOT_NULL(script);
+    TEST_ASSERT_NOT_NULL(script->first_child);
+    TEST_ASSERT_NOT_NULL(strstr(script->first_child->text, "a < b"));
+    TEST_ASSERT_NOT_NULL(strstr(script->first_child->text, "<img>"));
+    dom_free(tree);
+}
+
+/** A CSS comment before a rule must not become part of its selector. */
+void test_css_comments_are_skipped(void)
+{
+    css_ruleset_t rules;
+
+    memset(&rules, 0, sizeof(rules));
+    css_parse_block("/* page colours */ body { background-color: #00aaaa; }"
+                    "/* banner */ .banner { background-color: #aa0000; }",
+                    &rules);
+    TEST_ASSERT_EQUAL_INT(2, rules.count);
+    TEST_ASSERT_EQUAL_STRING("body", rules.rules[0].selector);
+    TEST_ASSERT_EQUAL_STRING("background-color", rules.rules[0].property);
+    TEST_ASSERT_EQUAL_STRING(".banner", rules.rules[1].selector);
 }

@@ -4644,18 +4644,66 @@ with the nearest DOS palette entry; alt text is the fallback. A centered element
 (`text-align: center`, inherited from `body`) shifts its whole block into the
 page's content column.
 
+**HTML5 subset (WHATWG HTML Living Standard + CSS Backgrounds 3).** This is a
+deliberately small, text-mode implementation of the standards, not a claim of
+full conformance:
+
+- **`<main>` reader focus:** a fetched page that exposes `<main>` renders that
+  subtree, so mobile-site navigation chrome does not consume the 80x25 viewport
+  (this is what makes the real Wikipedia ESP32 article reachable).
+- **Raw-text `<script>`/`<style>`:** their content is text until the matching
+  close tag, so `<`, `>` and tag-like strings inside JS/CSS are not parsed as
+  markup. A `<style>` comment is skipped, not folded into the first selector.
+- **Nesting cap:** block nesting deeper than 32 is flattened to its text rather
+  than recursed per level (the live Wikipedia page exhausted the shell worker's
+  28 KB stack at the previous unbounded depth). Content is preserved.
+- **CSS backgrounds:** `background-color` (and the colour part of the
+  `background` shorthand) on any element, plus `background-image: url(...)` on
+  the page. In the cell grid a background is drawn as solid block cells in that
+  colour; glyph cells stay text, so content remains readable. The dump marks
+  these cells and reads them as spaces, keeping page text copyable. Block fills
+  are a TUI feature; ANSI surfaces (editor preview, `print` export, EPUB) keep
+  the text colours they already support.
+- **Canvas 2D (`<canvas>`):** `getContext('2d')` with `fillStyle`,
+  `strokeStyle`, `globalAlpha`, `lineWidth`, `font`, `textAlign`,
+  `textBaseline`, `save`/`restore`, `translate`/`scale`/`rotate`/
+  `setTransform`/`resetTransform`, `fillRect`/`clearRect`/`strokeRect`,
+  `beginPath`/`moveTo`/`lineTo`/`closePath`/`rect`/`arc`/`fill`/`stroke`,
+  `fillText`/`strokeText`/`measureText`, and `canvas.width`/`height`. The
+  backing store is PSRAM RGBA, capped at 320x200 and two canvases; the bitmap is
+  snapshotted into the **same packed cell image** `<img>` uses, then rendered by
+  the one DOM renderer. Alpha uses source-over compositing. Images/patterns/
+  gradients/clipping/pixel access are present as no-ops or null so a page keeps
+  running; they are documented limitations, not silent misrenders.
+- **No-JS surfaces:** the editor's HTML preview, `print`-to-HTML and EPUB use
+  the single-pass ANSI reader, which never executes scripts. A `<canvas>` there
+  shows its **fallback content**, exactly as the HTML spec requires; the same
+  page can be checked in the browser (bitmap) and in the reader (fallback text).
+  There is one HTML renderer for cells and one ANSI reader for text; canvas and
+  images cannot grow a second renderer.
+
+Spec references: WHATWG HTML Living Standard §4.12.5 (the `canvas` element) and
+§4.12.5.1 (2D rendering context) for the canvas model; CSS Backgrounds and
+Borders Module Level 3 §2/§3 for background colour/image; CSS Color Module
+Level 3 for the parsed colour subset. `apps/website/canvas.html` is the live
+example and `s22_canvas` is the hardware gate (pixel + text assertions).
+
 In-page JavaScript (`P4_CONFIG_BROWSER_JS`) runs `<script>` blocks and
 `onload`/`onclick` handlers through the existing QuickJS engine. The DOM
 bindings are `document.getElementById`/`body`/`title`/`write`, element
 `textContent`/`innerHTML`/`style`/`getAttribute`/`setAttribute`/
-`addEventListener`, `console.log`, and `fetch`. A `<button id="x">` with an
+`addEventListener`, `console.log`, and `fetch`; `<canvas>` additionally exposes
+`getContext('2d')` and `width`/`height` (see the HTML5 subset above). A
+`<button id="x">` with an
 `onclick` registers a tappable link that runs `browser js x`.
 
 `browser js <id>` dispatches that element's click handler and re-renders.
 `browser css` prints the parsed rules and the computed body/h1/th styles (a
 diagnostic). The first render enters TUI mode so the page is visible;
 `draw close` (or `tui fullscreen off`) returns to the transcript. After
-rendering, `tui dump [from] [to]` reads the page back cell by cell.
+rendering, `tui dump [from] [to] [/a]` reads the page back cell by cell;
+`/a` may appear before or after the row range and appends the per-row colour
+runs used by the suites.
 
 Caching (both in PSRAM, `components/browser/`):
 - **Image cache** — the decoded cell grid per source URL. A hit skips both the
@@ -4990,11 +5038,17 @@ errorlevel. Timeouts are bounded so the worker task is never hung.
 | bluetooth mouse off | Silence BLE mouse motion echo (default) |
 | bluetooth mouse cursor <on\|off> | Track motion with a visible cursor (shared with USB; default off) |
 | bluetooth mouse click <on\|off> | Deliver button-1 presses as taps (shared with USB; default off) |
+| bluetooth chat on [name] | Start a connectable GATT chat server (service `0xFFF2`: RX `0xFFF3` write, TX `0xFFF4` notify). Reuses the one GATT table; registration happens before NimBLE starts so the handles are real |
+| bluetooth chat off | Stop the chat server and disconnect its peer |
+| bluetooth chat join XX:XX:XX:XX:XX:XX | Connect as the GATT client, discover the chat service/characteristics, subscribe to TX notifications and become ready to send |
+| bluetooth chat send <text> | Send one message to the connected peer (server: notify TX; client: write RX). Capped to the negotiated ATT MTU minus 3 bytes |
+| bluetooth chat status | Report server/client role, peer address, MTU, RX/TX handles and message counters |
 | bt ... | Alias for bluetooth command family |
 
 > **Architecture (hard rule):** this board is a BLE/USB HID *host* only — it
-> uses keyboards and mice, it never becomes one. There is no peripheral/device
-> HID mode and none is planned.
+> uses keyboards and mice, it never becomes one. The only peripheral role is
+> the P4MiniShell chat GATT service above; there is no peripheral/device HID
+> mode and none is planned.
 
 ### Bluetooth Lifecycle
 - The hosted controller and NimBLE host initialize once on first use
@@ -5021,6 +5075,15 @@ errorlevel. Timeouts are bounded so the worker task is never hung.
   wheel scrolls the transcript through the `bluetooth_mouse_scroll` host op
   (same convention as USB); motion/buttons echo only with `bluetooth mouse on`.
   `bluetooth status` shows the connected device name/address.
+- **Board-to-board chat:** `bluetooth chat on` registers the 0xFFF2 service
+  (RX 0xFFF3 write, TX 0xFFF4 notify, plus the Device Information/status
+  services) and advertises connectably. The services must be added before the
+  NimBLE host starts, because `ble_gatts_start()` builds the ATT database
+  inside `ble_hs_start`; adding them after sync leaves an empty database. The
+  client half discovers the service, subscribes to TX (CCCD 0x2902), exchanges
+  MTU (256 on the bench), and writes RX. Incoming messages are printed as plain
+  `[bt] ...` text, so a remote `@R` palette sequence cannot inject colours.
+  No Wi-Fi, AP, broker or cable is involved.
 
 ## USB Commands
 
@@ -5031,8 +5094,10 @@ errorlevel. Timeouts are bounded so the worker task is never hung.
 | usb mount [N] | Mount MSC slot N (`/usbN`); slot 0 when omitted |
 | usb keyboard on | Enable transcript echo for HID boot keyboard |
 | usb keyboard off | Disable keyboard transcript echo |
-| usb mouse on | Enable transcript echo for HID boot mouse |
+| usb mouse on | Enable transcript echo for the HID mouse (coalesced to ~10 lines/s: a 1 kHz mouse must not bury the UI; wheel notches and button edges are immediate) |
 | usb mouse off | Disable mouse transcript echo |
+| usb mouse desc | Dump the connected mouse's HID report descriptor (hex) for diagnostics |
+| usb mouse layout | Print the decoded report map (button/X/Y/wheel byte, bit and width, report ID) |
 | usb mouse cursor <on\|off> | Track motion with a visible cursor (shared pointer with BLE; default off) |
 | usb mouse click <on\|off> | Deliver button-1 presses as taps at the cursor (shared; default off) |
 | usb mouse move <x> <y> | Place the cursor at native-panel pixels (clamped; needs cursor on) — serial cursor simulation |
@@ -5054,6 +5119,22 @@ are one shared state: `usb mouse` and `bluetooth mouse` toggle the same
 switches. `usb status` reports them (`usb.hid.mouse.ptr:
 cursor=on click=off x=512 y=300`, native pixels). Cursor size is
 `P4_CONFIG_MOUSE_CURSOR_PX`.
+
+The mouse interface runs **report protocol**, and the HID report descriptor is
+decoded into the button/X/Y/wheel field map (`components/usb/usb_hid_layout.c`,
+host-tested). Boot protocol has no wheel byte at all, so a boot-only host cannot
+scroll; the decoded map supports 16-bit axes, report IDs, padding and an 8-bit
+wheel. A wheel notch scrolls the transcript regardless of the cursor/click
+switches. The right button has no LVGL pointer meaning, so a press edge is
+delivered as **Esc** (dismiss a modal/pager/editor, cancel input) instead of
+being dropped. `usb mouse desc` dumps the descriptor and `usb mouse layout`
+prints the decoded offsets; `usb.hid.mouse.events` counts motion/left/right/
+wheel reports for hardware verification.
+
+A composite device can expose a keyboard interface that never types (gaming
+mice often do). The on-screen-keyboard auto-hide therefore keys off a **real key
+report** (`usb.hid.keyboard.typed: yes`), not mere enumeration, so plugging such
+a mouse does not take the OSK away.
 
 Serial cursor simulation needs no physical mouse: with the switches on,
 `usb mouse move <x> <y>` places the cursor (native panel pixels — read them

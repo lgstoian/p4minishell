@@ -260,6 +260,16 @@ extern void test_html_render_comment_and_doctype(void);
 extern void test_html_render_blockquote(void);
 extern void test_html_render_measure_and_truncate(void);
 extern void test_html_render_malformed_is_tolerated(void);
+extern void test_dom_render_main_focus(void);
+extern void test_html_canvas_fallback_ansi(void);
+extern void test_dom_render_depth_cap_keeps_text(void);
+extern void test_dom_canvas_attributes(void);
+extern void test_dom_render_canvas_fallback(void);
+extern void test_dom_render_canvas_bitmap(void);
+extern void test_dom_css_background_properties(void);
+extern void test_dom_render_fill_bg_callback(void);
+extern void test_dom_raw_text_script_style(void);
+extern void test_css_comments_are_skipped(void);
 
 /* --- test_json.c --------------------------------------------- */
 extern void test_json_validate_ok(void);
@@ -319,10 +329,29 @@ extern void test_sync_event_once_and_timeout(void);
 extern void test_svc_registry_guards(void);
 extern void test_svc_bg_slot_helpers(void);
 
+/* --- test_usb_hid_layout.c ----------------------------------- */
+extern void test_usb_hid_layout_real_mouse(void);
+extern void test_usb_hid_layout_extract_report(void);
+extern void test_usb_hid_layout_extract_axis_extremes(void);
+extern void test_usb_hid_layout_without_wheel(void);
+extern void test_usb_hid_layout_report_id(void);
+extern void test_usb_hid_layout_rejects_bad_descriptor(void);
+
 /* --- test_theme.c -------------------------------------------- */
 extern void test_theme_registry(void);
 extern void test_theme_lookup(void);
 extern void test_theme_set_and_active(void);
+
+/* --- test_js_canvas.c ---------------------------------------- */
+extern void test_js_canvas_fill_rect_and_clear(void);
+extern void test_js_canvas_global_alpha(void);
+extern void test_js_canvas_transform_translate_scale(void);
+extern void test_js_canvas_stroke_rect_border(void);
+extern void test_js_canvas_path_fill_and_arc(void);
+extern void test_js_canvas_text_and_measure(void);
+extern void test_js_canvas_resize_resets_bitmap(void);
+extern void test_js_canvas_snapshot_downsample(void);
+extern void test_js_canvas_parse_color(void);
 
 void app_main(void)
 {
@@ -557,6 +586,16 @@ void app_main(void)
     RUN_TEST(test_html_render_blockquote);
     RUN_TEST(test_html_render_measure_and_truncate);
     RUN_TEST(test_html_render_malformed_is_tolerated);
+    RUN_TEST(test_dom_render_main_focus);
+    RUN_TEST(test_html_canvas_fallback_ansi);
+    RUN_TEST(test_dom_render_depth_cap_keeps_text);
+    RUN_TEST(test_dom_canvas_attributes);
+    RUN_TEST(test_dom_render_canvas_fallback);
+    RUN_TEST(test_dom_render_canvas_bitmap);
+    RUN_TEST(test_dom_css_background_properties);
+    RUN_TEST(test_dom_render_fill_bg_callback);
+    RUN_TEST(test_dom_raw_text_script_style);
+    RUN_TEST(test_css_comments_are_skipped);
 
     /* test_json.c */
     RUN_TEST(test_json_validate_ok);
@@ -616,10 +655,29 @@ void app_main(void)
     RUN_TEST(test_svc_registry_guards);
     RUN_TEST(test_svc_bg_slot_helpers);
 
+    /* test_usb_hid_layout.c */
+    RUN_TEST(test_usb_hid_layout_real_mouse);
+    RUN_TEST(test_usb_hid_layout_extract_report);
+    RUN_TEST(test_usb_hid_layout_extract_axis_extremes);
+    RUN_TEST(test_usb_hid_layout_without_wheel);
+    RUN_TEST(test_usb_hid_layout_report_id);
+    RUN_TEST(test_usb_hid_layout_rejects_bad_descriptor);
+
     /* test_theme.c */
     RUN_TEST(test_theme_registry);
     RUN_TEST(test_theme_lookup);
     RUN_TEST(test_theme_set_and_active);
+
+    /* test_js_canvas.c */
+    RUN_TEST(test_js_canvas_fill_rect_and_clear);
+    RUN_TEST(test_js_canvas_global_alpha);
+    RUN_TEST(test_js_canvas_transform_translate_scale);
+    RUN_TEST(test_js_canvas_stroke_rect_border);
+    RUN_TEST(test_js_canvas_path_fill_and_arc);
+    RUN_TEST(test_js_canvas_text_and_measure);
+    RUN_TEST(test_js_canvas_resize_resets_bitmap);
+    RUN_TEST(test_js_canvas_snapshot_downsample);
+    RUN_TEST(test_js_canvas_parse_color);
 
     failures = UNITY_END();
 

@@ -56,6 +56,15 @@ typedef struct {
     void (*put_ansi)(void *ctx, const char *text);
     /** Optional image loader. Return false to fall back to alt text. */
     bool (*load_image)(void *ctx, const char *src, dom_image_t *out);
+    /** Optional <canvas> bitmap loader (the browser runs the scripts first).
+     *  Return false to render the element's fallback content, which is what a
+     *  no-JS surface (editor preview, print-to-HTML, EPUB) does. */
+    bool (*load_canvas)(void *ctx, dom_node_t *node, dom_image_t *out);
+    /** CSS background: fill a rectangle's background colour, keeping any text
+     *  already drawn in those cells. NULL on surfaces without cell colours. */
+    void (*fill_bg)(void *ctx, int col, int row, int w, int h, uint8_t bg);
+    /** Optional CSS background-image loader (page backdrop). */
+    bool (*load_background)(void *ctx, const char *src, dom_image_t *out);
     void *ctx;
     int cols;             /**< TUI columns / ANSI wrap width. */
     int rows;             /**< TUI rows. */

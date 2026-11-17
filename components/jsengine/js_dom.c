@@ -1,5 +1,7 @@
 #include "quickjs.h"
 #include "jsengine.h"
+#include "js_canvas.h"
+#include "js_canvas_js.h"
 #include "p4minishell_config.h"
 #include "dom.h"
 #include "css.h"
@@ -215,6 +217,100 @@ static JSValue js_node_add_listener(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/** canvas.getContext('2d'): the canvas bitmap lives in the js_canvas registry
+ *  keyed by this DOM node, so repeated calls return the same backing store. */
+static JSValue js_node_get_context(JSContext *ctx, JSValueConst this_val,
+                                   int argc, JSValueConst *argv)
+{
+    dom_node_t *node = js_node_of(ctx, this_val);
+    const char *kind;
+    js_canvas_t *canvas;
+    int width;
+    int height;
+
+    if (node == NULL || strcmp(node->tag, "canvas") != 0 || argc < 1) {
+        return JS_NULL;
+    }
+    kind = JS_ToCString(ctx, argv[0]);
+    if (kind == NULL) {
+        return JS_NULL;
+    }
+    if (strcmp(kind, "2d") != 0) {
+        JS_FreeCString(ctx, kind);
+        return JS_NULL;   /* no WebGL on this hardware */
+    }
+    JS_FreeCString(ctx, kind);
+
+    width = node->canvas_w > 0 ? node->canvas_w : 300;   /* HTML defaults */
+    height = node->canvas_h > 0 ? node->canvas_h : 150;
+    canvas = js_canvas_for_node(node, width, height);
+    return js_canvas_wrap_context(ctx, canvas);
+}
+
+static JSValue js_node_get_width(JSContext *ctx, JSValueConst this_val,
+                                 int argc, JSValueConst *argv)
+{
+    dom_node_t *node = js_node_of(ctx, this_val);
+
+    (void)argc;
+    (void)argv;
+
+    return JS_NewInt32(ctx, node != NULL && node->canvas_w > 0
+                            ? node->canvas_w : 300);
+}
+
+static JSValue js_node_set_width(JSContext *ctx, JSValueConst this_val,
+                                 int argc, JSValueConst *argv)
+{
+    dom_node_t *node = js_node_of(ctx, this_val);
+    int32_t value = 300;
+    js_canvas_t *canvas;
+
+    if (argc >= 1) (void)JS_ToInt32(ctx, &value, argv[0]);
+    if (node == NULL) return JS_UNDEFINED;
+    if (value < 1) value = 1;
+    if (value > JS_CANVAS_MAX_W) value = JS_CANVAS_MAX_W;
+    node->canvas_w = value;
+    canvas = js_canvas_find_node(node);
+    if (canvas != NULL) {
+        (void)js_canvas_resize(canvas, node->canvas_w,
+                               node->canvas_h > 0 ? node->canvas_h : 150);
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_node_get_height(JSContext *ctx, JSValueConst this_val,
+                                  int argc, JSValueConst *argv)
+{
+    dom_node_t *node = js_node_of(ctx, this_val);
+
+    (void)argc;
+    (void)argv;
+
+    return JS_NewInt32(ctx, node != NULL && node->canvas_h > 0
+                            ? node->canvas_h : 150);
+}
+
+static JSValue js_node_set_height(JSContext *ctx, JSValueConst this_val,
+                                  int argc, JSValueConst *argv)
+{
+    dom_node_t *node = js_node_of(ctx, this_val);
+    int32_t value = 150;
+    js_canvas_t *canvas;
+
+    if (argc >= 1) (void)JS_ToInt32(ctx, &value, argv[0]);
+    if (node == NULL) return JS_UNDEFINED;
+    if (value < 1) value = 1;
+    if (value > JS_CANVAS_MAX_H) value = JS_CANVAS_MAX_H;
+    node->canvas_h = value;
+    canvas = js_canvas_find_node(node);
+    if (canvas != NULL) {
+        (void)js_canvas_resize(canvas, node->canvas_w > 0 ? node->canvas_w : 300,
+                               node->canvas_h);
+    }
+    return JS_UNDEFINED;
+}
+
 static JSValue js_dom_node_obj(JSContext *ctx, dom_node_t *node)
 {
     JSValue obj = JS_NewObjectClass(ctx, (int)s_dom_node_class_id);
@@ -228,6 +324,23 @@ static JSValue js_dom_node_obj(JSContext *ctx, dom_node_t *node)
                       JS_NewCFunction(ctx, js_node_get_attr, "getAttribute", 1));
     JS_SetPropertyStr(ctx, obj, "addEventListener",
                       JS_NewCFunction(ctx, js_node_add_listener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, obj, "getContext",
+                      JS_NewCFunction(ctx, js_node_get_context, "getContext", 1));
+
+    if (node != NULL && strcmp(node->tag, "canvas") == 0) {
+        atom = JS_NewAtom(ctx, "width");
+        JS_DefinePropertyGetSet(ctx, obj, atom,
+                                JS_NewCFunction(ctx, js_node_get_width, "width", 0),
+                                JS_NewCFunction(ctx, js_node_set_width, "width", 1),
+                                JS_PROP_CONFIGURABLE);
+        JS_FreeAtom(ctx, atom);
+        atom = JS_NewAtom(ctx, "height");
+        JS_DefinePropertyGetSet(ctx, obj, atom,
+                                JS_NewCFunction(ctx, js_node_get_height, "height", 0),
+                                JS_NewCFunction(ctx, js_node_set_height, "height", 1),
+                                JS_PROP_CONFIGURABLE);
+        JS_FreeAtom(ctx, atom);
+    }
 
     atom = JS_NewAtom(ctx, "textContent");
     JS_DefinePropertyGetSet(ctx, obj, atom,

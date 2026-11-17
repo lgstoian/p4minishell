@@ -5,3 +5,6 @@
 #
 # Keep it minimal: add an option here only when the host build fails without
 # it, and record the reason next to the option.
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
+CONFIG_MAIN_TASK_STACK_SIZE=32768

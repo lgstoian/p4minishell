@@ -366,15 +366,20 @@ and font modules — no new app model:
   `components/filetype/` rather than a local extension check.
 - **Browser DOM renderer** (`components/markdown/dom_render.c`): the browser's
   TUI page and ANSI surfaces share `dom_render_tree(tree, ops)`. `ops` supplies
-  the cell/link sinks (TUI) or the ANSI sink, plus an optional image loader; the
-  markdown leaf never touches SD/network. CSS is computed by `css.c`
+  the cell/link sinks (TUI) or the ANSI sink, an optional image loader, a canvas
+  loader, the background fill, and a page-background loader; the markdown leaf
+  never touches SD/network. CSS is computed by `css.c`
   (tag/class/id/attribute, descendant/child, specificity, inline last); the
   browser's `browser_load_image` resolves/fetches/decodes via `gfx` (BMP) and
   `components/imgdec` (PNG/JPEG; `imgdec_probe()` routes by format, never by a
-  local magic-byte sniff), and maps to DOS cells. `components/browser` owns only
+  local magic-byte sniff), and maps to DOS cells. `<canvas>` bitmaps are
+  produced by `components/jsengine/js_canvas.c` (pure RGBA software rasterizer,
+  host-tested; QuickJS bindings in `js_canvas_js.c`) and snapshotted into the
+  **same packed cell image** `<img>` uses. A no-JS surface leaves `load_canvas`
+  unset and gets the element's fallback content. `components/browser` owns only
   the PSRAM caches (decoded-image cache, rendered-page shot) built on the
   hardware-free `tui_page_shot` model. To add a layout construct, extend
-  `dom_render.c`; do not add a second browser renderer or a second decoder.
+  `dom_render.c`; do not add a second browser renderer, decoder or canvas path.
 - **MCP** (`components/mcp/`): `mcp_build_request()` is the JSON-RPC builder;
   `mcp_connect/list_tools/call_tool` use `networking_http_request(POST)` and
   `json_walk`. The `mcp` command lives in `components/command/mcp_commands.c`.

@@ -678,6 +678,8 @@
         "batch",
         "storage",
         "markdown",
+        "gfx",
+        "p4heap",
         "rss",
         "json",
         "tui",
