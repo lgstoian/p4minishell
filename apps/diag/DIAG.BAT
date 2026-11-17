@@ -26,7 +26,7 @@ echo ===================== >> %REPORT%
 :menu
 draw clear screen
 draw box 1 1 80 3 double "P4 DIAGNOSTICS"
-draw text 3 2 "System health, capabilities and frame-rate benchmark"
+draw text 3 2 "⚙ System health, capabilities and frame-rate benchmark"
 draw box 1 5 80 15 single "Diagnostics"
 draw text 5 7  "Full report"
 draw text 5 8  "Identity          software / board / build"

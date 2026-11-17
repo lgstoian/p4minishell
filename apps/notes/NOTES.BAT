@@ -28,7 +28,7 @@ dialog "Notes" "Created the zettel store." "OK"
 :menu
 draw clear screen
 draw box 1 1 80 3 double "ZETTELKASTEN"
-draw text 5 2 "linked notes on the db store" 14
+draw text 5 2 "📝 linked notes on the db store" 14
 list "Zettelkasten" "New note" "List notes" "View note" "Search" "Delete note" "Export" "Import" "Back"
 on %errorlevel%+1 goto :new_note,:list_notes,:view_note,:search,:del_note,:export,:import,:back
 goto :back
