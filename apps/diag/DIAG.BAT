@@ -19,18 +19,18 @@ setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 set REPORT=%APPDRIVE%/DIAG.TXT
 echo [M-DIAG]
-title "P4 Diagnostics ⚙"
+title "P4 Diagnostics"
 echo P4 Diagnostics report > %REPORT%
 echo ===================== >> %REPORT%
 
 :menu
 draw clear screen
-draw box 1 1 80 3 double "P4 DIAGNOSTICS ⚙"
-draw text 3 2 "⚙ System health, capabilities and frame-rate benchmark"
+draw box 1 1 80 3 double "P4 DIAGNOSTICS ★"
+draw text 3 2 "System health, capabilities and frame-rate benchmark"
 draw box 1 5 80 15 single "Diagnostics"
-draw text 5 7  "Full report"
-draw text 5 8  "Identity          software / board / build"
-draw text 5 9  "System            heap + PSRAM, CPU, tasks, clock"
+draw text 5 7 "Full report"
+draw text 5 8 "Identity          software / board / build"
+draw text 5 9 "System            heap + PSRAM, CPU, tasks, clock"
 draw text 5 10 "Storage           SD card, disk, recycle bin"
 draw text 5 11 "Network           Wi-Fi, DNS, sockets"
 draw text 5 12 "Devices           audio, LED, USB, battery"
@@ -39,7 +39,7 @@ draw text 5 14 "Capabilities      feature checklist"
 draw box 1 21 80 3 single
 draw text 3 22 "Select a diagnostic; Exit returns to the shell"
 echo [M-DIAG-MENU]
-list "P4 Diagnostics ⚙" "Full report" "Identity" "System" "Storage" "Network" "Devices" "Benchmark" "Capabilities" "Exit"
+list "P4 Diagnostics" "Full report" "Identity" "System" "Storage" "Network" "Devices" "Benchmark" "Capabilities" "Exit"
 on %errorlevel%+1 goto :do_full,:do_identity,:do_system,:do_storage,:do_network,:do_devices,:do_bench,:do_cap,:do_exit
 goto menu
 

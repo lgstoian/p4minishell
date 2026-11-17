@@ -1,7 +1,7 @@
 ; APPINFO metadata for the Companion File Tools (INI, `launch`).
 ; Copied to <drive>/APPS/FILES.APPINFO by apps/push_apps.py. FILES is also a
 ; sub-app of COMPANION; launched standalone it applies its own transparency.
-title=File Tools 📁
+title=File Tools
 description=Browse, view, search, trash, clipboard and note pad on %APPDRIVE%
 version=1.0
 ; Opt-in transparency (v1.4.3): translucent file browser + modal scrim.

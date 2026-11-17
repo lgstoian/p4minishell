@@ -11,7 +11,7 @@ rem =====================================================================
 setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-NOTE]
-title "Zettelkasten 📝"
+title "Zettelkasten"
 rem The `db` record store is SD-owned by design (sd:/DBS/zettel.DB); everything
 rem else this app writes uses %APPDRIVE% so the shell and editor data follow
 rem the drive the app was launched from.
@@ -30,9 +30,10 @@ dialog "Notes" "Created the zettel store." "OK"
 
 :menu
 draw clear screen
-draw box 1 1 80 3 double "ZETTELKASTEN 📝"
-draw text 5 2 "📝 linked notes on the db store" 14
-list "Zettelkasten 📝" "New note" "List notes" "View note" "Search" "Delete note" "Export" "Import" "Back"
+draw box 1 1 80 3 double "ZETTELKASTEN ★"
+draw text 5 2 "linked notes on the db store" 14
+echo [M-NOTE-MENU]
+list "Zettelkasten" "New note" "List notes" "View note" "Search" "Delete note" "Export" "Import" "Back"
 on %errorlevel%+1 goto :new_note,:list_notes,:view_note,:search,:del_note,:export,:import,:back
 goto :back
 

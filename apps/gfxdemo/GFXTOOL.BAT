@@ -10,7 +10,7 @@ rem  Markers: [M-GFXTOOL] / [M-GFXTOOL-IMG|NOIMG] / [M-GFXTOOL-DONE].
 rem =====================================================================
 echo [M-GFXTOOL]
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
-title "GFX Tool 🎨"
+title "GFX Tool"
 gfx init 320 200
 if errorlevel 1 goto :nofx
 gfx clear 0x101820
@@ -38,6 +38,11 @@ rem is outside every primitive/text region checked by gfx_toolkit_test.py.
 gfx image %APPDRIVE%/PHOTO.BMP 232 154 80 32
 if errorlevel 1 echo [M-GFXTOOL-NOIMG]
 if not errorlevel 1 echo [M-GFXTOOL-IMG]
+rem Present the canvas, then capture the whole panel for the docs gallery
+rem (GFXTOOL.BMP below stays the raw 320x200 canvas that gfx_toolkit_test.py
+rem checks; the SCREEN file is the 1024x600 surface).
+gfx show
+screenshot %APPDRIVE%/GFXTOOL_SCREEN.BMP
 gfx save %APPDRIVE%/GFXTOOL.BMP
 gfx close
 echo [M-GFXTOOL-DONE]

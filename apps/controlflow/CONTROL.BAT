@@ -14,8 +14,8 @@ rem =====================================================================
 setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-CONTROL]
-title "Control Flow Tour ★"
-echo CONTROL: start ★
+title "Control Flow Tour"
+echo CONTROL: start 
 set n=2
 call :banner
 on %n% goto :one,:two,:three
@@ -126,7 +126,12 @@ type < %APPDRIVE%/_p4parity_in.txt
 del /p %APPDRIVE%/_p4parity_in.txt > NUL
 gosub :parity_shift a b c d
 write %APPDRIVE%/_p4parity_eol.txt ";kept"
-for /f "eol= tokens=*" %%e in (%APPDRIVE%/_p4parity_eol.txt) do echo CONTROL: eol-keep %%e
+rem `for /f` cannot open a variable-expanded path: read it from the app drive
+rem through a temporary cd, then restore the caller's directory.
+set OLDDIR=%CD%
+cd %APPDRIVE%/
+for /f "eol= tokens=*" %%e in (_p4parity_eol.txt) do echo CONTROL: eol-keep %%e
+cd %OLDDIR%
 del /p %APPDRIVE%/_p4parity_eol.txt > NUL
 return
 

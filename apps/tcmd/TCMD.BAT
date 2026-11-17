@@ -17,7 +17,7 @@ rem  Foreground-only: draw/browse refuse in background jobs (see :nogfx).
 setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-TCMD]
-title "Commander 📂"
+title "Commander"
 set LD=/
 set RD=/APPS
 set LCUR=1
@@ -68,7 +68,7 @@ set RAC=7
 if %PA%==L set LAC=15
 if %PA%==R set RAC=15
 rem Frame.
-draw box 1 1 80 3 double "Commander 📂"
+draw box 1 1 80 3 double "Commander ★"
 draw text 3 2 "dual-pane commander  (%APPNAME% on %APPDRIVE%)"
 draw text 55 2 "1:/ 2:/APPS"
 draw list 1 4 39 17 %APPDRIVE%/tmp/_LT.txt %LAC% 16 /top:%LTOP% /cursor:%LCUR% /title:%LD%
@@ -109,10 +109,15 @@ rem either enter it (directory) or open it (file).
 if %PA%==R goto openR
 set /a SKP=%LCUR% - 1
 set FN=
-rem `eol=` disables the cmd.exe `;`-comment filter: a directory entry may
-rem legitimately begin with `;`, so the pane listing must not drop it.
-for /f "eol= skip=%SKP%" %%a in (%APPDRIVE%/tmp/_LT.txt) do set FN=%%a & goto openL
+rem `for /f` does not expand %APPDRIVE% in its file list: cd to the app
+rem drive for the read and restore before using the entry. `eol=` disables
+rem the cmd.exe `;`-comment filter: a directory entry may legitimately begin
+rem with `;`, so the pane listing must not drop it.
+set OLDDIR=%CD%
+cd %APPDRIVE%/
+for /f "eol= skip=%SKP%" %%a in (tmp/_LT.txt) do set FN=%%a & goto openL
 :openL
+cd %OLDDIR%
 if "%FN%"=="" goto refresh
 cd %APPDRIVE%%LD%/%FN%
 if errorlevel 1 goto viewL
@@ -127,8 +132,11 @@ goto refresh
 :openR
 set /a SKP=%RCUR% - 1
 set FN=
-for /f "eol= skip=%SKP%" %%a in (%APPDRIVE%/tmp/_RT.txt) do set FN=%%a & goto openR2
+set OLDDIR=%CD%
+cd %APPDRIVE%/
+for /f "eol= skip=%SKP%" %%a in (tmp/_RT.txt) do set FN=%%a & goto openR2
 :openR2
+cd %OLDDIR%
 if "%FN%"=="" goto refresh
 cd %APPDRIVE%%RD%/%FN%
 if errorlevel 1 goto viewR
@@ -161,7 +169,7 @@ set ST=refreshed
 goto refresh
 
 :menu
-list "Commander 📂" "Copy to other" "Move to other" "Delete file" "Mkdir here" "Rename file" "View file" "Edit file" "Change path" "Refresh" "Quit"
+list "Commander" "Copy to other" "Move to other" "Delete file" "Mkdir here" "Rename file" "View file" "Edit file" "Change path" "Refresh" "Quit"
 on %errorlevel%+1 goto :copyf,:movef,:delf,:mkdirf,:renf,:viewf,:editf,:chdir,:forcerelist,:done
 goto refresh
 

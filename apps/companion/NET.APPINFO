@@ -1,7 +1,7 @@
 ; APPINFO metadata for the Companion Network Tools (INI, `launch`).
 ; Copied to <drive>/APPS/NET.APPINFO by apps/push_apps.py. NET is also a
 ; sub-app of COMPANION; launched standalone it applies its own transparency.
-title=Network Tools 🌐
+title=Network Tools
 description=Wi-Fi status, connect, ping, DNS, fetch and the MQTT messaging view
 version=1.0
 ; Opt-in transparency (v1.4.3): translucent tools page + modal scrim.

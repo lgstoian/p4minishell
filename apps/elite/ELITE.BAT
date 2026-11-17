@@ -3,7 +3,7 @@ rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
 rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  ELITE.BAT - turn-based space trader (batch adaptation of the DOS Elite
-rem  idea: trade, travel, pirates; no real-time flight — the engine is
+rem  idea: trade, travel, pirates; no real-time flight  the engine is
 rem  blocking-input + full-label flushes, so combat is choice-driven).
 rem  Systems and goods live in SYSNAME[]/MULT[]/PRICE[]/HOLD[] arrays; the
 rem  buy/sell lists return the good index straight into `set /a g=%%err`,
@@ -16,7 +16,7 @@ rem =====================================================================
 setlocal enabledelayedexpansion
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-ELITE]
-title "Elite 🚀"
+title "Elite"
 if exist %APPDRIVE%/ELITE.SAV call %APPDRIVE%/ELITE.SAV
 if not defined credits set credits=100
 if not defined sys set sys=0
@@ -52,7 +52,7 @@ draw text 3 15 Hull %hull%%
 draw text 50 14 Buy low
 draw text 50 15 sell high
 draw refresh
-list "Elite 🚀" "Buy" "Sell" "Travel" "Save" "Quit"
+list "Elite" "Buy" "Sell" "Travel" "Save" "Quit"
 on %errorlevel%+1 goto :buy,:sell,:travel,:save,:done
 goto done
 

@@ -9,17 +9,17 @@ rem =====================================================================
 :main
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 :files_menu
-title "File Tools 📁"
+title "File Tools"
 echo [M-FILES]
 draw clear screen
 draw box 1 1 80 3 single
-draw text 35 2 "FILE TOOLS 📁" 14
+draw text 35 2 "FILE TOOLS ★" 14
 draw box 1 4 80 12 single "Tools"
 draw text 5 6 "Browse the app drive with the full TUI file browser"
 draw text 5 7 "Quick dir, search, trash, clipboard, notes"
 draw box 1 17 80 8 single "Status"
 draw text 5 19 "Use Browse for full-screen file picker  (%APPDRIVE%)"
-list "File Tools 📁" "Browse SD (TUI)" "Quick dir" "Search files" "Trash browser" "Clipboard" "Note pad" "Hexview demo" "Commander" "Back"
+list "File Tools" "Browse SD (TUI)" "Quick dir" "Search files" "Trash browser" "Clipboard" "Note pad" "Hexview demo" "Commander" "Back"
 on %errorlevel%+1 goto :browse,:dir,:search,:trash,:clipboard,:notes,:hex_demo,:tcmd,:back
 goto :back
 

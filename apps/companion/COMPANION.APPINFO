@@ -1,6 +1,6 @@
 ; APPINFO metadata for the P4 Companion (INI format, read by the `launch`
 ; command). Copied to sd:/APPS/COMPANION.APPINFO by push_sd.py.
-title=P4 Companion ★
+title=P4 Companion
 description=A pure-batch system helper: dashboard, files, network, games, settings
 version=1.0
 ; Opt-in transparency (v1.4.3): translucent menu/dashboard + modal scrim.

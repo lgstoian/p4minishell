@@ -9,11 +9,11 @@ rem =====================================================================
 
 :main
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
-title "Live System 🖥"
+title "Live System"
 echo [M-SYS]
 tui fullscreen on
 draw clear screen
-draw box 1 1 80 3 double "LIVE SYSTEM DASHBOARD 🖥"
+draw box 1 1 80 3 double "LIVE SYSTEM DASHBOARD ★"
 draw box 1 4 80 10 single "System - View opens the local HTML guide"
 draw box 1 15 40 10 single "Memory (heap + PSRAM)"
 draw box 41 15 40 10 single "Tasks"
@@ -21,12 +21,12 @@ draw text 5 6 "System dashboard ready"
 draw text 5 7 "Use View for the HTML guide"
 draw text 5 8 "Use Save to keep a snapshot on the app drive"
 :refresh
-list "Dashboard 🖥" "Refresh" "View details" "Save snapshot" "Services" "Packages" "Back"
+list "Dashboard" "Refresh" "View details" "Save snapshot" "Services" "Packages" "Back"
 on %errorlevel%+1 goto :do_refresh,:view_details,:save,:services,:packages,:back
 goto :back
 :do_refresh
 draw clear screen
-draw box 1 1 80 3 double "LIVE SYSTEM DASHBOARD 🖥"
+draw box 1 1 80 3 double "LIVE SYSTEM DASHBOARD"
 draw box 1 4 80 10 single "System - Refreshed"
 draw box 1 15 40 10 single "Memory (heap + PSRAM)"
 draw box 41 15 40 10 single "Tasks"

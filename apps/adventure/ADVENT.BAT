@@ -19,7 +19,9 @@ set ITEM[amulet]=0
 set score=0
 set moves=0
 echo [M-ADV]
-title "Adventure ⚔"
+title "Adventure"
+draw hold on
+draw fullscreen on
 goto room_courtyard
 
 :back_to_room
@@ -29,47 +31,69 @@ switch %room% hall:room_hall library:room_library tower:room_tower cellar:room_c
 set room=courtyard
 draw clear screen
 draw box 1 1 80 3 double "COURTYARD ⚔"
-draw text 5 5 "A quiet stone courtyard. A hall lies north, a garden east."
+draw text 5 5 "A quiet stone courtyard. A hall lies north, a garden east." 15
 draw text 5 6 "Exits: n e    (%APPNAME% on %APPDRIVE%)"
 goto prompt
 
 :room_hall
 set room=hall
 draw clear screen
-draw box 1 1 80 3 double "GREAT HALL"
-draw text 5 5 "A torch-lit hall. Doors west and east, stairs up, south out."
+draw box 1 1 80 3 double "GREAT HALL ⚔"
+draw text 5 5 "A torch-lit hall. Doors west and east, stairs up, south out." 15
 draw text 5 6 "Exits: s w e u"
 goto prompt
 
 :room_library
 set room=library
 draw clear screen
-draw box 1 1 80 3 double "LIBRARY"
-if "!ITEM[key]!"=="0" (draw text 5 5 "Dusty shelves. A brass key hangs on a hook.") else (draw text 5 5 "Dusty shelves. The key hook stands empty.")
+draw box 1 1 80 3 double "LIBRARY ⚔"
+rem Keep multi-word prose out of the if-group: this engine's group parser
+rem takes only the first token of a quoted string inside `( ... )`.
+if "!ITEM[key]!"=="0" (set desc=Dusty shelves. A brass key hangs on a hook.) else (set desc=Dusty shelves. The key hook stands empty.)
+draw text 5 5 "%desc%" 15
 draw text 5 6 "Exits: e"
 goto prompt
 
 :room_tower
 set room=tower
 draw clear screen
-draw box 1 1 80 3 double "TOWER"
-if "!ITEM[amulet]!"=="0" (draw text 5 5 "Windy rooftop. A glowing amulet rests on a pedestal.") else (draw text 5 5 "Windy rooftop. The pedestal is empty.")
+draw box 1 1 80 3 double "TOWER ⚔"
+if "!ITEM[amulet]!"=="0" (set desc=Windy rooftop. A glowing amulet rests on a pedestal.) else (set desc=Windy rooftop. The pedestal is empty.)
+draw text 5 5 "%desc%" 15
 draw text 5 6 "Exits: d"
 goto prompt
 
 :room_cellar
-if "!ITEM[lantern]!"=="1" (set room=cellar & draw clear screen & draw box 1 1 80 3 double "CELLAR" & draw text 5 5 "Your lantern lights a wine cellar. An iron chest sits here." & draw text 5 6 "Exits: w" & goto prompt) else (draw clear screen & draw text 5 5 "Pitch black below. You stumble back up to the hall." & delay 1200 & goto room_hall)
+if not "!ITEM[lantern]!"=="1" goto cellar_dark
+set room=cellar
+draw clear screen
+draw box 1 1 80 3 double "CELLAR ⚔"
+draw text 5 5 "Your lantern lights a wine cellar. An iron chest sits here." 15
+draw text 5 6 "Exits: w"
+goto prompt
+:cellar_dark
+draw clear screen
+draw text 5 5 "Pitch black below. You stumble back up to the hall." 15
+delay 1200
+goto room_hall
 
 :room_garden
 set room=garden
 draw clear screen
-draw box 1 1 80 3 double "GARDEN"
-if "!ITEM[lantern]!"=="0" (draw text 5 5 "Moonlit garden. A lantern hangs by the gate.") else (draw text 5 5 "Moonlit garden. The lantern post is bare.")
+draw box 1 1 80 3 double "GARDEN ⚔"
+if "!ITEM[lantern]!"=="0" (set desc=Moonlit garden. A lantern hangs by the gate.) else (set desc=Moonlit garden. The lantern post is bare.)
+draw text 5 5 "%desc%" 15
 draw text 5 6 "Exits: w"
 goto prompt
 
 :prompt
+rem A `snap` command re-enters the current room and takes the BMP here, before
+rem the input modal covers the page (the page is freshly presented).
+if "%wantsnap%"=="1" goto snap_now
 set /a moves+=1
+rem Present the room before the input modal: the modal is a surface over the
+rem committed TUI page, so the docs capture (and a player) sees where they are.
+draw refresh
 rem Literal dashes (not a Markdown rule): /raw keeps the bytes identical.
 echo /raw ---
 ask /v:cmd "What now? (help)"
@@ -81,6 +105,7 @@ if "%cmd%"=="inv" goto inv
 if "%cmd%"=="score" goto show_score
 if "%cmd%"=="save" goto save
 if "%cmd%"=="load" goto load
+if "%cmd%"=="snap" goto do_snap
 if "%cmd%"=="n" goto move
 if "%cmd%"=="s" goto move
 if "%cmd%"=="e" goto move
@@ -183,6 +208,22 @@ echo [M-ADV-LOADED]
 dialog "Adventure" "Loaded." "OK"
 goto back_to_room
 
+:do_snap
+rem Documented debug/docs aid. The room routine is re-entered so the page is
+rem freshly painted; :prompt takes the BMP before the input modal opens.
+set wantsnap=1
+goto back_to_room
+
+:snap_now
+set wantsnap=
+rem Capture immediately: with draw-hold off the shell repaints the transcript
+rem over a presented page after a short delay, so a pause here captures black.
+draw refresh
+delay 300
+screenshot %APPDRIVE%/ADVENT.BMP
+echo [M-ADV-SNAP]
+goto prompt
+
 :do_win
 set /a score+=50
 echo [M-ADV-WIN]
@@ -197,4 +238,7 @@ return
 :do_quit
 echo [M-ADV-QUIT]
 draw clear screen
+draw hold off
+draw fullscreen off
+draw close
 return

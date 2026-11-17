@@ -21,8 +21,8 @@ setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 set ERR=0
 echo [M-WRITER]
-title "Writer Deck ✍"
-echo WRITER: ✍ P4MiniShell writerdeck (%APPNAME% on %APPDRIVE%)
+title "Writer Deck"
+echo WRITER:  P4MiniShell writerdeck (%APPNAME% on %APPDRIVE%)
 echo.
 echo WRITER: templates need apps/push_templates.py; spell needs apps/push_dicts.py
 echo.

@@ -536,6 +536,9 @@ def _notes(dev, c):
     c.check("NOTES saved marker", b"[M-NOTE-SAVED]" in tail,
             tail[-300:].decode("utf-8", "replace"))
     _ok(s)
+    # Wait for the NOTES menu itself, not a fixed sleep: a slow dialog close
+    # used to let the "2" reach the shell (measured once in the full run).
+    _wait(s, "[M-NOTE-MENU]", 25)
     # List notes: 2 -> db count + pipe listing -> pause -> Back.
     s.write_line("2")
     tail = s.read_until(b"[M-NOTE-COUNT]", 40)
@@ -935,7 +938,9 @@ def _companion_deep(dev, c):
 def _cleanup(dev, c):
     artifacts = [
         "BOUNCE.BMP", "SNAKE.BMP", "GFXTOOL.BMP", "PLOT.BMP", "TCMD.BMP",
-        "DIAG_BENCH.BMP", "ELITE.BMP", "DIAG.TXT", "ADVENT.SAV", "ELITE.SAV",
+        "GFXTOOL_SCREEN.BMP", "PLOT_SCREEN.BMP", "ADVENT.BMP",
+        "MOOD_TREND.BMP", "DIAG_BENCH.BMP", "ELITE.BMP", "DIAG.TXT",
+        "ADVENT.SAV", "ELITE.SAV",
         "_z.txt", "_zinit.txt", "_m.txt", "_s.txt", "_tz.txt", "_d.txt",
         "_mood.txt", "_LT.txt", "_RT.txt", "_palm.csv",
         "SYS_SNAP.TXT", "funurl.txt", "_joke.txt", "_known.txt", "_net.txt",

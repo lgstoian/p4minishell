@@ -18,8 +18,8 @@ rem  back with `tui dump` so the suite can assert the event fired.
 rem =====================================================================
 setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
-echo [M-WEB] 🌍
-title "Browser 🌍"
+echo [M-WEB] 
+title "Browser"
 
 if not exist %APPDRIVE%/WEB/INDEX.HTML goto :nofile
 rem Emit the sync marker BEFORE rendering: printing after `browser` repaints

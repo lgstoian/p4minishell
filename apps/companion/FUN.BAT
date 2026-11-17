@@ -8,14 +8,14 @@ rem =====================================================================
 
 :main
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
-title "Fun & Demos ★"
+title "Fun & Demos"
 echo [M-FUN]
 draw clear screen
 draw box 1 1 80 3 single
-draw text 35 2 "FUN / DEMOS ★" 14
+draw text 35 2 "FUN / DEMOS 😀" 14
 draw box 1 4 80 10 single "Demos"
 draw text 5 6 "Melody, RGB, guessing, calc, snake, elite trader"
-list "Fun / Demos ★" "Melody (TUI)" "RGB effects" "Number guessing" "Calc playground" "Browse demo file" "TUI Demo" "Snake" "Elite Trader" "Back"
+list "Fun / Demos" "Melody (TUI)" "RGB effects" "Number guessing" "Calc playground" "Browse demo file" "TUI Demo" "Snake" "Elite Trader" "Back"
 on %errorlevel%+1 goto :melody,:rgb,:guess,:calc,:browse_demo,:tui_demo,:snake,:elite,:back
 goto :back
 

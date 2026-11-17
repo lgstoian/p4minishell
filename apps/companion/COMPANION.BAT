@@ -7,7 +7,7 @@ rem  Enhanced TUI with fullscreen, draw boxes, and status.
 rem =====================================================================
 setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
-title "P4 Companion ★"
+title "P4 Companion"
 gosub %APPROOT%/LIB.BAT::load_settings
 
 :main_menu
@@ -24,7 +24,7 @@ draw text 5 12 "Settings     - brightness, volume"
 draw box 1 20 80 3 single
 draw text 5 22 "Use list to select, ESC to cancel"
 echo [C-MENU]
-list "P4 Companion ★" "Live System" "File Tools" "Network Tools" "Fun / Demos" "Settings" "Exit"
+list "P4 Companion" "Live System" "File Tools" "Network Tools" "Fun / Demos" "Settings" "Exit"
 on %errorlevel%+1 goto :opt_sys,:opt_files,:opt_net,:opt_fun,:opt_settings,:opt_exit
 goto main_menu
 

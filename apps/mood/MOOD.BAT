@@ -11,15 +11,16 @@ rem =====================================================================
 setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-MOOD]
-title "Mood ♥"
+title "Mood"
+draw fullscreen on
 goto menu
 
 :menu
 draw clear screen
-draw box 1 1 80 3 double "MOOD ♥"
+draw box 1 1 80 3 double "MOOD 💖"
 draw text 5 2 "board mood from live heap (mem includes PSRAM)" 14
 draw text 45 2 "local %TIME%" 7
-list "Mood ♥" "Live mood (5 samples)" "RGB demo" "Tone demo" "Snapshot" "Service sampler" "Back"
+list "Mood" "Live mood (5 samples)" "RGB demo" "Tone demo" "Snapshot" "Service sampler" "Back"
 on %errorlevel%+1 goto :live,:rgb_demo,:tone_demo,:snapshot,:svcview,:back
 goto back
 
@@ -38,6 +39,9 @@ draw clear screen
 draw box 1 1 80 3 double "MOOD TREND"
 draw text 5 2 "heap free percent per sample" 14
 for /A %%k in (SAMPLE) do call :barline %%k %%l
+draw refresh
+rem Save the trend page for the docs gallery before the dialog covers it.
+screenshot %APPDRIVE%/MOOD_TREND.BMP
 echo [M-MOOD-TREND]
 dialog "Mood" "Sampling done." "OK"
 goto menu
@@ -51,8 +55,16 @@ rem occasional slow-SD unlink stalling the worker (see bugs.md O6).
 set heapf=0
 set heapt=1
 set pct=0
-for /f "eol= tokens=1,2,5 delims==,b" %%a in (%APPDRIVE%/_mood.txt) do if "%%a"=="  mem.heap: free" set heapf=%%b
-for /f "eol= tokens=1,2,5 delims==,b" %%a in (%APPDRIVE%/_mood.txt) do if "%%a"=="  mem.heap: free" set heapt=%%c
+rem `for /f` does not expand variables inside its file list, so read the
+rem scratch file from the app drive through a temporary cd. The mem row's
+rem first token can carry one or two leading spaces; accept either spelling.
+set OLDDIR=%CD%
+cd %APPDRIVE%/
+for /f "eol= tokens=1,2,5 delims==,b" %%a in (_mood.txt) do if "%%a"=="  mem.heap: free" set heapf=%%b
+for /f "eol= tokens=1,2,5 delims==,b" %%a in (_mood.txt) do if "%%a"==" mem.heap: free" set heapf=%%b
+for /f "eol= tokens=1,2,5 delims==,b" %%a in (_mood.txt) do if "%%a"=="  mem.heap: free" set heapt=%%c
+for /f "eol= tokens=1,2,5 delims==,b" %%a in (_mood.txt) do if "%%a"==" mem.heap: free" set heapt=%%c
+cd %OLDDIR%
 if %heapt% GTR 100 set /a hunit=%heapt% / 100
 if %heapt% GTR 100 set /a pct=%heapf% / %hunit%
 set SAMPLE[%round%]=%pct%
@@ -93,9 +105,9 @@ return
 :barline
 rem %1 = sample index, %2 = pct; one trend bar per sample.
 set /a my=7+%1
-draw text 2 %my% sample %1
+draw text 2 %my% "sample %1"
 draw bar 14 %my% 40 %2 # . 10 0
-draw text 58 %my% %2 pct
+draw text 58 %my% "%2 pct" 7
 return
 
 :rgb_demo
@@ -160,5 +172,6 @@ goto menu
 rgb off
 rem Leave the TUI: `draw clear screen` alone keeps TUI mode active and would
 rem make the next gfx app refuse ("gfx: TUI mode is active").
+draw fullscreen off
 draw close
 return

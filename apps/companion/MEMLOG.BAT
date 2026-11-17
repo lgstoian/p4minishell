@@ -14,17 +14,24 @@ rem  (mem/for/set/append/lock/signal/delay only).
 rem  Markers: [M-MEMLOG] / [M-MEMLOG-SAMPLE].
 rem  Tick ms comes from %1 (default 300000 = 5 min; the suite passes 2000).
 rem =====================================================================
-echo [M-MEMLOG] ▒ logger started (mem reports heap + PSRAM)
+echo [M-MEMLOG]  logger started (mem reports heap + PSRAM)
 set every=300000
 if not "%1"=="" set every=%1
 :loop
 lock memlog
 mem > %APPDRIVE%/_memlog.txt
 set heapf=0
-for /f "eol= tokens=1,2,5 delims==,b" %%a in (%APPDRIVE%/_memlog.txt) do if "%%a"=="  mem.heap: free" set heapf=%%b
+rem `for /f` does not expand variables in its file list: cd to the app drive
+rem and read the scratch/CSV files by name. Accept one or two leading spaces
+rem on the mem row (the formatter can emit either).
+set OLDDIR=%CD%
+cd %APPDRIVE%/
+for /f "eol= tokens=1,2,5 delims==,b" %%a in (_memlog.txt) do if "%%a"=="  mem.heap: free" set heapf=%%b
+for /f "eol= tokens=1,2,5 delims==,b" %%a in (_memlog.txt) do if "%%a"==" mem.heap: free" set heapf=%%b
 if not exist %APPDRIVE%/MEMLOG.CSV write %APPDRIVE%/MEMLOG.CSV date,time,heap_free
 set lines=0
-for /f %%a in (%APPDRIVE%/MEMLOG.CSV) do set /a lines+=1
+for /f %%a in (MEMLOG.CSV) do set /a lines+=1
+cd %OLDDIR%
 if %lines% GTR 200 copy %APPDRIVE%/MEMLOG.CSV %APPDRIVE%/MEMLOG.OLD > NUL
 if %lines% GTR 200 write %APPDRIVE%/MEMLOG.CSV date,time,heap_free
 append %APPDRIVE%/MEMLOG.CSV %DATE%,%TIME%,%heapf%

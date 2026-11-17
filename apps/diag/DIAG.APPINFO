@@ -1,6 +1,6 @@
 ; APPINFO metadata for P4 Diagnostics (INI format, read by `launch`).
 ; Copied to sd:/APPS/DIAG.APPINFO by apps/push_apps.py.
-title=P4 Diagnostics ⚙
+title=P4 Diagnostics
 description=System health, capability and frame-rate diagnostics console; mem shows internal heap + PSRAM
 version=1.0
 ; Opt-in transparency (v1.4.3): translucent diagnostics page + modal scrim.

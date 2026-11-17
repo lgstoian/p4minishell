@@ -11,15 +11,15 @@ rem =====================================================================
 setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-PALM]
-title "PalmTop 📟"
+title "PalmTop"
 goto menu
 
 :menu
 draw clear screen
-draw box 1 1 80 3 double "PALMTOP 📟"
+draw box 1 1 80 3 double "PALMTOP ★"
 draw text 5 2 "palmtop-parity primitives demo  (%APPNAME% on %APPDRIVE%)" 14
 draw text 45 2 "local %TIME%" 7
-list "PalmTop 📟" "Calculator + conversions" "Stopwatch" "CSV sheet (=EXPR)" "Encrypt a note" "Bind an F-key" "TCP probe" "Back"
+list "PalmTop" "Calculator + conversions" "Stopwatch" "CSV sheet (=EXPR)" "Encrypt a note" "Bind an F-key" "TCP probe" "Back"
 on %errorlevel%+1 goto :calc_demo,:timer,:sheet,:crypt,:bind,:tcp,:back
 goto back
 

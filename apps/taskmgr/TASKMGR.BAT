@@ -15,17 +15,17 @@ rem =====================================================================
 
 :main
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
-title "Task Manager 📊"
+title "Task Manager"
 echo [M-TMGR]
 tui fullscreen on
 :refresh
 draw clear screen
-draw box 1 1 80 3 double "TASK MANAGER 📊"
+draw box 1 1 80 3 double "TASK MANAGER ★"
 draw text 5 5 "Jobs, services and events (mem reports heap + PSRAM). Pick an action:"
 start
 ps /O:C
 service list
-list "Tasks 📊" "Refresh view" "Kill job" "Suspend job" "Resume job" "Job priority" "Services" "Events" "Save snapshot" "Back"
+list "Tasks" "Refresh view" "Kill job" "Suspend job" "Resume job" "Job priority" "Services" "Events" "Save snapshot" "Back"
 on %errorlevel%+1 goto :do_refresh,:tm_kill,:tm_susp,:tm_res,:tm_nice,:tm_svc,:tm_events,:tm_save,:tm_back
 goto :tm_back
 

@@ -57,6 +57,10 @@ APPS = os.path.join(ROOT, "apps")
 DOCS = os.path.join(ROOT, "docs", "assets", "apps")
 REFERENCE_SIZE = (1024, 600)
 
+# Apps whose PNG was written by the current run (the final gate uses this so a
+# stale file from an older run can never stand in for a failed capture).
+WRITTEN = set()
+
 sys.path.insert(0, APPS)
 
 from app_manifest import (  # noqa: E402
@@ -93,9 +97,9 @@ SPECS = [
     dict(app="companion", cmd="launch COMPANION", start="[C-MENU]",
          shot="stream", shot_delay=2.0, quit=["6"], end="[C-EXIT]"),
     dict(app="sys", cmd="launch SYS", start="[M-SYS]",
-         shot="stream", shot_delay=3.0, quit=["7"], end="[M-SYS-BACK]"),
+         shot="stream", shot_delay=3.0, quit=["6"], end="[M-SYS-BACK]"),
     dict(app="files", cmd="launch FILES", start="[M-FILES]",
-         shot="stream", shot_delay=3.0, quit=["10"], end="[M-FILES-BACK]"),
+         shot="stream", shot_delay=3.0, quit=["9"], end="[M-FILES-BACK]"),
     dict(app="net", cmd="launch NET", start="[M-NET]",
          shot="stream", shot_delay=3.0, quit=["8"], end="[M-NET-BACK]"),
     dict(app="fun", cmd="launch FUN", start="[M-FUN]",
@@ -111,28 +115,30 @@ SPECS = [
 
     # ---- pictures: the documented first entry is the full-color viewer --
     dict(app="pics", cmd="launch PICS", start="[M-PICS]",
-         pre=[(1.0, "1", None)], shot="stream", shot_delay=2.5,
+         pre=[(2.0, "1", "[M-PICS-VIEW]")], shot="stream", shot_delay=1.5,
          quit=["q", "5"], end_shell=True),
 
     # ---- games / adventures: a few moves so the shot looks alive -------
     dict(app="adventure", cmd="launch ADVENT", start="[M-ADV]",
-         pre=[(1.0, "n", "---"), (0.3, "w", "---")],
-         shot="stream", shot_delay=0.5, quit=["quit"], end="[M-ADV-QUIT]"),
+         pre=[(1.0, "n", "---"), (0.3, "w", "---"),
+              (0.3, "snap", "[M-ADV-SNAP]")],
+         shot=("file", "ADVENT.BMP"), quit=["quit"], end="[M-ADV-QUIT]"),
     dict(app="snake", cmd="launch SNAKE", start="[M-SNAKE]",
          pre=[(1.2, "s", None)],
          shot=("snap", "p", "[M-SNAKE-SNAP]", "SNAKE.BMP"),
          quit=["q"], end="[M-SNAKE-DONE]"),
     dict(app="mood", cmd="launch MOOD", start="[M-MOOD]",
          pre=[(1.0, "1", "[M-MOOD-TREND]")],
-         shot="stream", shot_delay=1.0, quit=["ok", "6", "6"], end_shell=True),
+         shot=("file", "MOOD_TREND.BMP"), quit=["ok", "6", "6"],
+         quit_settle=1.5, end_shell=True),
 
     # ---- canvas apps: use the BMP the app saves off its frame loop ------
     dict(app="bounce", cmd="launch BOUNCE", start="[M-BOUNCE]",
          done="[M-BOUNCE-DONE]", shot=("file", "BOUNCE.BMP")),
     dict(app="gfx", cmd="launch GFXTOOL", start="[M-GFXTOOL]",
-         done="[M-GFXTOOL-DONE]", shot=("file", "GFXTOOL.BMP")),
+         done="[M-GFXTOOL-DONE]", shot=("file", "GFXTOOL_SCREEN.BMP")),
     dict(app="plot", cmd="launch PLOT", start="[M-PLOT]",
-         done="[M-PLOT-DONE]", shot=("file", "PLOT.BMP")),
+         done="[M-PLOT-DONE]", shot=("file", "PLOT_SCREEN.BMP")),
 
     # ---- browser showcase: the app captures its own clean boot state ---
     dict(app="web", cmd="launch WEB", start="[M-WEB-LOADED]",
@@ -160,11 +166,11 @@ SPECS = [
 
     # ---- extra sub-screens that document a feature in place ------------
     dict(app="files-notes", cmd="launch FILES", start="[M-FILES]",
-         pre=[(2.5, "6", "[M-FILES-NOTES]")], shot="stream", shot_delay=1.0,
+         pre=[(4.0, "6", "[M-FILES-NOTES]")], shot="stream", shot_delay=1.0,
          quit=["5"], end="[M-FILES-BACK]"),
     dict(app="net-msg", cmd="launch NET", start="[M-NET]",
-         pre=[(2.5, "7", "[M-NET-OUTBOX]")], shot="stream", shot_delay=1.0,
-         quit=["1", "8"], end="[M-NET-BACK]"),
+         pre=[(4.0, "7", "[M-NET-OUTBOX]")], shot="stream", shot_delay=1.0,
+         quit=["1", "8"], quit_settle=2.0, end="[M-NET-BACK]"),
 ]
 
 # Background-service surfaces: start the real script in a pool slot, wait for
@@ -179,7 +185,9 @@ BG_SPECS = [
 
 TEMP_FILES = [
     "BOUNCE.BMP", "SNAKE.BMP", "GFXTOOL.BMP", "PLOT.BMP", "TCMD.BMP",
+    "GFXTOOL_SCREEN.BMP", "PLOT_SCREEN.BMP",
     "DIAG_BENCH.BMP", "ELITE.BMP", "DIAG.TXT", "ADVENT.SAV", "ELITE.SAV",
+    "ADVENT.BMP", "MOOD_TREND.BMP",
     "_mood.txt", "_m.txt", "_s.txt", "_tz.txt", "_d.txt", "_palm.csv",
     "SYS_SNAP.TXT", "TMGR_SNAP.TXT", "WRITERDEMO.MD", "WRITERDEMO.HTML",
     "WRITERDEMO.TXT", "WRITERDEMO.PRN", "WEB/SHOT.BMP",
@@ -341,6 +349,12 @@ def _ink(bmp):
 
 def _publish(dev, c, app, bmp, want, source):
     """Write the PNG and run the one-per-app gallery gate."""
+    check_name = ("%s: PNG is a valid %dx%d image and not blank"
+                  % (app, want[0], want[1]))
+    if bmp is None:
+        c.check(check_name, False, "no capture from %s" % (source or "the app"))
+        return False
+
     path = os.path.join(DOCS, app + ".png")
     try:
         img = _image_from_bmp(bmp)
@@ -367,7 +381,11 @@ def _publish(dev, c, app, bmp, want, source):
             return False
 
     ink, colours = _ink(bmp)
-    not_blank = ink >= 0.01 and colours >= 8
+    # A TUI screen is deliberately low-colour (TCMD/BOUNCE are 4-5 colours:
+    # background, ink, accent, sprite). A blank capture has ONE colour, so
+    # require a second/third tone plus real ink, not a palette count that
+    # would reject a legitimate monochrome app.
+    not_blank = ink >= 0.01 and colours >= 3
     ok = size_ok and png_ok and not_blank
     if not size_ok:
         detail = ("captured %dx%d from %s; the docs gallery requires the %dx%d "
@@ -380,9 +398,9 @@ def _publish(dev, c, app, bmp, want, source):
                   % (ink * 100.0, colours, source))
     else:
         detail = ""
-    c.check("%s: PNG is a valid %dx%d image and not blank"
-            % (app, want[0], want[1]), ok, detail)
+    c.check(check_name, ok, detail)
     if ok:
+        WRITTEN.add(app)
         c.note("%s: %dx%d, %.1f%% ink, %d colours" %
                (app, img.width, img.height, ink * 100.0, colours))
     return ok
@@ -438,6 +456,13 @@ def _drive(dev, c, spec, want):
         if wait_marker:
             got = _read_until(s, wait_marker, spec.get("step_timeout", 45.0))
             if wait_marker.encode() not in got:
+                # The line reached the shell before the modal opened (common
+                # on a slow first paint). Give the list time, then resend.
+                s.read_for(2.0)
+                s.write_line(line)
+                got += _read_until(s, wait_marker,
+                                   spec.get("step_timeout", 45.0))
+            if wait_marker.encode() not in got:
                 c.note("%s: step marker %s missing after %r: %s"
                        % (app, wait_marker, line, _tail(got)))
 
@@ -479,22 +504,33 @@ def _drive(dev, c, spec, want):
     exited = True
     if spec.get("quit") or spec.get("end") or spec.get("end_shell"):
         s.read_for(0.5)
-        for line in spec.get("quit", []):
+        # Do NOT drain after the last line: the app's exit marker is emitted
+        # in the next few hundred ms and `read_for` would throw it away (that
+        # was why every menu app looked like it had not exited cleanly).
+        quit_lines = spec.get("quit", [])
+        settle = spec.get("quit_settle", 0.6)
+        for index, line in enumerate(quit_lines):
+            if index:
+                s.read_for(settle)
             s.write_line(line)
-            s.read_for(0.8)
         if spec.get("end"):
-            got = _read_until(s, spec["end"], 45.0)
+            got = _read_until(s, spec["end"], 18.0)
             exited = spec["end"].encode() in got
             if not exited:
                 # A dropped quit line is common while a modal is closing.
-                for _ in range(3):
-                    for line in spec.get("quit", []):
+                # One short retry is enough: `_ensure_shell` below is the
+                # real "the next app can start" gate.
+                for _ in range(2):
+                    for line in quit_lines:
                         s.write_line(line)
                         s.read_for(0.7)
-                    got += _read_until(s, spec["end"], 12.0)
+                    got += _read_until(s, spec["end"], 8.0)
                     if spec["end"].encode() in got:
                         exited = True
                         break
+                if not exited:
+                    c.note("%s: end marker %s missing; tail: %s"
+                           % (app, spec["end"], _tail(got)))
     # The next app's launch must reach the shell, never an app that still
     # owns the input (also heals a console wedged by a large `send` frame).
     shell_ok = _ensure_shell(dev, c, app, spec.get("quit", ()))
@@ -511,7 +547,7 @@ def _drive(dev, c, spec, want):
              timeout=20)
         _ensure_shell(dev, c, app)
 
-    ok = bmp is not None and _publish(dev, c, app, bmp, want, source)
+    ok = _publish(dev, c, app, bmp, want, source)
     if not ok:
         c.note("%s: no usable capture (%s)" % (app, source))
     elif not exited:
@@ -552,7 +588,7 @@ def _drive_background(dev, c, spec, want):
     if read_marker:
         _read_until(dev.session, read_marker, 15.0)
     _ensure_shell(dev, c, app)
-    ok = bmp is not None and _publish(dev, c, app, bmp, want, source)
+    ok = _publish(dev, c, app, bmp, want, source)
     if not ok:
         c.note("%s: no usable capture (%s)" % (app, source))
     return ok
@@ -587,6 +623,7 @@ def run(dev, ctx):
         c.note("panel is %dx%d; the docs gallery is the %dx%d reference board "
                "(no PNG will be written on this panel)" % (want + REFERENCE_SIZE))
 
+    WRITTEN.clear()
     import tempfile
     tmp = tempfile.mkdtemp(prefix="p4gallery_")
     try:
@@ -594,15 +631,23 @@ def run(dev, ctx):
 
         for spec in SPECS:
             _log("driving %s" % spec["app"])
-            _drive(dev, c, spec, want)
+            ok = _drive(dev, c, spec, want)
+            if not ok:
+                _log("retrying %s" % spec["app"])
+                _ensure_shell(dev, c, spec["app"])
+                _drive(dev, c, spec, want)
         for spec in BG_SPECS:
             _log("driving background %s" % spec["app"])
-            _drive_background(dev, c, spec, want)
+            ok = _drive_background(dev, c, spec, want)
+            if not ok:
+                _log("retrying background %s" % spec["app"])
+                _ensure_shell(dev, c, spec["app"])
+                _drive_background(dev, c, spec, want)
 
-        # One closing gate: the folder really holds the documented set.
+        # One closing gate: every app was captured by THIS run (a stale file
+        # from an older run cannot satisfy it).
         names = [spec["app"] for spec in SPECS + BG_SPECS]
-        missing = [n for n in names
-                   if not os.path.exists(os.path.join(DOCS, n + ".png"))]
+        missing = [n for n in names if n not in WRITTEN]
         c.check("gallery publishes every app PNG",
                 not missing and len(names) == len(set(names)),
                 "missing=%r" % missing)

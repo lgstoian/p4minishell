@@ -1,6 +1,6 @@
 ; APPINFO metadata for the writerdeck reference app (INI format, read by `launch`).
 ; Copied to sd:/APPS/WRITER.APPINFO by apps/push_apps.py.
-title=Writer Deck ✍
+title=Writer Deck
 description=Templates, focus writing, and Markdown export on the app drive
 version=1.0
 ; Opt-in transparency (v1.4.3): translucent transcript page + modal scrim.

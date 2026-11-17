@@ -8,16 +8,16 @@ rem =====================================================================
 
 :main
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
-title "Network Tools 🌐"
+title "Network Tools"
 echo [M-NET]
 draw clear screen
 draw box 1 1 80 3 single
-draw text 32 2 "NETWORK TOOLS 🌐" 14
+draw text 32 2 "NETWORK TOOLS ★" 14
 draw box 1 4 80 10 single "Tools"
 draw text 5 6 "Wi-Fi status, connect, ping, dns, fetch"
 draw box 1 15 80 8 single "Status"
 draw text 5 17 "Offline handling: all ops degrade gracefully"
-list "Network Tools 🌐" "Wi-Fi status (TUI)" "Connect Wi-Fi" "Pick known network" "Ping (TUI)" "DNS lookup" "Fetch a joke" "Messaging (MQTT)" "Back"
+list "Network Tools" "Wi-Fi status (TUI)" "Connect Wi-Fi" "Pick known network" "Ping (TUI)" "DNS lookup" "Fetch a joke" "Messaging (MQTT)" "Back"
 on %errorlevel%+1 goto :status,:connect,:known,:ping,:dns,:joke,:msg,:back
 goto :back
 
@@ -88,7 +88,11 @@ goto main
 :joke
 appconfig companion get fun_url > %APPDRIVE%/funurl.txt
 if errorlevel 1 goto :joke_default
-for /f "eol= tokens=*" %%u in (%APPDRIVE%/funurl.txt) do set funurl=%%u
+rem `for /f` does not expand %APPDRIVE% in its file list.
+set OLDDIR=%CD%
+cd %APPDRIVE%/
+for /f "eol= tokens=*" %%u in (funurl.txt) do set funurl=%%u
+cd %OLDDIR%
 del /p %APPDRIVE%/funurl.txt > NUL
 goto :joke_go
 :joke_default

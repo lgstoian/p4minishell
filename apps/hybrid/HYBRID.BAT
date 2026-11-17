@@ -3,9 +3,9 @@ rem HYBRID.BAT - hybrid app shim: every app launches through a .BAT file,
 rem even when the work happens in a linked-in C entry (see ABI.md).
 rem Runs the `hello` native entry, then branches on its ERRORLEVEL and
 rem environment results exactly like a pure-batch app would.
-echo [M-HYBRID] start ⚡
+echo [M-HYBRID] start 
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
-title "Hybrid Demo ⚡"
+title "Hybrid Demo"
 hello test
 if not "%HELLO_RESULT%"=="ok" echo [M-HYBRID] BAD result
 if errorlevel 1 echo [M-HYBRID] BAD errorlevel

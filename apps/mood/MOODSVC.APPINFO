@@ -1,5 +1,5 @@
 ; APPINFO metadata for the headless mood sampler (INI format, read by `launch`).
 ; Copied to sd:/APPS/MOODSVC.APPINFO by apps/push_apps.py.
-title=Mood Sampler Service ♥
-description=Headless heap sampler feeding the Mood dashboard via sd:/MOODLAST.INI (SD-only store; install: service install moodsampler "MOODSVC" /restart)
+title=Mood Sampler Service
+description=Headless heap sampler feeding the Mood dashboard via sd:/MOODLAST.INI (SD-only store; install: service install moodsampler"MOODSVC" /restart)
 version=1.0

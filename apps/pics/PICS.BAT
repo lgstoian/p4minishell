@@ -11,18 +11,19 @@ rem =====================================================================
 setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-PICS]
-title "Pictures 🖼"
+title "Pictures"
 goto menu
 
 :menu
 draw clear screen
-draw box 1 1 80 3 double "PICS 🖼"
+draw box 1 1 80 3 double "PICS ★"
 draw text 5 2 "BMP image support  (%APPNAME% on %APPDRIVE%)" 14
-list "Pictures 🖼" "View PHOTO.BMP (full color)" "Draw into TUI (16 color)" "Blit to gfx canvas" "Image info" "Back"
+list "Pictures" "View PHOTO.BMP (full color)" "Draw into TUI (16 color)" "Blit to gfx canvas" "Image info" "Back"
 on %errorlevel%+1 goto :view,:tui,:canvas,:info,:back
 goto back
 
 :view
+echo [M-PICS-VIEW]
 view %APPDRIVE%/PHOTO.BMP
 goto menu
 

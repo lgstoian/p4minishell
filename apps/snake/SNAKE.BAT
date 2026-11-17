@@ -18,10 +18,13 @@ rem =====================================================================
 setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-SNAKE]
-title "Snake 🐍"
+title "Snake"
 draw hold on
 if errorlevel 1 goto nogfx
-draw box 1 2 44 22 double "SNAKE 🐍"
+rem Full screen: reclaim the header and on-screen keyboard rows so the whole
+rem 44x22 playfield and the score panel are visible (TCMD does the same).
+draw fullscreen on
+draw box 1 2 44 22 double "SNAKE ★"
 if errorlevel 1 goto nogfx
 set hh=596
 set dir=1
@@ -51,13 +54,13 @@ goto frame
 
 :frame
 draw clear
-draw box 1 2 44 22 double "SNAKE 🐍"
-draw text 48 4 Score %score%
-draw text 48 6 Length %len%
-draw text 48 8 wasd move
-draw text 48 9 Enter on serial
-draw text 48 10 p snap  q quit
-draw text 48 12 1s per step
+draw box 1 2 44 22 double "SNAKE ★"
+draw text 48 4 "Score %score%"
+draw text 48 6 "Length %len%"
+draw text 48 8 "wasd move"
+draw text 48 9 "Enter on serial"
+draw text 48 10 "p snap  q quit"
+draw text 48 12 "1s per step"
 draw text %fx% %fy% *
 rem Draw the body once per frame: head gets the @, the rest get O.
 for /A %%k in (S) do if %%k LSS %len% call :drawseg %%k %%l
@@ -172,4 +175,5 @@ goto end
 :end
 draw hold off
 draw close
+draw fullscreen off
 endlocal

@@ -17,7 +17,7 @@ rem =====================================================================
 setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-BOUNCE]
-title "Bounce ⚫"
+title "Bounce"
 gfx init 240 180
 if errorlevel 1 goto nogfx
 gfx load 0 %APPDRIVE%/BALL.BMP

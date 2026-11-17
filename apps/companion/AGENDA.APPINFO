@@ -1,7 +1,7 @@
 ; APPINFO metadata for the Companion agenda job (INI, `launch`).
 ; Copied to <drive>/APPS/AGENDA.APPINFO by apps/push_apps.py. The job is also
 ; scheduled by `alarm add ... /run:AGENDA.BAT`.
-title=Agenda 📅
+title=Agenda
 description=Prints today's date and the next alarm, then notifies
 version=1.0
 ; Opt-in transparency (v1.4.3): translucent transcript page + modal scrim.

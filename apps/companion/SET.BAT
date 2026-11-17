@@ -19,14 +19,14 @@ rem =====================================================================
 
 :main
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
-title "Settings ⚙"
+title "Settings"
 echo [M-SET]
 draw clear screen
 draw box 1 1 80 3 single
-draw text 34 2 "PREFERENCES ⚙" 14
+draw text 34 2 "PREFERENCES ★" 14
 draw box 1 4 80 16 single "Options"
 draw text 5 6 "Settings persist in CONFIG.SYS"
-list "Preferences ⚙" "Brightness" "Volume" "Rotate" "Idle timeout" "Header" "Theme" "Fonts" "Cursor" "Keyboard page" "System" "Security" "Show settings" "Back" "Quick settings"
+list "Preferences" "Brightness" "Volume" "Rotate" "Idle timeout" "Header" "Theme" "Fonts" "Cursor" "Keyboard page" "System" "Security" "Show settings" "Back" "Quick settings"
 on %errorlevel%+1 goto :brightness,:volume,:rotate,:idle,:header,:theme,:fonts,:cursor,:keyboard,:system,:security,:show_all,:back,:quick
 goto :back
 

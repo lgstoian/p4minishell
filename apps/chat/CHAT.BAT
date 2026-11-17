@@ -20,16 +20,16 @@ rem =====================================================================
 setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-CHAT]
-title "Chat 💬"
+title "Chat"
 
 :menu
 draw clear screen
-draw box 1 1 80 3 double "P4 CHAT 💬"
+draw box 1 1 80 3 double "P4 CHAT 🎵"
 draw text 24 2 "Board-to-board chat over the local link" 14
 draw box 1 5 80 13 single "Menu"
-draw text 5 7  "1  Host      start/stop the SoftAP host"
-draw text 5 8  "2  Join      join the host AP"
-draw text 5 9  "3  Send      send a message"
+draw text 5 7 "1  Host      start/stop the SoftAP host"
+draw text 5 8 "2  Join      join the host AP"
+draw text 5 9 "3  Send      send a message"
 draw text 5 10 "4  Poll      fetch new messages"
 draw text 5 11 "5  Log       show the local log"
 draw text 5 12 "6  Status    host/peer/sequence state"
@@ -39,7 +39,7 @@ draw text 5 15 "9  Quit"
 draw box 1 19 80 3 single
 draw text 5 21 "Tip: the host prints 192.168.4.1; the peer joins that address."
 draw refresh
-list "P4 Chat 💬" "Host" "Join" "Send" "Poll" "Log" "Status" "Clear" "Help" "Quit"
+list "P4 Chat" "Host" "Join" "Send" "Poll" "Log" "Status" "Clear" "Help" "Quit"
 on %errorlevel%+1 goto :host,:peer,:send,:poll,:log,:status,:clear,:help,:quit
 goto :menu
 
@@ -99,11 +99,11 @@ goto :menu
 :help
 draw clear screen
 draw box 1 1 80 3 single "Chat help"
-draw text 3 5  "chat host [ssid]      start the SoftAP (default P4MiniShell-Chat)"
-draw text 3 6  "chat host off         stop it, restore STA-only mode"
-draw text 3 7  "chat peer <ip>        join the host AP"
-draw text 3 8  "chat peer off         leave it"
-draw text 3 9  "chat send <text...>   send to the peer"
+draw text 3 5 "chat host [ssid]      start the SoftAP (default P4MiniShell-Chat)"
+draw text 3 6 "chat host off         stop it, restore STA-only mode"
+draw text 3 7 "chat peer <ip>        join the host AP"
+draw text 3 8 "chat peer off         leave it"
+draw text 3 9 "chat send <text...>   send to the peer"
 draw text 3 10 "chat poll             fetch new messages"
 draw text 3 11 "chat log              show the local log"
 draw text 3 12 "chat clear            clear inbox and log"

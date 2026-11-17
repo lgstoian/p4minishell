@@ -14,8 +14,8 @@ rem  Markers: [M-UITEST] / [M-UITEST-DONE].
 rem =====================================================================
 setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
-echo [M-UITEST] ✋ touch automation demo
-title "UI Test ✋"
+echo [M-UITEST]  touch automation demo
+title "UI Test"
 ui state
 ui targets /v:UICOUNT
 echo touch targets: %UICOUNT%
