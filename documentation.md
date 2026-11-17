@@ -168,10 +168,15 @@ deterministic range defaults. Two adapters consume it:
 - LVGL: `font_get()` inserts a glyph-remapping font link between the role's
   primary font and the FontAwesome fallback. With a pack installed the link
   returns an RGB565 `lv_image_dsc_t` from the pack's PSRAM cache (drawn by
-  LVGL's own image path, no filesystem driver, no second decoder); without
-  one it substitutes the same retro glyph as the TUI. `command_init()` wires
-  the pack lookup in through `font_set_emoji_image_source()` because font
-  cannot require storage (the upward-inversion rule).
+  LVGL's own image path, no filesystem driver, no second decoder). Without a
+  pack it substitutes the retro map's CP437 stand-in, which the LVGL chrome can
+  only draw if the TUI font covers that codepoint - verified in v1.4.3 as a
+  solid/empty box for some symbols (e.g. U+2605 in the transcript) while the
+  TUI page draws a real star. App titles therefore stay ASCII in transcripts
+  and lists; emoji in a `draw box` header, the browser page or a pack-backed
+  glyph render correctly. `command_init()` wires the pack lookup in through
+  `font_set_emoji_image_source()` because font cannot require storage (the
+  upward-inversion rule).
 
 Limits are deliberate and documented: single codepoints only (ZWJ
 sequences, flags and skin tones fall back to their components). A malformed

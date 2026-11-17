@@ -115,12 +115,14 @@ the host regression runners are green. See
 - **Display:** `draw` TUI verbs, `gfx` RGB565 canvas with sprites and images
   (BMP in `gfx`, **PNG/JPEG in `imgdec`**), `plot` graphs, `font` registry with
   SD TTFs and CJK fallback, and UI themes.
-- **Emoji:** every emoji renders with a **retro MS-DOS/CP437 look** by default
-  (an MIT map in the firmware, no SD card or network needed), in both the TUI
-  and LVGL labels. An optional colour pack (`EMOJI/EMOJI.INI` + BMP/PNG on SD
-  or USB) renders as real colour glyphs in LVGL and as per-cell colour in the
-  TUI, through one shared image decoder and PSRAM cache. A project-authored
-  MIT sample pack ships in `apps/emoji/`; `emoji list|check|path` manage it.
+- **Emoji:** emoji render with a **retro MS-DOS/CP437 look** from a built-in
+  MIT map (no SD card or network needed) in the TUI page, the browser and the
+  HTML modal. An optional colour pack (`EMOJI/EMOJI.INI` + BMP/PNG on SD or
+  USB) renders real colour glyphs - in LVGL chrome too - through one shared
+  image decoder and PSRAM cache. A project-authored MIT sample pack ships in
+  `apps/emoji/`; `emoji list|check|path` manage it. Without a pack, a symbol
+  the TUI font does not cover shows as a box in LVGL labels, so app titles and
+  menus stay ASCII and put their glyph in a `draw box` header.
 - **Transparency:** opt-in, per app. CSS `rgba()`, `transparent` and `opacity`
   are honoured in HTML and the Canvas 2D context, with matching TUI cells,
   real alpha background rectangles, a modal panel opacity and a dimming
