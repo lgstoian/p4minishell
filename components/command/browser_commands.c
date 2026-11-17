@@ -19,6 +19,7 @@
 #include "browser.h"
 #include "clock.h"
 #include "command.h"
+#include "batch.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -385,7 +386,10 @@ static uint8_t browser_pixel_to_cell(uint16_t c565)
 static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
 {
     const char *base = (const char *)ctx;
-    char target[1024];
+    /* Keep this frame small: it is live across the TLS fetch, the image
+     * decode and newlib's vsnprintf, and the worker stack is a verified
+     * 28 KB ceiling (a bigger one starves the C6/SDMMC DMA buffers). */
+    char target[P4_CONFIG_BROWSER_URL_BYTES + 8];
     uint8_t *data = NULL;
     size_t len = 0;
     uint8_t *pixels;
@@ -425,6 +429,9 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
     /* The decoded-cell cache makes a re-render or a back/forward skip BOTH the
      * fetch and the decode; the grid geometry is fixed by the config, so the
      * resolved URL is a complete key. */
+    if (browser_image_cache_is_bad(target)) {
+        return false;   /* known-undecodable: keep the alt text, no re-fetch */
+    }
     {
         dom_image_t cached;
 
@@ -453,6 +460,7 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
     }
     if (data == NULL || len == 0) {
         free(data);
+        browser_image_cache_mark_bad(target);
         return false;
     }
     {
@@ -462,6 +470,7 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
 
         if (!imagefile_probe_mem(data, len, &native_w, &native_h)) {
             free(data);
+            browser_image_cache_mark_bad(target);
             return false;
         }
         /* Fit the native size to the TUI image budget. ALL supported images
@@ -489,6 +498,7 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
         if (!imagefile_decode_mem(data, len, w, h, &surface)) {
             free(pixels);
             free(data);
+            browser_image_cache_mark_bad(target);
             return false;
         }
         for (y = 0; y < h; y++) {
@@ -506,6 +516,69 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
     out->pixels = pixels;
     browser_image_cache_put(target, out);
     return true;
+}
+
+/* Build the command line for a tappable region, resolving a relative href
+ * against the current page (the shell would otherwise resolve it against its
+ * own working directory). `dom_render` registers "browser <href>" for a link
+ * and "browser js <id>" for a JS button. */
+static bool browser_link_command(const char *command, char *out, size_t size)
+{
+    char target[P4_CONFIG_BROWSER_URL_BYTES + 8];
+    const char *href;
+
+    if (command == NULL || command[0] == '\0' || out == NULL || size == 0) {
+        return false;
+    }
+    if (strncmp(command, "browser ", 8) != 0) {
+        snprintf(out, size, "%s", command);
+        return true;
+    }
+    href = command + 8;
+    if (strncmp(href, "js ", 3) == 0) {
+        snprintf(out, size, "%s", command);
+        return true;
+    }
+    if (href[0] == '#' || strncasecmp(href, "javascript:", 11) == 0 ||
+        strncasecmp(href, "mailto:", 7) == 0) {
+        return false;
+    }
+    if (strstr(href, "://") != NULL || strncmp(href, "sd:", 3) == 0 ||
+        strncasecmp(href, "usb", 3) == 0 || href[0] == '/') {
+        snprintf(target, sizeof(target), "%s", href);
+    } else {
+        const char *base = s_page_base;
+        const char *slash = (base[0] != '\0') ? strrchr(base, '/') : NULL;
+
+        if (slash != NULL) {
+            snprintf(target, sizeof(target), "%.*s/%s", (int)(slash - base),
+                     base, href);
+        } else {
+            snprintf(target, sizeof(target), "%s/%s",
+                     base[0] != '\0' ? base : "sd:/", href);
+        }
+    }
+    if (strchr(target, '"') != NULL) {
+        return false;   /* a quote would split the command line */
+    }
+    snprintf(out, size, "browser \"%s\"", target);
+    return true;
+}
+
+/** Touch path: runs on the LVGL task, so it only *requests* the command (the
+ *  worker owns the fetch and the render). */
+static void browser_link_run(const char *command)
+{
+    char line[P4_CONFIG_BROWSER_URL_BYTES + 32];
+
+    if (browser_link_command(command, line, sizeof(line))) {
+        shell_execute_command_async(line);
+    }
+}
+
+void browser_init(void)
+{
+    tui_set_link_callback(browser_link_run);
 }
 
 static void browser_run_scripts(dom_node_t *node)
@@ -961,7 +1034,51 @@ static int browser_load_url(const char *url) {
     return 0;
 }
 
+/* `browser links` / `browser link <n>`: the same link registry the touch
+ * overlay uses, exposed to serial scripts (and testable on hardware). */
+static int browser_list_links(void)
+{
+    int count = tui_link_count();
+
+    if (count == 0) {
+        shell_print_muted("browser: no links on this page");
+        return 0;
+    }
+    for (int i = 0; i < count; i++) {
+        shell_print_muted("%2d  %s", i, tui_link_command_at(i));
+    }
+    return 0;
+}
+
+static int browser_follow_link(int index)
+{
+    const char *command = tui_link_command_at(index);
+    char line[P4_CONFIG_BROWSER_URL_BYTES + 32];
+
+    if (command == NULL) {
+        shell_print_error("browser: no link %d (see 'browser links')", index);
+        return 1;
+    }
+    if (!browser_link_command(command, line, sizeof(line))) {
+        shell_print_error("browser: link %d has no navigable target", index);
+        return 1;
+    }
+    /* Synchronous: a script asks for the page and reads it on the next line. */
+    return shell_execute_command_core(line) ? 0 : 1;
+}
+
 int shell_command_browser(int argc, char **argv) {
+    if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "links")) {
+        int rc = browser_list_links();
+        batch_set_errorlevel((uint8_t)rc);
+        return rc;
+    }
+    if (argc >= 3 && shell_text_equals_ignore_case(argv[1], "link")) {
+        int rc = browser_follow_link(atoi(argv[2]));
+        batch_set_errorlevel((uint8_t)rc);
+        return rc;
+    }
+
     browser_cache_init();
     if (argc < 2) {
         shell_print_usage("browser <url|file> | browser back | browser forward | browser js <id> | browser css | browser bookmark [add|del|list]");

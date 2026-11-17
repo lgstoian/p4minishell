@@ -7328,6 +7328,8 @@ static bool command_emoji_image_source(uint32_t cp, int px,
 
 void command_init(void)
 {
+    browser_init();
+
     static const shell_command_ops_t shell_ops = {
         .execute_command    = shell_execute_command,
         .execute_command_async = shell_execute_command_async,

@@ -325,9 +325,20 @@ void tui_selection_clear(void);
 void tui_page_draw_image(int col, int row, int w, int h,
                          const gfx_surface_t *img);
 
+/** Called when a tap lands on a registered link region. The TUI never runs
+ *  commands itself; the owner (the browser) decides what a link means. */
+void tui_set_link_callback(void (*callback)(const char *url));
+
 void tui_link_register(int x, int y, int w, int h, const char *url);
 bool tui_link_hit_test(int x, int y, const char **url_out);
 void tui_link_clear(void);
+
+/** Number of tappable regions the last page render registered. */
+int tui_link_count(void);
+
+/** Command registered for region @p index (NULL when out of range). Lets
+ *  `browser links` list them and `browser link <n>` run one without touch. */
+const char *tui_link_command_at(int index);
 
 void tui_address_bar_set(const char *text);
 void tui_address_bar_render(void);

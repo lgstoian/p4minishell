@@ -79,6 +79,19 @@ def run(dev, ctx):
         except Exception as exc:  # noqa: BLE001
             c.check("showcase screenshot captured", False, str(exc))
 
+    # Link interaction: the page registers tappable regions ("browser <href>"
+    # commands); `browser links` lists them and `browser link <n>` runs one,
+    # which is exactly what a touch tap does through the TUI overlay.
+    dev.run("browser sd:/WEB/INDEX.HTML", timeout=90)
+    links = dev.run("browser links", timeout=30)
+    c.expect("page registered its links", "browser sd:/WEB/PAGE2.HTML", links)
+    dev.run("browser link 0", timeout=60)
+    dump = dev.run("tui dump 1 4", timeout=30)
+    c.expect("following a link navigates", "DOCUMENTATION", dump)
+    dev.run("browser back", timeout=60)
+    dump = dev.run("tui dump 1 4", timeout=30)
+    c.expect("browser back returns to the previous page", "DEVICE DASHBOARD", dump)
+
     # `html` is the blocking modal form of the same engine (Esc/q closes).
     # While it is up the shell is inside the modal, so the only probe is that a
     # following command runs once `q` is sent.

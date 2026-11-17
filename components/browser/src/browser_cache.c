@@ -209,8 +209,59 @@ bool browser_image_cache_put(const char *url, const dom_image_t *img)
     return true;
 }
 
+/* ---- negative cache: URLs whose decode failed ---------------------------- */
+
+#define BROWSER_IMAGE_BAD_MAX 48
+
+typedef struct {
+    char url[P4_CONFIG_BROWSER_URL_BYTES];
+} browser_bad_entry_t;
+
+static browser_bad_entry_t s_bad[BROWSER_IMAGE_BAD_MAX];
+static int s_bad_count;
+
+void browser_image_cache_mark_bad(const char *url)
+{
+    if (url == NULL || url[0] == '\0' || strlen(url) >= sizeof(s_bad[0].url)) {
+        return;
+    }
+    if (browser_image_cache_is_bad(url)) {
+        return;
+    }
+    cache_lock();
+    if (s_bad_count >= BROWSER_IMAGE_BAD_MAX) {
+        /* Oldest first: a page re-renders in the same order, so dropping the
+         * oldest entry costs at most one extra fetch. */
+        memmove(&s_bad[0], &s_bad[1], sizeof(s_bad[0]) * (BROWSER_IMAGE_BAD_MAX - 1));
+        s_bad_count = BROWSER_IMAGE_BAD_MAX - 1;
+    }
+    snprintf(s_bad[s_bad_count].url, sizeof(s_bad[0].url), "%s", url);
+    s_bad_count++;
+    cache_unlock();
+}
+
+bool browser_image_cache_is_bad(const char *url)
+{
+    bool found = false;
+
+    if (url == NULL || url[0] == '\0') {
+        return false;
+    }
+    cache_lock();
+    for (int i = 0; i < s_bad_count; i++) {
+        if (strcmp(s_bad[i].url, url) == 0) {
+            found = true;
+            break;
+        }
+    }
+    cache_unlock();
+    return found;
+}
+
 void browser_image_cache_clear(void)
 {
+    s_bad_count = 0;
+
     if (s_images == NULL) {
         return;
     }

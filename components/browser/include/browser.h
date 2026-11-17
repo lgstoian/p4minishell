@@ -63,6 +63,13 @@ void browser_image_cache_clear(void);
 int  browser_image_cache_count(void);
 size_t browser_image_cache_bytes(void);
 
+/** Remember that @p url cannot be decoded (a GIF, a broken file, an oversized
+ *  photo). A page can reference the same spacer image dozens of times; without
+ *  this every reference re-ran the whole TLS fetch, which is slow and (on a
+ *  deeply nested page) pushed the worker stack to its limit. */
+void browser_image_cache_mark_bad(const char *url);
+bool browser_image_cache_is_bad(const char *url);
+
 /* ========================================================================
  * PAGE CACHE (back/forward)
  * ======================================================================== */

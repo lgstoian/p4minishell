@@ -341,7 +341,18 @@ static size_t node_plain_text_len(const dom_node_t *node)
     return acc.len;
 }
 
-static void render_inline_node(render_ctx_t *c, dom_node_t *node, style_t st);
+/** Deepest inline nesting the renderer recurses through.
+ *
+ * `render_inline_node` frames are ~670 bytes, and real markup nests spans,
+ * fonts and anchors deeply (a news discussion page overflowed the command
+ * worker's stack here). Past the cap the subtree's text is emitted flat.
+ */
+#define DOM_RENDER_INLINE_MAX_DEPTH 24
+
+static void render_inline_node(render_ctx_t *c, dom_node_t *node, style_t st,
+                               int depth);
+static void render_flat_text(render_ctx_t *c, dom_node_t *node, style_t st,
+                              int budget);
 static void render_children(render_ctx_t *c, dom_node_t *node, style_t st, int indent);
 
 static bool render_packed_image(render_ctx_t *c, const style_t *st,
@@ -405,12 +416,22 @@ static bool render_packed_image(render_ctx_t *c, const style_t *st,
     return true;
 }
 
+/** Deepest block nesting at which an image is still fetched.
+ *
+ * The fetch runs the network stack (TLS, several KB) inside the render
+ * recursion; a deeply nested table page (a news discussion) used to overflow
+ * the command worker's verified 28 KB stack right here. Spacer images live
+ * deep inside tables, so beyond this depth the alt text is shown instead -
+ * article figures sit near the top and still load. */
+#define DOM_RENDER_IMAGE_FETCH_DEPTH 8
+
 static void render_image(render_ctx_t *c, dom_node_t *node, const style_t *st)
 {
     dom_image_t img;
 
     memset(&img, 0, sizeof(img));
-    if (c->ops->load_image != NULL && node->src[0] != '\0' &&
+    if (c->depth <= DOM_RENDER_IMAGE_FETCH_DEPTH &&
+        c->ops->load_image != NULL && node->src[0] != '\0' &&
         c->ops->load_image(c->ops->ctx, node->src, &img) &&
         img.pixels != NULL && img.width > 0 && img.height > 0) {
         bool drawn = render_packed_image(c, st, &img, 32);
@@ -449,8 +470,14 @@ static void render_canvas(render_ctx_t *c, dom_node_t *node, const style_t *st)
     render_children(c, node, *st, c->indent);
 }
 
-static void render_inline_node(render_ctx_t *c, dom_node_t *node, style_t st)
+static void render_inline_node(render_ctx_t *c, dom_node_t *node, style_t st,
+                               int depth)
 {
+    if (depth > DOM_RENDER_INLINE_MAX_DEPTH) {
+        /* Too deep to lay out: keep the words, drop the styling. */
+        render_flat_text(c, node, st, 64);
+        return;
+    }
     if (node == NULL || c->done) return;
     if (node->type == DOM_NODE_TEXT) {
         emit_text(c, node->text, &st);
@@ -471,7 +498,7 @@ static void render_inline_node(render_ctx_t *c, dom_node_t *node, style_t st)
         int start_row = c->row;
         emit_text(c, "[ ", &st);
         for (dom_node_t *ch = node->first_child; ch != NULL; ch = ch->next_sibling) {
-            render_inline_node(c, ch, st);
+            render_inline_node(c, ch, st, depth + 1);
         }
         emit_text(c, " ]", &st);
         if (c->ops->put_link != NULL && node->id[0] != '\0' &&
@@ -489,7 +516,7 @@ static void render_inline_node(render_ctx_t *c, dom_node_t *node, style_t st)
         st.fg = 11;
         st.underline = true;
         for (dom_node_t *ch = node->first_child; ch != NULL; ch = ch->next_sibling) {
-            render_inline_node(c, ch, st);
+            render_inline_node(c, ch, st, depth + 1);
         }
         if (c->ops->put_link != NULL && c->row == start_row && c->col > start_col) {
             char cmd[600];
@@ -515,7 +542,7 @@ static void render_inline_node(render_ctx_t *c, dom_node_t *node, style_t st)
         st.bg = 8;
     }
     for (dom_node_t *ch = node->first_child; ch != NULL; ch = ch->next_sibling) {
-        render_inline_node(c, ch, st);
+        render_inline_node(c, ch, st, depth + 1);
     }
 }
 
@@ -561,7 +588,7 @@ static void render_children(render_ctx_t *c, dom_node_t *node, style_t st, int i
                 c->depth--;
             }
         } else {
-            render_inline_node(c, ch, st);
+            render_inline_node(c, ch, st, 0);   /* inline child of a block */
         }
     }
 }

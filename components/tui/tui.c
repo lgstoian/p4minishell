@@ -431,6 +431,7 @@ static lv_obj_t *s_touch;
 static lv_obj_t *s_sel_layer;
 static bool s_selecting;
 static int s_sel_ar = 1, s_sel_ac = 1, s_sel_fr = 1, s_sel_fc = 1;
+static void (*s_link_cb)(const char *url);
 static lv_coord_t s_last_scroll;
 static lv_coord_t s_press_y;
 static int s_press_acc;
@@ -607,6 +608,19 @@ static void tui_touch_event_cb(lv_event_t *event)
                 (void)tui_selection_copy();
             } else {
                 tui_selection_clear();
+            }
+            break;
+        }
+        {
+            /* A tap on a link region opens it. Page rows are scrolled, so the
+             * hit test uses the same absolute row the renderer registered. */
+            const char *url = NULL;
+
+            tui_point_to_cell(p, &row, &col);
+            if (s_link_cb != NULL &&
+                tui_link_hit_test(col, s_scroll_offset + row, &url) &&
+                url != NULL) {
+                s_link_cb(url);
             }
         }
         break;
@@ -2164,6 +2178,11 @@ void tui_page_render(void)
     }
 }
 
+void tui_set_link_callback(void (*callback)(const char *url))
+{
+    s_link_cb = callback;
+}
+
 void tui_link_register(int x, int y, int w, int h, const char *url)
 {
     if (s_link_count >= TUI_MAX_LINKS || !url) return;
@@ -2187,6 +2206,19 @@ bool tui_link_hit_test(int x, int y, const char **url_out)
         }
     }
     return false;
+}
+
+int tui_link_count(void)
+{
+    return s_link_count;
+}
+
+const char *tui_link_command_at(int index)
+{
+    if (index < 0 || index >= s_link_count) {
+        return NULL;
+    }
+    return s_links[index].url;
 }
 
 void tui_link_clear(void)

@@ -201,7 +201,11 @@ static void parse_attributes(const char **p, dom_node_t *node) {
                 (*p)++;
             }
             i = 0;
-            while (**p && (quote ? **p != quote : (!isspace((unsigned char)**p) && **p != '>' && **p != '/')) && i < sizeof(attr_value) - 1) {
+            /* An unquoted value runs to whitespace or '>'. Stopping at '/' too
+             * (as this scanner used to) truncated `src=/s.js` to `src=`, and
+             * the rest leaked into the document as text. `/` is only the
+             * self-closing marker before '>'. */
+            while (**p && (quote ? **p != quote : (!isspace((unsigned char)**p) && **p != '>')) && i < sizeof(attr_value) - 1) {
                 attr_value[i++] = **p;
                 (*p)++;
             }
@@ -215,7 +219,7 @@ static void parse_attributes(const char **p, dom_node_t *node) {
                 while (**p && **p != quote) (*p)++;
                 if (**p == quote) (*p)++;
             } else {
-                while (**p && !isspace((unsigned char)**p) && **p != '>' && **p != '/') {
+                while (**p && !isspace((unsigned char)**p) && **p != '>') {
                     (*p)++;
                 }
             }
@@ -225,9 +229,13 @@ static void parse_attributes(const char **p, dom_node_t *node) {
         } else if (strcmp(attr_name, "class") == 0) {
             strncpy(node->class, attr_value, sizeof(node->class) - 1);
         } else if (strcmp(attr_name, "href") == 0) {
-            strncpy(node->href, attr_value, sizeof(node->href) - 1);
+            /* URLs in markup carry `&amp;`; the stored href must be the real
+             * URL or the fetch asks for `...&amp;goto=...`. */
+            dom_decode_entities(attr_value, strlen(attr_value), node->href,
+                                sizeof(node->href));
         } else if (strcmp(attr_name, "src") == 0) {
-            strncpy(node->src, attr_value, sizeof(node->src) - 1);
+            dom_decode_entities(attr_value, strlen(attr_value), node->src,
+                                sizeof(node->src));
         } else if (strcmp(attr_name, "alt") == 0) {
             strncpy(node->alt, attr_value, sizeof(node->alt) - 1);
         } else if (strcmp(attr_name, "style") == 0) {

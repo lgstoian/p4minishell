@@ -562,6 +562,10 @@ int shell_command_js(int argc, char **argv);
  *  Returns an ERRORLEVEL: 0 ok, 1 error, 2 usage. */
 int shell_command_browser(int argc, char **argv);
 
+/** Wire the browser's tappable links into the TUI page (called once at boot).
+ *  A tap then runs `browser <href>` through the normal command worker. */
+void browser_init(void);
+
 /** `html <file|url> [args...]` - render a page through the SAME browser page
  *  engine (fetch/parse/CSS/JS/images/canvas), for batch and native flows that
  *  want web standards without the browser command's history/bookmark verbs.
