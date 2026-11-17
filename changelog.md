@@ -95,13 +95,17 @@ open bugs see [`bugs.md`](bugs.md).
 
 ### Verified
 
-- `idf.py build` is clean on the JC1060P470C profile and the standalone `test/`
-  project builds; the host lane is **283/283**; `green_guard` (739 cases),
-  `comment_index` and `breadcrumbs` pass; `tools/harness/verify.py` is green.
-  Static DIRAM dropped from 396,950 to 315,022 bytes used (48,442 -> 130,370
-  free) with the image size unchanged. On-board unit/hardware re-verification
-  for this release is recorded separately in `test/README.md` and `bugs.md`
-  when the boards are next run; do not claim it before it exists.
+- Firmware builds clean on both profiles (JC1060P470C, M5Stack Tab5) and the
+  standalone `test/` project builds for both; the on-board unit suite is
+  **681/0/2 on COM3 and COM6** (the 15 new colour/emoji/alpha cases included);
+  the host lane is **283/283**; `green_guard` (739), `comment_index` and
+  `breadcrumbs` pass; `tools/harness/verify.py` is green.
+- COM3 hardware spot-checks: `version` reports v1.4.3, `emoji` prints the
+  retro map and pack status, `help html`/`html` resolve, `launch /list` lists
+  the deployed apps, `s20_website` 7/7, `s21_wikipedia` 13/13 (including the
+  header-only screenshot gate), `s22_canvas` 13/13.
+- Static DIRAM dropped from 396,950 to 315,022 bytes used (48,442 -> 130,370
+  free) with the image size unchanged.
 
 ---
 

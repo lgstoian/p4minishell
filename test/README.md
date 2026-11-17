@@ -8,10 +8,9 @@ the Unity framework (included in ESP-IDF) and run in two places:
   ESP-IDF `linux` target, 283 cases at v1.4.3). See `harness.md` 2.2 and
   section "Host suite" below.
 
-Last recorded board baseline (v1.4.2): **666 tests, 0 failures, 2 ignored** on
-COM3 and COM6. v1.4.3 adds 14 cases and the host lane is **283/283** green;
-record the new board count with `python tools/unit_run.py <COM_PORT>` before
-shipping. The static case count is **739** (what `tools/green_guard.py` sees in
+Current baseline: **681 tests, 0 failures, 2 ignored** on COM3 and COM6
+(v1.4.3, after the 15 new colour/emoji/alpha cases), and the host lane is
+**283/283** green. The static case count is **739** (what `tools/green_guard.py` sees in
 `test/main/test_*.c`); the difference is cases that only compile for the
 target. The runner completes cleanly with `=== All tests completed ===` and no
 reboot; if the board is reset-looping, check for a newly added test that calls
