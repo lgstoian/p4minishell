@@ -597,10 +597,6 @@
 
 /** Maximum image height in terminal rows. */
 #define P4_CONFIG_BROWSER_IMAGE_MAX_HEIGHT      40
-/** Native images larger than this (either side, PNG/JPEG) render as alt text
- *  instead of 80x40 cell art: a photo at that scale is unreadable noise, while
- *  logos/icons stay recognizable. BMP site assets are unaffected. */
-#define P4_CONFIG_BROWSER_IMAGE_NATIVE_MAX_PX   96
 
 /** Maximum total in-page JavaScript bytes per page. */
 #define P4_CONFIG_BROWSER_JS_MAX_BYTES          (16 * 1024)
@@ -617,7 +613,7 @@
 
 /** Rendered pages kept in the browser's PSRAM back/forward cache. A hit restores
  *  the cell grid and link regions by memcpy - no fetch, parse or render. */
-#define P4_CONFIG_BROWSER_PAGE_CACHE_MAX        3
+#define P4_CONFIG_BROWSER_PAGE_CACHE_MAX        6
 
 /** Arena block size for parsed DOM nodes (PSRAM). A page builds hundreds of
  *  ~3.6 KB nodes; handing them from a few large blocks keeps the heap out of it. */

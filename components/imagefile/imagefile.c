@@ -61,3 +61,31 @@ bool imagefile_decode_mem(const uint8_t *data, size_t len, int w, int h,
         return gfx_bmp_decode_scaled_565(data, len, &info, w, h, out);
     }
 }
+
+bool imagefile_probe_mem(const uint8_t *data, size_t len, int *w, int *h)
+{
+    imgdec_format_t fmt;
+    int native_w = 0;
+    int native_h = 0;
+
+    if (data == NULL || len == 0 || w == NULL || h == NULL) {
+        return false;
+    }
+    fmt = imgdec_probe(data, len, &native_w, &native_h);
+    if (fmt == IMGDEC_FMT_PNG || fmt == IMGDEC_FMT_JPEG) {
+        *w = native_w;
+        *h = native_h;
+        return native_w > 0 && native_h > 0;
+    }
+    {
+        gfx_bmp_info_t info;
+
+        if (!gfx_bmp_parse_header_ex(data, len, &info, GFX_IMAGE_MAX_W,
+                                     GFX_IMAGE_MAX_H)) {
+            return false;
+        }
+        *w = info.w;
+        *h = info.h;
+        return true;
+    }
+}

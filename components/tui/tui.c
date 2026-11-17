@@ -57,7 +57,7 @@ static const tui_font_cell_t *s_bound_cell = NULL;
 /* CSS background rectangles behind the cell label (browser page renderer).
  * Cell coordinates are 1-based; the label is transparent, so a rectangle shows
  * through the glyph gaps and spaces without touching the text. */
-#define TUI_MAX_BG_RECTS 24
+#define TUI_MAX_BG_RECTS 64
 typedef struct {
     int col;
     int row;

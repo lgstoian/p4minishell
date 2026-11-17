@@ -17,6 +17,8 @@
 
 #include "ansi.h" /* ansi_image_glyph / ANSI_IMAGE_RAMP_* */
 #include "css_color.h"
+#include "p4minishell_config.h"
+#include "p4heap.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -35,6 +37,14 @@ typedef struct {
     uint8_t align;
     uint8_t font_scale;
 } style_t;
+
+/** One coalesced background run: a rectangle of one colour. */
+typedef struct {
+    int start;
+    int len;
+    int y0;
+    uint8_t color;
+} bg_run_t;
 
 typedef struct {
     const dom_render_ops_t *ops;
@@ -900,18 +910,74 @@ void dom_render_tree(dom_tree_t *tree, const dom_render_ops_t *ops)
             memset(&bg, 0, sizeof(bg));
             if (ops->load_background(ops->ctx, bg_src, &bg) &&
                 bg.pixels != NULL && bg.width > 0 && bg.height > 0) {
-                for (int r = 0; r < ops->rows; r++) {
-                    for (int c = 0; c < ops->cols; c++) {
+                /* Tile the image as coalesced rectangles. One rectangle per
+                 * cell exhausted the backdrop pool after a few rows (and was
+                 * needlessly slow), so equal runs are merged horizontally AND
+                 * vertically: a solid CSS background becomes ONE rectangle
+                 * covering the whole page, a striped one a rectangle per band.
+                 * Detailed photographic backgrounds stop at the documented
+                 * pool cap instead of covering the page with thousands of
+                 * objects. */
+                size_t slots = (size_t)ops->cols + 1u;
+                bg_run_t *runs =
+                    p4heap_alloc_psram(slots * sizeof(bg_run_t) * 2u);
+                bg_run_t *cur = runs;
+                bg_run_t *prev = (runs != NULL) ? runs + slots : NULL;
+                int prev_n = 0;
+
+                /* PSRAM, not the stack: a render frame lives on the caller's
+                 * task and two 80-run tables overflowed the unit-test task. */
+                for (int r = 0; runs != NULL && r < ops->rows; r++) {
+                    int cur_n = 0;
+
+                    for (int c = 0; c < ops->cols; ) {
                         uint8_t packed = bg.pixels[(r % bg.height) * bg.width +
                                                    (c % bg.width)];
                         uint8_t color = (uint8_t)(packed >> 4);
+                        int start = c;
 
-                        if (color != 16) {
-                            ops->fill_bg(ops->ctx, c + 1, r + 1, 1, 1, color,
-                                         255);
+                        while (c < ops->cols) {
+                            packed = bg.pixels[(r % bg.height) * bg.width +
+                                               (c % bg.width)];
+                            if ((uint8_t)(packed >> 4) != color) {
+                                break;
+                            }
+                            c++;
+                        }
+                        cur[cur_n].start = start;
+                        cur[cur_n].len = c - start;
+                        cur[cur_n].y0 = r;
+                        cur[cur_n].color = color;
+                        cur_n++;
+                    }
+                    /* Close the runs that did not continue into this row. */
+                    for (int i = 0; i < prev_n; i++) {
+                        bool same = i < cur_n &&
+                                    cur[i].start == prev[i].start &&
+                                    cur[i].len == prev[i].len &&
+                                    cur[i].color == prev[i].color;
+
+                        if (same) {
+                            cur[i].y0 = prev[i].y0;
+                            continue;
+                        }
+                        if (prev[i].color != 16) {
+                            ops->fill_bg(ops->ctx, prev[i].start + 1,
+                                         prev[i].y0 + 1, prev[i].len,
+                                         r - prev[i].y0, prev[i].color, 255);
                         }
                     }
+                    memcpy(prev, cur, (size_t)cur_n * sizeof(cur[0]));
+                    prev_n = cur_n;
                 }
+                for (int i = 0; i < prev_n; i++) {
+                    if (prev[i].color != 16) {
+                        ops->fill_bg(ops->ctx, prev[i].start + 1,
+                                     prev[i].y0 + 1, prev[i].len,
+                                     ops->rows - prev[i].y0, prev[i].color, 255);
+                    }
+                }
+                p4heap_free(runs);
                 free(bg.pixels);
             }
         }

@@ -37,6 +37,10 @@ extern "C" {
 bool imagefile_decode_mem(const uint8_t *data, size_t len, int w, int h,
                           gfx_surface_t *out);
 
+/** Native pixel size of an in-memory image (BMP header or PNG/JPEG probe).
+ *  Used by callers that fit an image into a cell grid before decoding. */
+bool imagefile_probe_mem(const uint8_t *data, size_t len, int *w, int *h);
+
 #ifdef __cplusplus
 }
 #endif

@@ -14,6 +14,7 @@
 #include "imgdec.h"
 #include "emoji_core.h"
 #include "emoji.h"
+#include "imagefile.h"
 #include "modal.h"
 #include "browser.h"
 #include "clock.h"
@@ -392,9 +393,6 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
     int h;
     int x;
     int y;
-    imgdec_format_t fmt;
-    int native_w = 0;
-    int native_h = 0;
 
     if (src == NULL || out == NULL || !P4_CONFIG_BROWSER_IMAGES) return false;
     memset(out, 0, sizeof(*out));
@@ -457,83 +455,50 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
         free(data);
         return false;
     }
-    fmt = imgdec_probe(data, len, &native_w, &native_h);
-    if (fmt == IMGDEC_FMT_UNKNOWN) {
-        free(data);
-        return false;
-    }
-    /* A photographic PNG/JPEG at 80x40 cells is unreadable noise; render its
-     * alt text instead (icons/logos stay). BMP site assets are not filtered. */
-    if ((fmt == IMGDEC_FMT_PNG || fmt == IMGDEC_FMT_JPEG) &&
-        (native_w > P4_CONFIG_BROWSER_IMAGE_NATIVE_MAX_PX ||
-         native_h > P4_CONFIG_BROWSER_IMAGE_NATIVE_MAX_PX)) {
-        free(data);
-        return false;
-    }
-    /* Fit the native size to the TUI image budget. */
-    w = native_w > 0 ? native_w : 1;
-    h = native_h > 0 ? native_h : 1;
-    if (w > P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH) {
-        h = h * P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH / w;
-        w = P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH;
-    }
-    if (h > P4_CONFIG_BROWSER_IMAGE_MAX_HEIGHT) {
-        w = w * P4_CONFIG_BROWSER_IMAGE_MAX_HEIGHT / h;
-        h = P4_CONFIG_BROWSER_IMAGE_MAX_HEIGHT;
-    }
-    if (w < 1) w = 1;
-    if (h < 1) h = 1;
-
-    pixels = malloc((size_t)w * (size_t)h);
-    if (pixels == NULL) {
-        free(data);
-        return false;
-    }
-    if (fmt == IMGDEC_FMT_PNG || fmt == IMGDEC_FMT_JPEG) {
-        imgdec_image_t img;
-
-        if (!imgdec_decode_scaled(data, len, w, h, &img)) {
-            free(pixels);
-            free(data);
-            return false;
-        }
-        for (y = 0; y < h; y++) {
-            for (x = 0; x < w; x++) {
-                pixels[y * w + x] = browser_pixel_to_cell(img.pixels[y * w + x]);
-            }
-        }
-        imgdec_free(&img);
-        free(data);
-        out->width = w;
-        out->height = h;
-        out->pixels = pixels;
-        browser_image_cache_put(target, out);
-        return true;
-    }
-
-    /* BMP: the strict gfx path. */
     {
-        gfx_bmp_info_t info;
-        gfx_surface_t surf;
+        gfx_surface_t surface;
+        int native_w = 0;
+        int native_h = 0;
 
-        memset(&info, 0, sizeof(info));
-        if (!gfx_bmp_parse_header_ex(data, len, &info, GFX_IMAGE_MAX_W, GFX_IMAGE_MAX_H)) {
-            free(pixels);
+        if (!imagefile_probe_mem(data, len, &native_w, &native_h)) {
             free(data);
             return false;
         }
-        memset(&surf, 0, sizeof(surf));
-        if (!gfx_bmp_decode_scaled_565(data, len, &info, w, h, &surf)) {
+        /* Fit the native size to the TUI image budget. ALL supported images
+         * render (no size filter): a page background or a photo is a feature,
+         * not noise to be dropped. */
+        w = native_w > 0 ? native_w : 1;
+        h = native_h > 0 ? native_h : 1;
+        if (w > P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH) {
+            h = h * P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH / w;
+            w = P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH;
+        }
+        if (h > P4_CONFIG_BROWSER_IMAGE_MAX_HEIGHT) {
+            w = w * P4_CONFIG_BROWSER_IMAGE_MAX_HEIGHT / h;
+            h = P4_CONFIG_BROWSER_IMAGE_MAX_HEIGHT;
+        }
+        if (w < 1) w = 1;
+        if (h < 1) h = 1;
+
+        pixels = malloc((size_t)w * (size_t)h);
+        if (pixels == NULL) {
+            free(data);
+            return false;
+        }
+        /* One decoder for every format (BMP via gfx, PNG/JPEG via imgdec). */
+        if (!imagefile_decode_mem(data, len, w, h, &surface)) {
             free(pixels);
             free(data);
             return false;
         }
         for (y = 0; y < h; y++) {
             for (x = 0; x < w; x++) {
-                pixels[y * w + x] = browser_pixel_to_cell(gfx_surface_get(&surf, x, y));
+                pixels[y * w + x] =
+                    browser_pixel_to_cell(surface.px[(size_t)y * (size_t)surface.w +
+                                                    (size_t)x]);
             }
         }
-        gfx_surface_free(&surf);
+        gfx_surface_free(&surface);
     }
     free(data);
     out->width = w;
@@ -1015,9 +980,10 @@ int shell_command_browser(int argc, char **argv) {
         if (s_page_tree != NULL && s_page_tree->body != NULL) {
             dom_node_t *h1 = dom_find_first_by_tag(s_page_tree, "h1");
             dom_node_t *th = dom_find_first_by_tag(s_page_tree, "th");
-            shell_transcript_appendf("body fg=%u bg=%u\n",
+            shell_transcript_appendf("body fg=%u bg=%u bg_src='%s'\n",
                                      (unsigned)s_page_tree->body->fg,
-                                     (unsigned)s_page_tree->body->bg);
+                                     (unsigned)s_page_tree->body->bg,
+                                     s_page_tree->body->bg_src);
             if (h1 != NULL) {
                 shell_transcript_appendf("h1 fg=%u bold=%d\n",
                                          (unsigned)h1->fg, h1->bold);

@@ -86,6 +86,27 @@ def run(dev, ctx):
         n = _count_near(bmp, rgb)
         c.check("%s pixels visible" % label, n >= minimum, "%d samples" % n)
 
+    # CSS background-image + an inline PNG. Regression: LVGL's vendored
+    # LodePNG returns an lv_draw_buf_t (not raw RGBA), so treating the pointer
+    # as pixels turned every PNG white; a wrong channel order tinted a blue
+    # background orange. The fixture is 16x16 #ff5555 (DOS red 12).
+    _push(dev, "PIX.PNG", "WEB/PIX.PNG")
+    _push(dev, "BGIMG.HTML", "WEB/BGIMG.HTML")
+    dev.run("browser cache clear", timeout=20)
+    out = dev.run("browser sd:/WEB/BGIMG.HTML", timeout=90, settle=2.0)
+    dump = dev.run("tui dump 1 12", timeout=30)
+    c.expect("PNG background page rendered", "PNG BACKDROP", dump)
+    c.check("no panic during the PNG render",
+            "Guru Meditation" not in out + dump, "panic marker")
+    bmp = dev.screenshot()
+    red = _count_near(bmp, CANVAS_RED)
+    c.check("PNG background decodes to red (not white)", red >= 120,
+            "%d red samples" % red)
+    # The inline <img> is cell art, so it lands as red glyph cells: a white or
+    # mis-tinted decode would leave the whole page outside the red family.
+    c.check("PNG background tiles the page", red >= 400,
+            "%d red samples (tiled backdrop)" % red)
+
     try:
         os.makedirs(SPIKES, exist_ok=True)
         with open(os.path.join(SPIKES, "canvas_page.bmp"), "wb") as fh:

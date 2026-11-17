@@ -9,6 +9,7 @@ idf_component_register(
     REQUIRES
         ansi
         emoji
+        imagefile
         applib
         archive
         audio

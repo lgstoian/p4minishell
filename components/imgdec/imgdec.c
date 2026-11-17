@@ -199,8 +199,14 @@ static uint16_t *imgdec_scale_rgb888(const uint8_t *src, int src_w, int src_h,
     return out;
 }
 
-static uint16_t *imgdec_scale_rgba(const uint8_t *src, int src_w, int src_h,
-                                   int dst_w, int dst_h)
+/** Scale one ARGB8888 draw buffer (LVGL's patched LodePNG output).
+ *
+ * LVGL's vendored LodePNG does NOT return raw RGBA bytes: `lodepng_decode32`
+ * hands back an `lv_draw_buf_t *` whose `data` is `LV_COLOR_FORMAT_ARGB8888`
+ * (R,G,B,A in memory). Treating the struct pointer as pixel bytes is what
+ * turned every PNG on a page white. */
+static uint16_t *imgdec_scale_argb8888(const uint8_t *src, int src_w, int src_h,
+                                       int dst_w, int dst_h)
 {
     uint16_t *out;
     int y;
@@ -220,7 +226,10 @@ static uint16_t *imgdec_scale_rgba(const uint8_t *src, int src_w, int src_h,
         for (x = 0; x < dst_w; x++) {
             int sx = x * src_w / dst_w;
             const uint8_t *px = row + (size_t)sx * 4u;
-            /* Composite onto white (the TUI ramp has no alpha). */
+            /* The patched decoder writes R,G,B,A (verified on hardware: a
+             * dark blue source came out orange until this order was used).
+             * Composite the remaining alpha onto white because the cell ramp
+             * has no alpha. */
             uint32_t a = px[3];
             uint32_t r = (px[0] * a + 255u * (255u - a)) / 255u;
             uint32_t g = (px[1] * a + 255u * (255u - a)) / 255u;
@@ -240,19 +249,28 @@ static uint16_t *imgdec_scale_rgba(const uint8_t *src, int src_w, int src_h,
 static bool imgdec_png_decode(const uint8_t *data, size_t len,
                               int dst_w, int dst_h, imgdec_image_t *out)
 {
-    unsigned char *rgba = NULL;
+    lv_draw_buf_t *decoded = NULL;
     unsigned w = 0;
     unsigned h = 0;
+    unsigned error;
 
     memset(out, 0, sizeof(*out));
-    if (lodepng_decode32(&rgba, &w, &h, data, len) != 0 || rgba == NULL) {
-        if (rgba != NULL) {
-            lv_free(rgba);
+    /* LVGL patches LodePNG's public decode entry points to return a draw
+     * buffer (see lv_lodepng.c); the cast is the library's documented shape. */
+    error = lodepng_decode32((unsigned char **)&decoded, &w, &h, data, len);
+    if (error != 0 || decoded == NULL) {
+        if (decoded != NULL) {
+            lv_draw_buf_destroy(decoded);
         }
         return false;
     }
-    out->pixels = imgdec_scale_rgba(rgba, (int)w, (int)h, dst_w, dst_h);
-    lv_free(rgba);
+    if (decoded->data == NULL || w == 0 || h == 0) {
+        lv_draw_buf_destroy(decoded);
+        return false;
+    }
+    out->pixels = imgdec_scale_argb8888(decoded->data, (int)w, (int)h, dst_w,
+                                        dst_h);
+    lv_draw_buf_destroy(decoded);
     if (out->pixels == NULL) {
         return false;
     }

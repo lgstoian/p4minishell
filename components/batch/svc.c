@@ -248,20 +248,21 @@ static bool svc_file_exists(const char *shell_path)
     return true;
 }
 
-/** Pin a bare script name to its drive when it only exists on USB.
+/** Pin a bare script name to USB only when the installing app runs from USB.
  *
- * `service install moodsampler "MOODSVC"` would otherwise run whatever
- * `PATH`/cwd finds (SD), so an app installed on a stick would still write its
- * data to SD. At install time we resolve the first token once: if SD/PATH does
- * not have it but `usb:/APPS` does, the registry stores the explicit
- * `usb:/APPS/<name>` path and the batch frame publishes `APPDRIVE=usb:`.
- * The line is copied verbatim in every other case (arguments preserved).
+ * `service install moodsampler "MOODSVC"` from an app running off a stick
+ * stores `usb:/APPS/MOODSVC.BAT` so the service publishes `APPDRIVE=usb:`.
+ * The running app's drive is the authoritative signal (the shell publishes
+ * `APPDRIVE` for every `.bat`); an SD install is left untouched even if a
+ * same-named USB copy exists, so a PATH/cwd script can never be shadowed.
+ * An explicit path (contains `/` or `:`) is always stored verbatim.
  *
  * @return true when @p out received the line to store. */
 static bool svc_resolve_line(const char *line, char *out, size_t out_size)
 {
     char token[P4_CONFIG_SVC_NAME_BYTES + 8];
     const char *space;
+    const char *drive;
     size_t len;
     static const char *const exts[] = { "", ".BAT", ".CMD", ".bat", ".cmd" };
 
@@ -269,6 +270,10 @@ static bool svc_resolve_line(const char *line, char *out, size_t out_size)
         return false;
     }
     snprintf(out, out_size, "%s", line);
+    drive = shell_env_get("APPDRIVE");
+    if (drive == NULL || strcmp(drive, "usb:") != 0) {
+        return true;   /* SD/PATH install: never rewrite */
+    }
     space = strchr(line, ' ');
     len = (space != NULL) ? (size_t)(space - line) : strlen(line);
     if (len == 0 || len >= sizeof(token)) {
@@ -280,17 +285,10 @@ static bool svc_resolve_line(const char *line, char *out, size_t out_size)
         return true;   /* already an explicit path */
     }
     for (size_t i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) {
-        char sd_path[P4_CONFIG_SD_PATH_BYTES];
         char usb_path[P4_CONFIG_SD_PATH_BYTES];
 
-        snprintf(sd_path, sizeof(sd_path), "sd:/APPS/%s%s", token, exts[i]);
-        if (svc_file_exists(sd_path)) {
-            return true;
-        }
         snprintf(usb_path, sizeof(usb_path), "usb:/APPS/%s%s", token, exts[i]);
         if (svc_file_exists(usb_path)) {
-            /* Replace only the first token, keeping any arguments. `out`
-             * already holds the line, so splice in place with bounds checks. */
             size_t used = strlen(usb_path);
             const char *rest = (space != NULL) ? space : "";
 
@@ -298,7 +296,7 @@ static bool svc_resolve_line(const char *line, char *out, size_t out_size)
                 memmove(out + used, rest, strlen(rest) + 1);
                 memcpy(out, usb_path, used);
             }
-            return true;
+            break;
         }
     }
     return true;

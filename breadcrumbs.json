@@ -752,6 +752,7 @@
       "requires": [
         "ansi",
         "emoji",
+        "imagefile",
         "applib",
         "archive",
         "audio",
