@@ -154,6 +154,39 @@ esp_err_t shell_sd_resolve_path(const char *input, char *output, size_t output_s
     return ESP_OK;
 }
 
+void storage_shell_path(const char *path, char *out, size_t out_size)
+{
+    size_t mount_len;
+
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    if (path == NULL || path[0] == '\0') {
+        out[0] = '\0';
+        return;
+    }
+    if (strncmp(path, "sd:/", 4) == 0 || strncmp(path, "usb:/", 5) == 0 ||
+        strncmp(path, "usb0:/", 6) == 0) {
+        snprintf(out, out_size, "%s", path);
+        return;
+    }
+    mount_len = strlen(BSP_SD_MOUNT_POINT);
+    if (strncmp(path, BSP_SD_MOUNT_POINT, mount_len) == 0 &&
+        (path[mount_len] == '\0' || path[mount_len] == '/')) {
+        snprintf(out, out_size, "sd:%s", path + mount_len);
+        return;
+    }
+    if (strncmp(path, "/usb", 4) == 0) {
+        const char *slash = strchr(path + 4, '/');
+
+        if (slash != NULL) {
+            snprintf(out, out_size, "usb:%s", slash);
+            return;
+        }
+    }
+    snprintf(out, out_size, "%s", path);
+}
+
 esp_err_t shell_fs_resolve_path(const char *input, char *output, size_t output_size)
 {
     char combined[SHELL_SD_PATH_BYTES];

@@ -20,6 +20,7 @@
 
 #include "math_disp.h"
 #include "p4minishell_config.h"
+#include "p4heap.h"
 #include "esp_log.h"
 #include <string.h>
 #include <stdlib.h>
@@ -454,28 +455,45 @@ int math_disp_layout(math_disp_expr_t *expr)
     return 0;
 }
 
+/* One scratch grid for the whole renderer. The 81 KB struct used to be a
+ * function-local static (internal DRAM, 18% of the boot budget) and the valid
+ * path allocated a *second* copy per call that nobody freed. A single PSRAM
+ * singleton fixes both: the layout grid is a non-DMA scratch buffer, so it
+ * belongs in PSRAM (v1.4.3 memory pass). */
+static math_disp_layout_t *s_layout;
+
+static math_disp_layout_t *layout_scratch(void)
+{
+    if (s_layout == NULL) {
+        s_layout = p4heap_calloc_psram(1, sizeof(*s_layout));
+        if (s_layout == NULL) {
+            s_layout = p4heap_calloc_any(1, sizeof(*s_layout));
+        }
+    }
+    return s_layout;
+}
+
 /* Get layout grid */
 const math_disp_layout_t *math_disp_get_layout(const math_disp_expr_t *expr)
 {
-    static math_disp_layout_t layout;
-    
-    if (!expr || !expr->root || !expr->layout_valid) {
-        layout.width = layout.height = 0;
-        return &layout;
+    math_disp_layout_t *layout = layout_scratch();
+
+    if (layout == NULL) {
+        return NULL;
     }
-    
+    memset(layout, 0, sizeof(*layout));
+    if (!expr || !expr->root || !expr->layout_valid) {
+        return layout;   /* width/height stay 0 */
+    }
+
     /* Build layout grid from node positions */
     /* This is a simplified version - full implementation would rasterize nodes */
-    math_disp_layout_t *layout_ptr = (math_disp_layout_t *)malloc(sizeof(math_disp_layout_t));
-    if (!layout_ptr) return NULL;
-    
-    memset(layout_ptr, 0, sizeof(math_disp_layout_t));
-    layout_ptr->width = expr->root->layout.w;
-    layout_ptr->height = expr->root->layout.h;
-    layout_ptr->cursor_x = expr->cursor.offset;
-    layout_ptr->cursor_y = 0;
-    
-    return (const math_disp_layout_t *)layout_ptr;
+    layout->width = expr->root->layout.w;
+    layout->height = expr->root->layout.h;
+    layout->cursor_x = expr->cursor.offset;
+    layout->cursor_y = 0;
+
+    return layout;
 }
 
 /* ========================================================================

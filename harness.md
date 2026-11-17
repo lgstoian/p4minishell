@@ -9,7 +9,7 @@
 > rules live in [`ai-context.md`](ai-context.md); open bugs in
 > [`bugs.md`](bugs.md).
 
-- **Version:** v1.4.2 · **Targets:** ESP32-P4 + ESP32-C6
+- **Version:** v1.4.3 · **Targets:** ESP32-P4 + ESP32-C6
 - **Boards:** `jc1060p470c` (reference, e.g. COM3) and `m5stack_tab5` (COM6)
 
 ---
@@ -111,7 +111,7 @@ python3 tools/host_unit_run.py --static   # manifest/orphan/case-count gates
 python3 tools/host_gen_runner.py --check  # generated runner is up to date
 ```
 
-- **Coverage today: 268 of 666 cases** — the leaf components with no board
+- **Coverage today: 283 cases** - the leaf components with no board
   dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`, plus the
   `strutil`/`p4heap` helpers they use), the hardware-free halves of the shell
   (`shell_core.c`: text helpers, statement scanner, history store, abort/busy,
@@ -218,6 +218,7 @@ Suites (`tools/suites/sNN_*.py`) and what they cover:
 | `s20_website` | the offline browser dashboard: deploys `apps/website/` (HTML + BMP logo), renders `sd:/WEB/INDEX.HTML`, runs the JS event hook, captures `browser-website.bmp` for the docs |
 | `s21_wikipedia` | the browser acceptance gate: deploys a trimmed `en.wikipedia.org/wiki/ESP32` fixture (infobox, table, list, links, a PNG and a JPEG) and asserts the rendered structure, link colour, missing-image alt text and a BMP capture. `P4_WIFI_LIVE=1` adds a live HTTPS fetch (credentials from `tools/wifi_local.json`) |
 | `s22_canvas` | the HTML5 subset gate: renders `apps/website/canvas.html` (CSS page/banner backgrounds + a 96x48 canvas drawn through the 2D context), asserts the canvas width/height reached JS, the bitmap replaced the fallback, the red/green/cyan colour runs and pixels, background pixels, no panic, and a BMP capture |
+| `s23_apps_usb` | the drive-aware apps gate (needs a USB stick): installs the fixture and HYBRID under `usb:/APPS`, asserts `launch /list` discovers them, that `%APPDRIVE%`/`%APPROOT%`/`%APPNAME%` report the USB root, that the same app on SD reports `sd:`, and that HYBRID completes from USB |
 
 The framework (`tools/p4test/`): `session.py` (DTR-safe open, marker-synced
 `run()`, panic detection, byte-exact `BMPX`/`SDFX` framing, ANSI+OSC 8 strip

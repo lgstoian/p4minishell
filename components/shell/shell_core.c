@@ -1111,6 +1111,8 @@ const shell_help_entry_t shell_core_help_entries[] = {
     { "event",    "event /wait|type|field|dispatch|post|clear|count - script-visible event multiplexer" },
     { "trace",    "trace /on|off|level|status - on-screen diagnostics" },
     { "color",    "color [fg] [bg] - DOS COLOR parity (hex digits)" },
+    { "emoji",    "emoji [status | reload] - retro DOS fallback + EMOJI/ pack on SD/USB" },
+    { "html",     "html <file|url> - render a page with the browser engine (CSS/JS/canvas)" },
     { "locate",   "locate <row> <col> - DOS LOCATE parity (1-based, 80x25)" },
     { "config",   "config [KEY=VALUE | save | reset [key] | factory] - persistent settings (CONFIG.SYS)" },
     { "prompt",   "prompt [template] - set the command prompt template" },

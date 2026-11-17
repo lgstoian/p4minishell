@@ -4117,6 +4117,13 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
     int setlocal_depth_on_entry;
     int depth;
     int index;
+    /* The shell publishes the running app's drive for the app's lifetime, so
+     * one helper path (`%APPDRIVE%`) serves SD and USB installs. Saved here and
+     * restored when the frame returns. */
+    char prev_drive[8] = { 0 };
+    char prev_root[128] = { 0 };
+    char prev_name[64] = { 0 };
+    bool app_env_saved = false;
 
     depth = (s_active_batch_frame != NULL) ? s_active_batch_frame->depth + 1 : 1;
     if (depth > SHELL_BATCH_DEPTH_MAX) {
@@ -4173,6 +4180,49 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
     }
 
     frame->batch_file = file;
+
+    /* Publish the app's location (APPDRIVE/APPROOT/APPNAME) for a top-level
+     * script. A library call (`call lib.bat::routine`) keeps the app's values:
+     * the routine belongs to the app that is running. */
+    if (start_label == NULL) {
+        char shell_path[128] = { 0 };
+        char drive[8] = "sd:";
+        char root[128] = { 0 };
+        char name[64] = { 0 };
+        const char *old;
+
+        storage_shell_path(path, shell_path, sizeof(shell_path));
+        snprintf(root, sizeof(root), "%s", shell_path);
+        {
+            char *slash = strrchr(root, '/');
+
+            if (slash != NULL) {
+                snprintf(name, sizeof(name), "%.63s", slash + 1);
+                *slash = '\0';
+            } else {
+                snprintf(name, sizeof(name), "%.63s", root);
+                root[0] = '\0';
+            }
+        }
+        {
+            char *dot = strrchr(name, '.');
+
+            if (dot != NULL) *dot = '\0';
+        }
+        if (strncmp(shell_path, "usb:", 4) == 0) {
+            snprintf(drive, sizeof(drive), "usb:");
+        }
+        old = shell_env_get("APPDRIVE");
+        snprintf(prev_drive, sizeof(prev_drive), "%s", old ? old : "");
+        old = shell_env_get("APPROOT");
+        snprintf(prev_root, sizeof(prev_root), "%s", old ? old : "");
+        old = shell_env_get("APPNAME");
+        snprintf(prev_name, sizeof(prev_name), "%s", old ? old : "");
+        app_env_saved = true;
+        (void)shell_env_set("APPDRIVE", drive);
+        (void)shell_env_set("APPROOT", root);
+        (void)shell_env_set("APPNAME", name);
+    }
 
     /* Load the whole file into RAM when it fits, so the line loop and every
      * `goto`/`call` seek run from memory rather than the SD card. Behavior is
@@ -4445,6 +4495,11 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
     if (file != NULL) fclose(file);
     if (frame->ram != NULL) free(frame->ram);
     shell_sd_end(&session, "call");
+    if (app_env_saved) {
+        (void)shell_env_set("APPDRIVE", prev_drive);
+        (void)shell_env_set("APPROOT", prev_root);
+        (void)shell_env_set("APPNAME", prev_name);
+    }
     free(frame);
     free(line);
     return ESP_OK;

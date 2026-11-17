@@ -36,17 +36,17 @@ rem Relist a pane only when its directory changed since the last frame:
 rem `dir` is the expensive SD op, and j/k navigation does not change dirs.
 rem Create the scratch dir only when missing: a redundant `md` on an
 rem existing directory is an error and would spam the pane each refresh.
-if not exist sd:/tmp md sd:/tmp > NUL
+if not exist %APPDRIVE%/tmp md %APPDRIVE%/tmp > NUL
 if "%LD%"=="%LDONE%" goto ldone
-dir /o:gn /b sd:%LD% > sd:/tmp/_LT.txt
+dir /o:gn /b sd:%LD% > %APPDRIVE%/tmp/_LT.txt
 rem Line counts via draw list's /count (a for-loop counter would flood:
 rem this shell's `set /a` echoes its result).
-draw list 1 4 39 17 sd:/tmp/_LT.txt /count:LN /countonly
+draw list 1 4 39 17 %APPDRIVE%/tmp/_LT.txt /count:LN /countonly
 set LDONE=%LD%
 :ldone
 if "%RD%"=="%RDONE%" goto rdone
-dir /o:gn /b sd:%RD% > sd:/tmp/_RT.txt
-draw list 41 4 39 17 sd:/tmp/_RT.txt /count:RN /countonly
+dir /o:gn /b sd:%RD% > %APPDRIVE%/tmp/_RT.txt
+draw list 41 4 39 17 %APPDRIVE%/tmp/_RT.txt /count:RN /countonly
 set RDONE=%RD%
 :rdone
 draw clear
@@ -71,8 +71,8 @@ rem Frame.
 draw box 1 1 80 3 double TCMD
 draw text 3 2 "dual-pane commander"
 draw text 55 2 "1:/ 2:/APPS"
-draw list 1 4 39 17 sd:/tmp/_LT.txt %LAC% 16 /top:%LTOP% /cursor:%LCUR% /title:%LD%
-draw list 41 4 39 17 sd:/tmp/_RT.txt %RAC% 16 /top:%RTOP% /cursor:%RCUR% /title:%RD%
+draw list 1 4 39 17 %APPDRIVE%/tmp/_LT.txt %LAC% 16 /top:%LTOP% /cursor:%LCUR% /title:%LD%
+draw list 41 4 39 17 %APPDRIVE%/tmp/_RT.txt %RAC% 16 /top:%RTOP% /cursor:%RCUR% /title:%RD%
 draw text 2 21 "pane %PA%  left=%LN% right=%RN%   status: %ST%"
 draw text 1 23 "j/k move  t pane  o open  x menu  s swap  1/2 root  p snap  q quit"
 draw refresh
@@ -111,7 +111,7 @@ set /a SKP=%LCUR% - 1
 set FN=
 rem `eol=` disables the cmd.exe `;`-comment filter: a directory entry may
 rem legitimately begin with `;`, so the pane listing must not drop it.
-for /f "eol= skip=%SKP%" %%a in (sd:/tmp/_LT.txt) do set FN=%%a & goto openL
+for /f "eol= skip=%SKP%" %%a in (%APPDRIVE%/tmp/_LT.txt) do set FN=%%a & goto openL
 :openL
 if "%FN%"=="" goto refresh
 cd sd:%LD%/%FN%
@@ -127,7 +127,7 @@ goto refresh
 :openR
 set /a SKP=%RCUR% - 1
 set FN=
-for /f "eol= skip=%SKP%" %%a in (sd:/tmp/_RT.txt) do set FN=%%a & goto openR2
+for /f "eol= skip=%SKP%" %%a in (%APPDRIVE%/tmp/_RT.txt) do set FN=%%a & goto openR2
 :openR2
 if "%FN%"=="" goto refresh
 cd sd:%RD%/%FN%

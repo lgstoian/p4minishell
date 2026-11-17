@@ -366,8 +366,14 @@ static void apply_to_tree(dom_node_t *node, const css_ruleset_t *rules) {
 static void inherit_styles(dom_node_t *node, const dom_node_t *parent) {
     if (!node) return;
     if (parent != NULL) {
-        if (node->fg == 16) node->fg = parent->fg;
-        if (node->bg == 16) node->bg = parent->bg;
+        if (node->fg == 16) {
+            node->fg = parent->fg;
+            node->fg_alpha = parent->fg_alpha;
+        }
+        if (node->bg == 16) {
+            node->bg = parent->bg;
+            node->bg_alpha = parent->bg_alpha;
+        }
         if (!node->bold) node->bold = parent->bold;
         if (!node->italic) node->italic = parent->italic;
         if (!node->underline) node->underline = parent->underline;

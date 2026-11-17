@@ -5,12 +5,12 @@ rem =====================================================================
 rem  WRITER.BAT - writerdeck reference app.
 rem
 rem  Exercises the writing workflow without leaving the shell:
-rem  1. template seeding (copies sd:/TEMPLATES/NOTE.MD the way
+rem  1. template seeding (copies %APPDRIVE%/TEMPLATES/NOTE.MD the way
 rem     `edit <new> /template NOTE` seeds a new buffer),
 rem  2. the Markdown render path (`markdown`, the same engine preview uses),
 rem  3. all three `markdown export` formats (text, standalone HTML page,
 rem     paginated print).
-rem  It also verifies the spell wordlist (sd:/DICTS/en.words) behind the
+rem  It also verifies the spell wordlist (%APPDRIVE%/DICTS/en.words) behind the
 rem  editor's `Spell` underlines. Focus/typewriter mode and the interactive
 rem  preview/spell toggles need a live `edit` session, so the app prints
 rem  their exact commands instead of driving them.

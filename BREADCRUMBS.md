@@ -56,6 +56,7 @@ invert the only upward edges. Never add a trampoline.
 | db | leaf | data | Palm-OS-style SD record store | [t](test/main/test_db.c) | `ai-context.md#module-layering-rules` | `components/db` |
 | display | leaf | ui | LVGL display bring-up, rotation, backlight | - | `ai-context.md#module-layering-rules` | `components/display` |
 | editor | leaf | app | modal text editor, syntax lexers, spell, recover | [t](test/main/test_editor.c) | `ai-context.md#module-layering-rules` | `components/editor` |
+| emoji | leaf | ui | emoji pack discovery, lookup and cell-image decode | [t](test/main/test_emoji.c) | `ai-context.md#module-layering-rules` | `components/emoji` |
 | epub | leaf | app | EPUB reader: OPF/NCX parse, spine, render | [t](test/main/test_epub.c) | `ai-context.md#module-layering-rules` | `components/epub` |
 | event_bus | leaf | core | typed event publish/subscribe | - | `ai-context.md#module-layering-rules` | `components/event_bus` |
 | filetype | leaf | fs | extension-to-kind registry | [t](test/main/test_filetype.c) | `ai-context.md#module-layering-rules` | `components/filetype` |
@@ -234,6 +235,8 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/editor/editor_spell_sd.c` :: module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules
 - `components/editor/editor_view.c` :: module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules
 - `components/editor/editor_view.h` :: module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules
+- `components/emoji/emoji.c` :: module=emoji :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_emoji.c :: rules=ai-context.md#module-layering-rules
+- `components/emoji/emoji.h` :: module=emoji :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_emoji.c :: rules=ai-context.md#module-layering-rules
 - `components/epub/epub.c` :: module=epub :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_epub.c :: rules=ai-context.md#module-layering-rules
 - `components/epub/epub_internal.h` :: module=epub :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_epub.c :: rules=ai-context.md#module-layering-rules
 - `components/epub/epub_nav.c` :: module=epub :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_epub.c :: rules=ai-context.md#module-layering-rules
@@ -246,6 +249,8 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/event_bus/include/event_bus_topics.h` :: module=event_bus :: layer=leaf :: domain=core :: status=stable :: rules=ai-context.md#module-layering-rules
 - `components/filetype/filetype.c` :: module=filetype :: layer=leaf :: domain=fs :: status=stable :: tests=test/main/test_filetype.c :: rules=ai-context.md#module-layering-rules
 - `components/filetype/filetype.h` :: module=filetype :: layer=leaf :: domain=fs :: status=stable :: tests=test/main/test_filetype.c :: rules=ai-context.md#module-layering-rules
+- `components/font/emoji_core.c` :: module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules
+- `components/font/emoji_core.h` :: module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules
 - `components/font/font.c` :: module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules
 - `components/font/font.h` :: module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules
 - `components/font/font_fs.c` :: module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules

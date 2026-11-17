@@ -3,3 +3,7 @@
 title=Commander
 description=Dual-pane file commander: browse selectors plus copy/move/delete/mkdir/rename/view/edit
 version=1.0
+; Opt-in transparency (v1.4.3): a translucent TUI page over the shell and
+; a dimmed backdrop behind its modals. Percent or 0-255; omit = opaque.
+alpha=96%
+scrim=40%

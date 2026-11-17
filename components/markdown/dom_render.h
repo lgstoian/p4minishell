@@ -61,15 +61,30 @@ typedef struct {
      *  no-JS surface (editor preview, print-to-HTML, EPUB) does. */
     bool (*load_canvas)(void *ctx, dom_node_t *node, dom_image_t *out);
     /** CSS background: fill a rectangle's background colour, keeping any text
-     *  already drawn in those cells. NULL on surfaces without cell colours. */
-    void (*fill_bg)(void *ctx, int col, int row, int w, int h, uint8_t bg);
+     *  already drawn in those cells. NULL on surfaces without cell colours.
+     *  @p alpha is 0-255: 0 means fully transparent and is never called, so
+     *  the surface behind a `transparent`/`rgba(...,0)` block shows through. */
+    void (*fill_bg)(void *ctx, int col, int row, int w, int h, uint8_t bg,
+                    uint8_t alpha);
     /** Optional CSS background-image loader (page backdrop). */
     bool (*load_background)(void *ctx, const char *src, dom_image_t *out);
+    /** Optional emoji fallback. Given one UTF-8 sequence, return a replacement
+     *  string (written into @p buf, NUL-terminated) or NULL to draw it as-is.
+     *  The caller owns the emoji core; the renderer stays table-free. */
+    const char *(*emoji_fallback)(void *ctx, const char *seq, size_t len,
+                                  char buf[5]);
+    /** Optional emoji blit for cell surfaces (pack images). Return true when
+     *  the sequence was drawn and store the cells consumed in @p cells_out
+     *  (0 for a zero-width modifier). Called before emoji_fallback. */
+    bool (*put_emoji)(void *ctx, int col, int row, const char *seq, size_t len,
+                      int *cells_out);
     void *ctx;
     int cols;             /**< TUI columns / ANSI wrap width. */
     int rows;             /**< TUI rows. */
     bool tui;             /**< true: cells; false: ANSI. */
     bool ansi_links;      /**< Append " (url)" after link text (reader). */
+    uint8_t base_bg;      /**< Surface background (DOS index) used to composite
+                               translucent text on a cell surface. */
     const char *base_url; /**< Page URL for relative images (may be NULL). */
 } dom_render_ops_t;
 

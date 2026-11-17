@@ -120,6 +120,28 @@ bounce                 the gfx bouncing-ball demo
 The `launch` menu prints every app name as a hyperlink: tap once to preview
 `launch <name>`, tap again to run it. `help` command names work the same way.
 
+## 6b. A first look at the v1.4.3 surfaces
+
+Four short commands show the new rendering and app features.
+
+```
+emoji                         (retro DOS/CP437 emoji map; pack count if installed)
+emoji status                  (same, explicit form)
+html sd:/WEB/INDEX.HTML       (the dashboard, through the browser engine)
+launch TCMD                   (translucent-by-default demo: APPINFO alpha=96%)
+```
+
+- **Emoji** always render with a retro MS-DOS look; a colour pack under
+  `EMOJI/` on SD or USB is optional. `command.md` has the pack format.
+- **Transparency** is per app and opt-in through `alpha=`/`scrim=` in the
+  app's `APPINFO`; drop those two lines and the app is opaque again.
+- **`html`** is the batch/native entry point to the browser page engine, so a
+  script can present a standards-rendered page without the interactive
+  `browser` verbs.
+- **USB:** `python apps/push_apps.py <COM_PORT> --drive usb:` installs the
+  same apps on a USB stick; `launch` discovers them and they keep their data
+  on the stick. See `batch.md` 5 for `%APPDRIVE%`.
+
 ## 7. Install a packaged app
 
 Packages are CRC-checked bundles under `PKGS/<APP>/`. Build and push the sample

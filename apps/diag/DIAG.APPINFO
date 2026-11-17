@@ -3,3 +3,6 @@
 title=P4 Diagnostics
 description=System health, capability and frame-rate diagnostics console
 version=1.0
+; Opt-in transparency (v1.4.3): translucent diagnostics page + modal scrim.
+alpha=88%
+scrim=48%

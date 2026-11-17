@@ -14,6 +14,97 @@ open bugs see [`bugs.md`](bugs.md).
 
 ---
 
+## [1.4.3] - 2026-11-17
+
+### Added
+
+- **Retro emoji, in the TUI and in LVGL.** One emoji core
+  (`components/font/emoji_core.c`) decides what is emoji and maps it to a
+  CP437-style DOS glyph from a curated table (smileys, hearts, marks, media,
+  weather, food, transport, files, status symbols) with deterministic range
+  defaults, so text can never show tofu. The built-in map is the default pack:
+  authored here, MIT, bundled with the firmware - `licence.md` records it.
+  `components/emoji/` adds optional third-party packs from
+  `EMOJI/EMOJI.INI` on SD or USB (`HEXCODEPOINT=FILE.BMP|PNG`, optional
+  `HEXCODEPOINT.cells=1|2`), parsed by the shared INI core and decoded by the
+  shared `imgdec`/`gfx` path into a four-entry PSRAM cache. Pack glyphs render
+  as cell-ramp images through the one image sampler shared by `draw img`,
+  screenshots and emoji; LVGL labels get the retro fallback through a
+  glyph-remapping font link installed once in `font_get()`. `emoji [status |
+  reload]` reports the map and pack. Single codepoints only in 1.4.3: ZWJ
+  sequences, flags and skin-tone modifiers fall back to their components
+  (documented in `documentation.md`).
+- **Opt-in transparency.** One CSS RGBA parser
+  (`components/markdown/css_color.{h,c}`) now serves HTML, the Canvas 2D
+  context and the TUI: `#rgba`, `#rrggbbaa`, `rgb()/rgba()` (numbers or
+  percentages), `transparent`, `opacity` and the basic named colours. DOM
+  nodes carry `fg_alpha`/`bg_alpha`/`opacity`; the cascade multiplies
+  `opacity` down the subtree; translucent text is composited once to the
+  nearest DOS cell colour so the TUI and ANSI output agree. CSS block
+  backgrounds keep their alpha as real LVGL rectangles (`bg_opa`), and
+  `transparent` draws no rectangle so the page behind shows through. Modal
+  panels and a new backdrop scrim share one runtime setting
+  (`modal_surf_set_alpha()`), and the classic CGA/DOS table moved to
+  `ansi_cga_color()/ansi_cga_nearest()` so TUI, gfx and CSS quantise
+  identically. **Default is opaque**; an app opts in through its existing
+  `APPINFO` (`alpha=`/`scrim=`, 0-255 or a `%`), applied by `launch` for the
+  app's lifetime. TCMD and DIAG ship with it enabled as examples.
+- **`html` page verb and app-drive variables.** `html <file|url>` renders a
+  page through the same browser page engine as `browser` (DOM, CSS,
+  JavaScript, images, canvas, HTTP(S)) for batch and native flows that do not
+  want the browser's history/bookmark verbs; it is non-blocking like
+  `browser`. The shell now publishes `APPDRIVE` (`sd:`/`usb:`), `APPROOT`
+  (the running script's directory) and `APPNAME` for every `.bat`, and
+  `launch` discovers apps under `usb:/APPS` with the same pattern scan and
+  metadata lookup it uses for SD. The reference apps use `%APPDRIVE%`
+  instead of a hardcoded `sd:/`, so the same payload runs from either drive
+  and keeps its data beside it; `apps/push_apps.py --drive usb:` deploys the
+  identical bundle. Intentional SD-only stores (the service registry and its
+  sample file) are marked in the scripts.
+- **Screenshot feedback is header-only.** A successful `screenshot` no longer
+  prints `captured`/`saved`/`streamed` lines into the transcript: success is a
+  header notification, errors stay on the transcript, and `s21_wikipedia`
+  gates on the BMP file instead of a removed line.
+- **Internal DRAM freed for the app.** The Natural Display layout grid was an
+  81 KB function-local static in internal DRAM and the valid path allocated a
+  second copy per render without freeing it. It is now one PSRAM singleton
+  (`math_disp_get_layout()`), taking static DIRAM from 397 KB used / 48 KB
+  free to 315 KB used / 130 KB free on the JC1060P470C build - the image size
+  is unchanged.
+
+### Changed
+
+- `dom_render` threads style alpha through its cell and rectangle sinks, and
+  exposes optional emoji hooks (`put_emoji`, `emoji_fallback`) so the markdown
+  leaf stays free of emoji tables and storage dependencies.
+- `dom_set_style` accepts `opacity`; inherited colours now carry their alpha
+  (`inherit_styles`), so `color: rgba(...)` on `<body>` reaches every child.
+- `tui_print_at` expands emoji (pack image or retro glyph) and skips
+  zero-width modifiers; `tui_page_draw_image()` blits into the browser page
+  buffer through the same sampler as `tui_draw_image()`.
+- `font_get()` chains a per-role emoji link between the primary font and the
+  FontAwesome fallback: no glyph data, no second table, every label covered.
+- `launch` reads `APPINFO` from `usb:/APPS` when SD has none, and
+  `launch /list` reports USB-installed apps.
+- `push_apps.py` gained `--drive sd:|usb:|usbN:`; `APPLIB.BAT` documents the
+  drive variables and its opt-in feature probe now exercises `emoji` and
+  `html` (`[M-FEAT-EMOJI]`, `[M-FEAT-HTML]`).
+- New `s23_apps_usb` suite proves drive-aware apps end-to-end (USB fixture,
+  SD fixture, HYBRID from USB); `test_css_color.c` and `test_emoji.c` cover
+  the shared colour parser and emoji core on the board and host lanes.
+
+### Verified
+
+- `idf.py build` is clean on the JC1060P470C profile and the standalone `test/`
+  project builds; the host lane is **283/283**; `green_guard` (739 cases),
+  `comment_index` and `breadcrumbs` pass; `tools/harness/verify.py` is green.
+  Static DIRAM dropped from 396,950 to 315,022 bytes used (48,442 -> 130,370
+  free) with the image size unchanged. On-board unit/hardware re-verification
+  for this release is recorded separately in `test/README.md` and `bugs.md`
+  when the boards are next run; do not claim it before it exists.
+
+---
+
 ## [1.4.2] - 2026-11-17
 
 ### Added
@@ -122,7 +213,7 @@ open bugs see [`bugs.md`](bugs.md).
   declare `services=APP>=1.2,APP2` (a bare name = any version); `pkg install`
   enforces every declared service is installed and satisfies its version, and
   `pkg info` reports the list. No ABI bump (additive metadata only).
-- **`store` verb — remote app-store client.** `store url|list|install <id>`
+- **`store` verb ï¿½ remote app-store client.** `store url|list|install <id>`
   fetches a JSON `apps[]` index, prints it, and installs an entry by streaming
   its `bpk_url` to `PKGS/<id>.PKG` via `networking_http_get_stream()` and then
   running the ordinary `pkg install`. The index URL is the compile-time
@@ -135,7 +226,7 @@ open bugs see [`bugs.md`](bugs.md).
   and `tools/dev_mcp_server.py` (MCP dev plugin exposing the repo's own host
   tools over stdio).
 - **PNG + JPEG image decode.** New `components/imgdec/` leaf decodes PNG
-  (LodePNG) and JPEG (TJpgDec) — the two decoders LVGL already compiles — to a
+  (LodePNG) and JPEG (TJpgDec) ï¿½ the two decoders LVGL already compiles ï¿½ to a
   scaled RGB565 buffer, the same contract as `gfx_bmp_decode_scaled_565`. The
   browser's `<img>`, `view`, `image`, and `gfx image` all accept PNG/JPEG
   through the ONE image path (`gfx` owns BMP; `imgdec` owns PNG/JPEG). Native
@@ -188,7 +279,7 @@ open bugs see [`bugs.md`](bugs.md).
 - **`s10_input_ui` ghost-completion check was flaky (recurring `coo`).** The
   typing loop judged each key with `endswith()`, which also accepts a duplicated
   character (`cc`), and a repaint-lagged read could break the loop after the
-  first of two identical keys — the second landed afterwards and corrupted the
+  first of two identical keys ï¿½ the second landed afterwards and corrupted the
   prefix to `coo`, which has no ghost hint. Keys are now confirmed by observing
   the input line actually grow, an exact-prefix mismatch triggers a verified
   clear+retype, and the cold-cache fallback uses the OSK enter key instead of
@@ -200,7 +291,7 @@ open bugs see [`bugs.md`](bugs.md).
   in internal DRAM, which this board has fully committed to the LVGL/display buffers,
   ESP-Hosted SDIO and the USB host (~3 KB free at startup). `ble_buf_alloc()` therefore
   returned `ESP_ERR_NO_MEM` and `nimble_port_init()` failed with
-  `BLE_INIT: nimble host init failed`, leaving `synced: no` and every BLE command unusable —
+  `BLE_INIT: nimble host init failed`, leaving `synced: no` and every BLE command unusable ï¿½
   even though the controller and hosted HCI transport were healthy. The host now allocates
   from PSRAM (`CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y`; the controller is external on
   the C6, so the pools have no DMA/IRAM requirement), and the ignored
@@ -209,8 +300,8 @@ open bugs see [`bugs.md`](bugs.md).
   one bounded retry (`P4_CONFIG_BT_INIT_RETRIES`) for the C6 BT service settling on the
   shared SDIO link.
 - **`bluetooth advertise on` failed while advertising was already active.** NimBLE rejects a
-  second `ble_gap_adv_start()` with `EALREADY`, so re-issuing `bluetooth advertise on` — or
-  running `bluetooth gatt on` while non-connectable advertising was active — logged
+  second `ble_gap_adv_start()` with `EALREADY`, so re-issuing `bluetooth advertise on` ï¿½ or
+  running `bluetooth gatt on` while non-connectable advertising was active ï¿½ logged
   `Hosted BLE startup failed` and recorded an error. Advertising now stops and restarts,
   which is also what lets the GATT server switch a running advert to connectable mode.
 - **Image viewer stack overflow (F43).** The `image_surface_free()` helper added
@@ -320,7 +411,7 @@ open bugs see [`bugs.md`](bugs.md).
   USB operation behind one slow stick. The lock is now released around enumeration (a
   per-slot `connecting` flag claims the slot across the unlocked enumeration
   window). Raising the USB task stacks was also tried and **reverted**: it cost
-  ~6 KB of internal DRAM on the Tab5 (three stacks × 2 KB), dropping reboot-time
+  ~6 KB of internal DRAM on the Tab5 (three stacks ï¿½ 2 KB), dropping reboot-time
   headroom from ~14 KB to ~8 KB and regressing `s17_browser` there. Internal DRAM
   is the scarce resource on this board; leave the IDF defaults alone. Hardware
   confirmation of the lock change with a real flash stick is still pending.
@@ -449,27 +540,27 @@ open bugs see [`bugs.md`](bugs.md).
   chat front-end.
 - **TUI workspace layer** (`components/tui/tui_pane.h` + `tui_pane.c`): named
   panes with a focus ring, declarative widget layer, HUD region with diff
-  rendering, and a script-visible event multiplexer — all fixed-capacity (no
+  rendering, and a script-visible event multiplexer ï¿½ all fixed-capacity (no
   dynamic allocation), rendered through the existing `tui_draw_*` primitives.
-  - `wig` verb — declarative widget layer (`/panel`, `/text`, `/gauge`,
+  - `wig` verb ï¿½ declarative widget layer (`/panel`, `/text`, `/gauge`,
     `/button`, `/list`, `/clear`, `/render`). The name avoids collision with
     the existing `ui` touch-automation verb.
-  - `pane` verb — pane stack management (`/add`, `/split`, `/focus`,
+  - `pane` verb ï¿½ pane stack management (`/add`, `/split`, `/focus`,
     `/cycle`, `/hide`, `/close`, `/list`).
-  - `hud` verb — HUD status cells (`/add`, `/refresh`, `/flash`, `/del`)
+  - `hud` verb ï¿½ HUD status cells (`/add`, `/refresh`, `/flash`, `/del`)
     with diff-based redraw (only changed cells flushed).
-  - `key` verb — key bindings + synthetic input (`/bind`, `/unbind`,
+  - `key` verb ï¿½ key bindings + synthetic input (`/bind`, `/unbind`,
     `/inject`, `/mode`, `/list`).
-  - `tap` verb — touch hotspot binding (`/on`, `/off`, `/clear`, `/list`).
-  - `event` verb — script-visible event multiplexer (`/wait`, `/type`,
+  - `tap` verb ï¿½ touch hotspot binding (`/on`, `/off`, `/clear`, `/list`).
+  - `event` verb ï¿½ script-visible event multiplexer (`/wait`, `/type`,
     `/field`, `/dispatch`, `/post`, `/clear`, `/count`). Typed events (key,
     tap, timer, serial, resize) queue for batch scripts; `event /wait`
     replaces polling in `while` loops.
-  - `trace` verb — on-screen diagnostics (`/on`, `/off`, `/level`,
+  - `trace` verb ï¿½ on-screen diagnostics (`/on`, `/off`, `/level`,
     `/status`).
-  - `prompt` verb — enhanced line input with masking and timeout.
-  - `draw /flip` — back-buffer swap (flush + workspace re-render).
-  - `theme /hud` — HUD band palette control.
+  - `prompt` verb ï¿½ enhanced line input with masking and timeout.
+  - `draw /flip` ï¿½ back-buffer swap (flush + workspace re-render).
+  - `theme /hud` ï¿½ HUD band palette control.
   - 18 new `P4_CONFIG_WS_*` config macros (pane/widget/HUD/event/tap/key
     capacities) in `p4minishell_config.h` + `.yaml`.
   - 15 new unit tests covering panes, widgets, HUD, events, keys, taps.
@@ -477,27 +568,27 @@ open bugs see [`bugs.md`](bugs.md).
 - **Modal layer** (`components/tui/tui_modal.h` + `tui_modal.c`): typed mode
   frame stack, multi-stroke keymaps with leader keys, nested blocking dialogs
   with return values, mode-scoped state bags with transition guards, and
-  macro record/replay — all fixed-capacity (no dynamic allocation).
-  - `mode` verb — mode stack management (`/push`, `/pop`, `/switch`,
+  macro record/replay ï¿½ all fixed-capacity (no dynamic allocation).
+  - `mode` verb ï¿½ mode stack management (`/push`, `/pop`, `/switch`,
     `/top`, `/list`, `/count`, `/drop`, `/timeout`).
-  - `mbind` verb — per-mode chord bindings (`/map`, `/unbind`, `/leader`,
+  - `mbind` verb ï¿½ per-mode chord bindings (`/map`, `/unbind`, `/leader`,
     `/list`). The `m` prefix avoids collision with the existing `bind`
     F-key verb.
-  - `mcmd` verb — named commands (`/def`, `/list`, `/run`, `/undef`).
-  - `mdialog` verb — nested blocking dialogs with return values (`/confirm`,
+  - `mcmd` verb ï¿½ named commands (`/def`, `/list`, `/run`, `/undef`).
+  - `mdialog` verb ï¿½ nested blocking dialogs with return values (`/confirm`,
     `/input`, `/result`). The `m` prefix avoids collision with the existing
     `dialog` modal surface.
-  - `guard` verb — transition hooks with veto (`/on`, `/off`, `/list`).
-  - `scope` verb — mode-scoped variable bags (`/save`, `/restore`,
+  - `guard` verb ï¿½ transition hooks with veto (`/on`, `/off`, `/list`).
+  - `scope` verb ï¿½ mode-scoped variable bags (`/save`, `/restore`,
     `/list`, `/clear`).
-  - `palette` verb — command palette dispatch (`/open`, `/close`, `/source`).
-  - `mmacro` verb — event macro record/replay (`/record`, `/stop`,
+  - `palette` verb ï¿½ command palette dispatch (`/open`, `/close`, `/source`).
+  - `mmacro` verb ï¿½ event macro record/replay (`/record`, `/stop`,
     `/replay`, `/list`).
-  - `pending` verb — chord buffer inspection (`/get`, `/clear`, `/timeout`).
-  - `mstatus` verb — per-mode statusline (`/set`, `/render`).
-  - `repeat` verb — repeat count prefix (`/last`, `/set`, `/clear`).
-  - `cancel` verb — unwind modal state (`[/to NAME]`, `[/all]`, `[/code N]`).
-  - `buffer` verb — modal text buffer (`/open`, `/close`, `/list`, `/mode`).
+  - `pending` verb ï¿½ chord buffer inspection (`/get`, `/clear`, `/timeout`).
+  - `mstatus` verb ï¿½ per-mode statusline (`/set`, `/render`).
+  - `repeat` verb ï¿½ repeat count prefix (`/last`, `/set`, `/clear`).
+  - `cancel` verb ï¿½ unwind modal state (`[/to NAME]`, `[/all]`, `[/code N]`).
+  - `buffer` verb ï¿½ modal text buffer (`/open`, `/close`, `/list`, `/mode`).
   - 15 new `P4_CONFIG_MODAL_*` config macros (frame/map/binding/command/
     scope/guard/macro capacities) in `p4minishell_config.h` + `.yaml`.
   - 12 new unit tests covering mode push/pop/switch, bindings, chords,
@@ -528,13 +619,13 @@ open bugs see [`bugs.md`](bugs.md).
 
 - **Browser rendering order and head/body resolution** - sibling blocks were
   pushed first-to-last onto a LIFO stack and drawn upside down; a normal
-  `<html><head>…</head><body>…` document left `tree->body` NULL, so the renderer
+  `<html><head>ï¿½</head><body>ï¿½` document left `tree->body` NULL, so the renderer
   walked the root and printed `<title>` and raw `<style>` CSS as page text.
 - **Command-worker memory budget** - the browser's ~28 KB CSS ruleset moved to
   PSRAM and DOM parse depth is bounded; the SD history save moved off the
   `esp_timer` task (4 KB timer stack); the Wi-Fi init task is 10 KB; the worker
   is 28 KB static. Boot-time SDMMC/C6 DMA allocations no longer fail.
-- **Deep batch apps** - MOOD's sampler uses a `goto` loop (the `while … call`
+- **Deep batch apps** - MOOD's sampler uses a `goto` loop (the `while ï¿½ call`
   wrapper overflowed the 28 KB worker by ~200 B); the APPLIB probe is invoked
   conditionally so it adds no frame when disabled.
 - **Audio under memory pressure** - playback refuses cleanly when the
@@ -590,14 +681,14 @@ open bugs see [`bugs.md`](bugs.md).
 
 - **Bring-up: the tree now builds, links, and boots green on both board
   profiles** (`jc1060p470c` and `m5stack_tab5`), for the firmware and the
-  standalone test project — zero errors, zero warnings — and the 559-test
+  standalone test project ï¿½ zero errors, zero warnings ï¿½ and the 559-test
   on-board suite passes on COM3 and COM6 (`UNIT RESULT OK`).
   - `shell.c` transcript click regions no longer keep a 4 KB command buffer
     inline per slot (~131 KB of `.bss`); the command is a heap (PSRAM-first)
     pointer owned per slot. The old table overflowed the internal DRAM region,
     leaving no room to place `.sbss`.
   - `gfx_font.c` regenerated from `tools/gen_gfx_font.py` with a real CP437
-    table — 95 entries in a 256-slot array had been shifting every glyph.
+    table ï¿½ 95 entries in a 256-slot array had been shifting every glyph.
   - `archive` delegates to `components/zip`; a duplicate ZIP reader and a
     duplicate CRC-32 table were removed. `zip_entry_t.crc32` is now 32-bit,
     `archive_detect_format` no longer reads past its probe buffer, and
@@ -634,7 +725,7 @@ open bugs see [`bugs.md`](bugs.md).
 ### Added
 
 - **EPUB e-book reader (`epub` verb family)**: minimal EPUB reader for `.epub`
-  files — ZIP-based EPUB archives with OPF/NCX/nav parsing, chapter rendering
+  files ï¿½ ZIP-based EPUB archives with OPF/NCX/nav parsing, chapter rendering
   via HTML-to-ANSI, spine/TOC navigation, and resource extraction.
 - New `components/epub/` leaf module (mirrors captive portal pattern):
   ZIP extraction + OPF/NCX/nav parsing + bounded HTML rendering,
@@ -786,12 +877,12 @@ performance pass (F26).
   no longer reboots under load. The transport-reset retry stays as a safety net.
 - **Tab5 reported a 100% "full" battery with no pack** (`bugs.md` F24): with no
   pack the INA226 bus node floats to the charger rail (~8.40 V) with ~0 current
-  — indistinguishable from a full 2S pack by voltage alone. A pack is now
+  ï¿½ indistinguishable from a full 2S pack by voltage alone. A pack is now
   judged present only when the reading is clearly inside the pack range or the
   recent samples are all plausible and stable; the IP2326 `CHG_STAT_LED` line
   (expander-2 0x44 P6) corroborates a toggling-with-no-current charger. No pack
   now reports `N/C` and the header `BAT N/C`.
-- **Tab5 animation/scroll lag and tearing** (`bugs.md` F25): three causes —
+- **Tab5 animation/scroll lag and tearing** (`bugs.md` F25): three causes ï¿½
   CPU screen rotation, an O(all-spans) transcript re-wrap on every append, and
   a single draw buffer. Rotation now uses the P4 PPA; the transcript reconcile
   is suspended while a gfx app surface owns the screen and its retained span
@@ -800,7 +891,7 @@ performance pass (F26).
   stats` average frame 190 ? 5.6 ms on COM6.
 - **Transcript per-command cost now scales with the viewport, not the session**
   (`bugs.md` F26, windowed pass): the transcript renders through a windowed row
-  model — scrollback is retained as measured byte-offset rows in PSRAM
+  model ï¿½ scrollback is retained as measured byte-offset rows in PSRAM
   (`P4_CONFIG_TRANSCRIPT_ROW_CAP` table + pixel prefix), a full-height
   transparent spacer sets the scroll range, and only the rows overlapping the
   viewport (plus `P4_CONFIG_TRANSCRIPT_WINDOW_MARGIN_PX`) are materialized as
@@ -834,7 +925,7 @@ performance pass (F26).
 - **P4Sync handshake + harness track** (`sync [status]`, `P4_CONFIG_SYNC_INVENTORY_MAX`,
   `tools/suites/s15_p4sync.py`, `tools/p4sync/`): the firmware prints one
   read-only `sync.*` capability snapshot (proto tag, board, SD/lock state,
-  SDFX/PIMX/BMPX magics, byte limits) over the existing serial engine —
+  SDFX/PIMX/BMPX magics, byte limits) over the existing serial engine ï¿½
   no second walker, parser, or CRC. The host prototype reuses the shared
   `p4test` transports (file push/pull, screenshot; PIM stays with
   `pim_sync.py`). Roadmap section F records the phased plan. The new suite
@@ -870,8 +961,8 @@ performance pass (F26).
   verbs (broker-dependent checks skip cleanly). The v1.3.0 sweep exercises the
   suite on both boards (15/15 with no broker attached); a live broker soak,
   sleep/wake reconnect, and OTA-exclusion retest remain follow-ups.
-- **Framework/portability chapter work** (roadmap §A): build-tree hygiene
-  (`build-tab5/`, `test/build-tab5/` untracked — they were committed before
+- **Framework/portability chapter work** (roadmap ï¿½A): build-tree hygiene
+  (`build-tab5/`, `test/build-tab5/` untracked ï¿½ they were committed before
   the ignore rules; working files untouched), capability queries migrated
   from preprocessor `#if BOARD_CFG` to the zero-cost `board_caps_*` runtime
   helpers in `power_commands.c`/`periph_commands.c`/`clock_rtc.c` (plus a new
@@ -890,7 +981,7 @@ performance pass (F26).
   `P4_CONFIG_EDITOR_AUTOSAVE_SECS`): dirty buffers spill to `sd:/tmp/edit/`
   on interval; `recover list|restore|discard|clear` manages crash files; a
   successful save deletes its crash file. Saves are now atomic (temp file +
-  rename via `storage_replace_file()`, `.bak` kept) — a failed save leaves
+  rename via `storage_replace_file()`, `.bak` kept) ï¿½ a failed save leaves
   the original untouched instead of removing a partial. Covered by
   `s09_editor` and unit tests.
 - **Audio output routing with headphone auto-mute** (`audio output
@@ -922,7 +1013,7 @@ performance pass (F26).
   `sd:/CERTS/`; `certs rebuild` concatenates all `.pem` files into a bundle.
   At boot, `certs_load_sd_store()` scans the directory, concatenates PEM
   contents into a PSRAM buffer, and registers it with
-  `esp_tls_set_global_ca_store()` — httpget and c6ota then verify peer
+  `esp_tls_set_global_ca_store()` ï¿½ httpget and c6ota then verify peer
   certificates against the combined trust set.  Build-verified for both boards
   and the `test/` app (0 errors/warnings); on-hardware verification deferred.
 - **BLE HID host** (`bluetooth connect` / `bluetooth disconnect`): the firmware now acts as a
@@ -933,7 +1024,7 @@ performance pass (F26).
   (0x2A22), writing the CCC (0x2902) to enable notifications. Incoming boot-protocol reports
   arrive as `BLE_GAP_EVENT_NOTIFY_RX`, are parsed as USB-HID-compatible reports (modifiers in
   byte 0, up to 6 key codes in bytes 2-7), and their press/release deltas are routed to the shell
-  through the new `networking_host_ops_t.bluetooth_keyboard_input` callback — the same
+  through the new `networking_host_ops_t.bluetooth_keyboard_input` callback ï¿½ the same
   `shell_usb_keyboard_input` path USB HID uses, so a BLE keyboard types into the prompt and the
   on-screen keyboard auto-hides. `bluetooth_is_device_connected()` (distinct from the NimBLE-sync
   `bluetooth_is_connected()`) feeds `command_physical_keyboard_present()`. `bluetooth status`
@@ -951,12 +1042,12 @@ performance pass (F26).
   for `jc1060p470c` and `m5stack_tab5`, with a hard rule in `ai-context.md` to
   read it before any hardware task.
 - **`s14_apps.py` deep drivers**: every interaction-heavy reference app now
-  has a dedicated reactive walker — ADVENT take/inv/score/save round-trip,
+  has a dedicated reactive walker ï¿½ ADVENT take/inv/score/save round-trip,
   MOOD 5-round trend, TCMD on-dispatch swap + guaranteed exit, NOTES deep
   new-note/list, ELITE buy/save, PALMTOP calc/stopwatch/CSV/TCP/crypt, DIAG
   identity + 150-frame bench, and a COMPANION menu walk across Services/
   Packages, the Note pad, offline fetch, calc, and the Theme/Rotate/Quick-
-  settings form — using marker/echo-barrier waits pinned to each app's
+  settings form ï¿½ using marker/echo-barrier waits pinned to each app's
   `on %errorlevel%+1` dispatch. NONSTOP `extra` lists pin CONTROL's
   switch/while/if-group/`for /A`/string lines and the BOUNCE/GFXTOOL
   frame/blit markers.
@@ -995,11 +1086,11 @@ performance pass (F26).
   pending). Build-verified for both boards and the `test/` app
   (0 errors/warnings); on-hardware verification deferred.
 - **Per-board sleep wake sources** (`power_commands.c`, `display_get_touch_int_gpio()`):
-  light sleep now arms every interrupt the fitted hardware actually wires — the
+  light sleep now arms every interrupt the fitted hardware actually wires ï¿½ the
   touch controller interrupt (`P4_CONFIG_POWER_WAKE_TOUCH`, read from the live
   panel driver so it is honest per Tab5 revision: GPIO23 on ST7123/ST7121,
   strapped and unavailable on ILI9881C+GT911) and the Tab5Keyboard interrupt
-  GPIO50 (`P4_CONFIG_POWER_WAKE_KEYBOARD`) — alongside the existing user GPIO.
+  GPIO50 (`P4_CONFIG_POWER_WAKE_KEYBOARD`) ï¿½ alongside the existing user GPIO.
   `deepsleep` arms the user GPIO through `esp_deep_sleep_enable_gpio_wakeup()`
   only when it is an RTC IO (`shell_power_deep_wake_gpio_eligible()`,
   GPIO0..GPIO15 on the ESP32-P4) and reports timer-only honestly otherwise;
@@ -1034,7 +1125,7 @@ performance pass (F26).
 - **SPI transactions restored** (`spi loopback`/`peek`/`poke`, `periph_commands.c`):
   the toolkit had reported SPI transactions as an "unavailable on this board"
   hardware gap, on the belief that initializing the SPI host with the ESP-Hosted
-  SDIO link active stalled the chip. That was wrong — the C6 hosted link and the
+  SDIO link active stalled the chip. That was wrong ï¿½ the C6 hosted link and the
   microSD card are on the **SDMMC controller**, not a SPI host, so they are
   independent. The toolkit now brings up SPI3 with caller-supplied pins routed
   through the GPIO matrix (`SPICOMMON_BUSFLAG_GPIO_PINS`, DMA disabled) and runs
@@ -1049,7 +1140,7 @@ performance pass (F26).
   IDF's `sd_pwr_ctrl_new_on_chip_ldo()`, which acquires the channel at 0 mV and
   made the LDO driver log `ldo: The voltage value 0 is out of the recommended
   range [500, 2700]` on every boot. `board_bsp/src/bsp_storage.c` now owns the
-  channel directly — it acquires LDO_VO4 at the card's 3.3 V IO level and
+  channel directly ï¿½ it acquires LDO_VO4 at the card's 3.3 V IO level and
   publishes the standard `sd_pwr_ctrl_drv_t` interface, so the SDMMC stack still
   switches IO voltage (SDR50/SDR104) through `set_io_voltage` with no
   zero-voltage acquire. New board knobs `BOARD_CFG_SD_PWR_LDO_CHAN` /
@@ -1060,7 +1151,7 @@ performance pass (F26).
   window manager detects head-moving truncation in O(1) (the 64 KB
   rendered-prefix snapshot and the per-apply `strlen`/`strncmp`/full-buffer
   `snprintf` scans are gone), and staging copies take a dedicated mutex instead
-  of the LVGL port lock — the command worker no longer serializes behind a
+  of the LVGL port lock ï¿½ the command worker no longer serializes behind a
   render on the append path. Repaints are pumped by a coalescing LVGL timer
   (`P4_CONFIG_TRANSCRIPT_APPLY_TICK_MS`, default 10 ms); screenshots/key-waits
   still force a synchronous apply (`windows_transcript_sync_apply`). Worker
@@ -1187,9 +1278,9 @@ Writerdeck milestone and the two-board bring-up: the
 M5Stack Tab5 is now a first-class `-DP4_BOARD` target with full on-board
 hardware (display/touch, audio, RTC, keyboard + LEDs, INA226 gauge + charging,
 BMI270 IMU, SC202CS MIPI-CSI camera, hosted C6 Wi-Fi/BLE) alongside the
-JC1060P470C reference. Additive only — no existing feature removed. See
+JC1060P470C reference. Additive only ï¿½ no existing feature removed. See
 [`roadmap.md`](roadmap.md), [`tutorial_edit.md`](tutorial_edit.md), and
-[`PORTING.md`](PORTING.md) §6.
+[`PORTING.md`](PORTING.md) ï¿½6.
 
 ### Added
 
@@ -1219,7 +1310,7 @@ JC1060P470C reference. Additive only — no existing feature removed. See
   `m5stack_tab5` BSP), a per-board `sdkconfig.<board>`, and the Tab5Keyboard
   I2C component. Peripherals: 1280x720 MIPI-DSI with runtime
   ILI9881C/ST7123/ST7121 panel auto-detect, ES8388 audio, RX8130CE RTC,
-  MicroSD, and hosted C6 Wi-Fi + BLE. See `PORTING.md` §6.
+  MicroSD, and hosted C6 Wi-Fi + BLE. See `PORTING.md` ï¿½6.
 - **Board-aware tooling**: `tools/board_ports.py` resolves board?COM by USB
   serial + live `sysinfo`, and `sysinfo` now reports `board.id` /
   `board.requested_name` / `board.detected_name`.
@@ -1319,7 +1410,7 @@ JC1060P470C reference. Additive only — no existing feature removed. See
   lists `TEMPLATES/` + `DICTS/` in the SD layout, and states the fallbacks.
 - **Stale writerdeck docs**: `command.md` editor limits corrected to
   1 MB / 65536, export caps/refusals, the 96 KB Markdown-only preview gate,
-   and the template-ignore rules documented; `tutorial_edit.md` §18 gained
+   and the template-ignore rules documented; `tutorial_edit.md` ï¿½18 gained
    writerdeck troubleshooting.
 - **Tab5 Wi-Fi/BT failed on the first hosted RPC** (new board): the first
   `esp_hosted` RPC issued immediately after a fresh connect timed out at the
@@ -1338,7 +1429,7 @@ JC1060P470C reference. Additive only — no existing feature removed. See
   and test projects.
 - **Tab5 C6 shipped with factory v2.3.0**: documented the one-time standalone
   flasher required to move the C6 to a host-compatible ESP-Hosted 3.x image
-  (`c6ota` cannot do it — an SD-sourced transfer wedges the shared SDMMC bus),
+  (`c6ota` cannot do it ï¿½ an SD-sourced transfer wedges the shared SDMMC bus),
   and attributed the vendored Tab5 BSP in `licence.md`.
 - **`about.display` advertised the reference panel on the Tab5** (identity
   drift): the line was hardcoded; it now reports the live panel/touch/resolution
@@ -1388,7 +1479,7 @@ JC1060P470C reference. Additive only — no existing feature removed. See
 ## [1.1.0] - Unreleased
 
 Roadmap section A groundwork (framework + portability), targeting a future
-M5Stack Tab5 + Tab5Keyboard port. No port code yet — this release only lays
+M5Stack Tab5 + Tab5Keyboard port. No port code yet ï¿½ this release only lays
 the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
 
 ### Added
@@ -1399,7 +1490,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   anatomy and minimal bring-up checklist.
 - **Native-app packaging spec.** `docs/native_packaging.md` defines the
   manifest keys, ABI version, and hash; `pkg` accepts and verifies
-  store-only native payloads (execution deferred — MCUs have no `dlopen`).
+  store-only native payloads (execution deferred ï¿½ MCUs have no `dlopen`).
 - **SDK scaffolding.** `tools/newapp.py` template generator plus an
   out-of-tree-style `applib` sample component.
 - **CI build matrix.** Firmware + test builds across board profiles;
@@ -1414,7 +1505,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
 ### Fixed - Tab5 white-noise regression (bugs.md F28)
 
 - **Constant white noise from the Tab5 speaker since v1.3.0**: two coupled
-  v1.3.0 changes — the new `audio output` routing latched the NS4150B amp ON
+  v1.3.0 changes ï¿½ the new `audio output` routing latched the NS4150B amp ON
   from the boot pre-warm (plus `bsp_audio_codec_speaker_init()`), while the
   I2S double-disable fix left the clocks stopped while idle, so the
   powered-but-clockless ES8388 idled as hiss (`volume` and factory reset could
@@ -1472,7 +1563,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   spans, plain buffers, redirect captures, and the harness strip never see
   escape residue.
 - **Tap-confirm execution** (`components/shell/shell.{c,h}`, `main/main.c`):
-  links share the `anchor` click-region table with a confirm gate — first tap
+  links share the `anchor` click-region table with a confirm gate ï¿½ first tap
   previews `<label> -> <command> (tap again to run)`, second tap executes on
   the command worker via one `shell_link_fire()` path shared with `ui link`.
   Anchors keep immediate-run; misses fall through to prompt focus (never run).
@@ -1509,7 +1600,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   storage_ini core, no new parser). `install` (validates, replaces) /
   `remove` (refused while running) / `list` (state/flags/restarts/line) /
   `start` / `stop` (admin off switch, never restarted). An own FreeRTOS timer
-  (`P4_CONFIG_SVC_TICK_MS`, created lazily — never in the boot heap window)
+  (`P4_CONFIG_SVC_TICK_MS`, created lazily ï¿½ never in the boot heap window)
   reaps unexpected exits and re-starts `/restart` services within a per-boot
   budget (`P4_CONFIG_SVC_RESTART_MAX`, then parked); `taskkill` counts as
   unexpected and IS restarted. `batch_svc_boot()` re-starts autostart entries
@@ -1521,14 +1612,14 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   owner-tracked and force-released at job exit.
 - **Pool 1?4 slots** (`P4_CONFIG_BG_TASKS`, `start`, `taskkill`, `ps` all
   slot-generic already): only `P4_CONFIG_BG_EAGER_TASKS` (2) tasks are created
-  at boot — every pool task costs internal heap outside its PSRAM stack, and
+  at boot ï¿½ every pool task costs internal heap outside its PSRAM stack, and
   the boot window must keep 12 KB contiguous for the Wi-Fi task (measured:
   4 eager tasks brick it). Lazy slots create on first claim; stacks are
   preallocated either way. Runner wake uses the established
   suspend/resume-on-notify-take mechanism (verified identical for lazy tasks).
-- **Boot-heap discipline (bugs.md F34 class):** bulk tables stay out of BSS —
+- **Boot-heap discipline (bugs.md F34 class):** bulk tables stay out of BSS ï¿½
   the 32 KB `svc_entry_t.line` table starved the command worker exactly like
-  F34 (fixed: lines in PSRAM); then `batch_task_ctx_t` (~10 KB × new slots),
+  F34 (fixed: lines in PSRAM); then `batch_task_ctx_t` (~10 KB ï¿½ new slots),
   himem/sync/svc tables moved to PSRAM (lazy, NULL-safe degrade). BSS growth
   audits against the 12 KB Wi-Fi block from now on.
 - **Apps actually using it:** `SVC.BAT` converted to an installed service
@@ -1551,7 +1642,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   s14's own `_advent` standalone (8/8), batch at 58 ms/200 set-a iterations,
   modal open, serial I/O. Likely modal-open/input races under full-suite
   pacing (the documented H7 class + `_press` retry logic exist for exactly
-  this) and/or worker-busy queueing after the heavy NONSTOP apps — in code
+  this) and/or worker-busy queueing after the heavy NONSTOP apps ï¿½ in code
   paths this round did not modify (modal, choice/keys, serial, draw, LVGL,
   transcript). Not pursued into working firmware; recorded for the harness
   round. All s14 checks owned by this round (MOOD service view, SYS service
@@ -1565,7 +1656,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   guard free). `alloc` (decimal/`0x`/DOS `K`/`M`, `/v:VAR`) / `free` / `lock` /
   `unlock` / `fill` / `load` / `save` / `crc` with `[offset] [count]`; `crc`
   folds through the single CRC, moved to the strutil leaf as
-  `strutil_crc32_update()` (`shell_crc32_update()` is now its thin wrapper —
+  `strutil_crc32_update()` (`shell_crc32_update()` is now its thin wrapper ï¿½
   serial framing, `crc32`/`asset`, `himem` share one CRC, no second copy).
 - **Process memory isolation:** a `start`ed job reads the global env but
   `set` lands in a lazily-allocated job-private overlay
@@ -1573,7 +1664,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   so background `set` never leaks into the foreground; `himem` blocks are
   owner-tracked, quota-capped per job (`P4_CONFIG_HIMEM_JOB_QUOTA_BYTES`),
   and freed at job exit even when locked. Aliases stay global by design.
-  Nothing a job allocates outlives it — no TSRs.
+  Nothing a job allocates outlives it ï¿½ no TSRs.
 - **Multitasking that matters (still cooperative, still no concurrency
   model change):** `start /wait` joins (job EL propagated, Ctrl+C breaks the
   wait only), `start /t:secs` auto-kills via a deadline enforced at the
@@ -1593,13 +1684,13 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
 - **`screen run` grows `browse`/`view`/`hexview`/`image` types**
   (`components/command/screen_commands.c`): a file picker, pager, hex pager,
   or BMP viewer step is now one `.FRM` (`start=`/`var=`, `file=`/`raw=`)
-  rendered through the existing verbs via argv synthesis — no second surface,
+  rendered through the existing verbs via argv synthesis ï¿½ no second surface,
   no second router. `screen info` reports the new keys; `screen flow` routes
   the new steps unchanged. `s06_batch` covers all four (info fields, 1 s
   timeout runs with ERRORLEVEL asserts, missing-`file=` refusal,
   unknown-type refusal).
 - **Modal audit verdicts:** `menu` (inline transcript numeric menu, 1-based
-  ERRORLEVEL) is not a duplicate of `list` (modal surface, 0-based) — kept
+  ERRORLEVEL) is not a duplicate of `list` (modal surface, 0-based) ï¿½ kept
   as-is. `modal_surf.c` per-surface code is genuinely per-surface (shared
   container/title/button/timeout scaffolding already factored); removed a
   duplicated `esp_log.h` include.
@@ -1612,7 +1703,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   COM3 and COM6; `s06_batch` 142/142 on COM3; `screen info`/`run` for all
   four new types plus refusal paths verified live on COM3 and COM6 (spot);
   boards left pristine (fixtures removed with `del /p`, trash empty).
-- **Docs:** `command.md` (screen key table), `batch.md` §13, `API.md`
+- **Docs:** `command.md` (screen key table), `batch.md` ï¿½13, `API.md`
   (screen synthesis note), `documentation.md` (screens), `ai-context.md`
   findings.
 
@@ -1621,7 +1712,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
 - **Double-glyph set corrected** (`components/ansi/ansi_palette.h`): the 8
   `SH_BOX_*2` / `SH_BOX_*R` macros duplicated single-glyph bytes (e.g. `X2`
   had `T2` bytes, `T2`/`B2`/`L2`/`R2` decoded off-spec); replaced with true
-  CP437 doubles (U+2550–U+256C) and rounded variants with inline codepoint
+  CP437 doubles (U+2550ï¿½U+256C) and rounded variants with inline codepoint
   comments. `tui_draw_box` with `double`/`rounded` now renders correctly on
   both boards.
 - **`tui selftest` verb** (`components/tui/tui.c`,
@@ -1648,7 +1739,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
 
 - **CERTS trust-store correctness + live proof:** file-loaded PEM now passes
   its NUL terminator in the length (mbedTLS sniffs PEM-vs-DER on
-  `buf[len-1]`; without it every PEM failed `-0x2180` — F36, fixed and
+  `buf[len-1]`; without it every PEM failed `-0x2180` ï¿½ F36, fixed and
   HW-verified with the mosquitto.org CA ? store ACTIVE).
 - **Portal wiring**: `portal_should_autostart()` is now called from `main.c`
   after `networking_init()`; `P4_CONFIG_PORTAL_TIMEOUT_SECS` is enforced
@@ -1664,7 +1755,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   enumerators sharing the FATFS loop bodies, R-only attr mapping);
   `find` search output is redirect-clean (new `shell_redirect_capture_active()`);
   `DEVICE=<bad>` warns once (F33); `edit cal` alias; `wifi throughput` confirmed
-  as the netbench verb (no new verb — verified wired + documented).
+  as the netbench verb (no new verb ï¿½ verified wired + documented).
   `findstr` caret-eating is shell-escape semantics (F32, documented: `^^` or
   single quotes).
 - **BLE host**: boot-mouse handle subscribed (report?kbd?mouse fallback
@@ -1672,7 +1763,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   `bluetooth mouse on|off` echo verbs; 0x2A4D reports only count as keyboard
   input at exactly 8 bytes. Host-only HID is now a stated hard rule.
 - **HTTP CardDAV** (`pim net pull|push|sync`, new `pim_carddav.c` pure engine:
-  namespace-tolerant multistatus scan, card split, UID extract, URL join —
+  namespace-tolerant multistatus scan, card split, UID extract, URL join ï¿½
   unit-tested): PROPFIND/GET/PUT over generalized `networking_http_request()`
   (method/body/Depth/Basic-auth, 207 accepted; `httpget` delegates unchanged),
   merge/push reusing the serial cores, `/p:` history-masked credentials, no
@@ -1698,7 +1789,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   portal 300 s timeout + TX-cap stability;
   `find` redirect, F33 single-warning boot, `edit cal`, xcopy/findstr, net
   tls verbs, CardDAV refusal paths, full-image image.json. Boards pristine.
-  Bench-blocked live legs (TLS handshake, CardDAV server E2E — both bench
+  Bench-blocked live legs (TLS handshake, CardDAV server E2E ï¿½ both bench
   LANs are HTTP-only, board?PC unrouted; F37) stay open with local
   amqtt + `tools/radicale_fixture.py` bench tooling ready.
 - Docs: `command.md` (pim net, net tls, BLE mouse, certs, portal, find,
@@ -1713,7 +1804,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   (shared `strutil_format_hex_row()`, byte-identical with the hexview modal),
   plus an in-memory hexview modal when interactive (`modal_hexview_run_buf()`).
   Addresses are hex with optional `0x`, capped at 8 digits (a 9-digit address
-  used to wrap `strtoul` on 32-bit long and read as valid — fixed with a length
+  used to wrap `strtoul` on 32-bit long and read as valid ï¿½ fixed with a length
   guard). `poke` is YES-gated and refuses known code windows (flash IROM, RTC
   fast memory). Tunables `P4_CONFIG_DEBUG_DUMP_BYTES/_DISK_MAX_SECTORS/
   _POKE_MAX_BYTES` (+ yaml).
@@ -1784,9 +1875,9 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   (config default `P4_CONFIG_GFIND_SEARCH_FILES_DEFAULT=0`), so existing
   `gfind` output and timing are unchanged.
 - **No duplication and no index.** The file scope walks the **same shared
-  storage search core `findstr /S` uses** — new public
+  storage search core `findstr /S` uses** ï¿½ new public
   `storage_walk_files()` (tree walk) + `storage_scan_file_lines()` (line loop)
-  in `components/storage/storage_text.c` — and the same pure matcher
+  in `components/storage/storage_text.c` ï¿½ and the same pure matcher
   (`shell_findstr_match_line`). `findstr /S` was refactored onto that core, so
   there is exactly one content-search walker and one line loop. The structured
   stores' directories (`P4_CONFIG_GFIND_SKIP_DIRS`: `DBS`, `ALARMS`) and
@@ -1794,7 +1885,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   `P4_CONFIG_GFIND_MAX_FILES` / `_MAX_FILE_BYTES` / `_MAX_MATCHES`.
 - **No SD search index exists and none is planned** (documentation and the
   roadmap say so explicitly); search is always live and can never go stale.
-- **`ai-context.md` hard rule:** *NEVER duplicate — every capability has
+- **`ai-context.md` hard rule:** *NEVER duplicate ï¿½ every capability has
   exactly one implementation.* A review-blocking rule, added to Source Code
   Rules ? Hard Rules, with concrete examples (no second parser/walker/matcher,
   no parallel search index, no duplicate dispatcher).
@@ -1806,7 +1897,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
 - **Docs:** `command.md` (gfind), `SDK.md` (walker renamed to the shared core),
   `documentation.md`, `ai-context.md`, `batch.md`, `readme.md`, `test/README.md`;
   the roadmap "Search everywhere" future row was removed and folded into
-  Part 1 §11.
+  Part 1 ï¿½11.
 
 ### Fixed
 
@@ -1849,7 +1940,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   two timeout-`dialog` `.FRM`s and asserts `screen info`, the `flow: a`/`flow: b`
   trace, the `err:255` route, the final ERRORLEVEL, the `screen run` refusal,
   and a broken-flow refusal (109/109 on COM3 and COM6).
-- **Docs:** `batch.md` §13.1, `command.md` (`screen` + Where-Commands),
+- **Docs:** `batch.md` ï¿½13.1, `command.md` (`screen` + Where-Commands),
   `documentation.md`, `SDK.md`, `ai-context.md`, `readme.md`, `test/README.md`;
   the roadmap "Multi-screen flow engine" residual row is removed as done.
 
@@ -1933,9 +2024,9 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   on pulled-BMP pixels plus both usage errors (102/102 on COM3).
 - **Background compute loops**: hardware-verified `while`/`for /L` bodies
   under `start` with cooperative `taskkill`; display verbs refuse there by
-  design (single shared writer). Pattern documented in `batch.md` §17.
-- **Docs**: `batch.md` (§5 delayed, §6 `/A`, §10.3 `/D`+`/R`, §11 `switch` +
-  paren groups, §16 `blitmany` flags, §17 bg pattern), `command.md`
+  design (single shared writer). Pattern documented in `batch.md` ï¿½17.
+- **Docs**: `batch.md` (ï¿½5 delayed, ï¿½6 `/A`, ï¿½10.3 `/D`+`/R`, ï¿½11 `switch` +
+  paren groups, ï¿½16 `blitmany` flags, ï¿½17 bg pattern), `command.md`
   (reference rows + sections), `API.md`, `ai-context.md`, `documentation.md`,
   `SDK.md`, `tutorial_batch.md`, `roadmap.md` gaps rewritten as done with
   residuals, `test/README.md` count.
@@ -1945,13 +2036,13 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
 - **`screen run <file.frm>` / `screen info <file.frm>`** (new
   `components/command/screen_commands.c`): one screen per flat `KEY=VALUE`
   file (same shape as `APPS/<APP>.APPINFO`, read through the shared
-  `storage_ini` core — no second parser). `type=` selects
+  `storage_ini` core ï¿½ no second parser). `type=` selects
   `dialog`/`list`/`ask`/`form`/`menu`; the runner synthesizes an argv vector
   and calls the existing verb, so every surface has exactly one
   implementation and results keep the same variables + ERRORLEVEL contract.
   `info` describes without UI. Multi-screen apps stay batch files (`screen
-  run` per screen + `if errorlevel`/`goto` — no flow engine by design).
-  Format reference in `batch.md` §13; `command.md`, `API.md` updated;
+  run` per screen + `if errorlevel`/`goto` ï¿½ no flow engine by design).
+  Format reference in `batch.md` ï¿½13; `command.md`, `API.md` updated;
   pure `screen_split_list()` unit-tested; `s06_batch` covers `info` +
   timeout-bounded `run` on hardware (88/88 on COM3).
 - **Roadmap:** the "Structured app format" row is marked done with its
@@ -1971,7 +2062,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   `%%n%%` resolves the live value); bounded by `P4_CONFIG_WHILE_ITER_MAX`
   (100000); ERRORLEVEL 0/1/2. Verified on COM3 (bare-name and `%%` forms).
 - **Indexed arrays**: `[`/`]` are name characters, so `set SPR[0]=...` /
-  `%SPR[0]%` / `set /a SPR[0]+=5` / `calc SPR[1]*2` just work — same 64-slot
+  `%SPR[0]%` / `set /a SPR[0]+=5` / `calc SPR[1]*2` just work ï¿½ same 64-slot
   table, no new storage. Verified on COM3.
 - **DOS string forms**: `%VAR:~start[,len]%` substring (negative counts from
   the end) and `%VAR:old=new%` case-insensitive replace-every, through the
@@ -1981,9 +2072,9 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   3-arg, 1-based like `MID$`) `REPLACE$`. Unit-tested.
 - **`gfx blitmany <slot> <x1> <y1> [<x2> <y2> ...] [transparent]`**: stamps
   one sprite at up to `P4_CONFIG_GFX_BLITMANY_MAX` (64) positions per
-  command — a whole formation per line for batch games. Same blit core,
+  command ï¿½ a whole formation per line for batch games. Same blit core,
   same guards (foreground, open canvas, ERRORLEVEL 0/1/2).
-- **`batch.md`**: single-file batch app spec — process model, quoting,
+- **`batch.md`**: single-file batch app spec ï¿½ process model, quoting,
   variables/arrays/string forms, `set /a`, `calc`, every loop form, `while`
   live-value rules, subroutines, input/modals, persistence, the TUI/GFX
   game kit with a game-loop sketch, packaging/testing, and budgets. An AI
@@ -1996,7 +2087,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
 
 - **Zero-cost `components/board_caps/` leaf** (`board_caps.h`, header-only
   `static inline` over `BOARD_CFG_*`): `board_caps_has_camera/imu/ina226/
-  battery_adc/tab5kbd/ws2812/rgb_via_tab5kbd()` — one truth for new code
+  battery_adc/tab5kbd/ws2812/rgb_via_tab5kbd()` ï¿½ one truth for new code
   instead of scattered `#if BOARD_CFG_*_PRESENT` branches. No RAM, no tasks,
   same codegen; wired into both root and `test/` `EXTRA_COMPONENT_DIRS`.
 - **Board/SDK mirror guard:** build-time `_Static_assert` in
@@ -2010,7 +2101,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   reference board) instead of a hardcoded `LEDC_TIMER_0`.
 - **PWM toolkit can no longer steal the backlight timer:** `shell_pwm_claim()`
   skips `SHELL_PWM_BACKLIGHT_TIMER` (the timer list now names all four timers
-  and filters at claim time — the old table silently assumed timer 1, which is
+  and filters at claim time ï¿½ the old table silently assumed timer 1, which is
   the backlight on the reference board but timer 0 on the Tab5).
 
 ### Fixed - hardware-abstraction hardening
@@ -2023,7 +2114,7 @@ the tracks. See [`roadmap.md`](roadmap.md) Part 2, section A.
   keyboard-LED path when `BOARD_CFG_RGB_VIA_TAB5KBD` is set instead of
   `check GPIO-1`.
 - **Bounded first-RPC recovery (F6):** the hosted version-read retry no longer
-  fires on a definitive version mismatch (`ESP_ERR_INVALID_STATE` — resetting
+  fires on a definitive version mismatch (`ESP_ERR_INVALID_STATE` ï¿½ resetting
   the transport cannot change the C6 image) and settles 200 ms (was 50 ms) so
   the slave can release DAT0. Still a single retry; no loop growth, no
   hard-reset hook (reverted before for hanging Wi-Fi).
@@ -2205,7 +2296,7 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
   missing apps warn and fall back to the viewer).
 - **`startup [list] | add | remove`** (`sd:/STARTUP.INI`) + boot runner
   (`components/boot/boot.c`): one-shot foreground apps after AUTOEXEC.BAT +
-  the LAUNCH_APP offer, before services — boot privilege, pre-lock,
+  the LAUNCH_APP offer, before services ï¿½ boot privilege, pre-lock,
   unsupervised (no second supervisor). Unknown entries skip with one muted
   line.
 - **`launch <app> /setup`** (passthrough `%1=/setup` convention) + `pkg info`
@@ -2216,11 +2307,11 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
   (never auto-applied), `remove` keeps app data with a warning, `purge`
   deletes it (`data=` + app INI, files only), `outdated` flags staged newer
   bundles. New APPINFO keys are additive metadata (`handles`, `setup`,
-  `autostart`, `alias`, `data`, `requires`, `min_fw`) — no ABI bump
-  (`ABI.md` §3, `docs/native_packaging.md`).
+  `autostart`, `alias`, `data`, `requires`, `min_fw`) ï¿½ no ABI bump
+  (`ABI.md` ï¿½3, `docs/native_packaging.md`).
 - Docs: `command.md` (assoc/startup/pkg sections + Where Commands Live),
-  `batch.md` §17, `API.md`, `ABI.md` §3, `docs/native_packaging.md`,
-  `tutorial_batch.md` §8, `documentation.md`, `readme.md`,
+  `batch.md` ï¿½17, `API.md`, `ABI.md` ï¿½3, `docs/native_packaging.md`,
+  `tutorial_batch.md` ï¿½8, `documentation.md`, `readme.md`,
   `architecture.md` (persistence rows), `test/README.md`, `harness.md`,
   `ai-context.md` findings, `bugs.md` quirks.
 
@@ -2237,23 +2328,23 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
 
 ### Added - BASIC-flavoured batch control flow
 
-- **`call :label [args]`** — run a local `:label` block as a subroutine and
+- **`call :label [args]`** ï¿½ run a local `:label` block as a subroutine and
   resume at the next line when it returns (`return` / `exit /b` /
   `goto :eof` / EOF).
-- **`gosub :label [args]` and `gosub <file.bat>::<routine> [args]`** — the
+- **`gosub :label [args]` and `gosub <file.bat>::<routine> [args]`** ï¿½ the
   BASIC-named siblings of `call :label` and the shared-library routine call.
-- **`return [code]`** — leave a `call`/`gosub` scope (at the top level of a
+- **`return [code]`** ï¿½ leave a `call`/`gosub` scope (at the top level of a
   file it ends the frame exactly like `goto :eof`); an optional code sets
   errorlevel.
-- **`on <expr> goto|gosub|call <label>[,<label>...]`** — BASIC computed
+- **`on <expr> goto|gosub|call <label>[,<label>...]`** ï¿½ BASIC computed
   dispatch. The expression is evaluated by the `set /a` engine; the 1-based
-  result selects a target and an out-of-range value falls through. `on … call`
-  is an alias of `on … gosub`.
+  result selects a target and an out-of-range value falls through. `on ï¿½ call`
+  is an alias of `on ï¿½ gosub`.
 - **Higher label capacity.** `P4_CONFIG_BATCH_LABEL_MAX` 48 -> 128 and
   `P4_CONFIG_BATCH_LABEL_BYTES` 48 -> 64, and a target now accepts both
   `:label` and bare `label` forms.
 - **`proc /labels` and `proc /goto`** report the scanned labels / pending goto.
-- **`apps/controlflow/CONTROL.BAT`** — a self-contained demo app exercising
+- **`apps/controlflow/CONTROL.BAT`** ï¿½ a self-contained demo app exercising
   `gosub`/`return`/`on`; wired into `push_apps.py`, `s14_apps.py` and the
   `appdiff` parity gate.
 
@@ -2272,7 +2363,7 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
 
 - A comment line containing `|`, `<`, `>`, `&` or `%` was expanded, chained,
   piped and redirected because those parsers ran before the comment was
-  recognised. `rem … | …` ran the tail as a command and `rem … > file` created
+  recognised. `rem ï¿½ | ï¿½` ran the tail as a command and `rem ï¿½ > file` created
   a file; app comments such as `GFXTOOL.BAT`'s marker list emitted a spurious
   `Unknown command: NOIMG]`. Comments are now swallowed to end of line at both
   command entry points (cmd.exe parity), covered by new `s06_batch.py` checks
@@ -2341,14 +2432,14 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
 
 ## [0.38.5] - 2026-09-15 (COM3; ESP-IDF v5.5.5)
 
-### Fixed — status LED showed a stale colour when `rgb auto on` was enabled
+### Fixed ï¿½ status LED showed a stale colour when `rgb auto on` was enabled
 
 - **Wi-Fi status events arriving while the auto-status layer was off did not
   update the persistent status colour.** `led_notify()` only wrote
   `s_status_frame` when `s_auto_status` was true; in manual mode a status event
   (e.g. `WIFI_CONNECTED`) was shown as a transient and the status frame stayed
   at its previous value (amber `#FF9900` from boot). Enabling auto afterwards
-  (`rgb auto on`) then showed the stale colour — amber while connected. Status
+  (`rgb auto on`) then showed the stale colour ï¿½ amber while connected. Status
   events now always refresh the status frame (and still flash transiently while
   auto is off), so `rgb auto on` reflects the live Wi-Fi state.
 - Verified with the new `tools/led_watch.py` webcam tester (locates the LED,
@@ -2358,7 +2449,7 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
 
 ## [0.38.4] - 2026-09-15 (COM3; ESP-IDF v5.5.5)
 
-### Fixed — batch/canvas apps slow down over time; Stop (foreground break) did nothing
+### Fixed ï¿½ batch/canvas apps slow down over time; Stop (foreground break) did nothing
 
 - **Batch apps that open a gfx canvas (BOUNCE.BAT) slowed down massively after a
   few seconds.** Every batch **line** runs `shell_execute_command()`, which
@@ -2366,7 +2457,7 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
   flushed the label, and `windows_set_transcript_text_len()` copies the *whole*
   ANSI transcript (up to 64 KB) into the staging buffer and rebuilds the spans.
   While a canvas/TUI/app covers the transcript those spans are hidden, so the
-  work was pure waste — and it grew with the transcript (fps 26 ? 15 over ~35 s,
+  work was pure waste ï¿½ and it grew with the transcript (fps 26 ? 15 over ~35 s,
   then a plateau). The per-line copy also churned the tiny internal heap.
   Fix: `shell_transcript_update_label()` skips the staging copy + span rebuild
   while `windows_transcript_is_hidden()`, and the header poll repaints once when
@@ -2383,14 +2474,14 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
 
 ## [0.38.3] - 2026-09-15 (COM3; ESP-IDF v5.5.5)
 
-### Fixed — BOUNCE.BAT jerky / stuck animation (gfx canvas present latency + blocking in-loop screenshot)
+### Fixed ï¿½ BOUNCE.BAT jerky / stuck animation (gfx canvas present latency + blocking in-loop screenshot)
 
 - **The bouncing-ball demo looked sluggish and jerky because `gfx show` did
   not present the frame promptly.** `gfx show` only calls `lv_obj_invalidate()`;
   the ESP LVGL port task sleeps up to `task_max_sleep_ms` (500 ms) between
   timers, so the invalidated canvas was often not redrawn until the next
-  unrelated timer fired. A 20 fps batch loop therefore presented only ~4–5
-  frames/s — the ball jumped ~3 frames at a time. `gfx show` now calls
+  unrelated timer fired. A 20 fps batch loop therefore presented only ~4ï¿½5
+  frames/s ï¿½ the ball jumped ~3 frames at a time. `gfx show` now calls
   `lvgl_port_task_wake(LVGL_PORT_EVENT_DISPLAY, NULL)` after invalidating, so
   the canvas presents each frame.
   - Measured with the webcam ball tracker: **35% ? 85%** of camera frames show
@@ -2406,7 +2497,7 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
 
 ## [0.38.2] - 2026-09-15 (COM3; ESP-IDF v5.5.5)
 
-### Fixed — "BSOD" full-screen blue flash (MIPI-DSI underrun); boot first-mount work + SD/C6 bring-up order
+### Fixed ï¿½ "BSOD" full-screen blue flash (MIPI-DSI underrun); boot first-mount work + SD/C6 bring-up order
 
 - **The recurring full-screen blue flash is a MIPI-DSI bridge underrun, not a
   panel or camera artifact.** The header status bar sampled telemetry on the
@@ -2424,7 +2515,7 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
   - Optional AXI-ICM QoS hardening (`display_apply_axi_icm_qos()`,
     `P4_CONFIG_DISPLAY_ICM_QOS_*`) and a `display stress on|off` reproducer.
   - Measured with the new camera detector `tools/display_glitch_watch.py`
-    (mean blue minus red over the panel ROI): ~1–4 events/60 s and 12/90 s
+    (mean blue minus red over the panel ROI): ~1ï¿½4 events/60 s and 12/90 s
     before, **0 events in 120 s + 240 s idle and a full boot** after.
 
 - **Boot: first-mount work (welcome / default files / font / CJK / history) was
@@ -2445,7 +2536,7 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
   - `tools/boot_regression.py` 10/10 clean; Wi-Fi associates and gets an IP;
     on-board unit suite green.
 
-### Fixed — `calc` RATE zero-payment error; `csv` aggregate/range near-miss substitution
+### Fixed ï¿½ `calc` RATE zero-payment error; `csv` aggregate/range near-miss substitution
 
 - **`RATE(12,0,100)` returned a bogus rate instead of a domain error.**
   `calc_fin_rate()` used Newton's method unconditionally; with `pmt == 0` the
@@ -2463,7 +2554,7 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
   Fixes `test_csv_substitute_ranges`.
 - On-board unit suite is fully green after both fixes.
 
-### Added — boot splash + repository icon
+### Added ï¿½ boot splash + repository icon
 
 - `tools/make_icon.py` generates the committed `icon/icon-512.png` (referenced
   by `readme.md`) and the firmware splash asset `main/assets/icon_splash.c/.h`
@@ -2474,7 +2565,7 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
   after `P4_CONFIG_SPLASH_MS` (1500 ms) or dismissed early by a tap, and
   re-created across UI rebuilds. `readme.md` now carries the icon.
 
-### Fixed — serial console CRLF artifact broke `set /p`, `pause`, `choice`, hidden input
+### Fixed ï¿½ serial console CRLF artifact broke `set /p`, `pause`, `choice`, hidden input
 
 - **Symptom:** `set /p`, `set /p NAME=<prompt> /P`, `shell_read_line_hidden`,
   `crypt ... /ask`, `app_read_password`, and the `security` passcode prompt
@@ -2486,7 +2577,7 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
   the second (`0x0A`) was read as a separate empty line and, when the command
   worker had just armed a key wait, was forwarded into the key queue and
   satisfied the wait as an empty key. Confirmed with raw console logs
-  (`got=17` command … then `got=1 first=0x0A` while `readline: begin`).
+  (`got=17` command ï¿½ then `got=1 first=0x0A` while `readline: begin`).
 - **Fix:** `shell_uart_console_task()` timestamps the last completed line and
   drops any leading LF that arrives within a 100 ms grace window, in both the
   command path and the key-wait forwarding path. A genuine blank line typed by
@@ -2496,7 +2587,7 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
   smoke (`ver`, `config /b`, `theme show`, `owner`, `security status`,
   `gfind /count`, `cursor /b`) and the expanded `SET.BAT` flows stay green.
 
-### Added — situational on-screen keyboard capabilities (greyed-out `Nav` key)
+### Added ï¿½ situational on-screen keyboard capabilities (greyed-out `Nav` key)
 
 - The symbols/edit page `Nav` key is only usable where the editor navigation
   page is reachable. It is now **disabled and greyed out** in every other
@@ -2520,15 +2611,15 @@ locations and verification are recorded in [`bugs.md`](bugs.md).
   ? `nav=on`; editor open on the symbols page ? `nav=on`; screenshot confirms
   the greyed `Nav` key.
 
-### Added — Preferences/security/form/global-find pass (single CONFIG.SYS store)
+### Added ï¿½ Preferences/security/form/global-find pass (single CONFIG.SYS store)
 
 Five additive features that keep the shell as the core and the GUI as an
 external batch app. Nothing removed; every new path defaults to the previous
 behaviour when unconfigured.
 
 - **CONFIG.SYS is the single settings store.** The UI presentation settings
-  that used to live in `sd:/APPS/SHELL.INI` — `THEME`, `FONT_TERMINAL`,
-  `FONT_UI`, `FONT_TERMINAL_SIZE`, `FONT_UI_SIZE`, `HEADER_MODE` — are now
+  that used to live in `sd:/APPS/SHELL.INI` ï¿½ `THEME`, `FONT_TERMINAL`,
+  `FONT_UI`, `FONT_TERMINAL_SIZE`, `FONT_UI_SIZE`, `HEADER_MODE` ï¿½ are now
   written there by the owning commands via a new shared writer
   `config_persist_set()` (`config_cmd.c`), and read back by the first-mount
   restore (legacy `SHELL.INI` is read once as a fallback). New directives:
@@ -2558,7 +2649,7 @@ behaviour when unconfigured.
   human output is unchanged.
 - **Companion `SET.BAT` is the Preferences GUI** (`apps/companion/`): expanded
   to drive every setting through its owning shell command and persist via
-  CONFIG.SYS — brightness, volume, rotate, idle timeout, header, theme, fonts,
+  CONFIG.SYS ï¿½ brightness, volume, rotate, idle timeout, header, theme, fonts,
   cursor, keyboard page, system (prompt/launch/Wi-Fi autoconnect), and
   security. No settings file of its own; `LIB.BAT :load_settings` no longer
   shadows brightness.
@@ -2569,7 +2660,7 @@ reboot, `theme set /save` persists, `owner`/`security` full lifecycle
 (bootlock on ? reboot ? locked ? unlock), `gfind /count`, `form /t:1`, and the
 expanded `SET.BAT` brightness + theme flows with markers.
 
-### Added — palmtop-parity primitives (HP 95LX class)
+### Added ï¿½ palmtop-parity primitives (HP 95LX class)
 
 A batch of additive primitives that close the firmware gaps between
 P4MiniShell and an early-90s palmtop, without removing or duplicating
@@ -2588,7 +2679,7 @@ plus a hardware driver registered in `tools/regression.py`.
   bug where lowercase `valb` was captured by `VAL`; found by the unit suite).
 - **`db` fields** (`components/db/db.c` `db_field_get`, `db_commands.c`):
   `k=v;k=v` payload convention with `db find /field:k=v`, `db sort
-  <field|key|id>`, and `db get <id> /field:name` — indexed-free fielded
+  <field|key|id>`, and `db get <id> /field:name` ï¿½ indexed-free fielded
   queries that leave fieldless payloads and the index format untouched.
 - **`export <db|alarms> <csv|json|txt> <file>`**
   (`components/command/export_commands.c`): portable interchange rendered
@@ -2622,7 +2713,7 @@ plus a hardware driver registered in `tools/regression.py`.
   the connection through the shared restore request (`wake-restore` origin)
   instead of a manual `wifi connect`.
 
-### Fixed — boot-time internal-RAM regression from the eager CDC-ACM install
+### Fixed ï¿½ boot-time internal-RAM regression from the eager CDC-ACM install
 
 - The CDC-ACM class driver was first staged inside `usb_install_host_stack()`
   alongside MSC/HID. On hardware this added a task stack plus internal
@@ -2632,7 +2723,7 @@ plus a hardware driver registered in `tools/regression.py`.
   `userial_open()`), so boot pays nothing; `boot_regression` is 8/8 clean
   again. Same shape as the M38 alarm lesson and the O8 boot-RAM relief.
 
-### Added — `usb userial term` VT100 screen (no more raw-only passthrough)
+### Added ï¿½ `usb userial term` VT100 screen (no more raw-only passthrough)
 
 - `usb userial term` now renders remote output as a VT100 screen on the TUI
   grid (80x25) instead of the legacy sanitized-transcript passthrough:
@@ -2653,7 +2744,7 @@ plus a hardware driver registered in `tools/regression.py`.
   unit tests `test_ansi_csi_trailing_*` + `test_tui_scroll_up_inactive_safe`
   (live rendering is hardware-verified on a real CDC-ACM device).
 
-### Added — `calc` financial + date functions (HP-12C class time value)
+### Added ï¿½ `calc` financial + date functions (HP-12C class time value)
 
 - Financial arms in `components/batch/calc.c` (exact names, HP-12C cash-flow
   signs, optional `fv`/`pv`/`type`/`guess` defaults): `PV FV PMT NPER RATE`
@@ -2667,7 +2758,7 @@ plus a hardware driver registered in `tools/regression.py`.
   round trip, NPV/IRR reference values, depreciation schedules, leap years,
   and every domain error; independently cross-checked values.
 
-### Added — `import` interchange in + vCard/iCalendar on both sides
+### Added ï¿½ `import` interchange in + vCard/iCalendar on both sides
 
 - New `import` verb (`components/command/import_commands.c`, dispatched from
   `command.c`): `import db <name> <csv|json|vcf> <file>` and `import alarms
@@ -2677,7 +2768,7 @@ plus a hardware driver registered in `tools/regression.py`.
   ics reads VEVENTs (DTSTART/SUMMARY/DESCRIPTION/RRULE daily+weekly+BYDAY).
   Fresh ids always; alarms arm notify-only with ENABLED kept and FIRED
   cleared. Single-line CSV rows only for multi-line payloads (skipped and
-  counted, never truncated — use json/native instead); UTC `Z` stamps read
+  counted, never truncated ï¿½ use json/native instead); UTC `Z` stamps read
   as device-local; binary vCard props skipped. Rows capped by
   `P4_CONFIG_DB_EXPORT_MAX_RECORDS`, JSON slurp by `..._MAX_BYTES`.
 - `export` gains `vcf` (db contacts from `k=v` fields) and `ics` (alarm
@@ -2686,14 +2777,14 @@ plus a hardware driver registered in `tools/regression.py`.
   are declared in `command.h` and unit-tested (`test_import.c`); store I/O
   stays hardware-verified.
 
-### Added — RTC backup (NVS anchor + optional external chip)
+### Added ï¿½ RTC backup (NVS anchor + optional external chip)
 
 - `components/clock/clock_rtc.c`: every anchor stores `{unix, rtc_us}` in
   the `p4rtc` NVS namespace, replayed at boot while the clock is unset
   (`unix + (rtc_now - rtc_anchor)/1e6`). Anchors land on SNTP sync, manual
   `date`/`time` set, `reboot` (new `clock_rtc_anchor_now()` hook in
   `command.c`), and a periodic esp_timer (`P4_CONFIG_RTC_ANCHOR_PERIOD_S`,
-  1 h, 0 disables) — no new tasks. Counter continuity decides the outcome
+  1 h, 0 disables) ï¿½ no new tasks. Counter continuity decides the outcome
   (pure `clock_rtc_restore_math`, unit-tested): kept counting ? RESTORED;
   reset below the anchor (power loss without VBAT) ? STALE last-known time
   that honestly reports `--:--` until re-synced; implausible data ?
@@ -2704,7 +2795,7 @@ plus a hardware driver registered in `tools/regression.py`.
 - New `rtc` verb (`rtc status` fields + `rtc anchor`), `time_is_set()`
   honors stale, help/docs updated, `test_clock_rtc_*` suites added.
 
-### Added — USTAR backup archives (`archive` + `backup`)
+### Added ï¿½ USTAR backup archives (`archive` + `backup`)
 
 - New leaf `components/archive/` (store-only POSIX tar, zero new
   dependencies, host-extractable) + `components/command/archive_commands.c`:
@@ -2715,26 +2806,26 @@ plus a hardware driver registered in `tools/regression.py`.
   under each source's basename, 100+155 split enforced by skipping (never
   truncating), `/..` escapes refused, temp+rename writes, size pre-walk +
   per-file space guards, heap-scratch directory walker (worker stack safe),
-  GNU longname/pax tolerant reader. (`restore` deliberately NOT aliased —
+  GNU longname/pax tolerant reader. (`restore` deliberately NOT aliased ï¿½
   it already means trash-undelete.) Transfers reuse `httpd`/`httpget`/
   `send`/`receive`.   Pure format core unit-tested (`test_archive.c`: CRC
   reference vector, octal/header round-trips, fit + path-safety gates);
   store I/O stays hardware-verified.
 
-### Added — foreground break (Ctrl+C / Stop button)
+### Added ï¿½ foreground break (Ctrl+C / Stop button)
 
 - Cooperative abort for the foreground worker: a shell-level flag
   (`shell_request_abort()` et al in `components/shell/`, the only layer
   the USB keys, the worker, batch, and the Stop poller can all reach)
   polled at the batch line loop, every `for` body (the single choke all
-  forms funnel through), and 100 ms `delay` chunks — each unwinding with
+  forms funnel through), and 100 ms `delay` chunks ï¿½ each unwinding with
   `^C` (or `delay: stopped`), consume-on-fire so one press prints once.
   The worker marks busy around each item (drives Stop visibility) and
   clears stale breaks on claim, so one tap never poisons the next line.
 - USB Ctrl+C (HID `c` + Ctrl) with no key-wait active aborts a running
   command or clears the idle line DOS-style; key-wait sessions keep their
   keys (remote `term` still receives `^C`, pause/choice/menu answer, the
-  editor keeps Ctrl+C for copy, reverse-search untouched — the intercept
+  editor keeps Ctrl+C for copy, reverse-search untouched ï¿½ the intercept
   sits after the modal branch).
 - Input-row Stop button (touch): created hidden, shown by a 150 ms main
   poll while the worker is busy, suppressed in editor/app/TUI modes via a
@@ -2743,7 +2834,7 @@ plus a hardware driver registered in `tools/regression.py`.
 - State ops unit-tested (`test_shell_abort.c`); unwinding stays
   hardware-verified. Background jobs still stop via `taskkill`.
 
-### Added — macro recorder + Ctrl+letter chord hotkeys
+### Added ï¿½ macro recorder + Ctrl+letter chord hotkeys
 
 - `macro record [file]` / `stop` / `play <file>` / `status`
   (`components/batch/batch.c`): captures every async-submitted line (both
@@ -2761,7 +2852,7 @@ plus a hardware driver registered in `tools/regression.py`.
 - Core unit-tested (`test_bind_chord_*`, `test_macro_*`; file I/O and
   replay stay hardware-verified). OSK maps deliberately untouched.
 
-### Added — batch spreadsheet: `csv set/get` + range aggregates
+### Added ï¿½ batch spreadsheet: `csv set/get` + range aggregates
 
 - `csv set <file> <row> <col> <value...>` mutates one cell in place:
   untouched rows stream byte-for-byte, ragged rows extend, past-EOF rows
@@ -2775,7 +2866,7 @@ plus a hardware driver registered in `tools/regression.py`.
   unit-tested (`test_csv_substitute_ranges`); file mutation stays
   hardware-verified.
 
-### Added — calendar recurrence (monthly/yearly/nth) + month grid
+### Added ï¿½ calendar recurrence (monthly/yearly/nth) + month grid
 
 - `alarm` recurrence widens from none/daily/weekly to monthly (by
   day-of-month or nth weekday) and yearly: new
@@ -2795,11 +2886,11 @@ plus a hardware driver registered in `tools/regression.py`.
   dispatcher. `test_alarm_advance_*` suites added; store/checker stays
   hardware-verified.
 
-### Added — shell input area: help-driven autocomplete, ghost text, persistent history
+### Added ï¿½ shell input area: help-driven autocomplete, ghost text, persistent history
 
 - **Single-source completion.** The Tab provider now derives its candidate set
   from the shell help table (`s_shell_help_entries[]`) plus aliases, so a new
-  command is completable the moment it has a help entry — no second list. The
+  command is completable the moment it has a help entry ï¿½ no second list. The
   old `shell_builtin_commands[]` duplicate was deleted. The `complete_word` op
   hook was replaced by `complete_line(line, match_index, ...)` so the provider
   parses the whole line: first token completes command names, later tokens
@@ -2825,7 +2916,7 @@ plus a hardware driver registered in `tools/regression.py`.
   `tools/completion_test.py` (registered in `regression.py`) plus unit suites
   `test_completion.c` / `test_history_search.c`.
 
-### Added — firmware `ui` touch-automation verbs + exhaustive touch suite
+### Added ï¿½ firmware `ui` touch-automation verbs + exhaustive touch suite
 
 - **Synthetic touch.** New `components/uitest/` owns a second LVGL pointer indev
   whose read callback reports a scripted point/press state, played by a 5 ms
@@ -2839,7 +2930,7 @@ plus a hardware driver registered in `tools/regression.py`.
   `release`, `key <label> [ms]`, `target <id>`, `targets [/b] [/v:NAME]`,
   `hit <x> <y> [/v:NAME]`, `state [/b] [/v:NAME]`. Standard batch semantics
   (ERRORLEVEL, `/b`, `/v:NAME`, redirection). While a modal blocks the worker
-  the console reader claims `ui …` via the `modal_console_command` hook so the
+  the console reader claims `ui ï¿½` via the `modal_console_command` hook so the
   editor/dialog/list UI can be driven over serial too.
 - **Target enumeration**: walks the active screen for every visible `CLICKABLE`
   widget and expands buttonmatrices into one target per key (`kbd:<label>`) with
@@ -2854,9 +2945,9 @@ plus a hardware driver registered in `tools/regression.py`.
   plus an opt-in `--sweep [px]` full-screen coordinate sweep); reference batch
   app `apps/uitest/UITEST.BAT`; registered as the `ui touch` regression step.
 
-### Changed — editor Nav/Edit pages redesigned (uniform grids, no phantom row)
+### Changed ï¿½ editor Nav/Edit pages redesigned (uniform grids, no phantom row)
 
-- The editor opens on a **uniform 4×6 Nav grid** and a **3×6 Edit grid**:
+- The editor opens on a **uniform 4ï¿½6 Nav grid** and a **3ï¿½6 Edit grid**:
   Nav = `Tab ? ? ? ? Home / End PgUp PgDn Del Ins Undo / Redo Find Next Replace
   ReplAll Case / Goto Save SaveAs Open Edit abc`; Edit = `Copy Cut Paste SelAll
   WordL WordR / DocTop DocBot DelLine DelEOL Reload Quit / Preview Comment Match
@@ -2872,7 +2963,7 @@ plus a hardware driver registered in `tools/regression.py`.
   by `tools/ui_touch_test.py` (the previous "touch compatible" claim was only
   serial-verified).
 
-### Added — Large-file `edit`: PSRAM document, windowed rendering, bounded undo
+### Added ï¿½ Large-file `edit`: PSRAM document, windowed rendering, bounded undo
 
 - **Bigger files, PSRAM-backed.** The document, its line array, the load
   staging/undo buffers, and the view caches (per-row width table, wrap cache,
@@ -2907,7 +2998,7 @@ plus a hardware driver registered in `tools/regression.py`.
   the window, edits, saves, and reloads with the change present (`Find: found at
   Ln 12000`); the small-file `editor_test.py` still passes.
 
-### Added — `edit` is truly touch-complete: opens on Nav, gains Open + 4 commands
+### Added ï¿½ `edit` is truly touch-complete: opens on Nav, gains Open + 4 commands
 
 - **The editor now opens on its navigation page.** `editor_view_open()` binds
   the OSK to the editor and selects `KEYBOARD_MODE_NAV`, so every editor button
@@ -2935,7 +3026,7 @@ plus a hardware driver registered in `tools/regression.py`.
   drift apart.
 - **`keyboard mode [page]` command**: `keyboard mode` reports
   `keyboard.page=<name>`; `keyboard mode <text_lower|text_upper|number|symbols|nav|nav2>`
-  switches the OSK page (aliases `letters`/`caps`/`num`/`special`/`edit`/…).
+  switches the OSK page (aliases `letters`/`caps`/`num`/`special`/`edit`/ï¿½).
   Backed by the stable `keyboard_mode_name()` / `keyboard_mode_parse()` registry
   and a port-lock-guarded `keyboard_set_mode()` so it is safe from the worker
   task.
@@ -2950,14 +3041,14 @@ plus a hardware driver registered in `tools/regression.py`.
   opens on Nav; `Open` switches to the letters page with the path pre-filled and
   reloads on commit; the input-row `Tab` button is present and completes.
 
-### Fixed — serial commands could be dropped while a modal blocked the worker
+### Fixed ï¿½ serial commands could be dropped while a modal blocked the worker
 
 - **A modal owns serial input, but unclaimed lines were still queued.** With the
   worker blocked inside a modal (editor/dialog/list/ask), a line the surface did
   not claim fell through to `shell_uart_console_submit_command()`, so it could
   not run until the modal closed. A burst then overflowed
   `P4_CONFIG_COMMAND_QUEUE_DEPTH` and the shell printed
-  `command queue full, command dropped` — including, in the worst case, the
+  `command queue full, command dropped` ï¿½ including, in the worst case, the
   modal's own quit line, wedging the UI. The console reader now routes every
   `modal_active` line to the surface and never queues it (the streaming
   `screenshot` console command is still claimed first).
@@ -2970,7 +3061,7 @@ plus a hardware driver registered in `tools/regression.py`.
 - Verified on COM3: a 40-line burst typed while the editor is open is consumed
   by the editor with zero drops and the shell restored (`editor_test.py`).
 
-### Changed — reference apps exercise the auto clock and BMP blit
+### Changed ï¿½ reference apps exercise the auto clock and BMP blit
 
 - **MOOD** now renders the auto-synced local clock (`%DATE%`/`%TIME%`) on the
   live-heap dashboard and adds `timezone` + `date` views to Snapshot, showing
@@ -2982,7 +3073,7 @@ plus a hardware driver registered in `tools/regression.py`.
   the blit changed the region (skipped when `PHOTO.BMP` is absent).
 - Verified on COM3: companion smoke 21/21, gfx toolkit 18/18 (new blit check).
 
-### Added — Color-coded compact header status + tap/long-press detail
+### Added ï¿½ Color-coded compact header status + tap/long-press detail
 
 - **Two must-have header features.** The WiFi/BT/USB/SD indicators (and now
   MEM/CPU/BAT) render as one compact ASCII glyph colored by state instead of
@@ -3003,7 +3094,7 @@ plus a hardware driver registered in `tools/regression.py`.
   notification area (built from the header's own cached state); long-press runs
   the matching `wifi status` / `bluetooth status` / `usb status` / `sd info` /
   `mem` / `top` / `battery` command through `header_register_status_action()`,
-  registered by `command_init()` — the header stays a command-free leaf.
+  registered by `command_init()` ï¿½ the header stays a command-free leaf.
 - **Theme**: added `theme.err` (red) to the theme table for the off/failed status
   color (`theme.text` is the healthy green, `theme.warn` amber, `theme.text_muted`
   absent); wired into `header_refresh_theme()`.
@@ -3014,7 +3105,7 @@ plus a hardware driver registered in `tools/regression.py`.
 - **Tests**: new pure status-mapping cases in `test/main/test_header.c`
   (glyphs, Wi-Fi label/tone bands, BT/USB/SD tones, MEM/CPU/BAT thresholds).
 
-### Added — Header notification queue, clock, activity indicator, adaptive poll
+### Added ï¿½ Header notification queue, clock, activity indicator, adaptive poll
 
 - **Notification queue + severity.** A later trivial message can no longer
   overwrite an alarm/OTA alert: the new pure `components/header/header_notify_queue.c`
@@ -3054,7 +3145,7 @@ plus a hardware driver registered in `tools/regression.py`.
   priority/clock/idle-off cases (`test_header.c`) plus the clock formatter
   (`test_clock.c`).
 
-### Fixed — Clock never synced; timezone is now auto-detected from the network
+### Fixed ï¿½ Clock never synced; timezone is now auto-detected from the network
 
 - **SNTP never started.** `time_start_sntp()` had no caller, so the clock only
   ever changed via a manual `date`/`time` and the header showed `--:--` (or
@@ -3075,9 +3166,9 @@ plus a hardware driver registered in `tools/regression.py`.
   (`Europe/Bucharest`, `UTC-3` POSIX = +3h) and the header clock reads the
   correct local time (`16:37`, matching the host); `sntp` reports `synced`.
 
-### Added — BMP image support across shell, TUI, gfx and batch apps
+### Added ï¿½ BMP image support across shell, TUI, gfx and batch apps
 
-- **One decoder, three surfaces.** `components/gfx` gains a general BMP core —
+- **One decoder, three surfaces.** `components/gfx` gains a general BMP core ï¿½
   `gfx_bmp_parse_header_ex` (24-bit and 32-bit BI_RGB, bottom-up or top-down,
   explicit dims), `gfx_bmp_decode_scaled_565` (decode + nearest-sample straight
   to the target size, so the native image is never materialized),
@@ -3105,7 +3196,7 @@ plus a hardware driver registered in `tools/regression.py`.
   (96x64); new reference app `apps/pics/PICS.BAT` (`view` / `draw image` /
   `gfx image` / `image info`) registered in `apps/push_apps.py`.
 
-### Fixed — `screenshot` now captures open modals
+### Fixed ï¿½ `screenshot` now captures open modals
 
 - **A modal blocked the command worker**, so the host's `screenshot` was queued
   and only ran after the modal closed (the screenshot tool timed out on any
@@ -3133,7 +3224,7 @@ plus a hardware driver registered in `tools/regression.py`.
 
 ## [0.38.1] - 2026-09-13 (COM3; ESP-IDF v5.5.5)
 
-### Changed — Wi-Fi throughput bench verified; lwIP TCP window raised
+### Changed ï¿½ Wi-Fi throughput bench verified; lwIP TCP window raised
 
 - Verified `wifi throughput` against a same-subnet host (AP `camera`, device
   192.168.1.239, host 192.168.1.194) with `tools/wifi_bench.py`.
@@ -3154,19 +3245,19 @@ plus a hardware driver registered in `tools/regression.py`.
 
 ## [0.38.0] - 2026-09-12 (COM3; ESP-IDF v5.5.5)
 
-### Changed — 40 MHz SDIO clock adopted after a soak gate
+### Changed ï¿½ 40 MHz SDIO clock adopted after a soak gate
 
 - Raised `CONFIG_ESP_HOSTED_HOST_SDIO_CLK_KHZ` from 10000 to **40000** (the
   board's maximum). The earlier 40 MHz trial was reverted after an LVGL
   timer-list panic; that panic is now known to be the header async double free
   (O7, fixed in 0.36.1), which the extra 40 MHz DMA pressure merely made more
-  likely — not a signal-integrity fault. Re-trialled and **adopted** on
+  likely ï¿½ not a signal-integrity fault. Re-trialled and **adopted** on
   evidence: `boot_regression` 20/20 clean boots, a 20-minute concurrent
   Wi-Fi+SD `stall_catch` soak with **0 stalls**, and the full host suite green
   (unit 262/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21,
   pkg/theme/gfx/plot/header OK). `test/sdkconfig` already used 40 MHz.
 
-### Added — Wi-Fi throughput bench
+### Added ï¿½ Wi-Fi throughput bench
 
 - **`wifi throughput tx <host> [port=N] [mb=N] [udp]`** /
   **`wifi throughput rx [port=N] [mb=N] [udp]`** (`components/networking/netbench.c`
@@ -3177,7 +3268,7 @@ plus a hardware driver registered in `tools/regression.py`.
   Caveat: a same-subnet host is required; the release session's lab had the
   host and device on different subnets (and switching the host AP needs
   elevation), so the bench shipped **hardware-unverified** and no throughput
-  number was captured — the 40 MHz adoption rests on the stability soak above.
+  number was captured ï¿½ the 40 MHz adoption rests on the stability soak above.
 - **`tools/regression.py [COMx] [--quick]`**: one-command host regression that
   resets the board, runs every suite/guard, prints a PASS/FAIL table, and exits
   non-zero on failure (11/11 on COM3). The Unity suite remains a separate
@@ -3185,7 +3276,7 @@ plus a hardware driver registered in `tools/regression.py`.
 
 ## [0.37.1] - 2026-09-12 (COM3; ESP-IDF v5.5.5)
 
-### Fixed — O3 single-output loss, O4 host resets, O5 boot wedge
+### Fixed ï¿½ O3 single-output loss, O4 host resets, O5 boot wedge
 
 - **O3 (single-output loss under TX pressure).** The IDF USB-Serial/JTAG
   `usb_serial_jtag_is_connected()` SOF monitor can falsely report
@@ -3199,7 +3290,7 @@ plus a hardware driver registered in `tools/regression.py`.
   stops mirroring without blocking. `tools/tx_stress_test.py` (numbered lines
   with deliberate read-pause backpressure) shows zero loss.
 - **O4 (host tooling reset the board on every open).** `setDTR(False)` after
-  `open()` ran too late — the reset already fired on the open transition.
+  `open()` ran too late ï¿½ the reset already fired on the open transition.
   `shell_session.open_port()` now pre-sets `dtr=False`/`rts=False` on the
   unopened `Serial` object so the port opens with both lines low. Every host
   driver (tools, harness, apps) routes through it; tools that need a fresh
@@ -3217,7 +3308,7 @@ pkg/theme/gfx/plot/header OK; `boot_regression` clean; push_apps/pkgs/assets OK.
 
 ## [0.37.0] - 2026-09-12 (COM3; ESP-IDF v5.5.5)
 
-### Changed — boot-time internal-RAM relief + reliability hardening
+### Changed ï¿½ boot-time internal-RAM relief + reliability hardening
 
 - **PSRAM task stacks for the boot-time tasks that never touch host flash.**
   PSRAM is not `MALLOC_CAP_DMA` on this P4 build (`dma_spi=0`), so
@@ -3243,7 +3334,7 @@ pkg/theme/gfx/plot/header OK; `boot_regression` clean; push_apps/pkgs/assets OK.
 
 ### Added
 
-- **`tools/boot_regression.py`** — fresh-boot guard that reboots N times and
+- **`tools/boot_regression.py`** ï¿½ fresh-boot guard that reboots N times and
   asserts no panic/assert, exactly one AUTOEXEC run, SD ready, and no
   unexpected W/E log lines. 8/8 clean on COM3.
 
@@ -3257,7 +3348,7 @@ pkg/theme/gfx/plot/header OK; `boot_regression` clean; push_apps/pkgs/assets OK.
 
 ## [0.36.1] - 2026-09-12 (COM3; ESP-IDF v5.5.5)
 
-### Fixed — heap corruption (LVGL timer-list panic) + boot reliability
+### Fixed ï¿½ heap corruption (LVGL timer-list panic) + boot reliability
 
 - **LVGL timer-list panic root cause (heap double free).**
   `header_schedule()` freed the async payload when `lv_async_call()` failed
@@ -3265,7 +3356,7 @@ pkg/theme/gfx/plot/header OK; `boot_regression` clean; push_apps/pkgs/assets OK.
   callers then freed the same pointer again. The second free scribbled on the
   heap free list; the next LVGL timer allocation drew from the damaged region
   and `lv_timer_handler -> lv_ll_get_next` jumped to garbage. `header_schedule()`
-  no longer frees — the caller owns the payload and frees it on failure (and
+  no longer frees ï¿½ the caller owns the payload and frees it on failure (and
   `header_set_notification()` now does too, restoring one consistent rule).
   Verified 0 panics / 0 poisoning asserts in 20+ fresh boots under the same
   boot load that previously panicked ~1/10.
@@ -3302,7 +3393,7 @@ pkg/theme/gfx/plot/header OK; `boot_regression` clean; push_apps/pkgs/assets OK.
 Verified: full boot log free of W/E; unit **262/0/2**, companion deep **8/8**,
 db **38/38**, alarm **25/25**, smoke **21/21**, pkg/theme/gfx/plot/header OK.
 (One transient `sdmmc_read_sectors` timeout appeared on an early db run and
-passed on rerun — the known O6 latency residual, unrelated to these fixes.)
+passed on rerun ï¿½ the known O6 latency residual, unrelated to these fixes.)
 
 ## [0.36.0] - 2026-09-12 (COM3; ESP-IDF v5.5.5)
 
@@ -3347,7 +3438,7 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   now passes `hw_cfg.dsi_bus` (550 Mbps + default PHY clock), which 4.2.3
   requires instead of reading the bitrate macro itself.
 - **Proven on hardware**: the pristine-4.2.3 on-chip LDO path fails SD mounts
-  deterministically after one failure (`already in use` — the exact leak the
+  deterministically after one failure (`already in use` ï¿½ the exact leak the
   restored driver fixes); with the re-port, a DMA-OOM-flaked boot mount
   self-recovers and `sd info` is full. `tone`/`audio status` clean on codec
   1.6.2 with no codec errors.
@@ -3366,12 +3457,12 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   either tree; no manifest pin changes (both float inside existing ranges).
 - **Held**: `esp_lcd_touch_gt911` at 1.2.0~1 (1.2.1 drops the driver-level
   800x480?1024x600 `touch_scale`, which would compress touch into the
-  top-left region — verified by source diff, no code touched) and
+  top-left region ï¿½ verified by source diff, no code touched) and
   `esp_lcd_jd9165` at 1.0.2 (1.0.4 deletes the default gamma/init table and
-  retimes the DPI clock/porches our BSP relies on — verified by source diff).
+  retimes the DPI clock/porches our BSP relies on ï¿½ verified by source diff).
 - **Held**: `esp_hosted` at 3.0.6 (pinned exact in both manifests after the
   resolver floated it). 3.0.7 was attempted and rejected on hardware: its
-  public compat version macros froze at 2.12.6 (broke our C6 version gate —
+  public compat version macros froze at 2.12.6 (broke our C6 version gate ï¿½
   fixed separately, see below), and without the tree's local W1
   SPIRAM-hardening patches (which 3.0.7's refactored RPC/DMA regions no
   longer fit) the SDIO RX mempool OOMs at boot and Wi-Fi never starts.
@@ -3382,7 +3473,7 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   project constant; messages/recovery text updated (2.x ? 3.x).
 - Verified: both builds clean, unit 262/0/2, deep 8/8, db 38/38, alarm 25/25,
   smoke 21/21, pkg/theme/gfx/plot/header green, post-flash screenshot. (One
-  mid-session eppp/hid scare — theme-output loss + a single Backtrace — was
+  mid-session eppp/hid scare ï¿½ theme-output loss + a single Backtrace ï¿½ was
   traced to transient board/UART state, not the firmware: full re-runs green
   with no code changes.)
 
@@ -3411,7 +3502,7 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
 
 - **Measurement-driven layout** (`components/header/header_layout.c`, pure +
   unit-tested): every render measures the live labels and fits the status,
-  notification, and system panels into the real content width — full labels,
+  notification, and system panels into the real content width ï¿½ full labels,
   then abbreviations, then dynamic font step-down, with the notification
   yielding first and panels hidden only as a last resort. Panels get explicit
   absolute geometry (no flex timing drift); the notification label is pinned
@@ -3446,7 +3537,7 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   status` and text-only `plot table`.
 - **Pure viewport math** (`components/gfx/gfx_view.c`, headless unit-tested):
   window-to-raster mapping with edges on the border indices, exact
-  Cohen–Sutherland segment clipping (trivial-reject first), and 1/2/5x10^n
+  Cohenï¿½Sutherland segment clipping (trivial-reject first), and 1/2/5x10^n
   nice-step ticks. Shared `gfx_canvas_*`/`draw_*` accessors via `command.h`
   (no copied canvas/color logic).
 - **Config**: `P4_CONFIG_PLOT_SAMPLES` (240), `P4_CONFIG_PLOT_MAX_POINTS`
@@ -3496,7 +3587,7 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   muted/warn macros now read `theme_current()` (header gains the `font`
   dependency); `/save` writes `theme=<name>` to `sd:/APPS/SHELL.INI`, restored
   by `font_restore_saved()` at the first SD mount.
-- **Companion Settings — Theme** submenu in `apps/companion/SET.BAT`
+- **Companion Settings ï¿½ Theme** submenu in `apps/companion/SET.BAT`
   (default/amber/ice/mono, Show, Back); `deep_test.py` SET walk updated for the
   new item and Back index.
 - **Tests**: `test/main/test_theme.c` (3 registry cases) and the HW driver
@@ -3550,7 +3641,7 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   unit-tested).
 - **Reference package app** `apps/pkgtest/PKGTEST.BAT` + `PKGTEST.APPINFO`,
   bundled/pushed by `apps/push_pkgs.py` (payload + APPINFO + generated
-  manifest). Companion **Live System — Packages** submenu in
+  manifest). Companion **Live System ï¿½ Packages** submenu in
   `apps/companion/SYS.BAT` (list/verify/info/install/remove). `version=1.0`
   added to every reference `*.APPINFO`.
 - New config: `P4_CONFIG_PKG_BUNDLE_DIR_NAME` (`PKGS`),
@@ -3562,7 +3653,7 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
 - New HW drivers: `tools/pkg_test.py` (full install?run?remove round-trip,
   green), `tools/pkg_smoke.py`, plus `apps/push_pkgs.py`. Unit tests
   `test/main/test_pkg.c` (`pkg_app_name_from_appinfo`). Companion **Live
-  System — Packages** deep-walk added to `deep_test.py`. Regression green:
+  System ï¿½ Packages** deep-walk added to `deep_test.py`. Regression green:
   unit 243/0/2, deep 8/8, db 38/38, alarm 25/25, smoke 21/21, pkg round-trip
   15/15 (deep/alarm show the usual first-run reset/barrier flake, green on
   re-run).
@@ -3604,28 +3695,28 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   alarm 25/25 (one barrier flake on first run, green on re-run), smoke 21/21.
 
 ### TUI selectable tables/list + Total Commander TCMD + background services (2026-09-11 session, COM3)
-- `draw table /cursor:N /sel:a,b` — bright cursor row + bold selected rows
+- `draw table /cursor:N /sel:a,b` ï¿½ bright cursor row + bold selected rows
   (`tui_draw_table_ex`, old signature a wrapper; pure parsers
   `tui_table_parse_cursor`/`_sel`, 4 new unit tests). Fixed a latent
   column-drop bug: the pad loop reused the split cursor and blanked the
   last column, so 3-column tables rendered only 2 (found via screenshot,
   fixed by advancing `c` first).
 - New `draw list <x> <y> <w> <h> <file> [fg] [bg] [/top /cursor /sel
-  /title /count:NAME /countonly]` — renders a file's lines as a bordered,
+  /title /count:NAME /countonly]` ï¿½ renders a file's lines as a bordered,
   scrollable, selectable panel; `/count` reports the line count to an env
   var (batch's `set /a` echoes, so a `for`-loop counter floods). Reuses the
   box/print primitives; off-TUI falls back to marked plain lines.
 - `apps/tcmd/TCMD.BAT` rewritten into a real dual-pane commander: live panes
   from `dir /o:gn /b` + `draw list`, bright cursor per pane, active-pane
   accent, path titles, status line, F-key-style hint bar, `draw fullscreen
-  on` for a full 80×25 grid (restored on exit). Keys j/k/t/o/x/s/1/2/p/q;
+  on` for a full 80ï¿½25 grid (restored on exit). Keys j/k/t/o/x/s/1/2/p/q;
   all previous ops kept behind the `x` menu; `p` snapshots to TCMD.BMP.
   Screenshot-verified (`spikes/tcmd_full.png`).
 - Background apps: `apps/companion/SVC.BAT` (headless service loop, `start
   SVC` / `taskkill bg0`) and `AGENDA.BAT` (calendar + notify job); a new
-  **Live System — Services** companion submenu (Status/Start/Stop/List
+  **Live System ï¿½ Services** companion submenu (Status/Start/Stop/List
   alarms/Run agenda). Documented the background rule (headless-safe verbs
-  only) and the two schedulers (`start`, `alarm … /run:`). `svc_test.py`
+  only) and the two schedulers (`start`, `alarm ï¿½ /run:`). `svc_test.py`
   drives start/tick/taskkill/agenda green on HW.
 - Spike findings that shaped the design: `dir > file` captures clean bytes
   (no ANSI); `for /f` supports `skip=`/`tokens=1-6` but not `usebackq`
@@ -3635,7 +3726,7 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
 ### Sprites, display discipline, assets, Snake/TCMD/Elite (2026-09-10 session, COM3)
 - `gfx load/blt/free/slots/save` (`components/gfx` pure BMP parser/decoder/
   blit + `command/gfx_commands.c` verbs): 24-bit `BI_RGB` ingest (the exact
-  `screenshot` format) into 8 PSRAM sprite slots (max 64×64 RGB565, 64 KB
+  `screenshot` format) into 8 PSRAM sprite slots (max 64ï¿½64 RGB565, 64 KB
   worst case), clipped blits with optional transparency, canvas save reusing
   the shared `screenshot_write_bmp_headers`. 5 new unit tests (234?239 with
   the asset suite); HW pixel round-trip exact (565 truncation verified).
@@ -3681,7 +3772,7 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   clean (DONE both passes, re-init safe). `start BOUNCE` refuses the shared
   display cleanly (verified headless-refusal path).
 - bugs.md note: boot prints "No SD card detected" yet the card lazy-mounts
-  on first access (BOUNCE runs fine on those boots) — cosmetic, early probe
+  on first access (BOUNCE runs fine on those boots) ï¿½ cosmetic, early probe
   vs lazy mount.
 
 ### TUI bar/table + draw colors (2026-09-10 session, COM3)
@@ -3715,7 +3806,7 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   storage redirect slot (`batch.c`/`shell.c`/`storage.c` per-task slots);
   modal/key-wait/appmode verbs refuse headlessly instead of blocking the UI.
 - Harness lesson: prompt-tail matching is unusable with deferred output
-  (`PS /sdcard> PS /sdcard> HI` — output legally trails the prompt), and
+  (`PS /sdcard> PS /sdcard> HI` ï¿½ output legally trails the prompt), and
   `D.worker_line` misses doubled-prompt marker lines. New
   `tools/bg_run.py` marker-sync driver (marker echo + multi-prompt strip +
   0.3 s serial timeout); full regression green with it (unit 220/0/2,
@@ -3726,11 +3817,11 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   executable, `.md`/`.markdown`/`.mkd` Markdown, `.json` JSON,
   `.txt`/`.log`/`.sys`/`.ini` text. Migrated every match site (editor
   syntax, viewer md branch, launch discovery, dir colours, batch resolver),
-  deleting the `.md×3` duplication and three `.bat`-test styles.
+  deleting the `.mdï¿½3` duplication and three `.bat`-test styles.
 - `.cmd` files execute like `.bat` (resolver probes both, launch discovers
   `*.cmd`, bare-name dispatch; LAUNCH_MAX bumped 16?24 so the second
   extension can't starve). `open <file>` verb dispatches by type (scripts to
-  the editor as source — never executes; md rendered; rest as text) with
+  the editor as source ï¿½ never executes; md rendered; rest as text) with
   batch errorlevels. `json validate|pretty` (nesting/strings/escapes/
   numbers/literals, line/col errors, 2-space pretty, 64 KB budget).
 - Editor: replace-all + case toggle (Ctrl+R/Ctrl+T, `All`/`Case` OSK keys,
@@ -3781,44 +3872,44 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   exhaustion misreported as unknown font (fixed), ADVENT.BAT `echo ---`
   now `echo /raw ---` (only batch line needing it).
 
-### Font follow-up — live refresh pass + shell block cursor (2026-09-09 session, COM3)
+### Font follow-up ï¿½ live refresh pass + shell block cursor (2026-09-09 session, COM3)
 - Root-fixed the real stale-font bug: LVGL styles snapshot the chain pointer
   at creation and `font_set` flips to a new copy, so header/keyboard/input
   rendered the orphaned font until recreated (transcript only worked by
-  accident — spans re-resolve per append). New narrow refresh pass instead
+  accident ï¿½ spans re-resolve per append). New narrow refresh pass instead
   of a full rebuild: `windows/keyboard/header/tui_refresh_fonts()` plus
   `editor_view_refresh_fonts()` (existing rebuild when open; open modals
   refresh on reopen), wired into `font set/size` success. Screenshot-proven:
   Montserrat keyboard live with no reopen.
 - Shell input gets the editor-like block cursor (`LV_PART_CURSOR` full-cell
   fill + contrasting glyph, shared `P4_CONFIG_CURSOR_BLINK_MS` now driving
-  both it and the editor timer — unifying 400/500 ms; 0 = steady with the
+  both it and the editor timer ï¿½ unifying 400/500 ms; 0 = steady with the
   editor timer correctly skipped). Cursor hides with its widget in
-  editor/app/TUI modes (no extra work — verified). Home/End go direct
-  (`set_cursor_pos`, dropping the N×left/right loops); USB Ctrl+Left/Right
+  editor/app/TUI modes (no extra work ï¿½ verified). Home/End go direct
+  (`set_cursor_pos`, dropping the Nï¿½left/right loops); USB Ctrl+Left/Right
   word-jump over codepoints (heap offset table, tear-safe; Ctrl bits mirrored
-  locally since usb already requires shell — reverse edge would cycle).
+  locally since usb already requires shell ï¿½ reverse edge would cycle).
 - New `cursor [block|bar] [blink <ms|off>]` command (session-only,
   Tab-completion + help + `command.md`). USB HID stays ASCII-only
-  (keycode map — documented limit).
+  (keycode map ï¿½ documented limit).
 - Regression: firmware+test 0/0, unit 196/0/2, deep 8/8 (one transient menu
   flake, clean rerun), db 38/38, alarm 25/25, smoke 21/21.
 
-### Font milestone Phase 3 — SD TTFs, sizes, CJK fallback, theme prep (2026-09-09 session, COM3)
+### Font milestone Phase 3 ï¿½ SD TTFs, sizes, CJK fallback, theme prep (2026-09-09 session, COM3)
 - Vendored `assets/fonts/` (DejaVuSansMono 340 KB, NotoSans-Regular 569 KB,
   NotoSansSC variable 17.7 MB + DejaVu/OFL licenses + SHA256SUMS) with
   `push_fonts.py` uploader. `receive` cap bumped 8?24 MB (`streaming` transfer
   with space pre-check; needed for the 17 MB SC).
 - Loader: `LV_USE_TINY_TTF` + file support (bundled stb, no freetype) and an
-  owned `F:` lv_fs driver over stdio/VFS (`font_fs.c`) — the in-tree FATFS
+  owned `F:` lv_fs driver over stdio/VFS (`font_fs.c`) ï¿½ the in-tree FATFS
   driver would have needed a managed CMakeLists edit for ff.h. Registry:
   dynamic `sd:/FONTS/*` discovery, lazy load, (stem,size) slots with
-  measured monospace probing, sizes 10–28 px via `lv_tiny_ttf_set_size`
+  measured monospace probing, sizes 10ï¿½28 px via `lv_tiny_ttf_set_size`
   under the port lock, async-deferred destroy, SHELL.INI size keys.
 - Default-font protection matrix verified live: SD-absent/corrupt/missing all
   keep current fonts with errorlevels; bitmap `size` cleanly refused;
   terminal refuses proportional fonts AND sizes breaking 80x25 (clamp uses
-  keyboard-hidden height — the keyboard-shrunk rect wrongly vetoed the
+  keyboard-hidden height ï¿½ the keyboard-shrunk rect wrongly vetoed the
   default 16 px during testing). Two registry bugs caught by the matrix:
   UI primary pointer not recorded (render right, names wrong) and refusal
   reasons misordered (new `font_is_monospace` gate first).
@@ -3839,7 +3930,7 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   `reset_input_buffer` right after a reset-adjacent open (ate the fast early
   unit tests), and drain with 64 KB reads (400 B caps overflow host RX).
 
-### Font milestone Phase 1 — registry/roles, live switching, UTF-8 typing (2026-09-09 session, COM3)
+### Font milestone Phase 1 ï¿½ registry/roles, live switching, UTF-8 typing (2026-09-09 session, COM3)
 - New `components/font/` registry (leaf component, no dependency edges):
   TERMINAL role (pure monospace) + UI role (RAM chain copy with Montserrat
   fallback), `font_init/list/set/restore`, monospace enforcement for
@@ -3849,21 +3940,21 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   wrappers); modal titles moved to UI.
 - `font list|set <terminal|ui> <name> [/save]|size <px>`; `/save` persists to
   `sd:/APPS/SHELL.INI`, restored in `boot_on_sd_first_mount` (command_init
-  time is too early — the SD mount is lazy). Live switch verified on HW
+  time is too early ï¿½ the SD mount is lazy). Live switch verified on HW
   (ui 17?16 px line height + screenshot in Montserrat chrome) and restore
   verified across reboot. `size` is an honest Phase-2 stub.
 - UTF-8 typing end to end: OSK inserts full codepoints into the input line
   (`shell_utf8_decode` helper); key queue widened to 5-byte sequence items
   with `shell_key_wait_submit_utf8()`; UART producer reassembles split
   multibyte chunks (truncated tails preserved across reads); `set /p`
-  round-trips `café` intact via new `shell_wait_for_key_utf8()` with
+  round-trips `cafï¿½` intact via new `shell_wait_for_key_utf8()` with
   codepoint-aware backspace. Legacy `char` API unchanged (lead byte for
   multibyte, safe for y/n/ESC compares). Verified: unit 196/0/2, deep 8/8,
   db 38/38 (one transient O6 SD-tail flake on import, clean on rerun),
   alarm 25/25, smoke 21/21. `command.md` documents the font verbs plus the
   `for /f` delims-space and `set /a` 32-bit gotchas found pressure-testing.
 
-### Font milestone Phase 0 — chained UI font + `font` command (2026-09-09 session, COM3)
+### Font milestone Phase 0 ï¿½ chained UI font + `font` command (2026-09-09 session, COM3)
 - Keyboard/header icon tofu fixed with a fallback chain, not a font swap:
   `windows_get_ui_font()` (`components/windows/windows.c`) is a RAM copy of
   unscii_16 with `.fallback = &lv_font_montserrat_14` (the only bundled font
@@ -3873,7 +3964,7 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   per the original code comment's intent. Screenshot-verified (all icons
   render, zero tofu), deep 8/8 green.
 - Crash lesson, caught pre-ship: a callback-delegating wrapper font
-  stack-overflowed taskLVGL — `lv_font_get_glyph_dsc()` records
+  stack-overflowed taskLVGL ï¿½ `lv_font_get_glyph_dsc()` records
   `resolved_font` = the struct it was called on, so the wrapper was recorded
   and its `get_glyph_bitmap` recursed into itself. Rule: chain via
   `.fallback` on a RAM struct copy, never via resolving callbacks.
@@ -3882,7 +3973,7 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   page: `[have]` ASCII/box/U+2600, `[want:P2]` currency/arrows/CJK as
   expected tofu until SD TTFs). Wired into dispatch, Tab completion, `help`,
   and `command.md`. Cross-component font sharing uses `extern` decls, not
-  CMake edges (`windows` already REQUIRES keyboard+header — a cycle).
+  CMake edges (`windows` already REQUIRES keyboard+header ï¿½ a cycle).
 
 ### P4 reference apps + O3 verdict + driver hardening (2026-09-09 session, COM3)
 - Shipped the three Phase-5 reference apps (all pure batch, verified on board
@@ -3891,7 +3982,7 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   (Zettelkasten on `db`: categories, `for /f` over `db find /b`, edit-file
   bodies, export/import), `apps/mood/MOOD.BAT` (live heap?RGB/tone dashboard
   parsing `mem` with `for /f`); each with `.APPINFO` + merged `ALIASES.BAT`
-  (all five app aliases in every copy — separate pushes used to clobber the
+  (all five app aliases in every copy ï¿½ separate pushes used to clobber the
   SD-root file) and one `apps/push_apps.py` uploader.
 - Batch engine: labels past the 32-per-file table were silently dropped, so a
   33-label game lost its quit path with only `goto: label not found` as a
@@ -3902,22 +3993,22 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   false-passed on the submit-side input echo while the worker was wedged; all
   three plus both `act()` barriers now require the worker's own output line
   (`worker_line`), and all matchers tolerate prompt-glue (trailing prompt +
-  output sharing one serial line — normal under load). `push_sd`/`push_apps`
+  output sharing one serial line ï¿½ normal under load). `push_sd`/`push_apps`
   note: `wait_shell` keeps the old substring check (failures there only cost
   retries; CRC guards integrity).
 - `command.md` gotchas found pressure-testing: spaces terminate `for /f`
   option values (no space in custom `delims=`; `apps/mood` parses with
   `delims==,b`), and `set /a` is 32-bit (divide heap-byte values before
   multiplying).
-- O3 verdict: P3 deferral holds (drain 19–29 KB/s both runs); 30-min
+- O3 verdict: P3 deferral holds (drain 19ï¿½29 KB/s both runs); 30-min
   `stall_catch.py` (740 probes, echo-vs-output timing) shows zero queue-fulls,
-  zero heap warnings, db/sd at 0.0–0.2 s — the worker is exonerated, residual
+  zero heap warnings, db/sd at 0.0ï¿½0.2 s ï¿½ the worker is exonerated, residual
   is rare single-output loss under TX pressure plus an SD-op latency tail
   (new O6: sync unlink/read occasionally >60 s under shared-bus contention;
   hot-loop deletes removed from the reference apps). See `bugs.md` O3/O6.
 - Regression this session: `deep_test` 8/8, `db_test` 38/38, `alarm_test`
   25/25, `smoke_apps` 21/21 (firmware: transcript deferral + buffer mutex +
-  label warning; unit suite still 196/0/2 from the pre-warning build — the
+  label warning; unit suite still 196/0/2 from the pre-warning build ï¿½ the
   warning is 5 lines in the label scanner, verified live instead).
 
 ### P2 config hygiene (2026-09-08 session, verified on board)
@@ -3946,7 +4037,7 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   coalesces). `tools/transcript_drain_bench.py` measures it: 1.3 MB `type`
   drains 10 KB @ 3.2 KB/s decaying to 100 KB @ 0.9 KB/s on first run, and a
   back-to-back second run over the SAME file starts 3x slower (10 KB @
-  1.0 KB/s) — ruling out SD/fragmentation/USB-host causes. At a full 64 KB
+  1.0 KB/s) ï¿½ ruling out SD/fragmentation/USB-host causes. At a full 64 KB
   buffer every printed line costs ~1 s, so sustained output occupies the
   single worker and submissions pile 16-deep into `queue full` drops.
 - Eliminated along the way: LVGL-lock contention (queue-full errors print
@@ -3960,12 +4051,12 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
   SD/non-SD output-anchored probes with queue-full + mount accounting) for
   future episodes. See `bugs.md` O3.
 
-### Added — batch loader depth (batch-first route)
+### Added ï¿½ batch loader depth (batch-first route)
 - `for /f ... in ('command')` (and backquotes with `usebackq`): runs the inner command through the re-entrant redirection capture and iterates its output with the shared skip/eol/delims/tokens processor (`shell_forf_is_command_set` + `shell_forf_run_command`, pure-helper unit tests).
 - `%~[fdpnx]N` argument modifiers (`shell_arg_apply_modifiers`, pure-helper unit tests; `d` is empty on FATFS, `s` accepted/ignored); also fixes `LIB.BAT` `:tui_header`/`:status`, which already used `%~1`.
 - `LIB.BAT::selftest_*` on-board contract checks (`tilde`, `forf_cmd`, `defined`, `all`), driven by a new deterministic `run_companion.py selftest` scenario.
 
-### Fixed — verbs and wiring lost in the v0.35.3-v0.35.6 splits (all verified on board)
+### Fixed ï¿½ verbs and wiring lost in the v0.35.3-v0.35.6 splits (all verified on board)
 - Restored `launch` (heap discovery over PATH + `sd:/APPS`, APPINFO titles, `/list`, `<name> [args]`, bounded menu, 0/1/2), `apps` (`app_get` loop), `delay` (clamped to `P4_CONFIG_DELAY_MAX_MS`, 0/2), `notify`/`gfind` dispatcher arms, the `app_dispatch` tail hook (never shadows built-ins/batch), and the `applib_env_ops` registration (`hello` shows real cwd/PATH again); completion table + both `help` surfaces updated.
 - Test project: pinned `CONFIG_LV_FONT_UNSCII_16` in `test/sdkconfig.defaults` and regenerated the stale committed `test/sdkconfig`; re-pointed both `dependencies.lock` files at this checkout.
 - Companion: corrected every submenu `list` errorlevel chain to 0-based indices; added serial-visible echo markers for the reactive driver.
@@ -3979,49 +4070,49 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
 
 ---
 
-## [0.35.7] - 2026-09-06 — Hardware bring-up fixes (all verified on board unless noted)
+## [0.35.7] - 2026-09-06 ï¿½ Hardware bring-up fixes (all verified on board unless noted)
 
-### Fixed — box-drawing tofu (M40)
+### Fixed ï¿½ box-drawing tofu (M40)
 
 - **Symptom:** TUI boxes rendered as placeholder boxes on hardware (screenshot-verified), although the extended `unscii_16` font is in-tree.
-- **Root causes (three stacked):** (1) the generated `sdkconfig` had lost `CONFIG_LV_FONT_UNSCII_16` (stale generated file) so `windows_get_terminal_font()` fell back to ASCII Montserrat; (2) the Kconfig symbol exists, so the fix is regenerating config + using the font unconditionally; (3) once enabled, the in-place font extension failed to compile — two missing commas (bitmap line 475, glyph-dsc line 2115), latent since the file previously compiled to empty behind the disabled guard.
+- **Root causes (three stacked):** (1) the generated `sdkconfig` had lost `CONFIG_LV_FONT_UNSCII_16` (stale generated file) so `windows_get_terminal_font()` fell back to ASCII Montserrat; (2) the Kconfig symbol exists, so the fix is regenerating config + using the font unconditionally; (3) once enabled, the in-place font extension failed to compile ï¿½ two missing commas (bitmap line 475, glyph-dsc line 2115), latent since the file previously compiled to empty behind the disabled guard.
 - **Fix:** unconditional `lv_font_unscii_16` use with extern decl (`windows.c`), dead-symbol note in `sdkconfig.defaults`, two commas, regenerated `sdkconfig`. Box glyphs verified pixel-perfect via screenshot.
 
-### Fixed — httpd start failed ESP_ERR_HTTPD_TASK (needs Wi-Fi to fully verify)
+### Fixed ï¿½ httpd start failed ESP_ERR_HTTPD_TASK (needs Wi-Fi to fully verify)
 
 - **Symptom:** manual + auto `httpd start` failed with `ESP_ERR_HTTPD_TASK`.
 - **Root cause:** 16 KB server-task stack (4x IDF default, unjustified) cannot allocate from fragmented internal heap at Wi-Fi-up time.
-- **Fix:** `P4_CONFIG_HTTPD_STACK_BYTES` 16384?8192 (handler frame <1 KB; verify HeadB watermark via `ps` on hardware with Wi-Fi up). Yaml already said 8192 — header had drifted.
+- **Fix:** `P4_CONFIG_HTTPD_STACK_BYTES` 16384?8192 (handler frame <1 KB; verify HeadB watermark via `ps` on hardware with Wi-Fi up). Yaml already said 8192 ï¿½ header had drifted.
 
-### Fixed — command queue drops
+### Fixed ï¿½ command queue drops
 
 - **Symptom:** `shell: command queue full, command dropped` under bursts.
 - **Root cause:** depth had regressed to 4 with zero-timeout submit (v0.33.0 M10 fix lost).
 - **Fix:** new `P4_CONFIG_COMMAND_QUEUE_DEPTH` 16 + `P4_CONFIG_COMMAND_QUEUE_SEND_TIMEOUT_MS` 500 bounded wait (submit runs on LVGL/UART tasks only). Verified 20/20 burst, no drops.
 
-### Fixed — NUL bytes in source
+### Fixed ï¿½ NUL bytes in source
 
-- **`batch.c` contained 3 literal NUL bytes** (`'\x00'` instead of `'\0'` escapes, ansi SGR parsing) from a past scripted edit — compiled with `-Wnull-character` warnings, now errors-or-clean. Replaced, repo-wide NUL sweep clean.
+- **`batch.c` contained 3 literal NUL bytes** (`'\x00'` instead of `'\0'` escapes, ansi SGR parsing) from a past scripted edit ï¿½ compiled with `-Wnull-character` warnings, now errors-or-clean. Replaced, repo-wide NUL sweep clean.
 
-### Fixed — alarm checker never started (M38)
+### Fixed ï¿½ alarm checker never started (M38)
 
 - **Symptom:** `alarm status` showed `checker stopped`, `catchup pending`; fire test failed; nothing ever fired.
 - **Root cause:** `alarm_init()` + `alarm_register_host_ops()` were never called (header claims `command_init()` does it; it didn't).
-- **Fix + lesson:** first wired into `command_init()`, which broke USB HCD bring-up on hardware (checker task fragments DMA heap before `usb_init()` — verified by A/B flash). Final fix: ops stay registered in `command_init()`, `alarm_init()` runs lazily on first `alarm`/`cal` command. Verified `checker running`, `catchup done`, alarm suite 25/25.
+- **Fix + lesson:** first wired into `command_init()`, which broke USB HCD bring-up on hardware (checker task fragments DMA heap before `usb_init()` ï¿½ verified by A/B flash). Final fix: ops stay registered in `command_init()`, `alarm_init()` runs lazily on first `alarm`/`cal` command. Verified `checker running`, `catchup done`, alarm suite 25/25.
 
-### Fixed — ask serial answer clobbered (M37)
+### Fixed ï¿½ ask serial answer clobbered (M37)
 
 - **Symptom:** `ask` via serial logged `ask serial line: 'blue'` but `ASK_RESULT` stayed empty.
 - **Root cause:** `ask_surface_close()` unconditionally copied the (empty) on-screen textarea over the serial-provided answer.
-- **Fix:** `serial_answered` flag; close only captures textarea when no serial answer arrived. Verified `RESULT=[blue]` on hardware. `dialog`/`list` handlers set results directly — unaffected.
+- **Fix:** `serial_answered` flag; close only captures textarea when no serial answer arrived. Verified `RESULT=[blue]` on hardware. `dialog`/`list` handlers set results directly ï¿½ unaffected.
 
-### Fixed — modal LVGL layout-loop watchdog (M39)
+### Fixed ï¿½ modal LVGL layout-loop watchdog (M39)
 
 - **Symptom:** running `COMPANION.BAT` ? `list` modal hung `shell_cmd` in `lv_obj_update_layout` ? task watchdog abort + backtrace (decoded via addr2line against the ELF).
-- **Root cause:** all six modal open functions called `windows_refresh_editor_surface()` AFTER `lvgl_port_unlock()` — layout raced the render task.
+- **Root cause:** all six modal open functions called `windows_refresh_editor_surface()` AFTER `lvgl_port_unlock()` ï¿½ layout raced the render task.
 - **Fix:** all six refreshes moved inside the locked region (`fb_refresh_list` takes the lock itself and stays outside). Companion `list` select verified working (dashboard geometry transition); editor paths ride LVGL-task affinity by design, untouched.
 
-### Fixed — test-suite findings (suite now 193 pass / 0 fail / 2 ignore)
+### Fixed ï¿½ test-suite findings (suite now 193 pass / 0 fail / 2 ignore)
 
 - **Extract-lock crash (mine):** v0.35.5 `lvgl_port_lock` in `shell_extract_input_text` fired before the NULL-widget guard ? assert/abort in the LVGL-less test app. Fixed order (widget check first, matching project convention); suite runs to completion.
 - **Copy off-by-one:** `shell_clipboard_copy_transcript` counted a trailing newline as a line (`clip copy 2` returned 1 line). Skip-one-trailing-newline fix; new test covers it.
@@ -4039,18 +4130,18 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
 
 ---
 
-## [0.35.6] - 2026-09-05 — Split patch (storage + batch-expr out; shell stays whole)
+## [0.35.6] - 2026-09-05 ï¿½ Split patch (storage + batch-expr out; shell stays whole)
 
-### Changed — `storage_commands.c` 6147?41 lines (residual header+includes), `batch.c` 4881?4072 lines (verbatim moves, no behavior change)
+### Changed ï¿½ `storage_commands.c` 6147?41 lines (residual header+includes), `batch.c` 4881?4072 lines (verbatim moves, no behavior change)
 
 - **New `components/storage/storage_nav.c`** (1122 lines): `cd`/`dir`/`tree`.
 - **New `components/storage/storage_files.c`** (1690 lines): manipulation + `attrib`/`label`/`xcopy`.
 - **New `components/storage/storage_disk.c`** (546 lines): `chkdsk`/`format` + destructive-confirm helper.
 - **New `components/storage/storage_text.c`** (1948 lines): `find`/`more`/`fc`/`sort`/`findstr`/`comp`.
 - **New `components/storage/storage_fam.c`** (768 lines): `sd` + `disk` families.
-- **Shared helpers promoted** (were file-static, used across the new files): `shell_parse_alloc_unit` + `shell_format_execute` (disk/fam), `shell_dir_format_stamp` (nav/text), `shell_find_parse_date` (text/files) — declared in `storage_commands.h`; shared `SHELL_*` aliases moved there too.
+- **Shared helpers promoted** (were file-static, used across the new files): `shell_parse_alloc_unit` + `shell_format_execute` (disk/fam), `shell_dir_format_stamp` (nav/text), `shell_find_parse_date` (text/files) ï¿½ declared in `storage_commands.h`; shared `SHELL_*` aliases moved there too.
 - **New `components/batch/batch_expr.c`** (809 lines): integer-expr evaluator + `set /a`/`set /p` helpers out of `batch.c`. The 19 direct `s_errorlevel` writes became `batch_set_errorlevel()` calls (same state); the two helpers are exported for `shell_command_set()`. Wider batch split stopped per stop-rule (engine/verb statics porous: `shell_batch_run_internal`, setlocal stack, appmode state shared both ways).
-- **`shell.c` intentionally not split**: static-sharing audit shows the `s_command_ops` table hub + shared transcript pointers in 7+ sections; splitting would scatter state instead of containing it. Fully-private sections total ~420 lines — not worth the churn.
+- **`shell.c` intentionally not split**: static-sharing audit shows the `s_command_ops` table hub + shared transcript pointers in 7+ sections; splitting would scatter state instead of containing it. Fully-private sections total ~420 lines ï¿½ not worth the churn.
 
 ### Verification
 
@@ -4058,36 +4149,36 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
 
 ---
 
-## [0.35.5] - 2026-09-05 — Hardening patch (truncation/OOB, OOM immediacy, tests, LVGL locks)
+## [0.35.5] - 2026-09-05 ï¿½ Hardening patch (truncation/OOB, OOM immediacy, tests, LVGL locks)
 
-### Fixed — truncation / OOB (fail closed, fitting inputs unchanged)
+### Fixed ï¿½ truncation / OOB (fail closed, fitting inputs unchanged)
 
 - **`tui_flush` recolor buffer** (`components/tui/tui.c:382,401`): clamp `pos` on `snprintf` truncation + final NUL guard (was `size_t` underflow ? OOB write past `cap`).
 - **Hexview pager** (`components/modal/modal_surf.c:908-917`): same clamp at all three `snprintf` sites.
-- **`tree` child paths** (`components/storage/storage_commands.c:1029,1086`): explicit truncation checks — skip the entry / mark truncated instead of stating or descending into a cut path.
+- **`tree` child paths** (`components/storage/storage_commands.c:1029,1086`): explicit truncation checks ï¿½ skip the entry / mark truncated instead of stating or descending into a cut path.
 - **`trash` unique names** (`components/storage/trash.c:180-184`): skip truncated candidates (never test a cut name for uniqueness).
 - **`db` path builders** (`components/db/db.c:62-79`): fail-closed empty string + `ESP_LOGE` on truncation (existing `DB_TAG` pattern, no new includes).
 - **Verified safe, no change:** `tree names[]` (equal 256B cells), db fixed-field copies (equal-size/`%.*s`), UART submit (assembler caps at 4095), windows fragment (use already NULL-guarded), dir display cells (deliberate clipping).
 
-### Fixed — OOM immediacy (NULL checked before use, success paths unchanged)
+### Fixed ï¿½ OOM immediacy (NULL checked before use, success paths unchanged)
 
 - **Dispatch snapshots** (`components/command/command.c:1064-1117`): `want_family`/`want_echo` restructure with a single OOM guard (was 8 unchecked `strdup`s flowing into family handlers).
 - **Async submit** (`components/command/command.c:2244`): validate args/queue before allocating (was allocate-then-check).
-- **`sd` dispatcher** (`components/storage/storage_commands.c:5730`), **`chkdsk` subdirs** (warns instead of silently skipping levels), **shell repair order** + **shell init early-return** (`components/shell/shell.c:1548,4475` — was NULL-deref at `s_transcript[0]`; `s_initialized` stays false), **clipboard text** (`components/command/command.c:329` — 2048B stack local ? heap, the last =1KB stack local on the dispatch path).
+- **`sd` dispatcher** (`components/storage/storage_commands.c:5730`), **`chkdsk` subdirs** (warns instead of silently skipping levels), **shell repair order** + **shell init early-return** (`components/shell/shell.c:1548,4475` ï¿½ was NULL-deref at `s_transcript[0]`; `s_initialized` stays false), **clipboard text** (`components/command/command.c:329` ï¿½ 2048B stack local ? heap, the last =1KB stack local on the dispatch path).
 
-### Added — 22 unit tests (pure logic; HW stays on board)
+### Added ï¿½ 22 unit tests (pure logic; HW stays on board)
 
-- **`test_modal.c`** (5): new shared `modal_parse_timeout_arg`/`modal_parse_var_arg` (`components/modal/modal_surf.h`) replacing 9 copy-pasted `/t:`/`/v:` parses in `tui_commands.c` — dedup + tests in one move.
+- **`test_modal.c`** (5): new shared `modal_parse_timeout_arg`/`modal_parse_var_arg` (`components/modal/modal_surf.h`) replacing 9 copy-pasted `/t:`/`/v:` parses in `tui_commands.c` ï¿½ dedup + tests in one move.
 - **`test_power.c`** (4): `shell_power_parse_seconds` + `shell_power_wake_cause_string` promoted to `command.h`.
 - **`test_serial.c`** (2): `screenshot_write_bmp_headers` promoted to `command.h` (magic/size/dims/bpp/DPI).
-- **`test_tui.c`** (4): default-colour round-trip, cursor save/restore, inactive defaults (draw/flush need LVGL — stay board-verified).
+- **`test_tui.c`** (4): default-colour round-trip, cursor save/restore, inactive defaults (draw/flush need LVGL ï¿½ stay board-verified).
 - **`test_clipboard.c`** (4): set/get/file-flag/copy-transcript (RAM buffer works headless).
 - **`test_history_file.c`** (3): new `shell_history_save_lines`/`shell_history_load_lines` (`components/shell/shell.h`, extracted from `history /save|/load`; `tmpfile`, skipped loudly if unavailable).
 - Wired in `test/main/CMakeLists.txt` (+ `modal`/`tui` includes/deps) and `test_main.c`.
 
-### Fixed — LVGL task affinity (narrow, no blanket locking)
+### Fixed ï¿½ LVGL task affinity (narrow, no blanket locking)
 
-- **Transcript-apply fallback** (`components/windows/windows.c:779`): takes `lvgl_port_lock(0)` — the doc comment always claimed the fallback held it, the code did not (recursive mutex nests safely).
+- **Transcript-apply fallback** (`components/windows/windows.c:779`): takes `lvgl_port_lock(0)` ï¿½ the doc comment always claimed the fallback held it, the code did not (recursive mutex nests safely).
 - **`shell_extract_input_text`** (`components/shell/shell.c:1554`): recursive-lock the textarea read (both callers are LVGL-task today; now safe from any task).
 - **Audited, no change:** header timer/init calls (LVGL-task context), USB inject path (async-dispatched), ops tables (NULL-checked throughout per prior audit).
 
@@ -4099,13 +4190,13 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
 
 ---
 
-## [0.35.4] - 2026-09-05 — Split patch (periph/power/serial out of `command.c`)
+## [0.35.4] - 2026-09-05 ï¿½ Split patch (periph/power/serial out of `command.c`)
 
-### Changed — `command.c` 5808?2467 lines (verbatim moves, no behavior change)
+### Changed ï¿½ `command.c` 5808?2467 lines (verbatim moves, no behavior change)
 
 - **New `components/command/periph_commands.c`** (1527 lines): peripheral toolkit `gpio`/`pwm`/`freq`/`adc`/`i2c`/`spi`/`rgb`/`camera` with the board GPIO table, pin-safety gate, and toolkit-exclusive `SHELL_*` compat defines, declared in `command.h` (new PERIPH section). The `SHELL_PWM/ADC/I2C/SPI_*` defines in `command.c` were orphaned (zero remaining users) and moved along.
 - **New `components/command/power_commands.c`** (897 lines): `brightness`/`rotate`/`battery`/`power`/`sleep`/`deepsleep` with the battery ADC state, idle display-off state, and power-exclusive defines, declared in `command.h` (new POWER section). The ops-table backings (`command_battery_read`, `shell_power_*` API) live there too; `command_init()` registers them unchanged.
-- **New `components/command/serial_commands.c`** (1015 lines): `screenshot`/`receive`/`send` with the BMP/frame/diag helpers, declared in `command.h` (new SERIAL section). `shell_print_http_body` + HTTPGET section stay in `command.c` — the httpget arm is inline code inside `shell_execute_command_core()` and cannot move.
+- **New `components/command/serial_commands.c`** (1015 lines): `screenshot`/`receive`/`send` with the BMP/frame/diag helpers, declared in `command.h` (new SERIAL section). `shell_print_http_body` + HTTPGET section stay in `command.c` ï¿½ the httpget arm is inline code inside `shell_execute_command_core()` and cannot move.
 - **Line endings preserved** (`command.c` LF); diff shows only the moves (function inventory HEAD vs work: zero lost, zero new).
 
 ### Verification
@@ -4114,20 +4205,20 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
 
 ---
 
-## [0.35.3] - 2026-09-05 — Split patch (audio/tui commands out of the god files, reconcile, managed shim)
+## [0.35.3] - 2026-09-05 ï¿½ Split patch (audio/tui commands out of the god files, reconcile, managed shim)
 
-### Changed — `command.c` 6394?5808 lines, `batch.c` 5195?4881 lines (verbatim moves, no behavior change)
+### Changed ï¿½ `command.c` 6394?5808 lines, `batch.c` 5195?4881 lines (verbatim moves, no behavior change)
 
 - **New `components/command/audio_commands.c`** (181 lines): `volume`/`beep`/`tone`/`wavplay`/`audio` moved out of `command.c` (`command.c:1137-1293`), declared in `command.h` (new AUDIO section), following the `db_commands.c` / `alarm_commands.c` split. The dispatcher calls them; it never implements them.
 - **New `components/command/tui_commands.c`** (756 lines, 12 verbs): `draw`/`anchor`/`browse` moved out of `command.c`, `dialog`/`list`/`ask`/`browse_batch`/`view`/`hexview`/`color`/`locate`/`tui` moved out of the batch engine (`batch.c:3476-3785`), declared in `command.h` (new TUI section). `appmode` stays in `batch.c` (batch-frame cleanup); `temp`/`ansi`/`menu`/`notify` stay (batch language). `batch.c` drops its `modal_surf.h`/`tui.h`/`windows.h` includes.
 - **Line endings preserved per file** (`batch.c` stays CRLF like the repo, `command/` stays LF) so the diffs show only the moves.
 
-### Fixed — reconcile (docs follow code)
+### Fixed ï¿½ reconcile (docs follow code)
 
 - **Memory baseline M33** (`bugs.md`): current tree runs transcript 65536 (`p4minishell_config.h:93`, PSRAM), recolor == transcript (`p4minishell_config.h:101`), trim 4096 (`p4minishell_config.h:120`), async 512 (`p4minishell_config.h:137`), SD DMA 4096 (`p4minishell_config.h:634`), worker stack 32768 (`p4minishell_config.h:1522`); M19/M31 kept as the 0.35.1 history.
 - **Stale codec ref fixed** (`bugs.md` M20, `changelog.md` 0.35.1 audio entry): guards are `esp32_p4_function_ev_board.c:305-380` + `audio_ensure_speaker()` `audio.c:72-93`, not `esp_codec_dev.c:269`.
 
-### Added — managed re-apply shim
+### Added ï¿½ managed re-apply shim
 
 - **`tools/reapply_managed_patches.ps1`** (+ `tools/managed_patches.patch` backup): `--check` dry-run / apply after `idf.py update-dependencies`; `tools/README.md` documents it.
 
@@ -4137,19 +4228,19 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
 
 ---
 
-## [0.35.2] - 2026-09-05 — Cleanup patch (root quarantine, browse dedup, layering, build/config drift)
+## [0.35.2] - 2026-09-05 ï¿½ Cleanup patch (root quarantine, browse dedup, layering, build/config drift)
 
-### Removed — root one-shot scripts quarantined
+### Removed ï¿½ root one-shot scripts quarantined
 
 - **97 root `*.py` helpers + 7 `*.txt` dumps removed from the root.** The 16 serial/screenshot/SD harnesses (`grab_screenshot.py`, `capture_tui.py`, `get_screenshot.py`, `save_to_sd.py`, `httpd_start_test.py`, `test_wifi*.py`, `wifi_*.py`, `verify.py`, `final_verify.py`, `final_check.py`) moved to `tools/harness/`; the 70 `add_*`/`apply_*`/`fix_*`/`check_*`/`find_*` one-shot patch scripts and the `extend_*`/`replace_*`/`extract_*`/`write_windows.py`/`list_surfaces.py` helpers were deleted (none referenced by docs, `CMakeLists.txt`, or configs). The 7 scratch dumps (`ansi_func.txt`, `box_chars.txt`, `draw_anchor_fixed.txt`, `draw_anchor_impl.txt`, `found.txt`, `windows_h.txt`, `windows_h_excerpt.txt`) were deleted. `apps/companion/push_sd.py` stays with the companion app.
 
-### Fixed — browse duplication and stack literals
+### Fixed ï¿½ browse duplication and stack literals
 
 - **`browse` verb unified** (`components/command/command.c:2413` + `components/batch/batch.c:3610`): the interactive `shell_command_browse` now uses the same `P4_CONFIG_TUI_BROWSE_PATH_BYTES` buffer and the same `"Browse"` title as `shell_command_browse_batch` (was `char selected_path[4096]` + `"File Browser"`), so the 4 KB worker-stack local and the title divergence are gone. The `/v:` dispatch at `components/command/command.c:5376` is unchanged.
 - **`shell_launch_app` heap buffer** (`components/command/command.c:2434`): the `char command[256]` stack local is now a `malloc(P4_CONFIG_COMMAND_BYTES)` buffer, so long app names cannot truncate and the worker stack stays small.
 - **`gfind` bounds via config** (`components/command/gfind_commands.c:30-32`): `GFIND_DB_MAX`/`GFIND_ALARM_MAX` are now `P4_CONFIG_DB_MAX_DATABASES`/`P4_CONFIG_ALARM_MAX_EVENTS` instead of comment-matched literals.
 
-### Fixed — layering and build configuration
+### Fixed ï¿½ layering and build configuration
 
 - **Shell layering** (`components/shell/CMakeLists.txt`): dropped `networking`, `c6ota`, `p4_usb` from `REQUIRES` (the shell core reaches those only through `shell_command_ops_t`, `components/shell/shell.h:50`); removes the `shell` ? `networking` ? `storage` ? `shell` build cycle.
 - **Root build list** (`CMakeLists.txt:5`): `EXTRA_COMPONENT_DIRS` now lists all 23 local components (added `alarm`, `db`, `c6ota`, `editor`, `header`, `led`, `networking`, `usb`, `p4_usb`).
@@ -4162,91 +4253,91 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
 
 ---
 
-## [0.35.1] - 2026-08-26 — Hardware Testing patch (0.35.0?0.35.1: flash to COM11, extensive serial tests, companion TUI expansion, stack overflow fix at 0x4012b75a)
+## [0.35.1] - 2026-08-26 ï¿½ Hardware Testing patch (0.35.0?0.35.1: flash to COM11, extensive serial tests, companion TUI expansion, stack overflow fix at 0x4012b75a)
 
-### Hardware Testing — flash, boot, and serial verification
+### Hardware Testing ï¿½ flash, boot, and serial verification
 
-- **Flash to COM11 succeeded, boot verified** (`P4MiniShell v0.35.1 ready`, SD mounted, header/battery/CPU live, transcript rect `1024x510` `80×25` `p4minishell_config.h:298` via `tui status`), **extensive serial tests run** over USB-Serial-JTAG covering every TUI surface (`draw box` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR` with title via `tui_draw_box` `components/tui/tui.c:228` / `tui_cell_set` `components/tui/tui.c:116` `utf8[4]` `components/tui/tui.h:35`, `draw line`/`fill`/`text`/`clear`/`window`/`close`/`refresh`/`fullscreen`, `draw fullscreen on|off` (global) + `tui fullscreen on|off` (per-app) header kept visible by default `windows_enter_tui_mode` hidden only on fullscreen `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418` / `tui_enter_fullscreen` `components/tui/tui.c:417` dynamic `windows_notify_keyboard_visibility` ? `windows_refresh_tui_surface`, TUI does not overlap shell text `tui_hide_for_modal`, `color`/`locate` TUI-aware, `tui_flush` recolor `#RRGGBB` per fg run `ansi_get_palette_color`, prompt `shell_prompt_render_plain()` `main.c:112` + `keyboard_bind_textarea` `components/modal/modal_surf.c:412` situational `SH_PROMPT`, screenshot `grab_screenshot.py --port/--out/--crop-transcript` + `capture_tui.py`), ANSI colour, audio, fullscreen — no panic, no `abort`, no watchdog, no LVGL assert, no overlap. **Companion fully TUI-expanded and hardware-verified** (see below).
+- **Flash to COM11 succeeded, boot verified** (`P4MiniShell v0.35.1 ready`, SD mounted, header/battery/CPU live, transcript rect `1024x510` `80ï¿½25` `p4minishell_config.h:298` via `tui status`), **extensive serial tests run** over USB-Serial-JTAG covering every TUI surface (`draw box` single `SH_BOX_TL`/`H`/`V` double `SH_BOX_TL2`/`H2`/`V2` rounded `SH_BOX_TLR`/`TRR`/`BLR`/`BRR` with title via `tui_draw_box` `components/tui/tui.c:228` / `tui_cell_set` `components/tui/tui.c:116` `utf8[4]` `components/tui/tui.h:35`, `draw line`/`fill`/`text`/`clear`/`window`/`close`/`refresh`/`fullscreen`, `draw fullscreen on|off` (global) + `tui fullscreen on|off` (per-app) header kept visible by default `windows_enter_tui_mode` hidden only on fullscreen `windows_set_fullscreen`/`header_set_visible` `components/windows/windows.c:418` / `tui_enter_fullscreen` `components/tui/tui.c:417` dynamic `windows_notify_keyboard_visibility` ? `windows_refresh_tui_surface`, TUI does not overlap shell text `tui_hide_for_modal`, `color`/`locate` TUI-aware, `tui_flush` recolor `#RRGGBB` per fg run `ansi_get_palette_color`, prompt `shell_prompt_render_plain()` `main.c:112` + `keyboard_bind_textarea` `components/modal/modal_surf.c:412` situational `SH_PROMPT`, screenshot `grab_screenshot.py --port/--out/--crop-transcript` + `capture_tui.py`), ANSI colour, audio, fullscreen ï¿½ no panic, no `abort`, no watchdog, no LVGL assert, no overlap. **Companion fully TUI-expanded and hardware-verified** (see below).
 
-### Added — extended unscii_16 font in-place (384 glyphs, no duplication)
+### Added ï¿½ extended unscii_16 font in-place (384 glyphs, no duplication)
 
-- **Extended `unscii_16` font in-place** (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, cmaps 3, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`) — adds box-drawing U+2500-U+257F (128 glyphs) and symbols U+2600-U+26FF (256 glyphs), 384 glyphs total, no duplication (previously the `-r` range duplicated `0x2500-0x257F,0x2600-0x26FF` twice). Enables hardware box rendering via `SH_BOX_*` UTF-8 sequences through `tui_cell_t utf8[4]`.
+- **Extended `unscii_16` font in-place** (`managed_components/lvgl__lvgl/src/font/lv_font_unscii_16.c`, cmaps 3, `sdkconfig.defaults:33` `CONFIG_LV_FONT_UNSCII_16=y`) ï¿½ adds box-drawing U+2500-U+257F (128 glyphs) and symbols U+2600-U+26FF (256 glyphs), 384 glyphs total, no duplication (previously the `-r` range duplicated `0x2500-0x257F,0x2600-0x26FF` twice). Enables hardware box rendering via `SH_BOX_*` UTF-8 sequences through `tui_cell_t utf8[4]`.
 
-### Fixed — TUI cell truncation and box glyph rendering
+### Fixed ï¿½ TUI cell truncation and box glyph rendering
 
-- **Fixed `tui_cell_t` to `utf8[4]`** (`components/tui/tui.h:35` `char utf8[4]`, `components/tui/tui.c:116` `tui_cell_set` via `strncpy` with NUL) — was `utf8[2]` truncating 3-byte box UTF-8 (e.g. `-` `0xE2 0x94 0x80`). Now holds full UTF-8 `SH_BOX_*`.
-- **Fixed `tui_draw_box`/`tui_draw_line` to honor style and title** (`components/tui/tui.c:228` `tui_draw_box`, `components/tui/tui.c:283` `tui_draw_line` via `tui_cell_set`) — `draw box 2 2 20 8 single|double|rounded [title]` and `draw line` now select `SH_BOX_TL`/`TR`/`BL`/`BR`/`H`/`V` vs `SH_BOX_TL2`/`H2`/`V2` vs `SH_BOX_TLR`/`TRR`/`BLR`/`BRR` and center title with surrounding spaces; interior cleared correctly.
+- **Fixed `tui_cell_t` to `utf8[4]`** (`components/tui/tui.h:35` `char utf8[4]`, `components/tui/tui.c:116` `tui_cell_set` via `strncpy` with NUL) ï¿½ was `utf8[2]` truncating 3-byte box UTF-8 (e.g. `-` `0xE2 0x94 0x80`). Now holds full UTF-8 `SH_BOX_*`.
+- **Fixed `tui_draw_box`/`tui_draw_line` to honor style and title** (`components/tui/tui.c:228` `tui_draw_box`, `components/tui/tui.c:283` `tui_draw_line` via `tui_cell_set`) ï¿½ `draw box 2 2 20 8 single|double|rounded [title]` and `draw line` now select `SH_BOX_TL`/`TR`/`BL`/`BR`/`H`/`V` vs `SH_BOX_TL2`/`H2`/`V2` vs `SH_BOX_TLR`/`TRR`/`BLR`/`BRR` and center title with surrounding spaces; interior cleared correctly.
 
-### Fixed — TUI color rendering via LVGL recolor per fg run
+### Fixed ï¿½ TUI color rendering via LVGL recolor per fg run
 
-- **Fixed `tui_flush` to render fg/bg via `lv_label` recolor** (`components/tui/tui.c:356` `tui_flush`) — coalesces cells by fg, emits `#RRGGBB ` prefix per run using `ansi_get_palette_color` (`components/ansi/ansi.c`) PowerShell palette (no duplicate palette), wraps run text and `#` suffix; rows joined by `\n`, set via `lv_label_set_text` under `lvgl_port_lock`. Default fg 16 emits no tag.
+- **Fixed `tui_flush` to render fg/bg via `lv_label` recolor** (`components/tui/tui.c:356` `tui_flush`) ï¿½ coalesces cells by fg, emits `#RRGGBB ` prefix per run using `ansi_get_palette_color` (`components/ansi/ansi.c`) PowerShell palette (no duplicate palette), wraps run text and `#` suffix; rows joined by `\n`, set via `lv_label_set_text` under `lvgl_port_lock`. Default fg 16 emits no tag.
 
-### Added — fullscreen (global draw + per-app tui)
+### Added ï¿½ fullscreen (global draw + per-app tui)
 
-- **Implemented `draw fullscreen on|off` (global) and `tui fullscreen on|off` (per-app)** (`components/tui/tui.c:417` `tui_enter_fullscreen`/`tui_exit_fullscreen`, `components/windows/windows.c:418` `windows_set_fullscreen`/`header_set_visible`) — header hidden completely when fullscreen, kept visible by default otherwise. `tui status` reports `fullscreen` state. Dynamic keyboard scaling via `windows_notify_keyboard_visibility` (`components/windows/windows.c:312`) keeps TUI sized to transcript rect (`1024x510`) while header is hidden.
+- **Implemented `draw fullscreen on|off` (global) and `tui fullscreen on|off` (per-app)** (`components/tui/tui.c:417` `tui_enter_fullscreen`/`tui_exit_fullscreen`, `components/windows/windows.c:418` `windows_set_fullscreen`/`header_set_visible`) ï¿½ header hidden completely when fullscreen, kept visible by default otherwise. `tui status` reports `fullscreen` state. Dynamic keyboard scaling via `windows_notify_keyboard_visibility` (`components/windows/windows.c:312`) keeps TUI sized to transcript rect (`1024x510`) while header is hidden.
 
-### Fixed — prompt in all inputs
+### Fixed ï¿½ prompt in all inputs
 
-- **Fixed prompt in all inputs** (`main/main.c:112` echo `SHELL_PROMPT` ? `shell_prompt_render_plain()` `components/shell/shell.c:412`, `components/modal/modal_surf.c:412` `ask` placeholder `shell_prompt_render_plain()` + `keyboard_bind_textarea`, `components/shell/shell.c:298` situational color via `SH_PROMPT`) — shell input line, `ask` modal, and serial echo now show the DOS prompt template honoring `PROMPT=` (`$p $g` etc).
+- **Fixed prompt in all inputs** (`main/main.c:112` echo `SHELL_PROMPT` ? `shell_prompt_render_plain()` `components/shell/shell.c:412`, `components/modal/modal_surf.c:412` `ask` placeholder `shell_prompt_render_plain()` + `keyboard_bind_textarea`, `components/shell/shell.c:298` situational color via `SH_PROMPT`) ï¿½ shell input line, `ask` modal, and serial echo now show the DOS prompt template honoring `PROMPT=` (`$p $g` etc).
 
-### Added — screenshot debug loop
+### Added ï¿½ screenshot debug loop
 
-- **Screenshot debug loop** (`grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py`, `components/tui/tui.c:356` `tui_flush` recolor, `components/windows/windows.c:312` transcript rect) — `tui status` shows `rect 1024x510 cols 80 rows 25`; `grab_screenshot.py` crops to transcript region for pixel-perfect TUI verification.
+- **Screenshot debug loop** (`grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py`, `components/tui/tui.c:356` `tui_flush` recolor, `components/windows/windows.c:312` transcript rect) ï¿½ `tui status` shows `rect 1024x510 cols 80 rows 25`; `grab_screenshot.py` crops to transcript region for pixel-perfect TUI verification.
 
-### Fixed — memory pressure (transcript / async / SD DMA / internal trim)
+### Fixed ï¿½ memory pressure (transcript / async / SD DMA / internal trim)
 
-- **`P4_CONFIG_TRANSCRIPT_BYTES` 2048?1024** (`p4minishell_config.h:93` + `p4minishell_config.yaml` `buffers:transcript_bytes`) — halves the span-group ceiling and its internal-RAM span overhead after TUI modal restoration.
-- **`P4_CONFIG_ASYNC_TRANSCRIPT_BYTES` 1024?512** (`p4minishell_config.h:134` + `p4minishell_config.yaml` `buffers:async_transcript_bytes`) — halves the background-task staging buffer; drain is heap-allocated, flush dispatches via `shell_schedule_transcript_appendf_ansi` when ESC present.
-- **`P4_CONFIG_SD_DMA_BUFFER_BYTES` 8192?4096** (`p4minishell_config.h:626` + `p4minishell_config.yaml` `sd_dma_buffer_bytes`) — 8 sectors cached on `card->host.dma_aligned_buffer` at mount; lower permanent internal-RAM reservation while keeping `storage_sd_ensure_dma_buffer()` reuse.
-- **`P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` 49152?60000 with 1/4 keep** (`p4minishell_config.h:117` + `p4minishell_config.yaml` `transcript_internal_trim_bytes`) — trim earlier under TUI pressure; `shell_transcript_guard_internal()` / `windows_transcript_trim()` now keep 1/4 on trim and guard trim-below-10KB (prevents stdio FILE-lock `abort()` on low internal heap). Guard called at command start and before every append under LVGL lock.
-- **`P4_CONFIG_COMMAND_TASK_STACK` 16384?24576** (`p4minishell_config.h:1514` + `p4minishell_config.yaml` `command_task_stack`) — raised due to TUI companion overflow at `0x4012b75a` (stack protection fault in `shell_cmd` when `COMPANION.BAT` pushed deep `draw` + `tui fullscreen` + `list`/`dialog` nesting); `P4_CONFIG_COMMAND_TASK_STACK` 12288?16384 in v0.33.0 was insufficient for the expanded TUI batch depth. Command queue full handling improved (bounded 1 s wait instead of silent drop).
+- **`P4_CONFIG_TRANSCRIPT_BYTES` 2048?1024** (`p4minishell_config.h:93` + `p4minishell_config.yaml` `buffers:transcript_bytes`) ï¿½ halves the span-group ceiling and its internal-RAM span overhead after TUI modal restoration.
+- **`P4_CONFIG_ASYNC_TRANSCRIPT_BYTES` 1024?512** (`p4minishell_config.h:134` + `p4minishell_config.yaml` `buffers:async_transcript_bytes`) ï¿½ halves the background-task staging buffer; drain is heap-allocated, flush dispatches via `shell_schedule_transcript_appendf_ansi` when ESC present.
+- **`P4_CONFIG_SD_DMA_BUFFER_BYTES` 8192?4096** (`p4minishell_config.h:626` + `p4minishell_config.yaml` `sd_dma_buffer_bytes`) ï¿½ 8 sectors cached on `card->host.dma_aligned_buffer` at mount; lower permanent internal-RAM reservation while keeping `storage_sd_ensure_dma_buffer()` reuse.
+- **`P4_CONFIG_TRANSCRIPT_INTERNAL_TRIM_BYTES` 49152?60000 with 1/4 keep** (`p4minishell_config.h:117` + `p4minishell_config.yaml` `transcript_internal_trim_bytes`) ï¿½ trim earlier under TUI pressure; `shell_transcript_guard_internal()` / `windows_transcript_trim()` now keep 1/4 on trim and guard trim-below-10KB (prevents stdio FILE-lock `abort()` on low internal heap). Guard called at command start and before every append under LVGL lock.
+- **`P4_CONFIG_COMMAND_TASK_STACK` 16384?24576** (`p4minishell_config.h:1514` + `p4minishell_config.yaml` `command_task_stack`) ï¿½ raised due to TUI companion overflow at `0x4012b75a` (stack protection fault in `shell_cmd` when `COMPANION.BAT` pushed deep `draw` + `tui fullscreen` + `list`/`dialog` nesting); `P4_CONFIG_COMMAND_TASK_STACK` 12288?16384 in v0.33.0 was insufficient for the expanded TUI batch depth. Command queue full handling improved (bounded 1 s wait instead of silent drop).
 
-### Fixed — audio abort in managed BSP
+### Fixed ï¿½ audio abort in managed BSP
 
-- **Managed BSP audio abort fixed** (ref corrected in v0.35.3: guards are `managed_components/espressif__esp32_p4_function_ev_board/esp32_p4_function_ev_board.c:305-380` + `audio_ensure_speaker()` `components/audio/audio.c:72-93`, backed up in `tools/managed_patches.patch`) — `tone`/`wavplay` no longer `abort()` when the BSP card handle is null; verified `tone 440 200` / `wavplay` no longer hits `lock_init_generic` abort. `components/audio/audio.c` background task unchanged, `audio status|stop` remains batch-safe.
+- **Managed BSP audio abort fixed** (ref corrected in v0.35.3: guards are `managed_components/espressif__esp32_p4_function_ev_board/esp32_p4_function_ev_board.c:305-380` + `audio_ensure_speaker()` `components/audio/audio.c:72-93`, backed up in `tools/managed_patches.patch`) ï¿½ `tone`/`wavplay` no longer `abort()` when the BSP card handle is null; verified `tone 440 200` / `wavplay` no longer hits `lock_init_generic` abort. `components/audio/audio.c` background task unchanged, `audio status|stop` remains batch-safe.
 
-### Fixed — modal EventGroup PSRAM
+### Fixed ï¿½ modal EventGroup PSRAM
 
-- **Modal `EventGroup` PSRAM fix** (`components/modal/modal.c:46` `xEventGroupCreateWithCaps(MALLOC_CAP_SPIRAM)`) — event group now prefers PSRAM (`MALLOC_CAP_SPIRAM`) with internal fallback, avoiding internal-heap fragmentation under transcript/TUI load; `modal_surface_run` session loop + `MODAL_EVENT_CLOSE_REQUEST` unchanged.
+- **Modal `EventGroup` PSRAM fix** (`components/modal/modal.c:46` `xEventGroupCreateWithCaps(MALLOC_CAP_SPIRAM)`) ï¿½ event group now prefers PSRAM (`MALLOC_CAP_SPIRAM`) with internal fallback, avoiding internal-heap fragmentation under transcript/TUI load; `modal_surface_run` session loop + `MODAL_EVENT_CLOSE_REQUEST` unchanged.
 
-### Fixed — ANSI wifi white fix verified on boot
+### Fixed ï¿½ ANSI wifi white fix verified on boot
 
-- **ANSI wifi `[wifi]` white?cyan verified** (`components/networking/networking.c:474` `C6 hosted firmware version: 3.0.6` and peers at `407,461,464,481,503,510,954,961,967,980,987,1043,1131` + `c6ota:` at `1080,1109,1114,1118,1127,1142,1147`, `main.c:200` `shell_c6ota_progress_callback`, `components/applib/applib.c:58` `app_vformat_append`, `components/shell/shell.c:709` `shell_schedule_transcript_appendf_ansi`) — boot `[wifi]` is now `SH_PROMPT` cyan (`@C[wifi]@R` ? `ESC[96m[wifi]ESC[0m`), versions are `SH_VAL` bright white, progress lines use `ansi_format` + ANSI async path. Verified on COM11 boot log.
+- **ANSI wifi `[wifi]` white?cyan verified** (`components/networking/networking.c:474` `C6 hosted firmware version: 3.0.6` and peers at `407,461,464,481,503,510,954,961,967,980,987,1043,1131` + `c6ota:` at `1080,1109,1114,1118,1127,1142,1147`, `main.c:200` `shell_c6ota_progress_callback`, `components/applib/applib.c:58` `app_vformat_append`, `components/shell/shell.c:709` `shell_schedule_transcript_appendf_ansi`) ï¿½ boot `[wifi]` is now `SH_PROMPT` cyan (`@C[wifi]@R` ? `ESC[96m[wifi]ESC[0m`), versions are `SH_VAL` bright white, progress lines use `ansi_format` + ANSI async path. Verified on COM11 boot log.
 
-### Fixed — dialog/list/ask serial routing and draw auto-enter
+### Fixed ï¿½ dialog/list/ask serial routing and draw auto-enter
 
-- **Dialog/list/ask serial routing fix** (`components/modal/modal_surf.c:412` `modal_handle_serial_line` vs `shell_key_wait_submit`) — serial lines now route to active modal via `shell_command_ops_t.modal_*`; timeout `/t:secs` and direct serial input both close with correct ERRORLEVEL/`*RESULT`.
-- **Draw auto-enter TUI** (`components/tui/tui.c:56` `tui_init` via `windows_enter_tui_mode`) — `draw` automatically enters TUI when no TUI/modal surface is active, otherwise reuses the active cell buffer.
+- **Dialog/list/ask serial routing fix** (`components/modal/modal_surf.c:412` `modal_handle_serial_line` vs `shell_key_wait_submit`) ï¿½ serial lines now route to active modal via `shell_command_ops_t.modal_*`; timeout `/t:secs` and direct serial input both close with correct ERRORLEVEL/`*RESULT`.
+- **Draw auto-enter TUI** (`components/tui/tui.c:56` `tui_init` via `windows_enter_tui_mode`) ï¿½ `draw` automatically enters TUI when no TUI/modal surface is active, otherwise reuses the active cell buffer.
 
-### Changed — TUI engine is live (draw TUI-aware, window stack, essential features)
+### Changed ï¿½ TUI engine is live (draw TUI-aware, window stack, essential features)
 
-- **TUI grid `P4_CONFIG_TUI_COLS`×`P4_CONFIG_TUI_ROWS` 80×25 via transcript region** (`p4minishell_config.h:298` + `p4minishell_config.yaml` `tui:cols/rows`, `components/windows/windows.c` `windows_enter_editor_mode`/`windows_refresh_editor_surface`/`windows_notify_keyboard_visibility`, `components/modal/modal_surf.c`) — every modal surface (`dialog`/`list`/`ask`/`browse`/`view`/`hexview`) fills the live transcript region (`1024x510`) and resizes with rotation/keyboard; logical grid is clamped to 80×25, pixel rect follows the transcript (`tui status`).
-- **`draw` is TUI-aware** (`components/batch/batch.c` `shell_command_draw` + `components/command/command.c` dispatcher, `components/tui/tui.c`) — `draw box/text/line/fill/clear` routes through the TUI cell buffer when a TUI/modal surface is active (auto-enters otherwise), otherwise falls back to transcript; `color`/`locate` set the TUI attribute/cursor (DOS `COLOR`/`LOCATE` parity). Window stack (`tui_draw_box` with title, nested boxes), fullscreen, color, prompt, screenshot debug are essential features implemented.
-- **Companion fully TUI-expanded (7 BATs) and hardware-verified on COM11** — `COMPANION.BAT` `draw clear` + `draw box 1 1 80 3 double "P4 COMPANION"` + `draw box 1 4 80 15 single "Main Menu"` + `list`; `SYS.BAT` `tui fullscreen on` + `draw box 1 1 80 3 double "LIVE SYSTEM DASHBOARD"` + `draw box 1 4 80 10 single` / `draw box 1 15 40 10 single "Memory"` / `draw box 41 15 40 10 single "Tasks"` (`tui fullscreen on/off` `components/tui/tui.c:417`); `FILES.BAT` `browse`/`view`/`hexview` + `draw` + `tui fullscreen` (browse/view fill `80×25` transcript region); `NET.BAT` `draw box 1 1 80 3 single "NETWORK TOOLS"` + `draw box 1 4 80 10 single` / `draw box 1 15 80 8 single "Status"`; `FUN.BAT` TUI demo `tui fullscreen on` + `draw box 1 1 80 3 double "TUI DEMO"` + `draw box 5 6 20 6 single`/`double`/`rounded` + `draw box 5 5 70 10 single "Notes"` for melody/RGB/guess/calc; `SET.BAT` TUI demo `draw box 1 1 80 3 double "TUI SETTINGS DEMO"` + brightness/volume/`appconfig`; `LIB.BAT` tui helpers `:tui_banner` (`draw clear` + `draw box 1 1 80 3 single` + `draw text 2 2` ), `:tui_header` (`%1` title), `:tui_hr` (`draw line 1 4 80 4`). All pushed to SD via `push_sd.py` COM11 PASS (LIB 1896, COMPANION 1552, SYS 1486, FILES 3946, NET 2893, FUN 3968, SET 3109) using `receive <path> <size> /crc` ACK-paced + CRC-32. Extensive serial tests of each BAT (list selection, browse/view/hexview, tui fullscreen, draw boxes) all pass without abort/watchdog/overlap.
-- **Modal serial routing fixed** — `dialog y` (serial line `y` ? ERRORLEVEL 0), `list 2` (serial `2` ? index 2), `ask myname` (serial `myname` ? `ASK_RESULT`/`/v:NAME` correctly via `shell.c` `modal_handle_serial_line` `components/modal/modal_surf.c:412`); previously `ask`/`list` required `/t:secs` to consume serial input, now all modals route via `shell_command_ops_t.modal_handle_serial_line` without retry.
+- **TUI grid `P4_CONFIG_TUI_COLS`ï¿½`P4_CONFIG_TUI_ROWS` 80ï¿½25 via transcript region** (`p4minishell_config.h:298` + `p4minishell_config.yaml` `tui:cols/rows`, `components/windows/windows.c` `windows_enter_editor_mode`/`windows_refresh_editor_surface`/`windows_notify_keyboard_visibility`, `components/modal/modal_surf.c`) ï¿½ every modal surface (`dialog`/`list`/`ask`/`browse`/`view`/`hexview`) fills the live transcript region (`1024x510`) and resizes with rotation/keyboard; logical grid is clamped to 80ï¿½25, pixel rect follows the transcript (`tui status`).
+- **`draw` is TUI-aware** (`components/batch/batch.c` `shell_command_draw` + `components/command/command.c` dispatcher, `components/tui/tui.c`) ï¿½ `draw box/text/line/fill/clear` routes through the TUI cell buffer when a TUI/modal surface is active (auto-enters otherwise), otherwise falls back to transcript; `color`/`locate` set the TUI attribute/cursor (DOS `COLOR`/`LOCATE` parity). Window stack (`tui_draw_box` with title, nested boxes), fullscreen, color, prompt, screenshot debug are essential features implemented.
+- **Companion fully TUI-expanded (7 BATs) and hardware-verified on COM11** ï¿½ `COMPANION.BAT` `draw clear` + `draw box 1 1 80 3 double "P4 COMPANION"` + `draw box 1 4 80 15 single "Main Menu"` + `list`; `SYS.BAT` `tui fullscreen on` + `draw box 1 1 80 3 double "LIVE SYSTEM DASHBOARD"` + `draw box 1 4 80 10 single` / `draw box 1 15 40 10 single "Memory"` / `draw box 41 15 40 10 single "Tasks"` (`tui fullscreen on/off` `components/tui/tui.c:417`); `FILES.BAT` `browse`/`view`/`hexview` + `draw` + `tui fullscreen` (browse/view fill `80ï¿½25` transcript region); `NET.BAT` `draw box 1 1 80 3 single "NETWORK TOOLS"` + `draw box 1 4 80 10 single` / `draw box 1 15 80 8 single "Status"`; `FUN.BAT` TUI demo `tui fullscreen on` + `draw box 1 1 80 3 double "TUI DEMO"` + `draw box 5 6 20 6 single`/`double`/`rounded` + `draw box 5 5 70 10 single "Notes"` for melody/RGB/guess/calc; `SET.BAT` TUI demo `draw box 1 1 80 3 double "TUI SETTINGS DEMO"` + brightness/volume/`appconfig`; `LIB.BAT` tui helpers `:tui_banner` (`draw clear` + `draw box 1 1 80 3 single` + `draw text 2 2` ), `:tui_header` (`%1` title), `:tui_hr` (`draw line 1 4 80 4`). All pushed to SD via `push_sd.py` COM11 PASS (LIB 1896, COMPANION 1552, SYS 1486, FILES 3946, NET 2893, FUN 3968, SET 3109) using `receive <path> <size> /crc` ACK-paced + CRC-32. Extensive serial tests of each BAT (list selection, browse/view/hexview, tui fullscreen, draw boxes) all pass without abort/watchdog/overlap.
+- **Modal serial routing fixed** ï¿½ `dialog y` (serial line `y` ? ERRORLEVEL 0), `list 2` (serial `2` ? index 2), `ask myname` (serial `myname` ? `ASK_RESULT`/`/v:NAME` correctly via `shell.c` `modal_handle_serial_line` `components/modal/modal_surf.c:412`); previously `ask`/`list` required `/t:secs` to consume serial input, now all modals route via `shell_command_ops_t.modal_handle_serial_line` without retry.
 
 ### Verification
 
 - Clean build `idf.py build` 0 errors, 0 warnings (firmware + test).
-- Flash to COM11 succeeded, boot banner verified, SD `dir`/`type` clean, `tui status` `1024x510 80x25` `80×25` `p4minishell_config.h:298`, 50+ mixed SD ops with zero `allocate_dma_buf` errors.
-- Serial extensives: `draw box single/double/rounded` with title + nested (`SH_BOX_TL`/`H`/`V` vs `TL2`/`H2`/`V2` vs `TLR`/`TRR`/`BLR`/`BRR` via `tui_cell_set` `utf8[4]`), `draw line` H/V single/double/heavy, `draw fill`/`text`/`clear`/`window`/`close`/`refresh`, `draw fullscreen on|off` and `tui fullscreen on|off` (header hidden completely when on, kept otherwise via `windows_set_fullscreen` `components/windows/windows.c:418`), `color`/`locate` TUI-aware, `dialog`/`list`/`ask` with `/t:secs` timeout ? 255/1 and via serial without timeout ? `*RESULT`/`/v:NAME` (`dialog y` ? 0, `list 2` ? 2, `ask myname` ? `myname` via `modal_handle_serial_line` `components/modal/modal_surf.c:412` `shell.c`), `browse`/`view`/`hexview` fill `80×25` transcript region and `draw` is TUI-aware (`tui_init` `components/tui/tui.c:56`), `tone`/`wavplay` do not abort (`bsp_audio_init` guard), boot `[wifi]` cyan verified, `grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py` pixel-perfect, `push_sd.py` COM11 PASS (LIB 1896, COMPANION 1552, SYS 1486, FILES 3946, NET 2893, FUN 3968, SET 3109) + companion BATs each exercised via serial `list`/`browse`/`view`, no watchdog, no overlap, no stack overflow at `0x4012b75a` after `P4_CONFIG_COMMAND_TASK_STACK` 16384?24576.
+- Flash to COM11 succeeded, boot banner verified, SD `dir`/`type` clean, `tui status` `1024x510 80x25` `80ï¿½25` `p4minishell_config.h:298`, 50+ mixed SD ops with zero `allocate_dma_buf` errors.
+- Serial extensives: `draw box single/double/rounded` with title + nested (`SH_BOX_TL`/`H`/`V` vs `TL2`/`H2`/`V2` vs `TLR`/`TRR`/`BLR`/`BRR` via `tui_cell_set` `utf8[4]`), `draw line` H/V single/double/heavy, `draw fill`/`text`/`clear`/`window`/`close`/`refresh`, `draw fullscreen on|off` and `tui fullscreen on|off` (header hidden completely when on, kept otherwise via `windows_set_fullscreen` `components/windows/windows.c:418`), `color`/`locate` TUI-aware, `dialog`/`list`/`ask` with `/t:secs` timeout ? 255/1 and via serial without timeout ? `*RESULT`/`/v:NAME` (`dialog y` ? 0, `list 2` ? 2, `ask myname` ? `myname` via `modal_handle_serial_line` `components/modal/modal_surf.c:412` `shell.c`), `browse`/`view`/`hexview` fill `80ï¿½25` transcript region and `draw` is TUI-aware (`tui_init` `components/tui/tui.c:56`), `tone`/`wavplay` do not abort (`bsp_audio_init` guard), boot `[wifi]` cyan verified, `grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py` pixel-perfect, `push_sd.py` COM11 PASS (LIB 1896, COMPANION 1552, SYS 1486, FILES 3946, NET 2893, FUN 3968, SET 3109) + companion BATs each exercised via serial `list`/`browse`/`view`, no watchdog, no overlap, no stack overflow at `0x4012b75a` after `P4_CONFIG_COMMAND_TASK_STACK` 16384?24576.
 
 ---
 
 ## [0.35.0] - 2026-08-24
 
-### Added — TUI restoration + DOS-style parity for batch apps
+### Added ï¿½ TUI restoration + DOS-style parity for batch apps
 
-- **Modal surfaces restored** (`components/modal/modal_surf.c`): the 6 batch TUI surfaces that were stubbed (all `return -1`) now render via the shared modal runtime and fill the live transcript region (rotation/keyboard-aware): `dialog "title" "message" [btn1] [btn2]` (0/1/255), `list [/t:secs] [/v:NAME] "title" items...` (0-based index + optional var), `ask [/t:secs] [/v:NAME] [/p] "prompt" [default]` (`ASK_RESULT`/NAME, 0/1), `browse [/t:secs] [/v:NAME] [path]` (`BROWSE_RESULT`/NAME, 0/1), `view <file>` and `hexview <file>` pagers (text + 16-byte hex dump). All accept `/t:secs` auto-cancel. `dialog`/`list`/`ask` dispatcher was missing from `components/command/command.c` — now wired, so interactive and batch use work.
-- **Batch TUI extras**: `browse`/`view`/`hexview`/`color`/`locate` batch verbs (`components/batch/batch.c` + `batch.h` + `command.c` dispatcher), `P4_CONFIG_TUI_*` logical grid `80×25` (`p4minishell_config.h:284` + `.yaml` `tui:` top key) mapping to the live transcript rect via `windows_enter_editor_mode`/`windows_refresh_editor_surface`.
+- **Modal surfaces restored** (`components/modal/modal_surf.c`): the 6 batch TUI surfaces that were stubbed (all `return -1`) now render via the shared modal runtime and fill the live transcript region (rotation/keyboard-aware): `dialog "title" "message" [btn1] [btn2]` (0/1/255), `list [/t:secs] [/v:NAME] "title" items...` (0-based index + optional var), `ask [/t:secs] [/v:NAME] [/p] "prompt" [default]` (`ASK_RESULT`/NAME, 0/1), `browse [/t:secs] [/v:NAME] [path]` (`BROWSE_RESULT`/NAME, 0/1), `view <file>` and `hexview <file>` pagers (text + 16-byte hex dump). All accept `/t:secs` auto-cancel. `dialog`/`list`/`ask` dispatcher was missing from `components/command/command.c` ï¿½ now wired, so interactive and batch use work.
+- **Batch TUI extras**: `browse`/`view`/`hexview`/`color`/`locate` batch verbs (`components/batch/batch.c` + `batch.h` + `command.c` dispatcher), `P4_CONFIG_TUI_*` logical grid `80ï¿½25` (`p4minishell_config.h:284` + `.yaml` `tui:` top key) mapping to the live transcript rect via `windows_enter_editor_mode`/`windows_refresh_editor_surface`.
 - **Companion migrated** (`apps/companion/*.BAT`): `COMPANION.BAT` main menu now uses `list` (0-based) with 255-cancel handling; `SYS.BAT` dashboard uses `list`/`dialog`; `FILES.BAT` browses SD with `browse`/`view`/`hexview`, clipboard/notes via `ask`/`list`; `NET.BAT` picks Wi-Fi via `list`/`ask` and views via `view`; `FUN.BAT` uses `dialog`/`list`/`ask`; `SET.BAT` uses `ask`/`list`/`dialog`. All handle `255` cancel.
 - **Native TUI SDK stub** (`components/applib/applib_tui.h/.c` + `applib.h` umbrella + `CMakeLists.txt`): `tui_create/destroy/box/print_at/refresh/clear` declared now, stubbed with a warning, implemented after companion ships.
 
-### Fixed — ANSI colour and async scheduling
+### Fixed ï¿½ ANSI colour and async scheduling
 
 - **White `[wifi]` on boot** (`components/networking/networking.c:474` `C6 hosted firmware version: 3.0.6` and 13 peers at `407,461,464,481,503,510,954,961,967,980,987,1043,1131` plus `c6ota:` at `1080,1109,1114,1118,1127,1142,1147`): all plain `networking_schedulef("[wifi] ...")` now `networking_schedulef_ansi(SH_PROMPT "[wifi]" SH_RST ... SH_VAL ... SH_RST)` so the second `[wifi]` is cyan (`@C`) and versions are bright white (`@W`). Verified: `@C[wifi]@R` expands to `ESC[96m[wifi]ESC[0m`.
-- **`main.c:200` progress** (`shell_c6ota_progress_callback`): built `line` with `snprintf` + `SH_*` literals then passed literal `@` to `shell_transcript_append_ansi`/`shell_schedule_transcript_appendf` — now `ansi_format` + `shell_schedule_transcript_appendf_ansi`.
-- **`applib.c:58`**: `app_vformat_append` used `vsnprintf` even when `ansi==true` — now `ansi_vformat` when `ansi`.
+- **`main.c:200` progress** (`shell_c6ota_progress_callback`): built `line` with `snprintf` + `SH_*` literals then passed literal `@` to `shell_transcript_append_ansi`/`shell_schedule_transcript_appendf` ï¿½ now `ansi_format` + `shell_schedule_transcript_appendf_ansi`.
+- **`applib.c:58`**: `app_vformat_append` used `vsnprintf` even when `ansi==true` ï¿½ now `ansi_vformat` when `ansi`.
 - **Async ANSI path** (`components/shell/shell.c:709` + `shell.h`): added `shell_schedule_transcript_appendf_ansi` (like the plain form but via `ansi_vformat`) and made `shell_async_transcript_flush_cb` dispatch to `shell_transcript_append_ansi` when the staged text contains ESC, otherwise plain. Added `networking_host_ops_t` note and `applib_tui` wiring.
 
 ### Changed
@@ -4265,17 +4356,17 @@ passed on rerun — the known O6 latency residual, unrelated to these fixes.)
 
 ## [0.34.0] - 2026-08-18
 
-### Added — FX-870P/VX-4 math parity complete
+### Added ï¿½ FX-870P/VX-4 math parity complete
 
 The `calc` float calculator (`components/batch/calc.c`) now implements all
 FX-870P/VX-4 BASIC math functions. Five previously missing functions have been
 added:
 
-- **`CUR(x)`** — cube root (`cbrt(x)`, handles negative correctly)
-- **`DEG(D.MMSS)`** — sexagesimal to decimal degrees (inverse of `DMS`)
-- **`ASINH(x)` / `HYP ASN`** — inverse hyperbolic sine
-- **`ACOSH(x)` / `HYP ACS`** — inverse hyperbolic cosine (domain x = 1)
-- **`ATANH(x)` / `HYP ATN`** — inverse hyperbolic tangent (domain -1 < x < 1)
+- **`CUR(x)`** ï¿½ cube root (`cbrt(x)`, handles negative correctly)
+- **`DEG(D.MMSS)`** ï¿½ sexagesimal to decimal degrees (inverse of `DMS`)
+- **`ASINH(x)` / `HYP ASN`** ï¿½ inverse hyperbolic sine
+- **`ACOSH(x)` / `HYP ACS`** ï¿½ inverse hyperbolic cosine (domain x = 1)
+- **`ATANH(x)` / `HYP ATN`** ï¿½ inverse hyperbolic tangent (domain -1 < x < 1)
 
 Unit tests added in `test/main/test_calc.c` (`test_calc_new_math_functions`,
 `test_calc_new_math_errors`). All 154 unit tests pass. Documentation updated in
@@ -4302,11 +4393,11 @@ so the lifecycle lives once and every surface behaves consistently.
   a private ops-table hook. No user-visible behaviour change; no function
   duplication.
 - **Native modal surfaces** (`components/modal/modal_surf.c`):
-  - `dialog "title" "message" [button1] [button2]` — message box, ERRORLEVEL
+  - `dialog "title" "message" [button1] [button2]` ï¿½ message box, ERRORLEVEL
     0/1 for the two buttons, 255 for cancel/Esc.
-  - `list "title" item1 [item2...]` — scrollable touch/keyboard selector,
+  - `list "title" item1 [item2...]` ï¿½ scrollable touch/keyboard selector,
     ERRORLEVEL is the 0-based selected index, 255 for cancel.
-  - `ask "prompt" [default]` — text input with on-screen keyboard and USB
+  - `ask "prompt" [default]` ï¿½ text input with on-screen keyboard and USB
     typing support. The answer is stored in the `ASK_RESULT` environment
     variable; ERRORLEVEL 0 = OK, 1 = cancel.
 - **Header notifications from batch and native apps**:
@@ -4328,7 +4419,7 @@ so the lifecycle lives once and every surface behaves consistently.
 - **Version bump**: 0.32.8 ? 0.33.0 (`p4minishell_config.h`,
   `p4minishell_config.yaml`, `readme.md`).
 
-### Added — batch-language features (from the P4 Companion on-board testing)
+### Added ï¿½ batch-language features (from the P4 Companion on-board testing)
 
 The on-board `apps/companion` batch app (a menu-driven system helper written
 entirely in batch) exercised the batch engine hard and surfaced a few missing
@@ -4336,30 +4427,30 @@ pieces, now added:
 
 - **Dynamic pseudo-variables** in `shell_expand_variables()`:
   `%DATE%` (`MM-DD-YYYY`), `%TIME%` (`HH:MM:SS`), `%RANDOM%` (`0..32767`,
-  `esp_random()`-based, cmd.exe parity), and `%CD%` (current directory) —
+  `esp_random()`-based, cmd.exe parity), and `%CD%` (current directory) ï¿½
   alongside the existing `%ERRORLEVEL%`.
 - **Undefined `%VAR%` expands to empty** (cmd.exe parity): an unset variable
   no longer stays literal, so the DOS `if "%var%"==""` idiom works. `%%` still
   yields a literal `%`, and single-quote protection is unchanged.
-- **`if [not] [/i] defined VAR`** — true when `VAR` has been set (cmd.exe
+- **`if [not] [/i] defined VAR`** ï¿½ true when `VAR` has been set (cmd.exe
   parity), in addition to `errorlevel` / `exist` / numeric / string forms.
 - **`delay <ms>`** command (`components/command/command.c`): a pure,
   deterministic wait for melodies/demos; unlike `sleep` (light-sleep), it does
   not blank the display or touch Wi-Fi. Clamped to
   `P4_CONFIG_DELAY_MAX_MS` (new, documented in `p4minishell_config.yaml`).
 
-### Added — native-app ABI (argv / env / cwd for native apps)
+### Added ï¿½ native-app ABI (argv / env / cwd for native apps)
 
 A native app is a C function with the signature `app_main_t(argc, argv)`
 registered via `app_register()`. Once registered it becomes a shell command:
 the dispatcher runs it with `argc`/`argv` (`argv[0]` = the app name) after
 every built-in and `.bat` lookup fails, and the return value becomes
-ERRORLEVEL — the native equivalent of the batch contract (`%0..%9`/`%*`, env
+ERRORLEVEL ï¿½ the native equivalent of the batch contract (`%0..%9`/`%*`, env
 table, storage cwd).
 
-- **`applib_app.h`** — `app_register()` / `app_find()` / `app_dispatch()` /
+- **`applib_app.h`** ï¿½ `app_register()` / `app_find()` / `app_dispatch()` /
   `app_get()`; the table holds `P4_CONFIG_APP_MAX` apps (new config).
-- **`applib_env.h`** — `app_env_get`/`app_env_set` (the shell's shared RAM
+- **`applib_env.h`** ï¿½ `app_env_get`/`app_env_set` (the shell's shared RAM
   environment table) and `app_get_cwd` (storage cwd), routed through
   `applib_env_ops_t` registered by `command_init()` so `applib` stays a leaf.
 - **`apps` command** lists the registered apps.
@@ -4368,7 +4459,7 @@ table, storage cwd).
   branching. Verified on board (`apps`, `hello a b c`, `echo
   %HELLO_RESULT%`, batch `if errorlevel`).
 
-### Added — PATH-based `.bat` app discovery + `launch`
+### Added ï¿½ PATH-based `.bat` app discovery + `launch`
 
 - **`launch` command** (`components/command/command.c`): discovers `.bat`
   apps on the command PATH and in the conventional `sd:/APPS` directory
@@ -4383,14 +4474,14 @@ table, storage cwd).
   timeout declines). Manageable via `config LAUNCH_APP=<app>` /
   `config reset LAUNCH_APP` (tracked setting added).
 - **Bug fixed during bring-up**: `launch` initially kept the discovery table
-  (˜5 KB) on the command-worker stack, overflowing it once the launched batch
+  (ï¿½5 KB) on the command-worker stack, overflowing it once the launched batch
   re-entered the dispatcher per line. The table is now heap-allocated (and not
   allocated at all for `launch <name>`).
 - Verified on board: `launch /list` (with the companion's title), the menu,
   `launch COMPANION` (full dashboard flow), and the boot offer (Y launches,
   N/timeout declines).
 
-### Added — Palm-OS-style `db` record store (SD-backed)
+### Added ï¿½ Palm-OS-style `db` record store (SD-backed)
 
 A named, SD-backed database surface for batch apps and native apps, inspired
 by Palm OS records (monotonic ids, 16 categories, secret/redacted payloads)
@@ -4417,19 +4508,19 @@ RECORDS/          R<8-hex-id>.DAT per record payload
   output. ERRORLEVEL 0/1/2. Secret payloads are redacted unless `/reveal`.
   Export writes `id|cat|flags|key|hexpayload` lines (binary-safe); import
   appends records with fresh ids.
-- **`applib_db.h`** — `app_db_create/info/drop`, `app_db_category_set/get`,
+- **`applib_db.h`** ï¿½ `app_db_create/info/drop`, `app_db_category_set/get`,
   `app_db_add/get/set/del`, `app_db_purge/count/find`, thin NULL-checked
   wrappers over the db core (added to the applib umbrella).
 - **Config** (`p4minishell_config.h` + `.yaml`): `P4_CONFIG_DB_*` bounds for
   databases, records, payload size, find results, name/key/label lengths,
   category count, export limits, and the secret/deleted flag bits.
 - **Unit tests** (`test/main/test_db.c`): pure `db_name_valid` rules.
-- **On-board verification** (`apps/companion/db_test.py`): 38/38 checks PASS —
+- **On-board verification** (`apps/companion/db_test.py`): 38/38 checks PASS ï¿½
   create/info/list/drop, add/get/set/del, secret redaction + `/reveal`,
   find/count, categories, soft-delete + purge, export/import round-trip,
   current-db short forms, and error levels.
 
-### Added — SD-persisted alarms (`alarm`, `cal`)
+### Added ï¿½ SD-persisted alarms (`alarm`, `cal`)
 
 A small, batch-friendly alarm/event system that reuses every existing surface
 instead of inventing a second notification path:
@@ -4443,8 +4534,8 @@ instead of inventing a second notification path:
   run).
 - **Reuses existing surfaces only**: on fire the checker posts to
   `shell_header_notify` (thread-safe from any task), `led_notify`
-  (`LED_EVENT_ALARM` added to the LED event table), `audio_play_tone`, and —
-  for the `/run:` action — a `call <file>` queued onto the command worker via
+  (`LED_EVENT_ALARM` added to the LED event table), `audio_play_tone`, and ï¿½
+  for the `/run:` action ï¿½ a `call <file>` queued onto the command worker via
   a registered `alarm_host_ops_t.execute_async` hook (registered in
   `command_init()`), never run on the checker stack. No private loop.
 - **`alarm` / `cal` commands** (`components/command/alarm_commands.c`):
@@ -4460,7 +4551,7 @@ instead of inventing a second notification path:
   catch-up, default notify seconds, and a `/run:` compile-out flag.
 - **Unit tests** (`test/main/test_alarm.c`): pure weekday-mask, recurrence
   advance, and `YYYY-MM-DD HH:MM` parsing helpers.
-- **On-board verification** (`apps/companion/alarm_test.py`): 25/25 PASS —
+- **On-board verification** (`apps/companion/alarm_test.py`): 25/25 PASS ï¿½
   add/list/status/cal/enable/disable/del/purge plus the background checker
   firing a due event (marked fired) and a `/run:` batch action queued onto the
   command worker (marker file created). Bring-up fix: the checker stack was
@@ -4468,7 +4559,7 @@ instead of inventing a second notification path:
   files and notifications) plus the tick's event/path locals overflowed the
   smaller stack.
 
-### Fixed — from the P4 Companion on-board testing
+### Fixed ï¿½ from the P4 Companion on-board testing
 
 - **Command worker stack overflow** (`Guru Meditation`, stack protection
   fault in `shell_cmd`): the deep re-entrant batch nesting of `setlocal` +
@@ -4490,7 +4581,7 @@ instead of inventing a second notification path:
   input): `pause`, `choice`, `shell_confirm_destructive`, the xcopy prompts
   and the `-- More --` pagers printed their prompt and *then* armed the key
   wait, so a key typed as soon as the prompt appeared could be dispatched as a
-  command (or lost) instead of answering the prompt — a batch `pause` would sit
+  command (or lost) instead of answering the prompt ï¿½ a batch `pause` would sit
   its full timeout and the app's default menu action fired. The key wait is now
   armed *before* the prompt is printed in every one of those commands.
 - **`if COND cmd1 & cmd2` ran `cmd2` unconditionally**: the command-chain
@@ -4531,7 +4622,7 @@ instead of inventing a second notification path:
   `xEventGroupWaitBits` assert ? reboot), and `ask` overwrote a serial answer
   with the empty textarea contents on close.
 - **Deep-test sweep of `apps/companion`** (`apps/companion/deep_test.py`,
-  reactive serial driver, uptime-verified reboots): all 8 checks PASS —
+  reactive serial driver, uptime-verified reboots): all 8 checks PASS ï¿½
   baseline (`apps`, `launch /list`), the full main-menu walk into all five
   modules and back, SYS dashboard + refresh, FILES dir/search/trash/clipboard/
   notes (new/list/view), NET offline (status/connect-cancel/ping/joke), FUN
@@ -4556,7 +4647,7 @@ suite. Three medium bugs and one thread-safety hazard were found and fixed:
   carry `MALLOC_CAP_DMA` here) and fails once the heap fragments under load,
   taking every SD command down. Fix: `storage_sd_ensure_dma_buffer()`
   pre-allocates a cached `card->host.dma_aligned_buffer` at mount (new
-  `P4_CONFIG_SD_DMA_BUFFER_BYTES`, 8192 B = 16 × 512 B sectors) and derives
+  `P4_CONFIG_SD_DMA_BUFFER_BYTES`, 8192 B = 16 ï¿½ 512 B sectors) and derives
   the SDMMC chunk size from it; released on `sdeject`. 50+ SD operations run
   with zero DMA errors (previously every op failed after ~40 s).
 - **`abort()` in newlib `lock_init_generic`** (stdio FILE-lock OOM) under
@@ -4583,8 +4674,8 @@ suite. Three medium bugs and one thread-safety hazard were found and fixed:
 
 - Clean build: 0 errors, 0 warnings (firmware and test project).
 - On-board unit suite: **158 tests, 0 failures** (20 groups).
-- Full command sweep (105 commands × 2 passes): **0 crashes, 0 errors**.
-- Batch sweep (18 verbs + 27 batch files × 2 passes): **0 crashes**.
+- Full command sweep (105 commands ï¿½ 2 passes): **0 crashes, 0 errors**.
+- Batch sweep (18 verbs + 27 batch files ï¿½ 2 passes): **0 crashes**.
 - appmode/appconfig/applib round-trips, rotate 90/180/270, and the previously
   crashing `volume`/`move`/`ren` commands verified clean on board.
 
@@ -4623,7 +4714,7 @@ hand it back, so interactive apps get a full-screen surface:
   which also guards the no-LVGL headless path).
 - On-board simulation (UART console, mirrored to the transcript display):
   `appmode status` ? `off`; a batch app that runs `appmode on /full /clear`,
-  prints a styled full-screen banner, `choice`, then `exit /b 0` — after the
+  prints a styled full-screen banner, `choice`, then `exit /b 0` ï¿½ after the
   exit the prior screen (`SCREEN_MARKER_123` and history) is restored and
   `appmode status` reports `off`; a manual `appmode on /clear` /
   `appmode off` round-trip restores the screen.
@@ -4638,7 +4729,7 @@ Prompted input can now be collected without echoing, for passwords and other
 secrets:
 
 - **`set /p NAME=<prompt> /P`** (`components/batch/batch.c`): the typed line
-  is stored in `NAME` but never echoed — Backspace erases silently, ESC
+  is stored in `NAME` but never echoed ï¿½ Backspace erases silently, ESC
   cancels, Enter completes and prints a newline. Combines with `/T:secs` for a
   bounded password prompt (`set /p pin=PIN: /P /T:2`).
 - **`shell_read_line_hidden()`** (`components/shell/shell.c`): the shared
@@ -4670,12 +4761,12 @@ both batch and applib, rendered in the shell transcript (the display area)
 and readable from touch, USB keyboard, or serial:
 
 - **`ansi <sgr-codes> [text...]`** (`components/batch/batch.c`): emit text
-  styled with the given ANSI SGR codes — `7` reverse video, `1` bold, `31`
-  red, `90` muted, `0` reset, etc. — wrapped as `ESC[<codes>m text ESC[0m`
+  styled with the given ANSI SGR codes ï¿½ `7` reverse video, `1` bold, `31`
+  red, `90` muted, `0` reset, etc. ï¿½ wrapped as `ESC[<codes>m text ESC[0m`
   into the transcript. The DOS `7m` spelling (with the trailing `m`) and the
   bare `7` spelling are both accepted; invalid codes are rejected (ERRORLEVEL
   2).
-- **`menu <item> [item...]`**: a numbered form primitive — renders `1. item`
+- **`menu <item> [item...]`**: a numbered form primitive ï¿½ renders `1. item`
   lines in the transcript, reads a numeric choice, and sets ERRORLEVEL to the
   chosen item's 1-based index (0 on cancel / timeout / an invalid entry), so a
   batch app branches with `if errorlevel`.
@@ -4713,7 +4804,7 @@ applib, with **all storage on the SD card** and a single shared core
 - **`ini` command** (`components/batch/batch.c`): `ini list|get|set|del
   <file> [key] [value]` reads/updates any `KEY=VALUE` file on the SD card
   (comment- and blank-line aware, atomic temp+rename writes), and
-  `ini load|save <file>` imports/exports the environment — easy persistent
+  `ini load|save <file>` imports/exports the environment ï¿½ easy persistent
   state without hand-rolling file parsing.
 - **`appconfig` command**: per-app settings without hand-rolling parsing.
   `appconfig <app> [path|list|get|set|del]` reads/writes a namespaced
@@ -4754,27 +4845,27 @@ applib, with **all storage on the SD card** and a single shared core
 
 Better modularity for both surfaces, without duplicating any existing verb:
 
-- **`call <file.bat>::<routine> [args]`** — shared libraries of batch
+- **`call <file.bat>::<routine> [args]`** ï¿½ shared libraries of batch
   routines. An external `.bat` becomes a callable library: `call lib.bat::add
   3 4` loads `lib.bat`, starts execution at its `:add` routine, and returns
   to the caller on `exit /b` / `goto :eof` / end of file. The routine's
   arguments arrive as `%1`..`%9`/`%*` and its final errorlevel propagates.
-- **Variable isolation beyond `setlocal`** — a library-routine call
+- **Variable isolation beyond `setlocal`** ï¿½ a library-routine call
   automatically pushes an environment scope for the callee, so a routine's
   temporary variables never leak into the caller (verified: `result`/`tmp`
   set inside `lib.bat::add`/`:probe` are undefined back in the caller, with
   no `setlocal` written by the caller). `call <file.bat>` (whole file) keeps
   the shared-environment behavior, matching DOS.
-- **`set /p NAME=<prompt> /T:secs`** — prompted input now takes a timeout
+- **`set /p NAME=<prompt> /T:secs`** ï¿½ prompted input now takes a timeout
   (`/T:secs`, default `P4_CONFIG_KEY_WAIT_TIMEOUT_MS`), giving input the same
   timeout control `choice /T` has. On timeout the variable is left unchanged
   and errorlevel is 1. `choice /T` is unchanged and re-verified on board.
-- **applib lean include mechanism** — `applib.h` is now an umbrella over
+- **applib lean include mechanism** ï¿½ `applib.h` is now an umbrella over
   focused headers (`applib_console.h`, `applib_mem.h`, `applib_time.h`,
   `applib_net.h`, `applib_input.h`), so a native app includes only the groups
   it uses. Each function is declared in exactly one header; the umbrella
   keeps the existing `#include "applib.h"` working.
-- **applib input with timeout** — `app_wait_key(timeout_ms, &key)` and
+- **applib input with timeout** ï¿½ `app_wait_key(timeout_ms, &key)` and
   `app_read_line(buf, size, timeout_ms)` give native apps bounded keypress /
   line reads (the primitive behind `pause` / `choice /T` / `set /p /T`),
   backed by the shell's key queue and returning false on a headless board.
@@ -4801,13 +4892,13 @@ Better modularity for both surfaces, without duplicating any existing verb:
 
 The batch "process" model is now explicit and introspectable, on top of the
 existing pipe-spool mechanism (each stage spools through an SD temp file and
-the next stage reads it through the input-redirection slot — a single worker
+the next stage reads it through the input-redirection slot ï¿½ a single worker
 task runs one command at a time, so there is no second process to stream
 into):
 
 - **`proc` command** (`components/batch/batch.c`): lists the active batch
-  process stack — every nested `.bat` (script path, depth, arguments, echo
-  state) — and reports the current process with `/args` (all arguments),
+  process stack ï¿½ every nested `.bat` (script path, depth, arguments, echo
+  state) ï¿½ and reports the current process with `/args` (all arguments),
   `/name` (%0), `/depth`, `/errorlevel`, `/echo`, and `/stdin` (the active
   pipe spool / `< file` source). A batch file can therefore branch on its own
   depth, arguments, or exit code, and a shell user can see which scripts are
@@ -4817,7 +4908,7 @@ into):
   string, giving a batch process access to its own exit code (cmd.exe
   parity): `set code=%errorlevel%`, `if %errorlevel%==5 ...`.
 - **Batch files as pipe processes**: a `.bat` is now a first-class pipe
-  stage — `echo hello | filter.bat` (reads stdin via `for /f ... in ()` /
+  stage ï¿½ `echo hello | filter.bat` (reads stdin via `for /f ... in ()` /
   `set /p NAME=<`) and `echo x | filter.bat | findstr LINE` (batch in the
   middle of a pipeline) are verified on board, with `proc /stdin` showing the
   spool file the stage is consuming.
@@ -4832,7 +4923,7 @@ into):
   the inner stage's capture is written and popped, and the outer capture
   resumes so the outer file receives the whole pipeline output.
 - `%ERRORLEVEL%` initially did not expand (the token buffer was read before
-  it was filled) — fixed and covered by a unit test.
+  it was filled) ï¿½ fixed and covered by a unit test.
 
 ### Verification
 
@@ -4859,7 +4950,7 @@ against instead of reaching into shell/clock/networking internals:
 - **Console output API** (`app_printf` / `app_vprintf`, ANSI variants, and the
   semantic `app_print_heading`/`app_print_field`/`app_print_ok`/`app_print_error`/
   `app_print_warning`/`app_print_muted`/`app_print_usage`). Output lands on the
-  transcript — which is the redirection layer — so an app invoked inside a
+  transcript ï¿½ which is the redirection layer ï¿½ so an app invoked inside a
   command dispatch is captured by `>` / `>>` exactly like a built-in command.
 - **Memory allocation policy + error reporting** (`app_alloc`/`app_calloc`/
   `app_realloc`/`app_strdup`/`app_strndup`/`app_free`, and
@@ -4872,7 +4963,7 @@ against instead of reaching into shell/clock/networking internals:
 - **Networking helpers** (`app_wifi_is_connected`, `app_wifi_get_rssi`,
   `app_wifi_state_string`) read Wi-Fi state through the registered
   `applib_net_ops_t` table (wired in `command_init()`), so applib never includes
-  `networking.h` — the same one-way ops-table pattern as `shell_command_ops_t`.
+  `networking.h` ï¿½ the same one-way ops-table pattern as `shell_command_ops_t`.
 
 Layering: `applib` depends only on `shell`, `clock`, and the FreeRTOS/heap/
 esp_timer IDF components. Registered in the root and test `CMakeLists.txt`;
@@ -4886,7 +4977,7 @@ table.
 - **`calc NAME=<expr>` failed from a batch file (and at the prompt).**
   `shell_command_calc_line()` copied the *whole* `NAME = expr` text into the
   variable name and passed it to `shell_env_set()`, which rejects names
-  containing spaces — so `calc y = 6 * 7` reported "invalid variable name or
+  containing spaces ï¿½ so `calc y = 6 * 7` reported "invalid variable name or
   environment is full". It now extracts only the text before the `=`.
   Regression test: `test_calc_command_assignment`.
 - **`for /f` silently did nothing** (interactive and in batch files). After
@@ -4947,7 +5038,7 @@ New config tunables under `calculator` / `for /f`:
 
 The remaining BASIC verbs map onto existing commands and are documented in
 `command.md` ("BASIC-to-DOS batch mapping"): `BEEP`?`beep`, `CLS`?`cls`,
-`GOTO`?`goto`, `IF/THEN/ELSE`?`if (…) else (…)`, `FOR/NEXT`?`for %%v in (…) do`,
+`GOTO`?`goto`, `IF/THEN/ELSE`?`if (ï¿½) else (ï¿½)`, `FOR/NEXT`?`for %%v in (ï¿½) do`,
 `LET`?`set`, `REM`?`rem`, `FILES`?`dir`, `KILL`?`del`, `NAME`?`ren`,
 `DELETE`?`del`, `EDIT`?`edit`, `CHAIN`?`call`, `GOSUB`?`call :label`,
 `RETURN`?`goto :eof`, `INPUT`?`set /p`, `PRINT`?`echo`, `LIST`?`type`/
@@ -4970,7 +5061,7 @@ documented as not applicable rather than stubbed.
 ### Verification
 
 - Clean build: 0 errors, 0 warnings (firmware and test project).
-- On-board (COM11): full unit suite passes — 139 tests, 0 failures,
+- On-board (COM11): full unit suite passes ï¿½ 139 tests, 0 failures,
   including 15 new `test_calc` cases (arithmetic/precedence/`^`/MOD, every
   math and string function, DEG/RAD, `&H`/`0x` hex, PI, seeded RAN#, env
   assignment, POL/REC X/Y side effects, error paths) and 5 new `for /f`
@@ -5025,7 +5116,7 @@ scheme with `screenshot`:
   `0x00000000`.
 - Raw serial writes are time-bounded (`P4_CONFIG_SERIAL_SEND_TIMEOUT_MS`,
   default 10 s) so a host that stops reading can never wedge the command
-  worker — `send` aborts with ERRORLEVEL 1 instead of hanging. This matters for
+  worker ï¿½ `send` aborts with ERRORLEVEL 1 instead of hanging. This matters for
   batch files run from the on-screen UI with no serial peer.
 - `receive` error reporting now distinguishes a CRC/trailer failure from a
   short transfer ("transfer failed - CRC mismatch or missing trailer" vs
@@ -5042,7 +5133,7 @@ scheme with `screenshot`:
 - `serial_write_raw` chunks writes to fit the USB-Serial/JTAG TX ring, so a
   large single payload (e.g. a full screenshot) is never rejected by the ring.
 
-### Changed — esp_hosted 3.0.6 upgrade + header notification-timer UAF fix
+### Changed ï¿½ esp_hosted 3.0.6 upgrade + header notification-timer UAF fix
 
 - Upgraded `espressif/esp_hosted` to `^3.0.6` (`esp_wifi_remote` stays
   `^1.6.4`); the ESP32-C6 co-processor was OTA-upgraded to 3.0.6 first, then the
@@ -5054,7 +5145,7 @@ scheme with `screenshot`:
 - Patched the managed component's `esp_hosted_host_fw_ver.h` (reported `2.12.6`
   instead of `3.0.6`, which tripped the host/C6 version gate).
 - **Fixed a heap-corruption / LVGL blue-screen bug exposed by the upgrade:** the
-  header notification one-shot timer was a use-after-free —
+  header notification one-shot timer was a use-after-free ï¿½
   `header_notification_timeout_cb()` never cleared `s_notification_timer`, so
   the next notification called `lv_timer_set_period/reset/resume` on the
   auto-deleted timer node, writing `{period, last_run, paused}` into reclaimed
@@ -5067,7 +5158,7 @@ scheme with `screenshot`:
   plus `eh_host_port_dma_alloc` / RPC ctrl-cmd / RX frame copies) to preserve
   internal RAM. See `bugs.md` W2.
 
-### Added — offline help, license/about, and build identity
+### Added ï¿½ offline help, license/about, and build identity
 
 Documentation and packaging polish that ships in the binary:
 
@@ -5103,22 +5194,22 @@ Documentation and packaging polish that ships in the binary:
   crashes; functional checks (file ops, batch, `for`, `if`, `set /a`, clipboard,
   `fc`, `chkdsk`) pass; 5/5 WiFi connect cycles.
 
-### Fixed — N1: shared-SDMMC host bring-up race (boot-time)
+### Fixed ï¿½ N1: shared-SDMMC host bring-up race (boot-time)
 
 The SD card (SDMMC slot 0) and the ESP-Hosted C6 transport (slot 1) both
 call the **non-thread-safe** `sdmmc_host_init()` at boot from different tasks;
 a concurrent double-call corrupted the shared host driver and failed BOTH
 devices ~1 in 15 boots. Fixes:
 
-- **`storage_sdmmc_host_preinit()`** — initializes the SDMMC host once,
+- **`storage_sdmmc_host_preinit()`** ï¿½ initializes the SDMMC host once,
   synchronously, in `app_main` before `networking_init()`, so every later call
   from fatfs and esp_hosted hits the driver's idempotent skip and the race
   cannot occur.
-- **Slot-scoped SD deinit** — `bsp_sdcard_mount()` (managed BSP) now deinits
+- **Slot-scoped SD deinit** ï¿½ `bsp_sdcard_mount()` (managed BSP) now deinits
   only slot 0 on failure/unmount (`sdmmc_host_deinit_slot(0)`) instead of the
   whole host, so a failed SD mount or `sdeject` never tears down the
   co-processor link.
-- **Hosted bring-up retry** — `networking_wifi_runtime_init()` retries
+- **Hosted bring-up retry** ï¿½ `networking_wifi_runtime_init()` retries
   `esp_hosted_connect_to_slave()` once (deinit ? 50 ms ? init ? connect) as
   defense-in-depth.
 
@@ -5130,48 +5221,48 @@ SD enumerated every boot, and `sdeject` no longer drops the hosted link
 
 ## [0.30.0] - 2026-08-13
 
-### Milestone — version renumbering + first full test-and-debug campaign
+### Milestone ï¿½ version renumbering + first full test-and-debug campaign
 
 Version numbering moves from 0.24.x to 0.3X.X. This release is the result of a
 full command-surface, unit, and stress-test campaign on the board (see the new
 `bugs.md`, which replaces the old one). Eight firmware bugs were found and fixed:
 
-- **Critical — intermittent `abort()` crash (internal-DRAM heap exhaustion).**
+- **Critical ï¿½ intermittent `abort()` crash (internal-DRAM heap exhaustion).**
   The 48 KB transcript scrollback buffers lived in internal DRAM; combined with
   newlib's per-`snprintf` lock allocation this drove internal free to ~1.7 KB and
   caused random `abort()` reboots on any output-heavy command. The three 16 KB
   transcript buffers (`s_transcript`, `s_transcript_ansi`, `s_transcript_staged`)
   now live in PSRAM. Internal free is stable at ~132-179 KB and the
   previously-100%-crashing 22-command sweep runs clean.
-- **Critical — `edit` crashed (Store access fault) when typing text + Enter.**
+- **Critical ï¿½ `edit` crashed (Store access fault) when typing text + Enter.**
   `editor_doc_split_line()` used a `&doc->lines[row]` pointer across
   `editor_doc_insert_line()`, which can realloc/shift the array (use-after-free).
   The line pointer is now re-fetched after the insert.
-- **High — `goto :label` broken.** `goto` prepended an extra `:` (so `goto :skip`
+- **High ï¿½ `goto :label` broken.** `goto` prepended an extra `:` (so `goto :skip`
   became `::skip`) and the label file position was computed with the trimmed line
   length, jumping a byte into the line. Both fixed.
-- **Medium — literal `@`-palette markers** in `rgb status`, `bluetooth status`, and
+- **Medium ï¿½ literal `@`-palette markers** in `rgb status`, `bluetooth status`, and
   `config` (palette macros passed as `%s` arguments). Markers moved into the format
   strings.
-- **Medium — `copy`/`move` to a directory destination failed.** A destination that
+- **Medium ï¿½ `copy`/`move` to a directory destination failed.** A destination that
   is an existing directory now keeps the source basename (`copy f.txt dir/`).
-- **Medium — `move dir\f.txt name.txt` resolved `name.txt` in the source's
+- **Medium ï¿½ `move dir\f.txt name.txt` resolved `name.txt` in the source's
   directory** (like `ren`) instead of the cwd. `move` now resolves cwd-relative.
-- **Medium — `if cond (cmd) else (cmd)` parenthesized blocks failed.**
-  `if` now parses balanced `(…)` blocks and the `else` branch.
-- **Medium — `call :label` unimplemented.** Implemented label subroutines with
+- **Medium ï¿½ `if cond (cmd) else (cmd)` parenthesized blocks failed.**
+  `if` now parses balanced `(ï¿½)` blocks and the `else` branch.
+- **Medium ï¿½ `call :label` unimplemented.** Implemented label subroutines with
   `exit /b` / `goto :eof` / EOF return to the caller.
-- **Low — interactive `for` was unknown at the prompt.** `for` only ran inside
+- **Low ï¿½ interactive `for` was unknown at the prompt.** `for` only ran inside
   batch files. It is now dispatched at the prompt (`for %i in (set) do cmd`),
   accepting the single-`%` prompt form and the `%%` batch form, with token sets,
   wildcard sets, and per-iteration nested commands (e.g. `set /a` and pipes)
   verified on board. The batch `for` path is unchanged.
-- **Low — caret escape `^c` was not stripped from `echo` output.** `echo a^&b`
+- **Low ï¿½ caret escape `^c` was not stripped from `echo` output.** `echo a^&b`
   printed `a^&b` (the caret was kept). `echo` now consumes caret escapes when
   printing (`a^&b` ? `a&b`, `a^^b` ? `a^b`, `a^|b` ? `a|b`), preserves quotes
   (`echo "a^&b"` ? `"a&b"`), keeps a caret inside single quotes literal, and
   `echo ^on` prints `on` instead of toggling the batch echo flag.
-- **Low — `clip` subcommand typos silently clobbered the clipboard.**
+- **Low ï¿½ `clip` subcommand typos silently clobbered the clipboard.**
   `clip status` (or any unknown first word that looks like a subcommand) is now
   reported as a usage error with errorlevel 2 instead of overwriting the current
   clipboard with the word itself; literal clipboard text (`clip hello world`)
@@ -5192,7 +5283,7 @@ full command-surface, unit, and stress-test campaign on the board (see the new
   IP-lost/DHCP timer a few seconds after connecting. It is not caused by this
   campaign's code (confirmed by reverting the memory-layout changes) and needs
   component-level work on the `esp_wifi_remote`/`esp_hosted`/lwIP integration on
-  IDF 5.5.5 — the `edit` save/quit round-trip is verified working with the
+  IDF 5.5.5 ï¿½ the `edit` save/quit round-trip is verified working with the
   documented `\s`/`\q` verbs.
 
 ---
@@ -5225,10 +5316,10 @@ card:
 
 ### Added - new public API
 
-- `storage_register_sd_first_mount_callback(cb)` — one-shot per-boot first-mount hook.
-- `shell_command_sd_mount()` — the `sd mount` subcommand.
-- `boot_ensure_default_files()` — idempotent CONFIG.SYS/AUTOEXEC.BAT generation.
-- `boot_on_sd_first_mount()` — the welcome callback registered by `main.c`.
+- `storage_register_sd_first_mount_callback(cb)` ï¿½ one-shot per-boot first-mount hook.
+- `shell_command_sd_mount()` ï¿½ the `sd mount` subcommand.
+- `boot_ensure_default_files()` ï¿½ idempotent CONFIG.SYS/AUTOEXEC.BAT generation.
+- `boot_on_sd_first_mount()` ï¿½ the welcome callback registered by `main.c`.
 
 ### Verification
 
@@ -5248,16 +5339,16 @@ card:
 Shell settings that previously lived only in RAM (or a one-shot CONFIG.SYS
 edit) can now be persisted and restored from the shell:
 
-- **`config`** — show every tracked setting (current value, default, and
+- **`config`** ï¿½ show every tracked setting (current value, default, and
   whether it is saved in CONFIG.SYS).
-- **`config <key>=<value>`** (or `config <key> <value>`) — apply a setting now
+- **`config <key>=<value>`** (or `config <key> <value>`) ï¿½ apply a setting now
   and write it into `sd:/CONFIG.SYS`, so the boot component re-applies it on
   the next boot with zero new boot code. Tracked keys: `BRIGHTNESS`, `ROTATE`,
   `VOLUME`, `PROMPT`, `WIFI_AUTOCONNECT`, `DISPLAY_TIMEOUT`, `OSK`, `HEADER`.
-- **`config save`** — persist the current value of every tracked setting into
-  CONFIG.SYS. **`config reset [key]`** — restore the default(s) in RAM and
-  remove the directive line(s). **`config <key>`** — show one setting.
-- **`config factory`** — destructive-confirmation-gated full reset: restores
+- **`config save`** ï¿½ persist the current value of every tracked setting into
+  CONFIG.SYS. **`config reset [key]`** ï¿½ restore the default(s) in RAM and
+  remove the directive line(s). **`config <key>`** ï¿½ show one setting.
+- **`config factory`** ï¿½ destructive-confirmation-gated full reset: restores
   every tracked default, clears history/aliases/known-networks, and deletes
   CONFIG.SYS, AUTOEXEC.BAT, WIFI.KNOWN, ALIASES.BAT, and HISTORY.TXT. The
   default boot files are regenerated at the next boot.
@@ -5267,8 +5358,8 @@ CONFIG.SYS is edited in place with a guarded, atomic temp-file+rename write
 and line order are preserved. Two new boot directives make the remaining
 RAM-only UI settings persistable:
 
-- **`OSK=ON|OFF`** — show/hide the on-screen keyboard at boot.
-- **`HEADER=ON|OFF`** — show/hide the header status bar at boot (the window
+- **`OSK=ON|OFF`** ï¿½ show/hide the on-screen keyboard at boot.
+- **`HEADER=ON|OFF`** ï¿½ show/hide the header status bar at boot (the window
   manager reports a zero-height header region when hidden, so the transcript
   expands to fill the space).
 
@@ -5315,7 +5406,7 @@ bounds the CONFIG.SYS file size the command reads/writes.
   hard error.
 - **Transcript overflow is bounded, not a boot crash.** Every append path is
   clamped to the buffer size and, when output exceeds capacity, the oldest half
-  is dropped and a `[history truncated]` marker is appended — removing the
+  is dropped and a `[history truncated]` marker is appended ï¿½ removing the
   overflow that aborted at boot.
 - **`findstr` regex engine fixes.** The matcher now advances past a complete
   atom, so bracket classes (`[ab]c`) and escapes (`a\*b`, `a\.b`) match
@@ -5325,7 +5416,7 @@ bounds the CONFIG.SYS file size the command reads/writes.
 
 ### Added
 
-- `P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES` (256 KB) — redirect capture cap,
+- `P4_CONFIG_REDIRECT_CAPTURE_MAX_BYTES` (256 KB) ï¿½ redirect capture cap,
   documented in p4minishell_config.yaml.
 
 ### Verification
@@ -5405,7 +5496,7 @@ document home/end, delete line, delete-to-end-of-line, and repeat-find.
   `test_editor_format_line_number`); serial smoke tests cover create/type/
   save/read-back, byte-identical round-trip, LF and CRLF preservation,
   undo/redo, select-all+replace, find, go-to-line, save-as, quit-confirmation,
-  tabs, blank-line handling, a 100-line file, and a `.bat` file — all pass
+  tabs, blank-line handling, a 100-line file, and a `.bat` file ï¿½ all pass
   with no hangs or crashes.
 
 ---
@@ -5424,7 +5515,7 @@ document home/end, delete line, delete-to-end-of-line, and repeat-find.
   under it.** `windows_enter_editor_mode` hid the transcript container, which is
   the editor surface; LVGL flex skips hidden children, so the editor area
   collapsed and the keyboard jumped up. The transcript container now stays
-  visible as the editor surface at the transcript-region height — the editor
+  visible as the editor surface at the transcript-region height ï¿½ the editor
   area is exactly as large as the normal shell area and the keyboard stays at
   the bottom. The editor already hides the shell span group, so no shell output
   leaks through.
@@ -5458,14 +5549,14 @@ document home/end, delete line, delete-to-end-of-line, and repeat-find.
 
 ### Configuration
 
-- `P4_CONFIG_OSK_DEBOUNCE_MS` (30) — documented in p4minishell_config.yaml.
+- `P4_CONFIG_OSK_DEBOUNCE_MS` (30) ï¿½ documented in p4minishell_config.yaml.
 
 ### Verification
 
 - Clean build: 0 errors, 0 warnings (firmware and test project).
 - On-board (COM11): `Keyboard callback audit: 1 handler(s) registered` in the
   boot log; `editor layout diagnostic: surface h=300 px, transcript region
-  h=300 px` on `edit` — the editor area matches the shell transcript exactly and
+  h=300 px` on `edit` ï¿½ the editor area matches the shell transcript exactly and
   the keyboard sits at its normal height at the bottom.
 - New `test_keyboard_osk_dedup` unit suite (debounce window, boundary, fast
   repeat) passes on the board alongside the full editor suite (24/24).
@@ -5499,7 +5590,7 @@ Editor hardening, DOS-EDIT search parity, and a reusable modal-surface pattern.
 - **Touch keyboard**: the symbols page now carries a `Nav` button that opens an
   editor navigation page (Tab, Ins, Del, arrows, Home/End, PgUp/PgDn, Find,
   Rep, Goto, Save, SaveAs, Quit). Mode switching (abc / ABC / 1# / Nav) is now
-  handled by the shell keyboard callback — the on-screen keyboard's text pages
+  handled by the shell keyboard callback ï¿½ the on-screen keyboard's text pages
   and symbols page are reachable again.
 - **Visible cursor + syntax colours**: the editor renders through a dedicated
   span group with a blinking block cursor, a selection background overlay, and
@@ -5536,7 +5627,7 @@ Editor hardening, DOS-EDIT search parity, and a reusable modal-surface pattern.
   128-byte search buffers (`P4_CONFIG_EDITOR_FIND_BYTES`); the find/replace
   prompt input is now capped at that size.
 - **Memory leak: undo/redo snapshots were never freed** when a document was
-  released — every session leaked up to `EDITOR_UNDO_DEPTH` full-document
+  released ï¿½ every session leaked up to `EDITOR_UNDO_DEPTH` full-document
   copies (up to ~4 MB); `editor_doc_free` now releases them.
 - **Undo/redo corruption on low memory**: `editor_doc_deserialize` freed the
   old lines before allocating the new ones, so an allocation failure mid-undo
@@ -5617,7 +5708,7 @@ Editor hardening, DOS-EDIT search parity, and a reusable modal-surface pattern.
   after Esc / `\q` (appearing as a frozen UI or, under load, a watchdog reset).
   Quit and Save now route through the event-group helpers.
 - **LF files round-trip correctly.** `editor_doc_save` wrote the first byte of
-  the `"\r\n"` literal when `crlf` was false — emitting a lone `\r` instead of
+  the `"\r\n"` literal when `crlf` was false ï¿½ emitting a lone `\r` instead of
   a `\n`, so every LF-only file saved by the editor lost its line breaks.
   The EOL is now selected explicitly.
 - **On-screen keyboard visibility no longer breaks the flex layout.** The
@@ -5743,7 +5834,7 @@ overflow the worker/UART stacks.
 
 ## [0.24.32] - 2026-08-12
 
-Clipboard / copy-paste for the transcript and the SD filesystem — a RAM
+Clipboard / copy-paste for the transcript and the SD filesystem ï¿½ a RAM
 clipboard in the shell core (`clip` / `paste`), batch-safe and DOS-flavoured.
 On a touch + USB-keyboard device this makes copying the last lines of output
 or a file and reusing them trivial.
@@ -5754,11 +5845,11 @@ or a file and reusing them trivial.
   `(empty)`); redirectable, so `clip > note.txt` saves it.
 - `clip <text>` sets the clipboard to text (`clip hello world`).
 - `clip copy [N]` copies the last N transcript lines (default 1, cap
-  `P4_CONFIG_CLIP_COPY_LINES_MAX`) into the clipboard — the same read the `>`
+  `P4_CONFIG_CLIP_COPY_LINES_MAX`) into the clipboard ï¿½ the same read the `>`
   redirection path uses.
 - `clip file <path>` stores a file reference in the clipboard;
   `paste <dest>` copies that file to a destination (or into a directory,
-  keeping its name) — Windows-style file copy-paste.
+  keeping its name) ï¿½ Windows-style file copy-paste.
 - `clip read <file>` loads a text file's contents into the clipboard (bounded
   by `P4_CONFIG_CLIPBOARD_BYTES`), so `clip read x.txt` then `clip > y.txt`
   round-trips text.
@@ -5798,7 +5889,7 @@ or a file and reusing them trivial.
 
 Basic audio surface: the ES8311 speaker now actually makes sound. `beep` and
 `tone <freq> [ms]` play tones, `wavplay` streams a short 16-bit PCM WAV from
-SD, `volume` gained a query form, and all of it is batch-friendly — playback
+SD, `volume` gained a query form, and all of it is batch-friendly ï¿½ playback
 runs on a small background task so nothing blocks a batch file, and every
 command sets a real ERRORLEVEL.
 
@@ -5882,7 +5973,7 @@ display back to the live shell.
   a running command also counts as activity, so a long batch step never looks
   idle.
 - Idle-off only drops the backlight (`display_set_power_state`), so the panel,
-  GT911, and USB host keep running and the shell state is untouched — waking
+  GT911, and USB host keep running and the shell state is untouched ï¿½ waking
   is a clean backlight-on plus a header notification. Disabled by default
   (`P4_CONFIG_POWER_IDLE_DISPLAY_OFF_SECS = 0`); no regression.
 
@@ -5919,7 +6010,7 @@ display back to the live shell.
 - Note: `sleep` (light sleep) prints the honest touch-wake message, but on this
   board entering light sleep leaves USB-Serial-JTAG unresponsive afterwards
   (the serial console stops answering; a physical power cycle restores it).
-  This is a pre-existing light-sleep/hardware quirk, not introduced here —
+  This is a pre-existing light-sleep/hardware quirk, not introduced here ï¿½
   the `sleep` changes in this release are inert on the default configuration
   (no wake GPIO set). Use `power idle` for the always-on touch/USB-wake screen.
 
@@ -5940,7 +6031,7 @@ terminal.
   Enter submits it (`format`, `del /s`, `rd /s`, `trash empty`/`purge`,
   `disk clean`/`delete`, xcopy overwrite prompts), and `set /p` accepts a full
   value line over serial. (The old workaround of sending each letter on its
-  own line no longer applies — type the word, then Enter.)
+  own line no longer applies ï¿½ type the word, then Enter.)
 - The queue is flushed at every key-wait begin/end, so stray characters from a
   one-key wait (`pause`, `choice`, `more`) never leak into the next prompt;
   those single-key waits behave exactly as before.
@@ -5948,7 +6039,7 @@ terminal.
 ### Verification
 
 - Clean build: 0 errors, 0 warnings (firmware and test project).
-- Verified over the serial console — the USB-Serial-JTAG endpoint `idf.py
+- Verified over the serial console ï¿½ the USB-Serial-JTAG endpoint `idf.py
   monitor` attaches to (same bytes, same port): full boot log into the prompt
   (`P4MiniShell v0.24.29 ready`, `UART console ready`), `version`, `dir`,
   `type`, `top /O:-C`, `findstr`, `xcopy`, a pipe (`top /b | findstr IDLE`),
@@ -6190,11 +6281,11 @@ that boot.c auto-loads after CONFIG.SYS.
 
 ### Added - alias / unalias
 
-- `alias` — list every alias; `alias name` — show one; `alias name=value` —
-  set; `alias name=` — clear; `alias /clear` — clear all;
-  `alias /save [file]` / `alias /load [file]` — persist to / reload from the SD
+- `alias` ï¿½ list every alias; `alias name` ï¿½ show one; `alias name=value` ï¿½
+  set; `alias name=` ï¿½ clear; `alias /clear` ï¿½ clear all;
+  `alias /save [file]` / `alias /load [file]` ï¿½ persist to / reload from the SD
   profile (default `P4_CONFIG_ALIAS_PROFILE` = `ALIASES.BAT`).
-- `unalias <name>` — remove one alias.
+- `unalias <name>` ï¿½ remove one alias.
 - DOSKEY-style expansion: when a command is typed at the interactive prompt,
   the leading word is replaced by its alias value before parsing, so
   `alias ll=dir /s` then typing `ll` runs `dir /s`, and `ll *.txt` becomes
@@ -6242,12 +6333,12 @@ layer tied to Wi-Fi/HTTP events and a boot confirmation flash.
   that renders the current colour, effect, or transient notification. All
   strip I/O happens on that task; callers only touch a mutex-protected state
   snapshot, so the command worker and the Wi-Fi event handler never block.
-- `rgb status` — driver pin, mode (auto/manual), effect, colour, speed,
+- `rgb status` ï¿½ driver pin, mode (auto/manual), effect, colour, speed,
   brightness.
-- `rgb <r> <g> <b>` (0-255), `rgb #RRGGBB`, `rgb off` — solid colour.
-- `rgb <effect> [speed]` — `rainbow`, `breath`, `pulse`, `blink`, `solid`
+- `rgb <r> <g> <b>` (0-255), `rgb #RRGGBB`, `rgb off` ï¿½ solid colour.
+- `rgb <effect> [speed]` ï¿½ `rainbow`, `breath`, `pulse`, `blink`, `solid`
   (speed 1..10).
-- `rgb auto <on|off>` — toggle the status-driven colour layer.
+- `rgb auto <on|off>` ï¿½ toggle the status-driven colour layer.
 - ERRORLEVEL 0/1/2, redirectable/pipable, so `rgb ... && echo ok` works in
   batch files. GPIO26 is added to the board pin table as a reserved critical
   line, so the peripheral toolkit (`pwm`/`freq`/`adc`/`i2c`/`spi`) refuses it.
@@ -6370,22 +6461,22 @@ with a shared pin-safety gate and all tunables in `p4minishell_config.h`.
 
 ### Added - pwm / freq / adc / i2c / spi
 
-- `pwm <pin> <freq_hz> <duty_pct>` / `pwm stop <pin>` / `pwm status` — LEDC PWM
+- `pwm <pin> <freq_hz> <duty_pct>` / `pwm stop <pin>` / `pwm status` ï¿½ LEDC PWM
   on a non-reserved GPIO. Uses timers 0/2/3 and channels excluding the
   backlight's, shares the backlight's XTAL global clock (so no LEDC "timer
   clock conflict"), and caps at `P4_CONFIG_PWM_CHANNEL_MAX` concurrent outputs.
-- `freq <pin> <hz>` / `freq stop <pin>` / `freq status` — square wave at 50%
+- `freq <pin> <hz>` / `freq stop <pin>` / `freq status` ï¿½ square wave at 50%
   duty via the same LEDC engine (`pwm` at the default duty).
-- `adc <pin> [samples]` / `adc status` — one-shot ADC reads on any non-reserved
+- `adc <pin> [samples]` / `adc status` ï¿½ one-shot ADC reads on any non-reserved
   ADC pin (ADC1 GPIO16-23, ADC2 GPIO49-54) with calibration; `adc status`
   live-samples the SOC channel map and only lists pins that currently read
   back, and a busy ADC unit reports "in use".
 - `i2c status | i2c scan [sda=.. scl=..] | i2c peek <addr> <reg> [sda=.. scl=..]
-  | i2c poke <addr> <reg> <value> [sda=.. scl=..]` — the scanner reuses the
+  | i2c poke <addr> <reg> <value> [sda=.. scl=..]` ï¿½ the scanner reuses the
   board's shared BSP bus handle and probes with normal device transactions
   (fast, does not disrupt the GT911 touch); custom pin pairs get a temporary
   bus on a free port.
-- `spi status` — reports the SPI toolkit configuration. The `loopback` /
+- `spi status` ï¿½ reports the SPI toolkit configuration. The `loopback` /
   `peek` / `poke` verbs are recognized but return an honest "unavailable on
   this board" error: SPI host init on this P4 with the ESP-Hosted SDIO link
   active stalls the chip and drops USB-Serial-JTAG off the bus (verified on
@@ -6452,16 +6543,16 @@ of Wi-Fi/hosted state and battery-aware reporting.
 
 ### Added - power / sleep / deepsleep
 
-- `power` — reports power state: PM enabled status, automatic light sleep
+- `power` ï¿½ reports power state: PM enabled status, automatic light sleep
   request (`battery sleep on|off`), display power state, Wi-Fi link state,
   battery level/voltage (shared `command_battery_read()` ADC path), and the
   last wake-up cause from `esp_sleep_get_wakeup_cause()`.
-- `sleep [seconds]` — enters light sleep. RAM is retained, so the shell
+- `sleep [seconds]` ï¿½ enters light sleep. RAM is retained, so the shell
   resumes with all state (env, aliases, cwd, variables) intact. With no
   argument the duration is `P4_CONFIG_POWER_SLEEP_DEFAULT_SECS` (60 s);
   `sleep 0` clears the timer and wakes only from an external source. On wake
   the wake cause is reported and the display is restored.
-- `deepsleep [seconds]` — enters deep sleep. RAM is lost, so on wake the
+- `deepsleep [seconds]` ï¿½ enters deep sleep. RAM is lost, so on wake the
   device boots fresh (same path as `reboot`). Warns that RAM-only state is
   lost and that omitting the timer requires an external wake source.
 - Clean shutdown before either sleep: `networking_wifi_shutdown()` (the same
@@ -6488,7 +6579,7 @@ of Wi-Fi/hosted state and battery-aware reporting.
 
 Better file discovery. The `find` command now has a recursive file-discovery
 mode in addition to its classic text search, filtering by filename wildcard,
-size, and modification date — one adaptable command, no new verbs.
+size, and modification date ï¿½ one adaptable command, no new verbs.
 
 ### Added - find file-discovery mode
 
@@ -6496,16 +6587,16 @@ size, and modification date — one adaptable command, no new verbs.
   `/SIZE:`, `/NEWER:`, `/OLDER:`, `/DIRS`, `/B`, `/S`); with the classic
   switches only, `find` remains the original text-search command unchanged.
 - `find [path] [/NAME:pattern] [/SIZE:spec] [/NEWER:date] [/OLDER:date] [/DIRS] [/B]`
-  - `/NAME:pattern` — filename wildcard (e.g. `*.log`, `*config*`). A wildcard
+  - `/NAME:pattern` ï¿½ filename wildcard (e.g. `*.log`, `*config*`). A wildcard
     in the path argument also splits into directory + pattern, like `dir`.
-  - `/SIZE:spec` — size filter in bytes with an optional K/M/G suffix. The
+  - `/SIZE:spec` ï¿½ size filter in bytes with an optional K/M/G suffix. The
     redirection-safe range syntax `N-M` (range), `N-` (at least), `-M` (at
     most), or `N` (exact) is primary because `>`/`<` are the shell's
     input/output operators; the comparison forms `>N`/`>=N`/`<N`/`<=N` are also
     accepted when quoted.
-  - `/NEWER:date` / `/OLDER:date` — modified on/after or on/before `YYYY-MM-DD`.
-  - `/DIRS` — include directories as well as files.
-  - `/B` — bare: full paths only, no colour (redirectable / pipable).
+  - `/NEWER:date` / `/OLDER:date` ï¿½ modified on/after or on/before `YYYY-MM-DD`.
+  - `/DIRS` ï¿½ include directories as well as files.
+  - `/B` ï¿½ bare: full paths only, no colour (redirectable / pipable).
 - Recursion is depth-bounded by `P4_CONFIG_DIR_RECURSE_DEPTH_MAX` and matches
   are capped by `P4_CONFIG_FIND_MATCH_MAX` (256) with a clear truncation note.
   The walker reuses the `dir /s` FATFS primitives and keeps each recursion
@@ -6539,15 +6630,15 @@ size, and modification date — one adaptable command, no new verbs.
 
 FreeRTOS task introspection. New `ps`, `tasks`, and `top` commands list every
 running task (name, state, priority, core, stack high-water mark) with the CPU
-share since the previous sample — read-only, no task is modified.
+share since the previous sample ï¿½ read-only, no task is modified.
 
 ### Added - ps / tasks / top
 
-- `ps` / `tasks` — print a colour-coded FreeRTOS task table: task name, state
+- `ps` / `tasks` ï¿½ print a colour-coded FreeRTOS task table: task name, state
   (RUN/RDY/BLK/SUS/DEL), priority, core (`-1` = unpinned / no affinity), stack
   high-water mark (minimum free stack bytes since creation), and CPU% since the
   previous sample.
-- `top` — same table plus a summary line with the live task count, free heap,
+- `top` ï¿½ same table plus a summary line with the live task count, free heap,
   and uptime. Per-task CPU% is computed by diffing `ulRunTimeCounter` against
   the previous `ps`/`top`/`tasks` call (keyed by `xTaskNumber`, so a
   deleted-and-recreated task starts fresh; unsigned arithmetic handles the
@@ -6666,10 +6757,10 @@ panel.
 
 ### Added - timezone and SNTP control
 
-- `timezone [TZ]` — show the current POSIX timezone string, or set one (e.g.
+- `timezone [TZ]` ï¿½ show the current POSIX timezone string, or set one (e.g.
   `timezone UTC`, `timezone CET-1CEST,M3.5.0,M10.5.0/3`). The local time
   re-renders immediately through the C library.
-- `sntp` / `ntpsync` — show NTP sync status (server, synced or not, local
+- `sntp` / `ntpsync` ï¿½ show NTP sync status (server, synced or not, local
   time). `sntp sync` (alias `ntpsync sync`) forces a fresh NTP exchange against
   the configured server; once Wi-Fi is connected the clock jumps to the network
   time. The NTP server hostname is configurable via `P4_CONFIG_NTP_SERVER`.
@@ -6809,7 +6900,7 @@ characters the default LVGL symbols map omitted.
 ## [0.24.13] - 2026-08-10
 
 Transcript colour rendering fix. The on-screen transcript was showing LVGL
-recolor markup (`#RRGGBB … #`) as literal visible characters instead of
+recolor markup (`#RRGGBB ï¿½ #`) as literal visible characters instead of
 applying the colours, leaving the shell monochrome.
 
 ### Fixed - transcript now renders ANSI colours as a span group
@@ -6852,7 +6943,7 @@ the existing UART/USB-Serial-JTAG console or to an SD card file.
   storage path (cwd-relative resolution, guarded session, free-space precheck,
   partial-destination cleanup on failure).
 - BMP format: 24-bit RGB888, bottom-up, BI_RGB (no compression), 96 DPI,
-  zero extra libraries required — opens in any image viewer.
+  zero extra libraries required ï¿½ opens in any image viewer.
 - Uses the LVGL lock (`lvgl_port_lock(0)`) exactly as the rest of the
   codebase does, so it is safe from any task context.
 - Sets ERRORLEVEL: 0 on success, 1 on failure (snapshot failed, PSRAM
@@ -7024,7 +7115,7 @@ operators cmd.exe users expect, adds numeric comparison keywords to `if`, and
 fully documents the batch math surface. No regressions to the existing
 arithmetic, bitwise, shift, compound-assignment, or `if` forms.
 
-### Added — `set /a` comparison operators
+### Added ï¿½ `set /a` comparison operators
 
 - `==`, `!=`, `<`, `>`, `<=`, `>=` now evaluate to 1 when the relation holds
   and 0 otherwise, so a boolean can be computed and stored:
@@ -7042,7 +7133,7 @@ arithmetic, bitwise, shift, compound-assignment, or `if` forms.
   shell operator and work unquoted. This matches how the pre-existing bitwise
   operators already behaved.
 
-### Added — `set /a` logical operators
+### Added ï¿½ `set /a` logical operators
 
 - `&&` and `||` return 1/0 and form the lowest precedence levels (`&&` binds
   tighter than `||`, so `1||0&&0` is `1||(0&&0)` ? 1). Both sides are always
@@ -7051,7 +7142,7 @@ arithmetic, bitwise, shift, compound-assignment, or `if` forms.
 - The bitwise `&`/`|` levels continue to refuse `&&`/`||`, so a chain separator
   that survives as shell syntax is never swallowed by the expression.
 
-### Added — `if` numeric comparison keywords
+### Added ï¿½ `if` numeric comparison keywords
 
 - `if [not] [/i] <a> EQU|NEQ|LSS|LEQ|GTR|GEQ <b> <command>` performs a numeric
   comparison. Operands are parsed as decimal integers; a non-numeric operand
@@ -7093,7 +7184,7 @@ change that introduced `%0` (script name) broke `%1..%9` / `%*` argument
 forwarding, tightens `goto :eof` frame scoping, and moves the `for` loop
 buffers off the recursive command/batch stack.
 
-### Fixed — `%1..%9` / `%*` argument forwarding after the `%0` change
+### Fixed ï¿½ `%1..%9` / `%*` argument forwarding after the `%0` change
 
 - **Symptom:** `call script.bat one two` ran the script, but inside the callee
   `echo %1` printed the script path instead of `one`, `%2` printed `one`, and
@@ -7113,7 +7204,7 @@ buffers off the recursive command/batch stack.
   script name, the two forwarded arguments, and exactly the two arguments for
   `%*`; `shift` keeps `%1` aligned with the frame slots.
 
-### Fixed — `goto :eof` now unwinds only the current frame from `for`/`if` bodies
+### Fixed ï¿½ `goto :eof` now unwinds only the current frame from `for`/`if` bodies
 
 - **Symptom:** `goto :eof` (and `goto`) issued inside a `for` loop body in a
   called script terminated the caller too: after the callee returned, the
@@ -7130,13 +7221,13 @@ buffers off the recursive command/batch stack.
   :eof` returns without running further callee lines and the caller continues
   to its next line.
 
-### Fixed — `goto :eof` accepted case-insensitively
+### Fixed ï¿½ `goto :eof` accepted case-insensitively
 
 - `goto :eof` matched with `strcmp`, so `goto :EOF` fell through to the label
   scan and reported "label not found". Now compared case-insensitively, like
   every other batch label.
 
-### Fixed — `for %%I in (set) do ...` accepted the DOS `%%` form
+### Fixed ï¿½ `for %%I in (set) do ...` accepted the DOS `%%` form
 
 - The loop body substitution only matched a single `%var`, so the correct
   batch-file spelling `for %%I in (a b c) do echo %%I` produced `echo %a`
@@ -7146,7 +7237,7 @@ buffers off the recursive command/batch stack.
   `for %%I in (alpha beta gamma) do echo ITEM_%%I` prints ITEM_alpha, ITEM_beta,
   ITEM_gamma.
 
-### Fixed — `%N` / `%0` / `%*` recognized anywhere in a line
+### Fixed ï¿½ `%N` / `%0` / `%*` recognized anywhere in a line
 
 - Positional arguments were only expanded when they were the final percent
   marker in the line (or a whole `%...%` pair), so `p0=[%0] p1=[%1]` printed
@@ -7154,11 +7245,11 @@ buffers off the recursive command/batch stack.
   token). They are now consumed as `%` plus one character immediately,
   matching COMMAND.COM, so `[%0] [%1]` expands both.
 
-### Fixed — nested `call` + command overflowed the worker task stack
+### Fixed ï¿½ nested `call` + command overflowed the worker task stack
 
 - **Symptom:** a batch file that `call`ed a second script, and the callee ran a
   `set`/`echo`, panicked with `Stack protection fault` in the `shell_cmd`
-  task — the recursive dispatch chain plus newlib's `vfprintf` machinery
+  task ï¿½ the recursive dispatch chain plus newlib's `vfprintf` machinery
   exceeded the 8192-byte worker stack.
 - **Root cause:** the recursive-path functions kept SD-path/line-sized buffers
   as stack locals that stacked with nesting depth: `shell_resolve_batch_path`
@@ -7176,11 +7267,11 @@ buffers off the recursive command/batch stack.
   `setlocal`, `set`, `goto :eof`) runs clean with no stack fault; nested
   `call` chains with `set`/`echo`/`if` in the callee all complete.
 
-### Fixed — UART console dropped the tail of long commands
+### Fixed ï¿½ UART console dropped the tail of long commands
 
 - **Symptom:** commands past ~64 bytes were split into two commands, the second
   becoming an "Unknown command" (e.g. a long `write`/`append` line lost its
-  final characters, corrupting batch files created from the serial console —
+  final characters, corrupting batch files created from the serial console ï¿½
   this was why the previous test batch files on the SD card were truncated).
 - **Root cause:** the USB-Serial-JTAG driver delivers one logical line across
   several reads (its RX FIFO is 64 bytes). The console task treated each read
@@ -7192,7 +7283,7 @@ buffers off the recursive command/batch stack.
   character lines lands intact, and `pause`/`choice` are still answered by a
   single key.
 
-### Fixed — unit-test app crashed after the debug-log suite
+### Fixed ï¿½ unit-test app crashed after the debug-log suite
 
 - The test app ran all suites with 0 failures, then panicked. Two pre-existing
   issues, previously masked by the crash, are fixed so the suite runs clean:
@@ -7208,7 +7299,7 @@ buffers off the recursive command/batch stack.
     is what keeps plain text visible on the dark background). The assertion was
     corrected to match the documented rendering contract.
 - **Verification (hardware, COM11):** the full unit-test suite runs to
-  "All tests completed" — 56 tests across 11 suites, 0 failures, 0 ignored,
+  "All tests completed" ï¿½ 56 tests across 11 suites, 0 failures, 0 ignored,
   no panic.
 
 ### Verification
@@ -7226,7 +7317,7 @@ buffers off the recursive command/batch stack.
 Feature release. Adds DOS-style boot scripting (`CONFIG.SYS` + `AUTOEXEC.BAT`)
 that runs at every boot.
 
-### Added — DOS-style boot scripting (`CONFIG.SYS` / `AUTOEXEC.BAT`)
+### Added ï¿½ DOS-style boot scripting (`CONFIG.SYS` / `AUTOEXEC.BAT`)
 
 - **Symptom this replaces:** previously the shell had no boot-time
   configuration; every setting had to be typed or scripted by hand after
@@ -7264,7 +7355,7 @@ that runs at every boot.
 - **Verification (hardware, COM11):** `CONFIG.SYS` with `ECHO OFF`,
   `SET TESTVAR=helloboot`, `BRIGHTNESS=50`, `ROTATE=0`, `VOLUME=30`,
   `WIFI_AUTOCONNECT=OFF`, `USB_KEYBOARD=ON`, `GPIO 42 = OUT HIGH` (refused:
-  reserved pin), and an unknown directive (muted warning) — all applied as
+  reserved pin), and an unknown directive (muted warning) ï¿½ all applied as
   expected; `AUTOEXEC.BAT` with `@echo off` +
   `echo testvar=%TESTVAR%` ran and expanded the variable; unit-test suite
   runs 0 failures.
@@ -7277,7 +7368,7 @@ Crash-fix + stability release. Root-caused and fixed the recurring intermittent
 LVGL crash (C1), upgraded LVGL to 9.4.0, fixed the deterministic `dir` crash
 (C2), and swept all remaining literal ANSI markers (H1 residual).
 
-### Added — diskpart / DOS FORMAT disk and volume management (`format` + `disk`)
+### Added ï¿½ diskpart / DOS FORMAT disk and volume management (`format` + `disk`)
 
 - **`format` is now a real FORMAT.COM.** It keeps `/FS:`, `/V:label`, `/Q` and
   the exact-`YES` confirmation contract, and adds `/A:size` (allocation unit /
@@ -7288,14 +7379,14 @@ LVGL crash (C1), upgraded LVGL to 9.4.0, fixed the deterministic `dir` crash
   rather than silently lying. After formatting the command reports the FAT
   type, label, capacity and cluster size with the semantic palette.
 - **New `disk` command family** (diskpart-style), owned by `components/storage`:
-  - `disk list` — physical disk geometry (name, capacity, sectors, sector size).
-  - `disk detail` — disk geometry plus the decoded MBR partition table (boot
+  - `disk list` ï¿½ physical disk geometry (name, capacity, sectors, sector size).
+  - `disk detail` ï¿½ disk geometry plus the decoded MBR partition table (boot
     flag, type with a friendly name, start LBA, size).
-  - `disk clean` — remove the partition table (destructive, `YES` required).
-  - `disk create partition primary [size=N]` — create a primary FAT32 MBR
+  - `disk clean` ï¿½ remove the partition table (destructive, `YES` required).
+  - `disk create partition primary [size=N]` ï¿½ create a primary FAT32 MBR
     partition aligned to 1 MiB; `size` is in MB (default: rest of the card).
-  - `disk delete partition N` — delete MBR partition N (1-4), `YES` required.
-  - `disk format [fs=...] [label=...] [au=...] [quick]` — diskpart-style alias
+  - `disk delete partition N` ï¿½ delete MBR partition N (1-4), `YES` required.
+  - `disk format [fs=...] [label=...] [au=...] [quick]` ï¿½ diskpart-style alias
     for the `format` engine.
 - **Engine:** `components/storage/storage.c` gained the volume services
   (`storage_disk_get_info`, `storage_disk_read_mbr`, `storage_disk_clean`,
@@ -7328,7 +7419,7 @@ LVGL crash (C1), upgraded LVGL to 9.4.0, fixed the deterministic `dir` crash
   in-firmware without `BOARD_CFG_SD_FORMAT_ON_MOUNT_FAIL` - the pre-existing
   constraint that formatting requires an initialized card.
 
-### Fixed — LVGL task hang: UI freezes after boot, touch keyboard unresponsive
+### Fixed ï¿½ LVGL task hang: UI freezes after boot, touch keyboard unresponsive
 
 - **Symptom:** the board boots, boot and Wi-Fi messages render on the display
   with colours, then the whole UI freezes: the touch keyboard stops echoing
@@ -7345,7 +7436,7 @@ LVGL crash (C1), upgraded LVGL to 9.4.0, fixed the deterministic `dir` crash
   races the LVGL render cycle and hangs `lv_timer_handler`, freezing the whole
   surface. Reverting the transcript to a plain `lv_textarea` (which never
   forced layout/scroll) confirmed the label update path was the trigger.
-- **Fix:** `components/windows/windows.c` — the label update is now **deferred
+- **Fix:** `components/windows/windows.c` ï¿½ the label update is now **deferred
   to the LVGL task**. `windows_set_transcript_text()` converts the ANSI text to
   recolor markup into a persistent staging buffer and schedules a coalesced
   `lv_async_call`; the callback runs on the LVGL task where it paints the
@@ -7358,7 +7449,7 @@ LVGL crash (C1), upgraded LVGL to 9.4.0, fixed the deterministic `dir` crash
   `set /a`) on hardware with **zero** task-watchdog triggers and zero panics;
   unit-test suite runs clean.
 
-### Fixed — transcript stops updating after the first command
+### Fixed ï¿½ transcript stops updating after the first command
 
 - **Symptom:** after the hang fix, the first command after boot renders on the
   display, but the second command's output never appears on screen (the serial
@@ -7368,24 +7459,24 @@ LVGL crash (C1), upgraded LVGL to 9.4.0, fixed the deterministic `dir` crash
   marker. The staging buffer was sized at `P4_CONFIG_TRANSCRIPT_BYTES` (8192),
   so after boot + the first command the buffer was already full
   (`ansi_to_lvgl_recolor` reported 8188 bytes). The converter dropped every
-  segment that did not fit — the **tail** — so the newest command output was
+  segment that did not fit ï¿½ the **tail** ï¿½ so the newest command output was
   the part that vanished from the label.
 - **Fix:**
-  1. `p4minishell_config.h` / `p4minishell_config.yaml` — added
+  1. `p4minishell_config.h` / `p4minishell_config.yaml` ï¿½ added
      `P4_CONFIG_TRANSCRIPT_RECOLOR_BYTES` (2x the plain transcript) so a full
      8 KiB scrollback fits in recolor form (verified: 9179/9538-byte markups
      render instead of being cut at 8192).
-  2. `components/ansi/ansi.c` — `ansi_to_lvgl_recolor()` now keeps the
+  2. `components/ansi/ansi.c` ï¿½ `ansi_to_lvgl_recolor()` now keeps the
      **newest** segments: when the buffer cannot hold the whole transcript it
      discards what is staged and restarts from the current segment, so the
      newest lines stay visible even under pathological colour density.
 - **Verification:** 3 minutes of sequential commands (`help`, `mem`, `sysinfo`,
-  `dir`, `dir /s`, `wifi diag`, `ver`, `echo`) on hardware — the transcript
+  `dir`, `dir /s`, `wifi diag`, `ver`, `echo`) on hardware ï¿½ the transcript
   label reaches a full-length recolor markup, scrolls to the bottom
   (`scroll_bottom == 0`, view at the newest output), with zero task-watchdog
   triggers and zero panics.
 
-### Fixed — recurring intermittent LVGL crash (C1)
+### Fixed ï¿½ recurring intermittent LVGL crash (C1)
 
 - **Symptom:** after `wifi connect` and other header-touching commands, an
   intermittent `Guru Meditation` in the LVGL task:
@@ -7399,7 +7490,7 @@ LVGL crash (C1), upgraded LVGL to 9.4.0, fixed the deterministic `dir` crash
   (header, transcript, input line, keyboard) churn pending 80 ms transitions;
   under load (Bluetooth NimBLE init) churned transition descriptors are freed
   and reused while their animation still references them, corrupting the LVGL
-  pool. Not a locking or object-lifecycle bug — no object deletion and an
+  pool. Not a locking or object-lifecycle bug ï¿½ no object deletion and an
   intact pool free-list were confirmed during diagnosis.
 - **Fix:**
   1. Upgraded LVGL from 9.2.2 ? 9.3.0 ? **9.4.0** (large upstream bug-fix
@@ -7407,7 +7498,7 @@ LVGL crash (C1), upgraded LVGL to 9.4.0, fixed the deterministic `dir` crash
      `lvgl/lvgl: "9.4.0"`).
   2. Disabled the risky theme style-transition animations with
      `CONFIG_LV_THEME_DEFAULT_TRANSITION_TIME=0` (durable in
-     `sdkconfig.defaults`). Style changes are now instant — the safe
+     `sdkconfig.defaults`). Style changes are now instant ï¿½ the safe
      replacement for the transition churn. Scroll, cursor, and interaction
      behaviour are unaffected (they are separate from style transitions).
 - **Verification:** 0 crashes / 14 trials of the exact repro, 0 / 8 trials of
@@ -7415,19 +7506,19 @@ LVGL crash (C1), upgraded LVGL to 9.4.0, fixed the deterministic `dir` crash
   Wi-Fi connected to the test AP (`<lab-ap>`, IP 192.168.199.225) with no
   crash.
 
-### Fixed — deterministic `dir` crash (C2)
+### Fixed ï¿½ deterministic `dir` crash (C2)
 
 - **Symptom:** every `dir` in `/sdcard` printed ` Directory of /sdcard` and then
   panicked with `Load access fault`. The register dump showed `strlen` being
-  called with the ASCII value `"test"` (0x74736574) as its string pointer — the
-  first four bytes of the `test.txt` entry name — which then dereferenced that
+  called with the ASCII value `"test"` (0x74736574) as its string pointer ï¿½ the
+  first four bytes of the `test.txt` entry name ï¿½ which then dereferenced that
   garbage address.
-- **Root cause:** `components/storage/storage_commands.c` — the per-entry colour
+- **Root cause:** `components/storage/storage_commands.c` ï¿½ the per-entry colour
   formatting in `shell_dir_list_one()` called the *va_list-taking* variant
   `ansi_vformat(coloured_name, sizeof(coloured_name), colour_fmt, display_name)`
   but passed `display_name` (a `char *`) where a `va_list` is expected. Inside
   `ansi_vformat()` the `%s` handler ran `va_arg(args, char *)`, which treated the
-  first four bytes of the `display_name` array as a pointer — `"test"` — and
+  first four bytes of the `display_name` array as a pointer ï¿½ `"test"` ï¿½ and
   handed it to `snprintf`, whose `%s` processing called `strlen("test")` and
   faulted.
 - **Fix:** use the varargs wrapper `ansi_format()` at that call site so the
@@ -7440,26 +7531,26 @@ LVGL crash (C1), upgraded LVGL to 9.4.0, fixed the deterministic `dir` crash
   with zero Guru Meditation faults; `dir` now prints `test.txt` correctly with
   colours.
 
-### Fixed — residual literal ANSI `@` markers (H1)
+### Fixed ï¿½ residual literal ANSI `@` markers (H1)
 
 - A hardware sweep over every command still found literal `@y(unsynced)@R`,
   `@Kno@R`, `@c...@K...@R` markers that the v0.24.3 fix missed, all caused by
   palette macros passed as `%s` argument values (which `ansi_vformat` leaves
   unconverted by design) instead of in the format string:
-  - `sysinfo` / `about` — `time ... (unsynced)` and `idf: unknown`.
-  - `wifi status` — `connected=@Kno@R`.
-  - `battery` / `battery sleep` — `light sleep requested=@Kno@R`.
-  - `display power` — `display.power: @Koff@R`.
-  - `bluetooth status` — `bluetooth_appendf()` used `vsnprintf()` (never
+  - `sysinfo` / `about` ï¿½ `time ... (unsynced)` and `idf: unknown`.
+  - `wifi status` ï¿½ `connected=@Kno@R`.
+  - `battery` / `battery sleep` ï¿½ `light sleep requested=@Kno@R`.
+  - `display power` ï¿½ `display.power: @Koff@R`.
+  - `bluetooth status` ï¿½ `bluetooth_appendf()` used `vsnprintf()` (never
     converts `@`) before the ANSI append; the whole line showed markers.
 - **Fix:** moved every palette marker into the format string (branching on
   state) so `ansi_vformat` converts them, and `bluetooth_appendf()` now routes
   through `ansi_vformat()` like the networking module.
 - **Verification:** hardware sweep of `dir`, `sd info|stat|ls`, `wifi status|diag`,
   `keyboard status`, `ver`, `sysinfo`, `about`, `mem`, `usb status`, `battery`,
-  `bluetooth status`, `display power` — zero literal `@` markers remain.
+  `bluetooth status`, `display power` ï¿½ zero literal `@` markers remain.
 
-### Fixed — LVGL transcript was monochrome (colours only on UART)
+### Fixed ï¿½ LVGL transcript was monochrome (colours only on UART)
 
 - The LVGL transcript was a plain `lv_textarea` fed with stripped text, so the
   on-screen shell rendered every line in a single colour while the UART console
@@ -7472,14 +7563,14 @@ LVGL crash (C1), upgraded LVGL to 9.4.0, fixed the deterministic `dir` crash
   manager on every update.
 - **Deferred rebuild:** because rebuilding the span group deletes and recreates
   spans, doing it synchronously from an LVGL event (e.g. on-screen keyboard
-  submit) left LVGL's `lv_draw_span` referencing freed spans — a `Load access
+  submit) left LVGL's `lv_draw_span` referencing freed spans ï¿½ a `Load access
   fault` after keyboard input. The rebuild is now buffered and deferred via
   `lv_async_call` so it runs after the current redraw pass.
 - **Verification:** firmware boots, colours render on the display, and the
   previously-crashing keyboard-input sequence (`keyboard show`/`hide` + `help` +
   `dir` + `sysinfo`) runs clean.
 
-### Fixed — shell parser / batch / variable bugs found by the unit tests
+### Fixed ï¿½ shell parser / batch / variable bugs found by the unit tests
 
 A full hardware run of the unit-test suite surfaced several latent bugs:
 
@@ -7495,24 +7586,24 @@ A full hardware run of the unit-test suite surfaced several latent bugs:
 - Corrected two stale unit tests (`a^^|b` pipe semantics, in-place chain-buffer
   reuse).
 
-**Verification:** the full unit-test suite runs clean — every suite reports 0
+**Verification:** the full unit-test suite runs clean ï¿½ every suite reports 0
 failures.
 
 ---
 
-### Fixed — date command error message did not state the expected format
+### Fixed ï¿½ date command error message did not state the expected format
 
 - `date 2026-08-08` (YYYY-MM-DD) rejected with "value out of range" but did not
   tell the user the expected format was `MM-DD-YYYY`, so the rejection was
   confusing.
-- **Fix:** `components/command/command.c` — `shell_command_date()` now prints the
+- **Fix:** `components/command/command.c` ï¿½ `shell_command_date()` now prints the
   usage line (`Usage: date [MM-DD-YYYY]`) alongside the range error, and the
   warning record notes the expected order. Verified on hardware: `date 08-08-2026`
   sets the date; `date 2026-08-08` explains the expected format.
 
 ### Observations reviewed and confirmed as designed / non-bugs
 
-- `echo %UNDEFINEDVAR%` prints the literal name — this is the documented "unknown
+- `echo %UNDEFINEDVAR%` prints the literal name ï¿½ this is the documented "unknown
   names left untouched" rule in `batch.h`. The unit-test assertion that
   contradicted it was corrected in v0.24.4.
 - `echo on` / `echo off` set the echo flag and print nothing, matching DOS (only
@@ -7521,10 +7612,10 @@ failures.
   the runtime stabilises the scan returns real access points including the test
   AP. No code change.
 - Transcript echo of a piped stage shows both the stage output and the
-  downstream result — expected given the transcript-delta redirection design. No
+  downstream result ï¿½ expected given the transcript-delta redirection design. No
   code change.
 
-### Recurring — intermittent LVGL crash (C1)
+### Recurring ï¿½ intermittent LVGL crash (C1)
 
 - The `wifi connect` command during testing triggered the same intermittent LVGL
   crash documented in C1 (fault in `lv_obj_get_style_prop` via
@@ -7541,7 +7632,7 @@ failures.
 Test correctness release. Resolved the final outstanding item from the hardware
 test report's recommended-next-steps list.
 
-### Fixed — test_shell_variables.c assertion
+### Fixed ï¿½ test_shell_variables.c assertion
 
 - The `test_variable_expansion_env_var()` test asserted that an undefined variable
   (`%UNDEFINED%`) expands to an empty string, but `shell_expand_variables()` leaves
@@ -7557,65 +7648,65 @@ Colour and correctness release. Eliminated the literal `@`-specifier markers tha
 appeared in command output, fixed the medium-severity hardware-test issues (M1-M4),
 and corrected three command-dispatch bugs found while testing on real hardware.
 
-### Fixed — ANSI colour markers rendered literally in command output
+### Fixed ï¿½ ANSI colour markers rendered literally in command output
 
 A systemic issue: commands composed output with `@`-specifier palette macros and
 sent the string through a path that never converted them to real SGR escapes.
 `ansi_vformat()` only converts `@`-specifiers that appear literally in the format
 string; `@`-specifiers inside substituted `%s` arguments are deliberately left
 untouched (injection guard). Every call site that relied on converting `@`-specifiers
-from a `%s` argument — or that used a plain `vsnprintf`/`snprintf` path — emitted
+from a `%s` argument ï¿½ or that used a plain `vsnprintf`/`snprintf` path ï¿½ emitted
 the raw `@K...@R` markers on both the LVGL transcript and the UART console.
 
 Affected commands: `dir`, `sd info|stat|ls`, `wifi status|diag`, `keyboard status`,
 `ver`, `sysinfo`, `about`, `mem`, `usb status`.
 
 Fix:
-- `components/shell/shell.c` — `shell_print_coloured()`, `shell_print_field()`,
+- `components/shell/shell.c` ï¿½ `shell_print_coloured()`, `shell_print_field()`,
   and `shell_print_field_num()` now route the entire format + arguments through
   `ansi_vformat()`, so every `@`-specifier is in the format string and gets
   converted. Added a `shell_colour_value()` helper for values whose colour depends
   on runtime state.
-- `components/storage/storage_commands.c` — `shell_dir_emitf()` now uses
+- `components/storage/storage_commands.c` ï¿½ `shell_dir_emitf()` now uses
   `ansi_vformat()` instead of `vsnprintf()`, and the `dir` listing entry colour
   is applied via a runtime-built format string.
-- `components/networking/networking.c` — conditional-colour `wifi diag` values
+- `components/networking/networking.c` ï¿½ conditional-colour `wifi diag` values
   are pre-converted with `ansi_format()`; the module's plain `networking_schedulef`
   is left for machine-readable output.
-- `components/command/command_ui.c` — `keyboard status` conditional colour uses
+- `components/command/command_ui.c` ï¿½ `keyboard status` conditional colour uses
   separate format strings.
-- `components/command/command.c` — `display.state`, `c6.hosted_transport.busy`,
+- `components/command/command.c` ï¿½ `display.state`, `c6.hosted_transport.busy`,
   and `heap` colour in `ver`/`sysinfo` now use inline colours or the
   `shell_colour_value()` helper.
 
-### Fixed — `cd` printed `\` while the prompt showed `/sdcard`
+### Fixed ï¿½ `cd` printed `\` while the prompt showed `/sdcard`
 
 - `shell_fs_print_cwd()` now prints the full VFS path to match the prompt.
 
-### Fixed — `attrib` with no path showed a bare error
+### Fixed ï¿½ `attrib` with no path showed a bare error
 
 - `shell_command_attrib()` now shows usage when no path is given.
 
-### Fixed — keypress wait timeout reduced for headless use
+### Fixed ï¿½ keypress wait timeout reduced for headless use
 
 - Reduced `P4_CONFIG_KEY_WAIT_TIMEOUT_MS` from 30000 to 10000.
 
-### Improved — battery telemetry shows calibration state
+### Improved ï¿½ battery telemetry shows calibration state
 
 - `battery` now reports `calibrated=yes|no` in the detail line.
 
-### Fixed — family commands printed help instead of executing
+### Fixed ï¿½ family commands printed help instead of executing
 
 - `wifi status|scan|diag`, `bluetooth status|scan`, `usb status`, `sd info|stat|ls|cat`
   printed help instead of running. Root cause: `shell_split_args()` truncated the
   command string passed to family handlers. Fixed with a heap copy in
   `shell_execute_command_core()`.
 
-### Fixed — `sd stat`/`sd ls`/`sd cat` showed a usage error
+### Fixed ï¿½ `sd stat`/`sd ls`/`sd cat` showed a usage error
 
 - Same mutation bug in `shell_command_sd()`; fixed with a `strdup` before splitting.
 
-### Fixed — `shell_print_*` helpers emitted literal `@`-specifiers
+### Fixed ï¿½ `shell_print_*` helpers emitted literal `@`-specifiers
 
 - `shell_print_coloured()` now routes through `ansi_vformat()`.
 
@@ -7625,10 +7716,10 @@ Fix:
 
 Hardware stability and polish release. Fixed the intermittent LVGL crash that
 surfaced during bring-up, addressed the medium-severity issues from the hardware
-test report (M1–M4), and applied three additional correctness fixes found while
+test report (M1ï¿½M4), and applied three additional correctness fixes found while
 testing on real hardware.
 
-### Fixed — intermittent LVGL crash (heap corruption on style transition)
+### Fixed ï¿½ intermittent LVGL crash (heap corruption on style transition)
 
 - **Symptoms:** Intermittent `Guru Meditation Error: Core 0 panic'ed (Load/Store
   access fault)` rebooting the device after commands like `if exist /sdcard`,
@@ -7642,18 +7733,18 @@ testing on real hardware.
   for keyboard commands), these raced with the LVGL render cycle and corrupted
   the LVGL heap pool.
 - **Fix:**
-  - `components/header/header.c` — `header_render()` now acquires
+  - `components/header/header.c` ï¿½ `header_render()` now acquires
     `lvgl_port_lock(0)` for its entire body and releases with
     `lvgl_port_unlock()`. Added `#include "esp_lvgl_port.h"` and added
     `espressif__esp_lvgl_port` to the component's `REQUIRES`.
-  - `components/keyboard/keyboard.c` — `keyboard_show()` and
+  - `components/keyboard/keyboard.c` ï¿½ `keyboard_show()` and
     `keyboard_hide()` now acquire `lvgl_port_lock(0)` around their LVGL widget
     operations. Added `#include "esp_lvgl_port.h"`.
 - **Verification:** A stress test exercising all previously-crashing commands
   plus rapid header-touching commands ran clean twice with no Guru Meditation
   errors.
 
-### Fixed — family commands printed help instead of executing
+### Fixed ï¿½ family commands printed help instead of executing
 
 - `wifi status`, `wifi scan`, `wifi diag`, `bluetooth status`, `bluetooth scan`,
   `usb status` all printed the command help/usage instead of running the
@@ -7662,22 +7753,22 @@ testing on real hardware.
   command buffer in place. By the time the dispatcher reached the module-routed
   family handlers, `command` was truncated to just the first token (`"wifi"`),
   so the family parser saw `argc <= 1` and fell through to help.
-- **Fix:** `components/command/command.c` — `shell_execute_command_core()` now
+- **Fix:** `components/command/command.c` ï¿½ `shell_execute_command_core()` now
   preserves a heap copy of the trimmed command for family-prefix lines
   (`strdup` before `shell_split_args`) and passes it to the family handlers.
   The copy is freed in every branch.
 
-### Fixed — `sd stat` / `sd ls` / `sd cat` showed a usage error
+### Fixed ï¿½ `sd stat` / `sd ls` / `sd cat` showed a usage error
 
 - `sd stat test.txt` printed the `sd` usage instead of the stat result.
-- **Root cause:** Same in-place mutation inside `shell_command_sd()` —
+- **Root cause:** Same in-place mutation inside `shell_command_sd()` ï¿½
   `shell_split_args(command, ...)` truncated `command` to `"sd"` before it was
   handed to the sub-handlers.
-- **Fix:** `components/storage/storage_commands.c` — `shell_command_sd()` now
+- **Fix:** `components/storage/storage_commands.c` ï¿½ `shell_command_sd()` now
   `strdup`s the command before splitting and passes the copy to the
   sub-handlers, restructuring to a single exit that frees the copy.
 
-### Fixed — `shell_print_*` helpers emitted literal `@`-specifiers
+### Fixed ï¿½ `shell_print_*` helpers emitted literal `@`-specifiers
 
 - Every usage/error/ok/warning/muted/heading line showed raw colour markers,
   e.g. `@yUsage: brightness <0-100>@R`, `@gCreated directory ...@R`,
@@ -7685,27 +7776,27 @@ testing on real hardware.
 - **Root cause:** `shell_print_coloured()` composed `@y...@R` and called
   `shell_transcript_append_ansi()`, which only strips real `\x1b` sequences and
   does not convert `@`-specifiers.
-- **Fix:** `components/shell/shell.c` — `shell_print_coloured()` now builds a
+- **Fix:** `components/shell/shell.c` ï¿½ `shell_print_coloured()` now builds a
   format string with the colour/reset as literal `@`-specifiers and routes the
   composed text through `shell_transcript_appendf_ansi()` (i.e. `ansi_vformat`),
   so colour and reset are converted and the rendered body is a `%s` argument
   (literal `%` in body stays data).
 
-### Fixed — `cd` printed `\` while the prompt showed `/sdcard`
+### Fixed ï¿½ `cd` printed `\` while the prompt showed `/sdcard`
 
 - `cd` (no args) printed `\` (the FAT root) while the prompt rendered `/sdcard`
   (the VFS path). The two surfaces disagreed about the current directory.
-- **Fix:** `components/storage/storage.c` — `shell_fs_print_cwd()` now always
+- **Fix:** `components/storage/storage.c` ï¿½ `shell_fs_print_cwd()` now always
   prints the full VFS path (`s_shell_cwd`), matching the prompt.
 
-### Fixed — `attrib` with no path showed a bare error
+### Fixed ï¿½ `attrib` with no path showed a bare error
 
 - `attrib` with no arguments printed `attrib: cannot access .` with no usage
   hint.
-- **Fix:** `components/storage/storage_commands.c` — `shell_command_attrib()`
+- **Fix:** `components/storage/storage_commands.c` ï¿½ `shell_command_attrib()`
   now shows usage when no path is given.
 
-### Fixed — keypress wait timeout reduced for headless use
+### Fixed ï¿½ keypress wait timeout reduced for headless use
 
 - `pause`/`choice`/`more` blocked for the full 30 s with no interactive key
   source before falling back, stalling headless batch files.
@@ -7713,12 +7804,12 @@ testing on real hardware.
   `p4minishell_config.h` and `p4minishell_config.yaml`. Still long enough for
   a human to respond interactively; less painful for scripted/headless use.
 
-### Improved — battery telemetry shows calibration state
+### Improved ï¿½ battery telemetry shows calibration state
 
 - `battery` now reports `calibrated=yes|no` in the detail line so the user
   knows whether the voltage reading comes from the calibrated ADC driver or
   the approximate linear fallback.
-- **Where:** `components/command/command.c` — `shell_command_battery()`.
+- **Where:** `components/command/command.c` ï¿½ `shell_command_battery()`.
 
 ---
 
@@ -7728,11 +7819,11 @@ Hardware bring-up release for real-ESP32-P4 testing. Three stack-protection faul
 and one LVGL concurrency bug discovered and fixed during first-flash bring-up on
 the JC1060P470 development board. Documentation issues from the roadmap resolved.
 
-### Fixed — main-task stack overflow during UI construction
+### Fixed ï¿½ main-task stack overflow during UI construction
 
 - `app_main()` builds the entire LVGL UI on the 3584-byte main-task stack via
   `shell_build_ui()` ? `windows_init()`. The transcript append and prompt rendering
-  paths include newlib `vfprintf` calls that consume ~1–1.5 KB of stack alone,
+  paths include newlib `vfprintf` calls that consume ~1ï¿½1.5 KB of stack alone,
   overflowing the guard and triggering `Stack protection fault` in
   `vfprintf` ? `__sbprintf`.
 - Bumped `CONFIG_ESP_MAIN_TASK_STACK_SIZE` from 3584 to 8192 in
@@ -7741,94 +7832,94 @@ the JC1060P470 development board. Documentation issues from the roadmap resolved
 - Added the new config value to `sdkconfig.defaults` with a descriptive comment
   explaining why the default is insufficient.
 
-### Fixed — LVGL assertion hang from concurrent transcript appends
+### Fixed ï¿½ LVGL assertion hang from concurrent transcript appends
 
 - `shell_transcript_append_internal()`, `shell_transcript_reset()`,
   `shell_history_transcript_scroll_to_end()`, and `shell_input_line_set_text()`
   performed direct LVGL object manipulation (`lv_textarea_set_text`,
-  `lv_obj_update_layout`, `lv_obj_scroll_to_y`) from any calling task — including
+  `lv_obj_update_layout`, `lv_obj_scroll_to_y`) from any calling task ï¿½ including
   the Wi-Fi background task, the command worker task, and the UART console task
-  — without holding the LVGL render lock.
+  ï¿½ without holding the LVGL render lock.
 - When the Wi-Fi background task called these functions while the LVGL task was
   mid-render, the `LV_ASSERT_MSG(!disp->rendering_in_progress, ...)` assertion
   fired, invoking the default `while(1)` handler. The task watchdog triggered
   every five seconds on CPU 1, but the system never recovered.
 - All four functions now acquire `lvgl_port_lock(0)` (recursive mutex) around
   their LVGL sections. The mutex is recursive, so the LVGL event path, the async
-  transcript flush callback, and the UART-console command path — all of which
-  already hold the lock — nest without deadlock. The lock is only taken when the
+  transcript flush callback, and the UART-console command path ï¿½ all of which
+  already hold the lock ï¿½ nest without deadlock. The lock is only taken when the
   LVGL port is initialized (guarded by transcript/input-line non-NULL checks).
 
-### Fixed — esp_event task stack overflow during Wi-Fi handler
+### Fixed ï¿½ esp_event task stack overflow during Wi-Fi handler
 
 - The `sys_evt` task (CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE, default 2304) runs
   the project's Wi-Fi event handler (`networking_wifi_event_handler`). That handler
   calls `networking_wifi_append_step()` ? `networking_schedulef_ansi()` ?
   `vsnprintf()` into a 512-byte stack buffer, then `networking_record_infof()` and
   `networking_notify_headerf()`. The newlib `vfprintf` machinery on this path
-  consumes ~1.5–2 KB, overflowing the 2304-byte task stack immediately after
+  consumes ~1.5ï¿½2 KB, overflowing the 2304-byte task stack immediately after
   `esp_wifi_start()`.
 - Bumped `CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE` from 2304 to 8192 in
   `sdkconfig.defaults`. The esp_event system task is created once; the extra
   ~5.8 KB SRAM cost is negligible and consistent with the other task budgets in
   this firmware.
 
-### Documentation — roadmap issues resolved
+### Documentation ï¿½ roadmap issues resolved
 
-- **`command.md` `rgb`/`camera` in wrong table** — The "Where Commands Live" table
+- **`command.md` `rgb`/`camera` in wrong table** ï¿½ The "Where Commands Live" table
   listed `rgb` and `camera` as hardware commands alongside working commands like
   `brightness`, `rotate`, etc., but these are stubs that only print error messages.
   Moved them out of the hardware table and clarified the "Unsupported Commands" table
   to note that these entries are stubs.
-- **`p4minishell_config.yaml` missing v0.23.0 Kconfig changes** — The YAML file
+- **`p4minishell_config.yaml` missing v0.23.0 Kconfig changes** ï¿½ The YAML file
   header still said version 0.24.0 and did not document the two new task stack size
   entries added during hardware bring-up. Updated the header to version 0.24.1 with
   the bring-up notes, and added `main_task` (8192) and `system_event` (8192) entries
   to the `task_stacks` section with full descriptions explaining why the defaults
   were insufficient.
 
-### Hardware support — roadmap review resolved
+### Hardware support ï¿½ roadmap review resolved
 
-- **ESP32-P4 ADC attenuation value (issue 9)** — Verified as false alarm. The
+- **ESP32-P4 ADC attenuation value (issue 9)** ï¿½ Verified as false alarm. The
   ESP-IDF header `hal/adc_types.h:51` defines `ADC_ATTEN_DB_12 = 3` which IS the
   correct enum value on ESP32-P4. The code at `p4minishell_config.h:451` using
   `P4_CONFIG_BATTERY_ATTEN = 3` with comment `/* ADC_ATTEN_DB_12 */` is correct.
-- **ADC calibration fallback (issue 10)** — Confirmed as informational, not a bug.
+- **ADC calibration fallback (issue 10)** ï¿½ Confirmed as informational, not a bug.
   ESP32-P4 supports curve fitting calibration. The uncalibrated fallback is expected
   when eFuse data is absent and degrades gracefully.
-- **Coprocessor firmware directory (issue 11)** — Already documented in
+- **Coprocessor firmware directory (issue 11)** ï¿½ Already documented in
   `coprocessor/esp32c6_slave/README.md` which states "No custom slave source code"
   and explains the upstream build approach. No change needed.
 
-- **`command.md` `rgb`/`camera` in wrong table** — The "Where Commands Live" table
+- **`command.md` `rgb`/`camera` in wrong table** ï¿½ The "Where Commands Live" table
   listed `rgb` and `camera` as hardware commands alongside working commands like
   `brightness`, `rotate`, etc., but these are stubs that only print error messages.
   Moved them out of the hardware table and clarified the "Unsupported Commands" table
   to note that these entries are stubs.
-- **`p4minishell_config.yaml` missing v0.23.0 Kconfig changes** — The YAML file
+- **`p4minishell_config.yaml` missing v0.23.0 Kconfig changes** ï¿½ The YAML file
   header still said version 0.24.0 and did not document the two new task stack size
   entries added during hardware bring-up. Updated the header to version 0.24.1 with
   the bring-up notes, and added `main_task` (8192) and `system_event` (8192) entries
   to the `task_stacks` section with full descriptions explaining why the defaults
   were insufficient.
 
-### Code quality — semantic helper newline consolidation
+### Code quality ï¿½ semantic helper newline consolidation
 
 - Refactored `shell_print_coloured()` to accept a `bool newline` parameter, so the
   newline is included in the ANSI output rather than appended as a separate plain-text
   call. All six single-colour helpers (`shell_print_heading`, `shell_print_ok`,
   `shell_print_error`, `shell_print_warning`, `shell_print_muted`, `shell_print_usage`)
   now call `shell_print_coloured(..., true, args)` directly. `shell_print_field` and
-  `shell_print_field_num` were unchanged — they embed `\n` in their own snprintf and
+  `shell_print_field_num` were unchanged ï¿½ they embed `\n` in their own snprintf and
   do not use `shell_print_coloured()`.
 
-### Code quality — shell_extract_input_text optimization
+### Code quality ï¿½ shell_extract_input_text optimization
 
 - `shell_extract_input_text()` called `strlen(s_input_line_prompt)` and
   `strlen(SHELL_PROMPT)` twice each (once for `strncmp`, once for the pointer
   offset). Cached both lengths in local variables so each is computed once.
 
-### Code quality — UART console fgets() documentation
+### Code quality ï¿½ UART console fgets() documentation
 
 - Added clarifying comment to `shell_uart_console_task()` explaining why the
   `fgets()` + `clearerr(stdin)` + `vTaskDelay(20ms)` pattern is safe for
@@ -7836,7 +7927,7 @@ the JC1060P470 development board. Documentation issues from the roadmap resolved
   reads character-by-character from the underlying driver, and the error
   recovery loop handles disconnect/reconnect correctly.
 
-### Code quality — debug command deduplication
+### Code quality ï¿½ debug command deduplication
 
 - Removed `debug.wifi_state` (same as `wifi status` state line) and
   `debug.free_heap` (same as `mem` heap line) from `shell_command_debug()`.
@@ -7844,7 +7935,7 @@ the JC1060P470 development board. Documentation issues from the roadmap resolved
   and warning count. Users can run `wifi status` or `mem` for the full
   network and memory state.
 
-### API — ansi.h documentation corrected
+### API ï¿½ ansi.h documentation corrected
 
 - Rewrote the `ansi_vformat()` specifier table in `ansi.h` to match the actual
   implementation. Removed the non-existent lowercase "off" specifiers (`@d`,
@@ -7853,18 +7944,18 @@ the JC1060P470 development board. Documentation issues from the roadmap resolved
   `@k`/`@K` descriptions to match the implementation (standard black vs bright
   black). Added `@@` literal escape to the documented table.
 
-### SDK — ESP-Hosted version gate configurable
+### SDK ï¿½ ESP-Hosted version gate configurable
 
 - Added `P4_CONFIG_HOSTED_SKIP_VERSION_GATE` (default 0) to
   `p4minishell_config.h`. When set to 1, the Wi-Fi and Bluetooth init paths
-  do not reject C6 firmware version mismatches — mismatches are logged as
+  do not reject C6 firmware version mismatches ï¿½ mismatches are logged as
   warnings instead of returning `ESP_ERR_INVALID_STATE`. Useful for
   development and testing with mismatched host/co-processor firmware. Both
   `networking_wifi_validate_hosted_version()` in `networking.c` and the
   bluetooth version check in `bluetooth.c` respect this config. Documented
   in `p4minishell_config.yaml` under `wifi.hosted_skip_version_gate`.
 
-### Testing — variable expansion and debug log coverage
+### Testing ï¿½ variable expansion and debug log coverage
 
 - Added `test/main/test_shell_variables.c` with nine test functions covering
   `shell_expand_variables()`: environment variable expansion (`%VAR%`),
@@ -7879,7 +7970,7 @@ the JC1060P470 development board. Documentation issues from the roadmap resolved
 - Updated `test/main/test_main.c` and `test/main/CMakeLists.txt` to register
   the new test suites.
 
-### Optimization — persistent command worker task
+### Optimization ï¿½ persistent command worker task
 
 - Replaced per-command FreeRTOS task creation with a persistent worker task
   (`command_worker_task`) and a FreeRTOS queue (`s_command_queue`, depth 4).
@@ -7890,15 +7981,15 @@ the JC1060P470 development board. Documentation issues from the roadmap resolved
   reduces heap fragmentation from repeated task stack allocation. Full queues
   are logged as warnings with the command dropped.
 
-### Optimization — SD I/O buffer size increased
+### Optimization ï¿½ SD I/O buffer size increased
 
 - Increased `P4_CONFIG_SD_IO_BUFFER_BYTES` from 128 to 512 bytes (matching
   `P4_CONFIG_FILE_IO_BUFFER_BYTES` for consistency). Reduces the number of
   small read/write calls for `storage_copy_file()`, pipe spool operations,
-  and `sd cat`. Stack impact is +384 bytes per function — well within the
+  and `sd cat`. Stack impact is +384 bytes per function ï¿½ well within the
   8192-byte command worker task budget.
 
-### Fixed — intermittent LVGL crash (heap corruption on style transition)
+### Fixed ï¿½ intermittent LVGL crash (heap corruption on style transition)
 
 - **Symptoms:** Intermittent `Guru Meditation Error: Core 0 panic'ed (Load/Store
   access fault)` rebooting the device after commands like `if exist /sdcard`,
@@ -7912,18 +8003,18 @@ the JC1060P470 development board. Documentation issues from the roadmap resolved
   for keyboard commands), these raced with the LVGL render cycle and corrupted
   the LVGL heap pool.
 - **Fix:**
-  - `components/header/header.c` — `header_render()` now acquires
+  - `components/header/header.c` ï¿½ `header_render()` now acquires
     `lvgl_port_lock(0)` for its entire body and releases with
     `lvgl_port_unlock()`. Added `#include "esp_lvgl_port.h"` and added
     `espressif__esp_lvgl_port` to the component's `REQUIRES`.
-  - `components/keyboard/keyboard.c` — `keyboard_show()` and
+  - `components/keyboard/keyboard.c` ï¿½ `keyboard_show()` and
     `keyboard_hide()` now acquire `lvgl_port_lock(0)` around their LVGL widget
     operations. Added `#include "esp_lvgl_port.h"`.
 - **Verification:** A stress test exercising all previously-crashing commands
   plus rapid header-touching commands ran clean twice with no Guru Meditation
   errors.
 
-### Fixed — family commands printed help instead of executing
+### Fixed ï¿½ family commands printed help instead of executing
 
 - `wifi status`, `wifi scan`, `wifi diag`, `bluetooth status`, `bluetooth scan`,
   `usb status` all printed the command help/usage instead of running the
@@ -7932,22 +8023,22 @@ the JC1060P470 development board. Documentation issues from the roadmap resolved
   command buffer in place. By the time the dispatcher reached the module-routed
   family handlers, `command` was truncated to just the first token (`"wifi"`),
   so the family parser saw `argc <= 1` and fell through to help.
-- **Fix:** `components/command/command.c` — `shell_execute_command_core()` now
+- **Fix:** `components/command/command.c` ï¿½ `shell_execute_command_core()` now
   preserves a heap copy of the trimmed command for family-prefix lines
   (`strdup` before `shell_split_args`) and passes it to the family handlers.
   The copy is freed in every branch.
 
-### Fixed — `sd stat` / `sd ls` / `sd cat` showed a usage error
+### Fixed ï¿½ `sd stat` / `sd ls` / `sd cat` showed a usage error
 
 - `sd stat test.txt` printed the `sd` usage instead of the stat result.
-- **Root cause:** Same in-place mutation inside `shell_command_sd()` —
+- **Root cause:** Same in-place mutation inside `shell_command_sd()` ï¿½
   `shell_split_args(command, ...)` truncated `command` to `"sd"` before it was
   handed to the sub-handlers.
-- **Fix:** `components/storage/storage_commands.c` — `shell_command_sd()` now
+- **Fix:** `components/storage/storage_commands.c` ï¿½ `shell_command_sd()` now
   `strdup`s the command before splitting and passes the copy to the
   sub-handlers, restructuring to a single exit that frees the copy.
 
-### Fixed — `shell_print_*` helpers emitted literal `@`-specifiers
+### Fixed ï¿½ `shell_print_*` helpers emitted literal `@`-specifiers
 
 - Every usage/error/ok/warning/muted/heading line showed raw colour markers,
   e.g. `@yUsage: brightness <0-100>@R`, `@gCreated directory ...@R`,
@@ -7955,7 +8046,7 @@ the JC1060P470 development board. Documentation issues from the roadmap resolved
 - **Root cause:** `shell_print_coloured()` composed `@y...@R` and called
   `shell_transcript_append_ansi()`, which only strips real `\x1b` sequences and
   does not convert `@`-specifiers.
-- **Fix:** `components/shell/shell.c` — `shell_print_coloured()` now builds a
+- **Fix:** `components/shell/shell.c` ï¿½ `shell_print_coloured()` now builds a
   format string with the colour/reset as literal `@`-specifiers and routes the
   composed text through `shell_transcript_appendf_ansi()` (i.e. `ansi_vformat`),
   so colour and reset are converted and the rendered body is a `%s` argument
@@ -7969,7 +8060,7 @@ Bug fixes and correctness release. **No commands, options, output formats, or be
 were removed.** The semantic `SH_*` palette migration started in v0.22.0 is now complete,
 and two latent correctness issues are resolved.
 
-### Fixed — `shell_get_cwd_for_prompt()` was not thread-safe
+### Fixed ï¿½ `shell_get_cwd_for_prompt()` was not thread-safe
 
 - The function used a `static` buffer and returned a pointer to it. Both the UART
   console task and the LVGL input-line task render the prompt and call this function,
@@ -7981,21 +8072,21 @@ and two latent correctness issues are resolved.
 - Updated the declaration in `components/shell/shell.h`, the test in
   `test/main/test_shell_prompt.c`, and the API reference in `API.md`.
 
-### Fixed — semantic palette migration incomplete
+### Fixed ï¿½ semantic palette migration incomplete
 
 - `shell_command_debug()` in `components/shell/` and the `display`, `keyboard`,
   `windows`, `reboot`, "Unknown command", and out-of-memory paths in
   `components/command/` still used raw `@`-specifiers (`@C`, `@R`, `@Y`, `@y`, `@g`,
   `@r`, `@G`, `@B`, `@K`) instead of the `SH_*` macros from
   `components/ansi/ansi_palette.h`. The v0.22.0 changelog claimed "every command
-  group migrated" — that is now true.
+  group migrated" ï¿½ that is now true.
 - Every site in `shell_command_help()`, `shell_command_sysinfo()`,
   `shell_command_version()`, `shell_command_about()`, `shell_command_mem()`, and
   `shell_command_debug()` in `shell.c`, and `shell_command_reboot()`,
   `shell_execute_rgb_command()` stubs, and the `display`/`keyboard`/`windows`
   subcommand handlers in `command.c`, now uses `SH_*` macros.
 
-### Fixed — stale documentation
+### Fixed ï¿½ stale documentation
 
 - `documentation.md` described the optimization level as "Performance (-O3)" but
   `sdkconfig.defaults` has specified `CONFIG_COMPILER_OPTIMIZATION_SIZE=y` since
@@ -8003,28 +8094,28 @@ and two latent correctness issues are resolved.
 - `roadmap.md` claimed "main.c is 445 lines" and "command.c is 1,140 lines". The
   actual counts are 499 and 1,793 respectively. Corrected.
 
-### Added — pipeline and chain test coverage
+### Added ï¿½ pipeline and chain test coverage
 
 - Added `test/main/test_shell_pipeline.c` with seven new test functions
   covering the command pipeline surfaces that previously had no tests:
-  - `test_pipe_detection_agreement` — verifies that `shell_has_unquoted_char()`
+  - `test_pipe_detection_agreement` ï¿½ verifies that `shell_has_unquoted_char()`
     and `shell_split_args()` never disagree about whether a `|` is syntax or
     data, across double quotes, single quotes, caret escapes, pipes after
     closed quotes, and mixed real/quoted pipes.
-  - `test_redirection_quote_awareness` — verifies that `>`, `>>`, and `<`
+  - `test_redirection_quote_awareness` ï¿½ verifies that `>`, `>>`, and `<`
     inside double quotes, single quotes, and caret escapes are treated as data.
-  - `test_chain_pipe_vs_chain_under_quotes` — verifies that a `|` inside
+  - `test_chain_pipe_vs_chain_under_quotes` ï¿½ verifies that a `|` inside
     quotes does not split a command chain.
-  - `test_chain_single_quote_protection` — verifies that `&`, `&&`, `||`
+  - `test_chain_single_quote_protection` ï¿½ verifies that `&`, `&&`, `||`
     inside single quotes are data, not chain separators.
-  - `test_chain_truncation_with_pipelines` — verifies that the segment limit
+  - `test_chain_truncation_with_pipelines` ï¿½ verifies that the segment limit
     works correctly when each link is itself a pipeline.
-  - `test_chain_empty_and_whitespace` — verifies edge cases for empty input
+  - `test_chain_empty_and_whitespace` ï¿½ verifies edge cases for empty input
     and leading separators.
-  - `test_find_unquoted_pipe` — verifies the pipe scanner directly: bare pipe,
+  - `test_find_unquoted_pipe` ï¿½ verifies the pipe scanner directly: bare pipe,
     quoted pipe, escaped pipe, pipe after closed quote, NULL input.
 
-### Changed — architecture and maintainability
+### Changed ï¿½ architecture and maintainability
 
 - **`shell.c` no longer depends on networking, Bluetooth, USB, or C6 OTA.** The
   shell core previously included `networking.h`, `bluetooth.h`, `usb.h`, and
@@ -8040,7 +8131,7 @@ and two latent correctness issues are resolved.
   `command.c` no longer includes `keyboard.h` or `windows.h`. `display.h` is
   still required for the `brightness` and `rotate` hardware commands.
 - **`coprocessor/esp32c6_slave/README.md`** now explicitly states that there is
-  no custom slave source code — the firmware is built entirely from the managed
+  no custom slave source code ï¿½ the firmware is built entirely from the managed
   `espressif__esp_hosted` component.
 - **`p4minishell_config.yaml`** gained a `build_constraints` section documenting
   the build-affecting Kconfig options (`CONFIG_SPIRAM_XIP_FROM_PSRAM`,
@@ -8065,7 +8156,7 @@ and two latent correctness issues are resolved.
 ## [0.23.0] - 2026-08-08
 
 Consolidates the networking layer onto the official Espressif path and makes the
-station-only constraint structural. **No commands, options, or output were removed** —
+station-only constraint structural. **No commands, options, or output were removed** ï¿½
 the dispatcher stays at 71 verbs and `wifi`, `bluetooth`/`bt`, and `c6ota` behave
 identically.
 
@@ -8074,7 +8165,7 @@ The module was already centralized and already used only `espressif/esp_hosted` 
 closes the gaps that remained: initialization order, one encapsulation leak, and
 several constraints that were conventional rather than enforced.
 
-### Changed — canonical initialization order
+### Changed ï¿½ canonical initialization order
 
 `networking_wifi_start_runtime()` previously ran `nvs_flash_init()` **before** bringing
 up the hosted transport. The order is now exactly as specified, and documented in
@@ -8095,7 +8186,7 @@ up the hosted transport. The order is now exactly as specified, and documented i
 Bringing the transport up first means a dead or mismatched co-processor is reported as
 a transport fault instead of surfacing later as a confusing Wi-Fi init error.
 
-### Fixed — encapsulation leak in the header status refresh
+### Fixed ï¿½ encapsulation leak in the header status refresh
 
 - `shell_header_status_refresh()` called `esp_wifi_sta_get_ap_info()` directly to read
   RSSI, which was the only `esp_wifi_*` call outside `components/networking/`.
@@ -8109,7 +8200,7 @@ a transport fault instead of surfacing later as a confusing Wi-Fi init error.
   `components/c6ota/`, which drives `esp_hosted_slave_ota_*` because co-processor
   firmware update is its entire purpose.
 
-### Changed — station-only is now structural
+### Changed ï¿½ station-only is now structural
 
 - `CONFIG_ESP_WIFI_SOFTAP_SUPPORT` and `CONFIG_WIFI_RMT_SOFTAP_SUPPORT` are both
   disabled in `sdkconfig.defaults`. The code always called
@@ -8117,20 +8208,20 @@ a transport fault instead of surfacing later as a confusing Wi-Fi init error.
 - Both symbols are needed: `esp_wifi_remote` mirrors the Wi-Fi Kconfig under its own
   `WIFI_RMT_` prefix, and on the hosted path that mirror is the authoritative one.
 
-### Fixed — build constraints were not durable
+### Fixed ï¿½ build constraints were not durable
 
 Regenerating `sdkconfig` from `sdkconfig.defaults` revealed that three documented
 constraints existed only in the generated file, so any regeneration silently reverted
 them. All three are now pinned in `sdkconfig.defaults`:
 
-- **`CONFIG_SPIRAM_XIP_FROM_PSRAM=n`** — the defaults file actually had this set to `y`,
+- **`CONFIG_SPIRAM_XIP_FROM_PSRAM=n`** ï¿½ the defaults file actually had this set to `y`,
   directly contradicting the documented constraint that PSRAM XIP mapping must stay
   disabled to avoid overflowing the flash/PSRAM budget at link time
-- **`CONFIG_COMPILER_OPTIMIZATION_SIZE=y`** — the defaults file specified
+- **`CONFIG_COMPILER_OPTIMIZATION_SIZE=y`** ï¿½ the defaults file specified
   `OPTIMIZATION_PERF`, and regenerating grew the image by roughly 280 KB
-- **`CONFIG_LOG_DEFAULT_LEVEL_WARN=y`** — warn-level compile-time logging
+- **`CONFIG_LOG_DEFAULT_LEVEL_WARN=y`** ï¿½ warn-level compile-time logging
 
-### Fixed — latent buffer truncation in `dir /w`
+### Fixed ï¿½ latent buffer truncation in `dir /w`
 
 - The wide-listing row buffer could not hold a full set of columns plus one clipped
   over-long cell, and the `strncat()` bound was computed from a runtime `strlen()` so
@@ -8158,10 +8249,10 @@ them. All three are now pinned in `sdkconfig.defaults`:
 Gives the shell a complete, built-in default colour scheme. Every category of
 output now uses a consistent colour chosen centrally, applied automatically on both
 the LVGL transcript and the serial console, with no per-command decisions left to
-individual implementations. **No commands, options, or output text were removed** —
+individual implementations. **No commands, options, or output text were removed** ï¿½
 the dispatcher stays at 71 verbs and every message keeps its exact wording.
 
-### Added — Semantic colour palette
+### Added ï¿½ Semantic colour palette
 
 - **New `components/ansi/ansi_palette.h`** is the single source of truth for what
   colour each kind of output is. It defines named `SH_*` macros that expand to the
@@ -8196,7 +8287,7 @@ the dispatcher stays at 71 verbs and every message keeps its exact wording.
 | USB attached / detached | `SH_USB_UP` / `SH_USB_DOWN` | Green / grey |
 | OTA | `SH_OTA` | Bright green |
 
-### Added — Semantic print helpers
+### Added ï¿½ Semantic print helpers
 
 Seven wrappers over `shell_transcript_appendf_ansi()` in `components/shell/`, so the
 common shapes need no colour decision at the call site. Each emits its own reset and
@@ -8216,7 +8307,7 @@ void shell_print_usage(const char *format, ...);
 They render the caller's text with real `vsnprintf` before wrapping it, so a `%s` value
 containing an `@` can never be mistaken for a colour specifier.
 
-### Fixed — muted text was nearly invisible
+### Fixed ï¿½ muted text was nearly invisible
 
 - **`@k` is pure black (0x0C0C0C), not grey**, and the default background is dark blue
   (0x012456). Thirty output sites across `networking.c`, `shell.c`, and `command.c`
@@ -8226,7 +8317,7 @@ containing an `@` can never be mistaken for a colour specifier.
 - The palette header documents this and the other specifier traps (`@E` is bright red,
   `@B` is bold rather than blue, `@L` is bright blue) so the mistake is not repeatable.
 
-### Fixed — `ansi_format()` discarded printf width and precision
+### Fixed ï¿½ `ansi_format()` discarded printf width and precision
 
 - The formatter captured the full specifier but then re-rendered with only the bare
   conversion, silently dropping flags. `%10s`, `%-4s`, `%05d`, and `%.2f` all lost their
@@ -8236,17 +8327,17 @@ containing an `@` can never be mistaken for a colour specifier.
 - This is what makes the right-aligned `chkdsk` capacity report and the `dir` column
   layout survive colouring. Covered by a new test suite.
 
-### Changed — every command group migrated
+### Changed ï¿½ every command group migrated
 
 - **System**: `help`, `sysinfo`, `version`, `about`, `mem`, `debug`
 - **Hardware**: `brightness`, `rotate`, `battery`, `volume`, `gpio`, `display`,
-  `keyboard`, `windows` — cyan labels with bright-magenta numbers throughout
+  `keyboard`, `windows` ï¿½ cyan labels with bright-magenta numbers throughout
 - **Storage**: every file command, plus `attrib`, `label`, `xcopy`, `chkdsk`, `format`,
   and the `sd` family. Around 105 error paths and 51 usage lines now route through
   `shell_print_error()` and `shell_print_usage()`.
-- **Directory listings**: `dir` and `sd ls` colour each entry by kind — bold bright
+- **Directory listings**: `dir` and `sd ls` colour each entry by kind ï¿½ bold bright
   blue for directories, bright green for runnable `.bat` files, white for ordinary
-  files — with grey timestamps and magenta sizes. The colour is applied *after* all
+  files ï¿½ with grey timestamps and magenta sizes. The colour is applied *after* all
   width formatting so column alignment is unaffected, and `dir /b` stays deliberately
   uncoloured so redirected output remains machine-parsable.
 - **Batch**: `set`, `set /a`, `set /p`, `path`, `echo`, and echoed batch lines
@@ -8282,11 +8373,11 @@ containing an `@` can never be mistaken for a colour specifier.
 
 Completes the batch language and closes the last filesystem parity gap. Delivery phase 1 is
 now fully done alongside phase 2. **No commands, options, output formats, or behaviors were
-removed.** The dispatcher stays at 71 verbs — `set /a` and `set /p` are sub-forms of the
-existing `set`, not new commands — and every previously working `set`, `copy`, `xcopy`, and
+removed.** The dispatcher stays at 71 verbs ï¿½ `set /a` and `set /p` are sub-forms of the
+existing `set`, not new commands ï¿½ and every previously working `set`, `copy`, `xcopy`, and
 batch file still behaves identically.
 
-### Added — `set /a` arithmetic expressions
+### Added ï¿½ `set /a` arithmetic expressions
 
 A recursive-descent evaluator over 32-bit signed integers implementing the COMMAND.COM
 operator set and precedence:
@@ -8307,7 +8398,7 @@ operator set and precedence:
 - **Compound assignments**: `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
 - Numbers accept decimal, `0x` hex, and leading-zero octal
 - A bare identifier reads an environment variable, and **an undefined variable evaluates to
-  0** exactly as DOS does — which is what makes `set /a count=count+1` work on first use
+  0** exactly as DOS does ï¿½ which is what makes `set /a count=count+1` work on first use
 - Errors are detected and reported rather than trapping: divide by zero, modulo by zero,
   `INT32_MIN / -1` overflow, unbalanced parentheses, malformed numbers, and trailing garbage
 - Shifts of 32 or more are clamped instead of invoking undefined behavior
@@ -8315,7 +8406,7 @@ operator set and precedence:
   never swallow a command-chain separator from v0.19.0
 - Exposed as `shell_expr_evaluate()` in `batch.h` so the evaluator is unit-testable
 
-### Added — `set /p` prompted input
+### Added ï¿½ `set /p` prompted input
 
 - **`set /p NAME=<prompt text>`** prints the prompt and reads a line through the key-wait
   facility added in v0.18.0
@@ -8323,11 +8414,11 @@ operator set and precedence:
 - **An empty line leaves the variable unchanged**, matching DOS, rather than clearing it
 - Sets errorlevel to 1 when input was cancelled, timed out, or unavailable, so a batch file
   can branch on it
-- Added **`shell_read_line()`** to the shell core — the reusable line-collection primitive
+- Added **`shell_read_line()`** to the shell core ï¿½ the reusable line-collection primitive
   `set /p` needed, echoing as it types and opening its own keypress wait so input never
   reaches the command dispatcher
 
-### Added — Line continuation
+### Added ï¿½ Line continuation
 
 - A trailing **`^`** joins the next physical line, so a long command can be split for
   readability
@@ -8337,7 +8428,7 @@ operator set and precedence:
 - **The label scanner applies the identical rule.** Without this, a continued line whose tail
   begins with `:` would register a phantom label and silently corrupt `goto` targets.
 
-### Added — Attribute preservation across `copy` and `xcopy`
+### Added ï¿½ Attribute preservation across `copy` and `xcopy`
 
 - New **`storage_copy_attributes()`** carries R/H/S/A from source to destination
 - Wired into `shell_fs_copy_file()`, so all five copy call sites inherit it at once: `copy`,
@@ -8361,9 +8452,9 @@ operator set and precedence:
 ### Configuration
 
 New `P4_CONFIG_*` macros, all documented in `p4minishell_config.yaml`:
-- `P4_CONFIG_SET_EXPR_DEPTH_MAX` (16) — parenthesis nesting limit in `set /a`
-- `P4_CONFIG_SET_PROMPT_INPUT_BYTES` (128) — maximum `set /p` input length
-- `P4_CONFIG_LINE_CONTINUATION_MAX` (8) — maximum lines joined by trailing `^`
+- `P4_CONFIG_SET_EXPR_DEPTH_MAX` (16) ï¿½ parenthesis nesting limit in `set /a`
+- `P4_CONFIG_SET_PROMPT_INPUT_BYTES` (128) ï¿½ maximum `set /p` input length
+- `P4_CONFIG_LINE_CONTINUATION_MAX` (8) ï¿½ maximum lines joined by trailing `^`
 
 ### Testing
 
@@ -8384,25 +8475,25 @@ formats, or behaviors were removed.** Three verbs were added (`chkdsk`, `scandis
 `format`), taking the dispatcher from 68 to 71; every previously working invocation of
 `dir`, `copy`, `move`, `write`, and `sd info` still works unchanged.
 
-### Added — Volume management
+### Added ï¿½ Volume management
 
-- **`chkdsk [path] [/F]`** (alias **`scandisk`**) — reports the volume label, total, used and
+- **`chkdsk [path] [/F]`** (alias **`scandisk`**) ï¿½ reports the volume label, total, used and
   free space, allocation unit size, and total and free cluster counts. `/F` additionally walks
   every directory verifying each entry is readable, reporting file and directory counts and
   any unreadable directory.
   The check is deliberately **read-only**. This firmware never rewrites FAT structures: a card
   with real corruption should be imaged and repaired on a host, so problems are reported
   honestly rather than silently "fixed" by an embedded shell. The output says so explicitly.
-- **`format [/FS:FAT|FAT32|EXFAT] [/V:label] [/Q]`** — reformats the card through
+- **`format [/FS:FAT|FAT32|EXFAT] [/V:label] [/Q]`** ï¿½ reformats the card through
   `esp_vfs_fat_sdcard_format()`, then optionally applies a volume label and reports the
   resulting geometry.
   Gated behind the exact confirmation word `P4_CONFIG_FORMAT_CONFIRM_WORD`, collected one key
-  at a time through the shared key queue so the answer never reaches the command dispatcher —
+  at a time through the shared key queue so the answer never reaches the command dispatcher ï¿½
   the same danger contract `c6ota` uses. **Refuses outright when no interactive input source
   is attached**, so a batch file can never silently wipe a card. The filesystem type is
   validated before the warning is even shown, so a typo cannot reach the prompt.
 
-### Added — Full `dir` option set
+### Added ï¿½ Full `dir` option set
 
 | Option | Behavior |
 |--------|----------|
@@ -8422,11 +8513,11 @@ formats, or behaviors were removed.** Three verbs were added (`chkdsk`, `scandis
 - Options may appear before or after the path, with or without the `:` separator
 - The existing no-option and wildcard behaviors are unchanged
 
-### Added — Free-space reporting and guardrails
+### Added ï¿½ Free-space reporting and guardrails
 
-- **`storage_get_space_info()`** — total, used, and free bytes plus cluster geometry via
+- **`storage_get_space_info()`** ï¿½ total, used, and free bytes plus cluster geometry via
   `f_getfree()`. Handles both FATFS sector-size configurations.
-- **`storage_check_free_space()`** — refuses a write that would leave less than
+- **`storage_check_free_space()`** ï¿½ refuses a write that would leave less than
   `P4_CONFIG_STORAGE_FREE_MARGIN_BYTES` (64 KB) free, so the volume never fills to the point
   where FAT metadata updates begin to fail. An overwrite correctly credits the space the
   destination already occupies, so replacing a file in place does not need double the room.
@@ -8436,7 +8527,7 @@ formats, or behaviors were removed.** Three verbs were added (`chkdsk`, `scandis
 - **`sd info`** now reports filesystem total, used, and free space and the allocation unit
   size alongside the existing raw card capacity
 
-### Fixed — data-loss bug in `copy`
+### Fixed ï¿½ data-loss bug in `copy`
 
 - **`copy` onto itself truncated the source.** `copy a.txt a.txt` opened the destination with
   `"wb"`, which truncated the file to zero bytes before the first read, destroying it. The
@@ -8451,7 +8542,7 @@ formats, or behaviors were removed.** Three verbs were added (`chkdsk`, `scandis
 - `write` and `append` precheck free space **before** opening the file, so a truncating
   overwrite cannot destroy the existing contents and then fail for lack of room.
 
-### Fixed — recursive directory walkers overflowed the worker stack
+### Fixed ï¿½ recursive directory walkers overflowed the worker stack
 
 Found by applying the stack-discipline rule added in v0.19.0 to the new code, which also
 surfaced the same problem in the existing `tree` walker.
@@ -8466,11 +8557,11 @@ surfaced the same problem in the existing `tree` walker.
 ### Configuration
 
 New `P4_CONFIG_*` macros, all documented in `p4minishell_config.yaml`:
-- `P4_CONFIG_DIR_SORT_ENTRY_MAX` (128) — entries buffered per level for sorting
+- `P4_CONFIG_DIR_SORT_ENTRY_MAX` (128) ï¿½ entries buffered per level for sorting
 - `P4_CONFIG_DIR_WIDE_COLUMNS` (4) and `P4_CONFIG_DIR_WIDE_COLUMN_WIDTH` (18)
-- `P4_CONFIG_DIR_PAGE_LINES` (20) — rows between `/P` pauses
-- `P4_CONFIG_DIR_RECURSE_DEPTH_MAX` (8) — `/S` and `chkdsk /F` recursion limit
-- `P4_CONFIG_STORAGE_FREE_MARGIN_BYTES` (64 KB) — free-space safety margin
+- `P4_CONFIG_DIR_PAGE_LINES` (20) ï¿½ rows between `/P` pauses
+- `P4_CONFIG_DIR_RECURSE_DEPTH_MAX` (8) ï¿½ `/S` and `chkdsk /F` recursion limit
+- `P4_CONFIG_STORAGE_FREE_MARGIN_BYTES` (64 KB) ï¿½ free-space safety margin
 - `P4_CONFIG_COPY_PROGRESS_THRESHOLD` (256 KB) and `P4_CONFIG_COPY_PROGRESS_STEP_PCT` (10)
 - `P4_CONFIG_FORMAT_CONFIRM_WORD` (`"YES"`) and `P4_CONFIG_FORMAT_ALLOC_UNIT_BYTES` (0)
 
@@ -8491,7 +8582,7 @@ Completes the command interpreter parity section of the roadmap. **No commands, 
 output formats, or behaviors were removed.** The dispatcher verb table is unchanged at 68
 verbs, verified by diff against the previous release.
 
-### Added — Quoting and escaping rules
+### Added ï¿½ Quoting and escaping rules
 
 The shell gained one quote/escape scanner in `components/shell/`, and every surface that has
 to tell syntax from data now shares it: the argument tokenizer, redirection parsing, pipe
@@ -8499,7 +8590,7 @@ splitting, chain splitting, and variable expansion. Previously each had its own 
 double-quote check, and none of them handled escapes.
 
 - **`"text"`** groups an argument and still expands `%VAR%`, matching COMMAND.COM
-- **`'text'`** groups an argument literally — no variable expansion and no escape processing
+- **`'text'`** groups an argument literally ï¿½ no variable expansion and no escape processing
   inside the run
 - **`^c`** escapes any single character, so `^&`, `^|`, `^>`, `^<`, `^"`, `^%`, and `^^` are
   data rather than syntax
@@ -8511,7 +8602,7 @@ double-quote check, and none of them handled escapes.
 - **`shell_expand_variables()`** skips single-quoted runs entirely and passes `^%` through
   untouched
 
-### Added — Command chaining with `&`, `&&`, and `||`
+### Added ï¿½ Command chaining with `&`, `&&`, and `||`
 
 - **`a & b`** runs both commands unconditionally
 - **`a && b`** runs `b` only when `a` succeeded
@@ -8530,7 +8621,7 @@ double-quote check, and none of them handled escapes.
 - Unrecognized commands now set `P4_CONFIG_ERRORLEVEL_UNKNOWN_COMMAND` (9009), matching
   COMMAND.COM, which is what makes `badcmd || echo fallback` work
 
-### Fixed — batch frame overflowed the worker task stack (pre-existing)
+### Fixed ï¿½ batch frame overflowed the worker task stack (pre-existing)
 
 Found while reviewing the stack cost of the new chaining code. This bug predates this release
 and would have caused stack-overflow crashes on any batch file.
@@ -8543,12 +8634,12 @@ and would have caused stack-overflow crashes on any batch file.
   frame and the line buffer moved to the heap. The stack frame is now **96 bytes**.
 - The command pipeline's two expansion buffers also moved to the heap, taking
   `shell_execute_command()` from **2,032 to 480 bytes**, because it sits on the same recursion
-  path — a batch file re-enters it for every line.
+  path ï¿½ a batch file re-enters it for every line.
 - Four levels of batch nesting now consume roughly 5.6 KB of the 8 KB stack with headroom to
   spare. Verified by disassembling the function prologues, not by inspection.
 - Every new allocation is released on every exit path, including the early-return error paths.
 
-### Fixed — `if` command correctness
+### Fixed ï¿½ `if` command correctness
 
 - **`if exist <file>`** now resolves the path against the current directory and runs inside a
   guarded SD session, like every other filesystem command. It previously called `stat()` on the
@@ -8560,10 +8651,10 @@ and would have caused stack-overflow crashes on any batch file.
 ### Configuration
 
 New `P4_CONFIG_*` macros, all documented in `p4minishell_config.yaml`:
-- `P4_CONFIG_ESCAPE_CHAR` (`^`) — the escape character
-- `P4_CONFIG_CHAIN_SEGMENT_MAX` (8) — maximum chained commands
-- `P4_CONFIG_ERRORLEVEL_UNKNOWN_COMMAND` (9009) — errorlevel for an unknown command
-- `P4_CONFIG_BATCH_LABEL_BYTES` (48) — maximum `:label` name length
+- `P4_CONFIG_ESCAPE_CHAR` (`^`) ï¿½ the escape character
+- `P4_CONFIG_CHAIN_SEGMENT_MAX` (8) ï¿½ maximum chained commands
+- `P4_CONFIG_ERRORLEVEL_UNKNOWN_COMMAND` (9009) ï¿½ errorlevel for an unknown command
+- `P4_CONFIG_BATCH_LABEL_BYTES` (48) ï¿½ maximum `:label` name length
 
 ### Testing
 
@@ -8581,7 +8672,7 @@ Completes every roadmap item that was marked ?? (partially implemented). **No co
 options, output formats, or behaviors were removed.** Every previously working invocation
 still works; the changes are additive or replace a stub with the real implementation.
 
-### Added — Interactive keypress wait
+### Added ï¿½ Interactive keypress wait
 
 The shell core gained a real keypress facility, which is what `pause`, `choice`, and `more`
 needed to stop faking a key wait with a timed delay.
@@ -8598,18 +8689,18 @@ needed to stop faking a key wait with a timed delay.
   attached, commands fall back to the previous timed behavior, so a headless board never
   stalls a batch file.
 
-### Added — Input redirection and multi-stage pipes
+### Added ï¿½ Input redirection and multi-stage pipes
 
-- **`<` input redirection operator** — `sort < notes.txt` reads the file as command input
-- **Multi-stage pipelines** — `cmd1 | cmd2 | cmd3`, up to `P4_CONFIG_PIPE_STAGE_MAX` (4)
-- **Quote-aware pipe splitting** — `echo "a | b"` is no longer mistaken for a pipeline
-- **Shared mechanism** — the `<` operator and each pipe stage both publish through the
+- **`<` input redirection operator** ï¿½ `sort < notes.txt` reads the file as command input
+- **Multi-stage pipelines** ï¿½ `cmd1 | cmd2 | cmd3`, up to `P4_CONFIG_PIPE_STAGE_MAX` (4)
+- **Quote-aware pipe splitting** ï¿½ `echo "a | b"` is no longer mistaken for a pipeline
+- **Shared mechanism** ï¿½ the `<` operator and each pipe stage both publish through the
   storage input-redirection slot, so `sort < f.txt` and `type f.txt | sort` reach the same
   code path in the text-processing commands
-- **Guaranteed spool cleanup** — every stage's temp file is removed on every exit path,
+- **Guaranteed spool cleanup** ï¿½ every stage's temp file is removed on every exit path,
   including a stage failure or an `exit` mid-pipeline
 
-### Changed — Batch control flow is now complete
+### Changed ï¿½ Batch control flow is now complete
 
 - **`pause`** blocks on a real keypress instead of a fixed 2-second delay
 - **`choice`** blocks on a real keypress and gained the DOS switch set: `/C:list` (allowed
@@ -8625,14 +8716,14 @@ needed to stop faking a key wait with a timed delay.
   `exit` abused the pending-goto flag, which meant a `goto` on the same line could resurrect
   execution.
 
-### Changed — Runtime prompt engine
+### Changed ï¿½ Runtime prompt engine
 
 - **`prompt` is a full DOS template engine** supporting `$p` (path), `$g` (`>`), `$l` (`<`),
   `$b` (`|`), `$n` (drive), `$d` (date), `$t` (time), `$v` (version), `$s` (space),
   `$_` (newline), `$q` (`=`), `$$` (`$`), `$a` (`&`), `$c` (`(`), `$f` (`)`), `$e` (ESC), and
   `$h` (destructive backspace). Metacharacters are case-insensitive; an unknown one renders
   literally, both matching COMMAND.COM.
-- **The template drives both surfaces** — the UART console prompt and the LVGL input line —
+- **The template drives both surfaces** ï¿½ the UART console prompt and the LVGL input line ï¿½
   so they can never disagree. Previously the LVGL prompt was fixed and `prompt` only printed
   a message.
 - **The input line snapshots the prefix it painted.** Extraction and repair compare against
@@ -8641,14 +8732,14 @@ needed to stop faking a key wait with a timed delay.
 - **`prompt /?`** lists the metacharacters; `prompt` with no argument shows the stored template
   and its rendered form.
 
-### Changed — `date` and `time` can set the clock
+### Changed ï¿½ `date` and `time` can set the clock
 
 - **`date [MM-DD-YYYY]`** and **`time [HH:MM[:SS]]`** now set the system clock in addition to
   reporting it. Both validate ranges, accept `-` or `/` separators for the date, make seconds
   optional for the time, and report honestly when the clock is not NTP-synchronized. A later
   SNTP sync still wins.
 
-### Changed — File utility commands are now complete
+### Changed ï¿½ File utility commands are now complete
 
 - **`tree` is fully recursive.** Draws the DOS box-drawing outline with correct `+---` and
   `\---` connectors, and gained `/F` (include files; DOS default is directories only) and `/A`
@@ -8681,14 +8772,14 @@ needed to stop faking a key wait with a timed delay.
 ### Configuration
 
 New `P4_CONFIG_*` macros, all documented in `p4minishell_config.yaml`:
-- `P4_CONFIG_PIPE_STAGE_MAX` (4) — maximum stages in one pipeline
-- `P4_CONFIG_SETLOCAL_DEPTH_MAX` (8) — setlocal nesting limit
-- `P4_CONFIG_TREE_DEPTH_MAX` (8) — tree recursion limit
-- `P4_CONFIG_PROMPT_TEMPLATE_BYTES` (64) — prompt template buffer
-- `P4_CONFIG_PROMPT_DEFAULT_TEMPLATE` (`"PS $p$g "`) — default prompt
-- `P4_CONFIG_KEY_QUEUE_DEPTH` (16) — keypress queue depth
-- `P4_CONFIG_KEY_WAIT_TIMEOUT_MS` (30000) — single keypress wait timeout
-- `P4_CONFIG_SD_DRIVE_LETTER` (`"A:"`) — DOS drive letter for `prompt $n` and `tree`
+- `P4_CONFIG_PIPE_STAGE_MAX` (4) ï¿½ maximum stages in one pipeline
+- `P4_CONFIG_SETLOCAL_DEPTH_MAX` (8) ï¿½ setlocal nesting limit
+- `P4_CONFIG_TREE_DEPTH_MAX` (8) ï¿½ tree recursion limit
+- `P4_CONFIG_PROMPT_TEMPLATE_BYTES` (64) ï¿½ prompt template buffer
+- `P4_CONFIG_PROMPT_DEFAULT_TEMPLATE` (`"PS $p$g "`) ï¿½ default prompt
+- `P4_CONFIG_KEY_QUEUE_DEPTH` (16) ï¿½ keypress queue depth
+- `P4_CONFIG_KEY_WAIT_TIMEOUT_MS` (30000) ï¿½ single keypress wait timeout
+- `P4_CONFIG_SD_DRIVE_LETTER` (`"A:"`) ï¿½ DOS drive letter for `prompt $n` and `tree`
 
 Changed values:
 - `P4_CONFIG_SORT_LINE_MAX` raised from 128 to 1024
@@ -8707,14 +8798,14 @@ Changed values:
 
 ## [0.17.0] - 2026-08-08
 
-### Changed — Phase B: Extract Modules
+### Changed ï¿½ Phase B: Extract Modules
 
 Roadmap Phase B is complete. The batch engine and the SD/storage layer are now separate
 components, and the DOS file commands live with the storage layer instead of inside the
 dispatcher. **No commands, options, output formats, error messages, or bounds were changed
 or removed.** The dispatcher verb table is identical to v0.16.0.
 
-- **Created `components/storage/`** — owns everything between the shell commands and the SD card:
+- **Created `components/storage/`** ï¿½ owns everything between the shell commands and the SD card:
   - `storage.c` / `storage.h`: guarded SD sessions (`shell_sd_begin()` / `shell_sd_end()`),
     persistent mount tracking, `storage_sd_is_mounted()`, the `sd eject` implementation,
     path resolution (`shell_sd_resolve_path()`, `shell_fs_resolve_path()`,
@@ -8725,11 +8816,11 @@ or removed.** The dispatcher verb table is identical to v0.16.0.
     the shared file helpers (`shell_fs_copy_file()`, `shell_list_directory_path()`,
     `shell_print_file_text()`), and the output-redirection writer
     (`shell_write_redirect_output()`)
-  - `storage_commands.c` / `storage_commands.h`: every DOS file command — `cd`/`chdir`, `dir`,
+  - `storage_commands.c` / `storage_commands.h`: every DOS file command ï¿½ `cd`/`chdir`, `dir`,
     `copy`, `move`, `del`/`erase`, `ren`/`rename`, `md`/`mkdir`, `rd`/`rmdir`, `type`, `write`,
     `append`, `touch`, `attrib`, `label`, `xcopy`, `find`, `more`, `tree`, `fc`, `sort`, and the
     `sd info|ls|stat|cat|eject` family
-- **Created `components/batch/`** — owns the whole `.bat` interpreter:
+- **Created `components/batch/`** ï¿½ owns the whole `.bat` interpreter:
   - Batch file execution with nesting (`shell_execute_batch_file()`), batch path resolution
     (`shell_resolve_batch_path()`), `:label` scanning, `goto`, `call :label`,
     `for %%var in (set) do command` loops, and the `|` pipe operator (`shell_execute_pipe()`)
@@ -8747,9 +8838,9 @@ or removed.** The dispatcher verb table is identical to v0.16.0.
   (`reboot`, `clear`/`cls`, `prompt`, `date`, `time`), and the family routing for
   `wifi`/`bluetooth`/`usb`/`c6ota`/`sd`.
 
-### Changed — Architecture
+### Changed ï¿½ Architecture
 
-- **Added `batch_command_ops_t`** — a registration table (mirroring `shell_command_ops_t`) that
+- **Added `batch_command_ops_t`** ï¿½ a registration table (mirroring `shell_command_ops_t`) that
   lets the batch engine re-enter the full command pipeline for nested contexts (`if` bodies,
   `for` bodies, pipe stages, batch lines) without depending on `command.h`. Registered by
   `command_init()`. The hook is NULL-checked, so nested execution degrades gracefully with an
@@ -8788,13 +8879,13 @@ or removed.** The dispatcher verb table is identical to v0.16.0.
 ## [0.16.0] - 2026-08-07
 
 ### Added
-- **Batch `for` loops** — Full `for %%var in (set) do command` implementation with variable expansion
-- **Batch `%0` and `%*` expansion** — `%0` expands to script name, `%*` expands to all arguments
-- **`:label` parsing** — Labels scanned at batch file load, stored in label table for `goto`/`call :label`
-- **`call :label`** — Jump to label within same batch file, with label table lookup
-- **`for` loop variable expansion** — `%%var` expanded per iteration in `do` command
+- **Batch `for` loops** ï¿½ Full `for %%var in (set) do command` implementation with variable expansion
+- **Batch `%0` and `%*` expansion** ï¿½ `%0` expands to script name, `%*` expands to all arguments
+- **`:label` parsing** ï¿½ Labels scanned at batch file load, stored in label table for `goto`/`call :label`
+- **`call :label`** ï¿½ Jump to label within same batch file, with label table lookup
+- **`for` loop variable expansion** ï¿½ `%%var` expanded per iteration in `do` command
 
-### Changed — Phase A: Command Implementation Consolidation
+### Changed ï¿½ Phase A: Command Implementation Consolidation
 
 Roadmap Phase A is complete. Every command implementation now lives in
 `components/command/command.c`, and `main.c` is reduced to boot orchestration
@@ -8810,44 +8901,44 @@ and LVGL event routing. No commands, options, or output formats were removed.
     `choice`, `setlocal`, `endlocal`, `prompt`, `date`, `time`, `exit`
   - Batch engine: batch file execution, label scanning, `for` loops, pipes, wildcard matching
   - SD session management, path resolution, environment variables, PATH, and current working directory
-- **Removed duplicate hardware command implementations from `main.c`** — the placeholder
+- **Removed duplicate hardware command implementations from `main.c`** ï¿½ the placeholder
   `cmd_battery()`/`cmd_volume()` stubs in `command.c` were replaced by the real ADC and
   ES8311 codec implementations, so `battery` and `volume` no longer depend on a bridge
-- **Removed duplicate `shell_execute_command_core()` and `shell_execute_command()` from `main.c`** —
+- **Removed duplicate `shell_execute_command_core()` and `shell_execute_command()` from `main.c`** ï¿½
   `command.c` owns the whole pipeline: variable expansion, redirection, dispatch, and the worker task
-- **Removed duplicate transcript functions from `main.c`** — `shell_transcript_append_text()`,
+- **Removed duplicate transcript functions from `main.c`** ï¿½ `shell_transcript_append_text()`,
   `shell_transcript_appendf()`, `shell_transcript_render()`, `shell_transcript_reset()`,
   `shell_schedule_transcript_appendf()`, the async staging buffer, and the UART console now exist
   only in `components/shell/shell.c`. The shell copies retain `main.c`'s richer behavior:
   half-buffer truncation with a `[history truncated]` marker, oldest-first async drop policy,
   and UART mirroring.
-- **Removed duplicate debug functions from `main.c`** — `shell_debug_log_push()`,
+- **Removed duplicate debug functions from `main.c`** ï¿½ `shell_debug_log_push()`,
   `shell_record_errorf()`, `shell_record_warningf()`, `shell_record_infof()`, and
   `shell_command_debug()` now exist only in `components/shell/shell.c`, keeping `main.c`'s
   transcript surfacing of errors and the Wi-Fi state/heap lines in `debug` output
-- **Removed all bridge trampolines** — the 18 `shell_bridge_*` functions and
+- **Removed all bridge trampolines** ï¿½ the 18 `shell_bridge_*` functions and
   `shell_execute_command_core_bridge()` are gone; `p4minishell.h` now declares only the
   c6ota, usb, and networking host callbacks that ESP-IDF requires in the app component
-- **Moved input line ownership to `components/shell/`** — added `shell_input_line_set_text()`,
+- **Moved input line ownership to `components/shell/`** ï¿½ added `shell_input_line_set_text()`,
   `shell_input_line_reset()`, `shell_extract_input_text()`, and `shell_input_line_repair_prompt()`
   so the prompt-prefix contract lives in one place
-- **Moved `Kconfig.projbuild` from `main/` to `components/networking/`** — that component is the
+- **Moved `Kconfig.projbuild` from `main/` to `components/networking/`** ï¿½ that component is the
   only consumer of `CONFIG_P4MINISHELL_WIFI_DEFAULT_SSID`/`_PASSWORD`, and the move lets the
   unit-test project resolve the symbols too
 
-### Changed — Architecture
+### Changed ï¿½ Architecture
 
 - **Removed the `command` ? `main` component dependency**, which was a layering inversion.
   Dependencies now flow one way: `command` ? `shell` ? (`ansi`, `display`, `windows`, `header`,
   `keyboard`, `clock`).
-- **Added `shell_command_ops_t`** — a registration table (mirroring `networking_host_ops_t`) that
+- **Added `shell_command_ops_t`** ï¿½ a registration table (mirroring `networking_host_ops_t`) that
   lets `shell.c` reach command-owned services (dispatch, current working directory, volume,
   SD mount state, battery telemetry) without including `command.h`. Registered by `command_init()`.
 - **`main.c` reduced from 5,990 to 397 lines** and now contains only `app_main()`, LVGL event
   callbacks, UI construction, and the c6ota/usb host bridges.
 - **Eliminated all 80+ forward declarations** from `main.c`.
 
-### Removed — Dead Code
+### Removed ï¿½ Dead Code
 
 - Legacy shell-local Wi-Fi runtime in `main.c` (`shell_wifi_runtime_init`, event handlers,
   `shell_wifi_connect_with_credentials`, `shell_wifi_run_diagnostic`, and helpers). All were
@@ -8862,17 +8953,17 @@ and LVGL event routing. No commands, options, or output formats were removed.
 
 ### Fixed
 
-- **Command history buffer overlap** — the full-buffer shift used `snprintf()` with overlapping
+- **Command history buffer overlap** ï¿½ the full-buffer shift used `snprintf()` with overlapping
   source and destination slots (undefined behavior, caught as `-Werror=restrict`). Now uses `memmove()`.
-- **Duplicate ANSI output on the serial console** — `shell_transcript_append_ansi()` wrote the
+- **Duplicate ANSI output on the serial console** ï¿½ `shell_transcript_append_ansi()` wrote the
   plain text and then the raw ANSI text to UART, printing every colored line twice. The plain
   append no longer mirrors to UART.
-- **Async transcript flush held a critical section across LVGL calls** — the staging buffer is now
+- **Async transcript flush held a critical section across LVGL calls** ï¿½ the staging buffer is now
   drained into a local copy before the append, and a re-queue check catches text staged during the flush.
-- **`shell_transcript_append_text()` silently dropped output when full** — it now truncates the
+- **`shell_transcript_append_text()` silently dropped output when full** ï¿½ it now truncates the
   oldest half and inserts a `[history truncated]` marker, matching the previous `main.c` behavior.
 
-### Added — Configuration
+### Added ï¿½ Configuration
 
 All newly extracted literals are `P4_CONFIG_*` macros in `p4minishell_config.h`, documented in
 `p4minishell_config.yaml`:
@@ -8882,7 +8973,7 @@ All newly extracted literals are `P4_CONFIG_*` macros in `p4minishell_config.h`,
 - `P4_CONFIG_PIPE_SETTLE_DELAY_MS`, `P4_CONFIG_REBOOT_DELAY_MS`
 - `P4_CONFIG_TEXT_LINE_BYTES`, `P4_CONFIG_LFN_BYTES`, `P4_CONFIG_VOLUME_DEFAULT_PCT`
 
-### Fixed — Unit Test Project
+### Fixed ï¿½ Unit Test Project
 
 The `test/` project did not configure. It now builds standalone:
 - Pinned `IDF_TARGET` to `esp32p4` (previously defaulted to `esp32` and failed on the toolchain)
@@ -8915,13 +9006,13 @@ The `test/` project did not configure. It now builds standalone:
 ## [0.15.1] - 2026-08-07
 
 ### Changed
-- **Merged duplicate command dispatch logic** — Consolidated command execution pipeline from `main.c` and `components/command/command.c` into a single path:
+- **Merged duplicate command dispatch logic** ï¿½ Consolidated command execution pipeline from `main.c` and `components/command/command.c` into a single path:
   - `main.c` now handles variable expansion (`%VAR%`, `%1`..`%9`) and output redirection (`>` / `>>`) before dispatch
   - `components/command/command.c` owns the unified command dispatcher (`shell_execute_command_core`) and worker task
   - Removed duplicate `shell_execute_command`, `shell_execute_command_core`, and `shell_command_task` from `main.c`
   - Added bridge function `shell_execute_command_core_bridge` for main.c to invoke command.c's dispatcher
-- **Updated all documentation** — All `.md` files, configs, and references updated to reflect ESP-IDF v5.5.5 and merged dispatch architecture
-- **Fixed deprecation warning** — Updated `esp_lvgl_port` DSI callback from deprecated `on_refresh_done` to `on_frame_buf_complete` for ESP-IDF 5.5.0+
+- **Updated all documentation** ï¿½ All `.md` files, configs, and references updated to reflect ESP-IDF v5.5.5 and merged dispatch architecture
+- **Fixed deprecation warning** ï¿½ Updated `esp_lvgl_port` DSI callback from deprecated `on_refresh_done` to `on_frame_buf_complete` for ESP-IDF 5.5.0+
 
 ### Updated
 - **ESP-IDF baseline**: v5.5.3 ? v5.5.5 across all configs, lock files, and documentation
@@ -8937,7 +9028,7 @@ The `test/` project did not configure. It now builds standalone:
 ## [0.15.0] - 2026-04-30
 
 ### Added
-- **Consistent ANSI color-coding across all components** — All text output (header, shell, commands, Wi-Fi, USB, OTA) now uses a unified color scheme:
+- **Consistent ANSI color-coding across all components** ï¿½ All text output (header, shell, commands, Wi-Fi, USB, OTA) now uses a unified color scheme:
   - `@C` (bright cyan) = subsystem labels and property keys (e.g., `wifi.state:`, `board.name:`)
   - `@G` (bright green) = success/connected/active status
   - `@r` (red) = errors and failures
@@ -8948,8 +9039,8 @@ The `test/` project did not configure. It now builds standalone:
   - `@k` (bright black/gray) = muted/secondary text
   - `@N` (bright cyan) = progress/info messages
   - `@R` = reset to default at end of every colored segment
-- **ANSI callback in networking_host_ops_t** — New `schedule_transcript_appendf_ansi` callback for colored output from components
-- **`networking_schedulef_ansi()` helper** — ANSI-capable formatted output for the networking module
+- **ANSI callback in networking_host_ops_t** ï¿½ New `schedule_transcript_appendf_ansi` callback for colored output from components
+- **`networking_schedulef_ansi()` helper** ï¿½ ANSI-capable formatted output for the networking module
 
 ### Changed
 - **networking.c**: All wifi_status, wifi_scan, wifi_diag, wifi_disconnect, wifi help, event handler, watchdog, and sysinfo output now uses ANSI color tokens
@@ -9095,7 +9186,7 @@ The `test/` project did not configure. It now builds standalone:
 - **NVS retry logic**: `networking_wifi_runtime_init()` now retries NVS init twice with erase recovery
 
 ### Changed
-- **networking.c**: Added `s_wifi_mutex`, `wifi_lock()`, `wifi_unlock()`, `wifi_try_claim_init_task()`, `wifi_release_init_task()`, `networking_wifi_auto_reconnect_task()` — all state transitions now mutex-protected
+- **networking.c**: Added `s_wifi_mutex`, `wifi_lock()`, `wifi_unlock()`, `wifi_try_claim_init_task()`, `wifi_release_init_task()`, `networking_wifi_auto_reconnect_task()` ï¿½ all state transitions now mutex-protected
 - **main.c**: Added `s_sd_persistent_mounted` flag; `shell_sd_header_is_mounted()` now uses persistent flag instead of `stat()`; `shell_sd_begin()`/`shell_sd_end()` update the flag
 
 ### Verified
@@ -9112,7 +9203,7 @@ The `test/` project did not configure. It now builds standalone:
 - **Status LED never settled on a board with no saved network (Tab5 keyboard
   LEDs)**: auto status started on the amber "connecting" pulse after Wi-Fi
   started, but when there was no known network, no sdkconfig default, and no
-  target, nothing ever moved it off that state — so the LED pulsed forever
+  target, nothing ever moved it off that state ï¿½ so the LED pulsed forever
   while the reference board (which always had a network to reach, then settled
   green) looked correct. The engine now has a persistent idle state: a station
   that is up with **no target to join** settles to a steady **green**
@@ -9185,7 +9276,7 @@ The `test/` project did not configure. It now builds standalone:
 
 ### Changed
 - **main.c shell_build_ui()**: Refactored from ~80 lines of manual LVGL widget creation to ~40 lines using window manager API
-- **main.c LVGL widgets**: Removed 5 static LVGL object variables — now owned by windows.c
+- **main.c LVGL widgets**: Removed 5 static LVGL object variables ï¿½ now owned by windows.c
 - **All hardcoded scaling values**: Moved to `P4_CONFIG_WINDOW_*` config macros
 
 ### Verified
@@ -9200,20 +9291,20 @@ The `test/` project did not configure. It now builds standalone:
 ### Added
 - **Display manager module**: New `components/display/` module that owns all display hardware state and operations
 - **display.h / display.c**: Central display controller with public API for rotation, resolution, refresh rate, brightness, and power management
-- **Rotation API**: `display_set_rotation()`, `display_get_rotation()`, `display_rotation_parse()`, `display_rotation_to_string()` — clean rotation control with automatic touch remapping
-- **Resolution API**: `display_get_resolution()`, `display_get_native_resolution()` — query current and native panel resolution accounting for rotation
-- **Refresh rate API**: `display_get_refresh_config()`, `display_set_refresh_rate()` — query and configure display refresh rate (dynamic rate change noted as not supported on current JD9165 panel)
-- **Brightness API**: `display_get_brightness()`, `display_set_brightness()` — backlight control through display manager
-- **Power management API**: `display_set_power_state()`, `display_sleep()`, `display_wake()` — display power state transitions (on/sleep/off)
-- **Display info API**: `display_get_info()`, `display_print_info()` — comprehensive display diagnostics for sysinfo
-- **UI rebuild callback**: `display_register_ui_rebuild_callback()` — allows the shell to register a callback for rotation-triggered UI rebuilds
+- **Rotation API**: `display_set_rotation()`, `display_get_rotation()`, `display_rotation_parse()`, `display_rotation_to_string()` ï¿½ clean rotation control with automatic touch remapping
+- **Resolution API**: `display_get_resolution()`, `display_get_native_resolution()` ï¿½ query current and native panel resolution accounting for rotation
+- **Refresh rate API**: `display_get_refresh_config()`, `display_set_refresh_rate()` ï¿½ query and configure display refresh rate (dynamic rate change noted as not supported on current JD9165 panel)
+- **Brightness API**: `display_get_brightness()`, `display_set_brightness()` ï¿½ backlight control through display manager
+- **Power management API**: `display_set_power_state()`, `display_sleep()`, `display_wake()` ï¿½ display power state transitions (on/sleep/off)
+- **Display info API**: `display_get_info()`, `display_print_info()` ï¿½ comprehensive display diagnostics for sysinfo
+- **UI rebuild callback**: `display_register_ui_rebuild_callback()` ï¿½ allows the shell to register a callback for rotation-triggered UI rebuilds
 - **Thread-safe state tracking**: All display state protected by critical sections; LVGL operations dispatched via `lv_async_call`
 - **Touch handle management**: Lazy touch handle acquisition cached internally; touch rotation remapping handled automatically on rotation change
 
 ### Changed
 - **main.c refactored**: All display-related code extracted to `components/display/`
 - **Removed from main.c**: `s_display`, `s_touch_handle`, `s_backlight_percent`, `s_display_rotation` static variables
-- **Removed from main.c**: `shell_get_touch_handle_from_bsp()`, `shell_update_touch_rotation()`, `shell_rotation_apply()`, `shell_async_rebuild_ui()` — now handled by display manager
+- **Removed from main.c**: `shell_get_touch_handle_from_bsp()`, `shell_update_touch_rotation()`, `shell_rotation_apply()`, `shell_async_rebuild_ui()` ï¿½ now handled by display manager
 - **shell_command_brightness()**: Now calls `display_set_brightness()` instead of `bsp_display_brightness_set()`
 - **shell_command_rotate()**: Now calls `display_rotation_parse()` + `display_set_rotation()` instead of inline LVGL rotation logic
 - **app_main()**: Display init now uses `display_init()` which wraps `bsp_display_start_with_config()`; UI rebuild callback registered via `display_register_ui_rebuild_callback()`

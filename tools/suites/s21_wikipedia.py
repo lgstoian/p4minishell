@@ -176,7 +176,11 @@ def _assert_page(c, dump):
 
 def _capture(dev, c):
     out = dev.run("screenshot sd:/WIKI/SHOT.BMP", timeout=90)
-    c.expect("screenshot saved on SD", "screenshot: saved", out)
+    # Success is header-only now (v1.4.3): the transcript must stay quiet, and
+    # the gate is the file itself, not a printed line.
+    c.check("screenshot success is not printed in the transcript",
+            "screenshot: saved" not in out and "screenshot: captured" not in out,
+            out[-300:])
     try:
         data = dev.pull_file("WIKI/SHOT.BMP")
         os.makedirs(SPIKES, exist_ok=True)

@@ -9,7 +9,11 @@ to the SD root (on PATH, so ``launch`` finds them), .APPINFO metadata goes to
 sd:/APPS.
 
 Usage:
-    python push_apps.py [COMx]
+    python push_apps.py [COMx] [--drive sd:|usb:|usbN:]
+
+The same payload runs from SD or a USB stick (v1.4.3): `--drive usb:` writes
+the identical bundle to usb:/APPS + usb:/WEB, and the shell's `launch`, path
+resolution and `%APPDRIVE%` make the apps behave identically there.
 """
 
 import os
@@ -31,7 +35,14 @@ APPS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def main():
-    port = sys.argv[1] if len(sys.argv) > 1 else "COM11"
+    args = sys.argv[1:]
+    drive = "sd:"
+    if "--drive" in args:
+        idx = args.index("--drive")
+        if idx + 1 < len(args):
+            drive = args[idx + 1].rstrip("/")
+            del args[idx:idx + 2]
+    port = args[0] if args else "COM11"
     ser = open_port(port, 115200, 1)
     ser.reset_input_buffer()
 
@@ -47,12 +58,13 @@ def main():
 
     ser.reset_input_buffer()
     for directory in (b"APPS", b"WEB"):
-        ser.write(b"md " + directory + b"\n")
+        ser.write(("md %s/" % drive).encode() + directory + b"\n")
         time.sleep(0.5)
         ser.read(ser.in_waiting or 1)
 
     ok = True
     for path, target in deploy_list():
+        target = "%s/%s" % (drive, target) if drive != "sd:" else target
         with open(path, "rb") as f:
             data = f.read()
         pushed = False

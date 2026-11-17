@@ -7,6 +7,7 @@ idf_component_register(
         shell
         windows
         ansi
+        emoji
         display
         gfx
         p4heap

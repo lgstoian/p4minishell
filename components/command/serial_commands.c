@@ -14,6 +14,7 @@
  */
 
 #include <errno.h>
+#include "header.h"
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -235,9 +236,8 @@ void shell_command_screenshot(int argc, char **argv)
         return;
     }
 
-    shell_print_ok("screenshot: captured %lux%lu RGB565 (%lu bytes)",
-                   (unsigned long)width, (unsigned long)height,
-                   (unsigned long)(draw_buf->data_size));
+    /* Success is quiet on the transcript: the header notification below is
+     * the user-facing acknowledgement (errors stay on the transcript). */
 
     if (to_sd) {
         /* Write to SD card file */
@@ -338,8 +338,14 @@ void shell_command_screenshot(int argc, char **argv)
             return;
         }
 
-        shell_print_ok("screenshot: saved %s (%lu bytes)", resolved,
-                       (unsigned long)(54 + (uint64_t)width * height * 3));
+        {
+            const char *name = strrchr(resolved, '/');
+            char message[96];
+
+            name = (name != NULL) ? name + 1 : resolved;
+            snprintf(message, sizeof(message), "screenshot saved: %.60s", name);
+            header_notify(HEADER_NOTIFY_INFO, message, 2000);
+        }
         free(pixel_data);
         free(draw_buf);
         batch_set_errorlevel(0);
@@ -351,7 +357,7 @@ void shell_command_screenshot(int argc, char **argv)
      * The host reads the magic, then the size, then exactly that many bytes. */
     {
         size_t total_size = 54 + (size_t)width * height * 3;
-        shell_print_muted("screenshot: streaming %lu bytes to serial...", (unsigned long)total_size);
+        header_notify(HEADER_NOTIFY_INFO, "screenshot: streaming to serial", 2000);
 
         /* Build the full BMP in memory first */
         uint8_t *bmp_data = p4heap_alloc_psram(total_size);
@@ -398,8 +404,12 @@ void shell_command_screenshot(int argc, char **argv)
 
         free(bmp_data);
 
-        shell_print_ok("screenshot: streamed %lu bytes to serial",
-                       (unsigned long)written);
+        if (written == 0) {
+            shell_print_error("screenshot: stream write failed");
+            batch_set_errorlevel(1);
+        } else {
+            header_notify(HEADER_NOTIFY_INFO, "screenshot streamed", 2000);
+        }
     }
 
     /* Free the pixel data and draw buffer structure */

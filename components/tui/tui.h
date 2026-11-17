@@ -165,6 +165,12 @@ uint32_t tui_table_parse_sel(const char *s, int n_data_rows);
 /** Set default fg/bg for next tui_putc/print (DOS COLOR). 16 = default. */
 void tui_set_default_color(uint8_t fg, uint8_t bg);
 
+/** Opt-in translucency of the whole TUI surface (0-255; 255 opaque).
+ *  Batch apps set it from their APPINFO `alpha=`; the shell restores 255
+ *  after the app returns. Applies live when TUI mode is up. */
+void tui_set_background_alpha(uint8_t alpha);
+uint8_t tui_get_background_alpha(void);
+
 /** Get default fg/bg. */
 void tui_get_default_color(uint8_t *fg_out, uint8_t *bg_out);
 
@@ -279,9 +285,18 @@ bool tui_page_get_cell(int col, int row, char *utf8_out, size_t out_size,
                        uint8_t *fg_out, uint8_t *bg_out, uint8_t *attr_out);
 void tui_page_clear(void);
 /** Paint a CSS background rectangle behind the cell grid (1-based cells).
- *  Real LVGL rectangles, so text and spaces stay untouched; no-op headless. */
-void tui_page_bg_rect(int col, int row, int w, int h, uint8_t bg);
+ *  Real LVGL rectangles, so text and spaces stay untouched; no-op headless.
+ *  @p alpha is 0-255 (255 opaque): CSS `rgba()` backgrounds keep their alpha
+ *  and `transparent` (0) draws nothing. */
+void tui_page_bg_rect(int col, int row, int w, int h, uint8_t bg,
+                      uint8_t alpha);
 void tui_page_render(void);
+
+/** Blit an image into the browser PAGE buffer as cell-ramp glyphs (1-based
+ *  cells). Shares the sampler with tui_draw_image(); used for emoji pack
+ *  glyphs so a page shows colour emoji on the next tui_page_render(). */
+void tui_page_draw_image(int col, int row, int w, int h,
+                         const gfx_surface_t *img);
 
 void tui_link_register(int x, int y, int w, int h, const char *url);
 bool tui_link_hit_test(int x, int y, const char **url_out);

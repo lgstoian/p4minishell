@@ -31,6 +31,7 @@ set(HOST_TEST_SRCS
     "${HOST_TEST_DIR}/test_svc.c"
     "${HOST_TEST_DIR}/test_usb_hid_layout.c"
     "${HOST_TEST_DIR}/test_css_color.c"
+    "${HOST_TEST_DIR}/test_emoji.c"
     "${HOST_TEST_DIR}/test_js_canvas.c"
     # Production sources that are hardware-free by construction (see each
     # file's @hard-rule): compiled directly so the lane exercises the real
@@ -79,6 +80,9 @@ set(HOST_TEST_SRCS
     # Canvas 2D rasterizer: pure, no QuickJS/LVGL. The JS bindings are
     # the thin layer on top; the drawing model is tested here.
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/jsengine/js_canvas.c"
+    # Emoji core: pure detection + the retro DOS fallback map (no LVGL,
+    # no storage). The pack loader and image decode are on-target only.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/font/emoji_core.c"
     # Host-lane backing for the two storage-backed spellchecker calls (the
     # lane has no SD card). Never part of the firmware image.
     "host_spell_storage.c"

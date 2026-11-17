@@ -84,7 +84,7 @@ Regenerate the committed manifests after changing tags or components:
 | Field | Value |
 |-------|-------|
 | Name | P4MiniShell |
-| Version | **v1.4.2** (`p4minishell_config.h` version macros) |
+| Version | **v1.4.3** (`p4minishell_config.h` version macros) |
 | Type | Embedded shell + application framework (palmtop / PDA / writerdeck) |
 | Target | ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO) |
 | Framework | ESP-IDF v5.5.5 |
@@ -581,6 +581,13 @@ tools use a webcam to observe the device; prefer them over guessing.
   (for example, an on-disk search index beside the existing scanners, a second
   BMP/JSON/CSV parser, a second command dispatcher, or a parallel asset/manifest
   checker). Duplication is a review-blocking defect, not a shortcut.
+  The rendered-UI concerns are the ones most tempting to fork, so they are
+  spelled out: **one** CSS colour/alpha parser (`components/markdown/css_color.c`,
+  canvas and DOM call it), **one** classic CGA/DOS palette + nearest-colour
+  (`ansi_cga_*`), **one** emoji core (`components/font/emoji_core.c`, with the
+  TUI/HTML and LVGL adapters consuming it), **one** image-to-cell sampler
+  (`tui_sample_image`, shared by `draw img` and emoji packs), and **one** HTML
+  page engine (the `browser` path; `html` is an entry point, not a renderer).
 - **Always fix any issue or bug that is found, even if it is unrelated to the
   current task.** A known failure is never acceptable to leave behind: never
   ignore or suppress it, never mark it "out of scope" and move on. Fix it in

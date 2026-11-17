@@ -366,6 +366,7 @@
       "provides": "the one command dispatcher + worker + built-in verbs",
       "requires": [
         "ansi",
+        "emoji",
         "applib",
         "archive",
         "audio",
@@ -501,6 +502,28 @@
       "status": "stable",
       "tests": [
         "test/main/test_editor.c"
+      ]
+    },
+    "emoji": {
+      "domain": "ui",
+      "header": "components/emoji/emoji.h",
+      "layer": "leaf",
+      "path": "components/emoji",
+      "provides": "emoji pack discovery, lookup and cell-image decode",
+      "requires": [
+        "font",
+        "gfx",
+        "imgdec",
+        "storage",
+        "p4heap",
+        "strutil"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_emoji.c"
       ]
     },
     "epub": {
@@ -800,6 +823,7 @@
         "storage",
         "strutil",
         "batch",
+        "p4heap",
         "PRIV_REQUIRES",
         "log"
       ],
@@ -1141,6 +1165,7 @@
         "shell",
         "windows",
         "ansi",
+        "emoji",
         "display",
         "gfx",
         "p4heap",

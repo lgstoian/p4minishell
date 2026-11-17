@@ -32,6 +32,7 @@ set(EXTRA_COMPONENT_DIRS
   components/db
   components/display
   components/editor
+  components/emoji
   components/event_bus
   components/font
   components/filetype

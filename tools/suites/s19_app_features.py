@@ -34,6 +34,8 @@ APPS = os.path.join(ROOT, "apps")
 FEATURE_MARKERS = [
     "[M-FEAT]",
     "[M-FEAT-LOCALE]",
+    "[M-FEAT-EMOJI]",
+    "[M-FEAT-HTML]",
     "[M-FEAT-JS]",
     "[M-FEAT-BROWSER]",
     "[M-FEAT-COOKIE]",

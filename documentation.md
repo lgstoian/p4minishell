@@ -10,7 +10,7 @@ code, see [`SDK.md`](SDK.md); for the command surface, see
 [`command.md`](command.md); for the API, see [`API.md`](API.md); for the
 working rules, see [`ai-context.md`](ai-context.md).
 
-- **Version:** v1.4.2 · **Target:** ESP32-P4 + ESP32-C6 · **ESP-IDF:** v5.5.5
+- **Version:** v1.4.3 · **Target:** ESP32-P4 + ESP32-C6 · **ESP-IDF:** v5.5.5
 - **UI:** LVGL 9.5.0 / esp_lvgl_port 2.9.0, JD9165 1024x600 + GT911 touch
 - **License:** MIT (see [`licence.md`](licence.md))
 
@@ -63,10 +63,12 @@ components/tui/                 TUI 80x25 cell buffer + draw primitives + tui_fl
 components/gfx/                 RGB565 raster core + BMP parse/decode/scale + 8x8 font + plot viewport
 components/imgdec/              PNG (LodePNG) + JPEG (TJpgDec) decode to scaled RGB565
 components/filetype/            Central extension -> kind registry
-components/markdown/            CommonMark-subset renderer (ANSI) + HTML serializer + print paginator + HTML reader + unified DOM renderer (TUI/ANSI)
+components/markdown/            CommonMark-subset renderer (ANSI) + HTML serializer + print paginator + HTML reader + unified DOM renderer (TUI/ANSI) + css_color.c (the one CSS RGBA parser)
 components/jsengine/            QuickJS engine + DOM/FS/shell bindings + Canvas 2D RGBA rasterizer (js_canvas) + HID-free HTML5 subset glue
 components/mcp/                 MCP (Model Context Protocol) JSON-RPC client (networking + json)
-components/font/                Font registry (roles/sizes/fallbacks), SD TTF loader, CJK attach, themes
+components/font/                Font registry (roles/sizes/fallbacks), SD TTF loader, CJK attach, themes,
+                                emoji_core.c (retro DOS map) + the LVGL glyph-remap fallback link
+components/emoji/               Third-party EMOJI/ packs: INI index + shared imgdec/gfx cell decode (PSRAM cache)
 components/db/                  Palm-OS-style SD record store (sd:/DBS/<name>.DB)
 components/alarm/               SD alarm store + single background checker (sd:/ALARMS)
 components/pim/                 Single vCard/iCalendar codecs + sync identity/newer-wins merge (pim_doc/parse/store/vcard/ical)
@@ -122,6 +124,54 @@ through `components/pim/`, and delivers to batch only through the registered
 esp-aes over small cache-aligned DMA buffers, with a self-contained software
 AES-256-GCM fallback (`components/swgcm/`) in the identical envelope format —
 no suite skip (bugs.md F23, fixed in v1.2.1).
+
+## Rendering: colour, alpha and emoji (v1.4.3)
+
+Three rules keep the visual surfaces consistent; each has exactly one
+implementation.
+
+**One colour parser.** `components/markdown/css_color.c` parses every colour
+string the firmware understands (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`,
+`rgb()`/`rgba()` with numbers or percentages, `transparent`, basic named
+colours) into `css_rgba_t`. HTML, the Canvas 2D context (`js_canvas_rgba_t`
+is an alias of `css_rgba_t`) and the TUI all call it. The classic CGA/DOS
+16-colour table and the nearest-colour search live in
+`ansi_cga_color()`/`ansi_cga_nearest()`; `tui_dos_color_rgb()` delegates, so
+a cell colour, a `gfx` pixel and a CSS colour quantise identically.
+
+**One alpha model.** A DOM node carries `fg_alpha`, `bg_alpha` and
+`opacity`; the cascade multiplies `opacity` down the subtree and
+`inherit_styles()` copies the colour alpha with the colour. `dom_render`
+threads the result through its sinks:
+
+- text: a cell holds one opaque DOS colour, so translucent text is
+  composited **once** over the effective background (`css_color_blend` +
+  `ansi_cga_nearest`) before the cell/ANSI sink sees it. TUI cells and ANSI
+  output therefore agree on what `rgba()` text looks like.
+- backgrounds: a CSS block background is a real LVGL rectangle behind the
+  cell label; its alpha becomes `bg_opa` (`tui_page_bg_rect(..., alpha)`).
+  `transparent` (alpha 0) draws no rectangle, so the page/surface behind
+  shows through. The default is opaque.
+- modals: `modal_surf_set_alpha(panel, scrim)` is the single runtime setting.
+  `launch` applies an app's APPINFO `alpha=`/`scrim=` for its lifetime (the
+  TUI surface uses `tui_set_background_alpha()`), then restores 255/0.
+
+**One emoji core.** `components/font/emoji_core.c` answers "is this emoji?"
+and "which retro DOS/CP437 glyph stands in?" with a curated table plus
+deterministic range defaults. Two adapters consume it:
+
+- TUI/HTML: `tui_print_at()` and the browser's `dom_render` hooks blit an
+  optional pack image (`components/emoji/`, decoded by `imgdec` and sampled
+  by the one cell-ramp sampler shared with `draw img`) or emit the retro
+  glyph. Zero-width modifiers (ZWJ, VS16, skin tones) are consumed.
+- LVGL: `font_get()` inserts a glyph-remapping font link between the role's
+  primary font and the FontAwesome fallback, so every label using the
+  registry gets the same retro glyph with no glyph data and no second table.
+
+Limits are deliberate and documented: single codepoints only (ZWJ
+sequences, flags and skin tones fall back to their components); colour pack
+glyphs render in the TUI/HTML page, while LVGL chrome uses the retro
+fallback. A malformed or missing pack is not an error.
 
 ## Configuration system
 
@@ -1636,6 +1686,15 @@ A new component under `components/` must be added to BOTH the root `CMakeLists.t
 - Password masking in transcript and command history
 - SD directory listings bounded to 128 entries
 - `sd cat` preview bounded to 8192 bytes
+- **PSRAM first for UI scratch (v1.4.3).** Non-DMA UI state belongs in the
+  32 MB PSRAM pool: emoji pack glyphs (4-entry PSRAM cache), browser image and
+  page caches, TUI page buffers, and the Natural Display layout grid (was an
+  81 KB internal `.bss`, now one PSRAM singleton; the valid path also leaked a
+  second copy per render, fixed). On the JC1060P470C build this took static
+  DIRAM from 396,950 bytes used / 48,442 free (89.1%) to 315,022 used /
+  130,370 free (70.7%), with the image size unchanged; internal DRAM stays
+  reserved for DMA descriptors, stacks, LVGL draw buffers and latency-critical
+  paths.
 
 ### Boot Scripting (components/boot)
 

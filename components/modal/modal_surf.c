@@ -57,15 +57,58 @@ static void surf_timeout_cb(TimerHandle_t timer)
     surf_request_close(eg);
 }
 
+/* Opt-in modal transparency (see modal_surf.h). The shell applies an app's
+ * APPINFO values before the app runs and restores 255/0 afterwards, so no
+ * surface needs its own copy of the setting. */
+static uint8_t s_panel_alpha = 255;
+static uint8_t s_scrim_alpha = 0;
+
+void modal_surf_set_alpha(uint8_t panel_alpha, uint8_t scrim_alpha)
+{
+    s_panel_alpha = panel_alpha;
+    s_scrim_alpha = scrim_alpha;
+}
+
+void modal_surf_get_alpha(uint8_t *panel_alpha, uint8_t *scrim_alpha)
+{
+    if (panel_alpha) *panel_alpha = s_panel_alpha;
+    if (scrim_alpha) *scrim_alpha = s_scrim_alpha;
+}
+
 static lv_obj_t *surf_create_container(lv_obj_t *parent)
 {
     lv_obj_t *c;
     lv_coord_t surface_h;
+    lv_coord_t surface_w;
 
     /* Every ready-made modal opens with the on-screen keyboard back in the
      * letters page, regardless of what page the shell left it on. (The editor
      * is deliberately not routed through this helper; it owns the Nav page.) */
     keyboard_set_mode(KEYBOARD_MODE_TEXT_LOWER);
+
+    surface_w = lv_obj_get_content_width(parent);
+    surface_h = lv_obj_get_content_height(parent);
+
+    /* Backdrop scrim: a black rectangle exactly under the panel, at the same
+     * content origin, so a translucent panel reveals a dimmed page rather than
+     * the raw transcript. IGNORE_LAYOUT keeps the parent's flex untouched. */
+    if (s_scrim_alpha > 0 && surface_w > 0 && surface_h > 0) {
+        lv_obj_t *scrim = lv_obj_create(parent);
+
+        if (scrim != NULL) {
+            lv_obj_remove_style_all(scrim);
+            lv_obj_set_size(scrim, surface_w, surface_h);
+            lv_obj_set_pos(scrim, 0, 0);
+            lv_obj_add_flag(scrim, LV_OBJ_FLAG_IGNORE_LAYOUT);
+            lv_obj_clear_flag(scrim, LV_OBJ_FLAG_SCROLLABLE |
+                                      LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_style_bg_color(scrim, lv_color_black(), 0);
+            lv_obj_set_style_bg_opa(scrim, (lv_opa_t)s_scrim_alpha, 0);
+            lv_obj_set_style_radius(scrim, 0, 0);
+            lv_obj_set_style_border_width(scrim, 0, 0);
+            lv_obj_set_style_pad_all(scrim, 0, 0);
+        }
+    }
 
     c = lv_obj_create(parent);
     lv_obj_set_width(c, LV_PCT(100));
@@ -80,6 +123,7 @@ static lv_obj_t *surf_create_container(lv_obj_t *parent)
     lv_obj_set_height(c, surface_h > 0 ? surface_h : LV_PCT(100));
     lv_obj_set_style_pad_all(c, 8, 0);
     lv_obj_set_style_bg_color(c, lv_color_hex(theme_current()->bg_transcript), 0);
+    lv_obj_set_style_bg_opa(c, (lv_opa_t)s_panel_alpha, 0);
     lv_obj_set_style_border_width(c, 1, 0);
     lv_obj_set_style_border_color(c, lv_color_hex(theme_current()->modal_panel_border), 0);
     lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);

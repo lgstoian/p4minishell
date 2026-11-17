@@ -5,6 +5,6 @@ idf_component_register(
     INCLUDE_DIRS "include"
     # calc.h/calc.c live in components/batch (there is no separate `calc`
     # component); the evaluator and natural-display renderer share them.
-    REQUIRES storage strutil batch
+    REQUIRES storage strutil batch p4heap
     PRIV_REQUIRES log
 )

@@ -63,6 +63,8 @@
 #include "c6ota.h"
 #include "tui.h"
 #include "tui_modal.h"
+#include "emoji_core.h"
+#include "emoji.h"
 #include "clock.h"
 #include "usb.h"
 #include "bsp/esp-bsp.h"
@@ -2307,6 +2309,13 @@ static void shell_launch_add(shell_launch_entry_t *table, int *count, const char
     if (storage_ini_file_get(appinfo, "title", title, sizeof(title)) != ESP_OK) {
         title[0] = '\0';
     }
+    if (title[0] == '\0') {
+        /* The app is installed on USB (v1.4.3): read its metadata there. */
+        snprintf(appinfo, sizeof(appinfo), "usb:/APPS/%s.APPINFO", table[*count].name);
+        if (storage_ini_file_get(appinfo, "title", title, sizeof(title)) != ESP_OK) {
+            title[0] = '\0';
+        }
+    }
     snprintf(table[*count].title, sizeof(table[*count].title), "%s", title);
     /* Hybrid shims advertise their kind; anything else stays unmarked. */
     table[*count].app_type[0] = '\0';
@@ -2417,6 +2426,14 @@ static int shell_launch_discover(shell_launch_entry_t *table)
     }
     if (count < P4_CONFIG_LAUNCH_MAX) {
         shell_launch_scan_pattern(table, &count, "sd:/APPS/*.cmd");
+    }
+    /* Apps installed on a USB stick are discoverable too: same pattern scan,
+     * only the root differs. `usb:/` resolves to the mounted slot. */
+    if (count < P4_CONFIG_LAUNCH_MAX) {
+        shell_launch_scan_pattern(table, &count, "usb:/APPS/*.bat");
+    }
+    if (count < P4_CONFIG_LAUNCH_MAX) {
+        shell_launch_scan_pattern(table, &count, "usb:/APPS/*.cmd");
     }
     return count;
 }
@@ -2661,6 +2678,111 @@ static void shell_command_startup(int argc, char **argv)
     batch_set_errorlevel(2);
 }
 
+/** Read one transparency override from an APPINFO file: 0-255, or a
+ *  0-100 percentage with a trailing '%'. Missing/invalid keeps @p fallback. */
+static uint8_t shell_appinfo_alpha(const char *path, const char *key,
+                                   uint8_t fallback)
+{
+    char value[16];
+    char *end = NULL;
+    long amount;
+
+    if (storage_ini_file_get(path, key, value, sizeof(value)) != ESP_OK) {
+        return fallback;
+    }
+    amount = strtol(value, &end, 10);
+    if (end == value) {
+        return fallback;
+    }
+    if (*end == '%') {
+        amount = amount * 255 / 100;
+    }
+    if (amount < 0) amount = 0;
+    if (amount > 255) amount = 255;
+    return (uint8_t)amount;
+}
+
+/** Apply `alpha=`/`scrim=` from @p app's APPINFO to the shared TUI surface and
+ *  the modal scrim. Apps without those keys keep the opaque defaults. The app
+ *  name may carry a directory or an extension; the manifest is always looked
+ *  up as `sd:/APPS/<stem>.APPINFO`, then `usb:/APPS/<stem>.APPINFO`. */
+static void shell_apply_app_transparency(const char *app)
+{
+    char name[P4_CONFIG_APP_NAME_BYTES];
+    char info[SHELL_SD_PATH_BYTES];
+    size_t len = 0;
+    const char *base;
+    uint8_t alpha;
+    uint8_t scrim;
+
+    if (app == NULL || app[0] == '\0') {
+        return;
+    }
+    base = strrchr(app, '/');
+    base = (base != NULL) ? base + 1 : app;
+    while (base[len] != '\0' && base[len] != '.' &&
+           len + 1 < sizeof(name)) {
+        name[len] = base[len];
+        len++;
+    }
+    name[len] = '\0';
+    if (name[0] == '\0') {
+        return;
+    }
+    snprintf(info, sizeof(info), "sd:/APPS/%s.APPINFO", name);
+    alpha = shell_appinfo_alpha(info, "alpha", (uint8_t)255);
+    scrim = shell_appinfo_alpha(info, "scrim", (uint8_t)0);
+    if (alpha == 255 && scrim == 0) {
+        /* No SD manifest (or no keys): the app may be installed on USB. */
+        snprintf(info, sizeof(info), "usb:/APPS/%s.APPINFO", name);
+        alpha = shell_appinfo_alpha(info, "alpha", (uint8_t)255);
+        scrim = shell_appinfo_alpha(info, "scrim", (uint8_t)0);
+    }
+    tui_set_background_alpha(alpha);
+    modal_surf_set_alpha(alpha, scrim);
+}
+
+/** Restore the default opaque surfaces after an app returns. */
+static void shell_clear_app_transparency(void)
+{
+    tui_set_background_alpha(255);
+    modal_surf_set_alpha(255, 0);
+}
+
+/** `emoji [status|reload]` - report the retro DOS fallback and the loaded
+ *  third-party pack, or rescan the volumes. Read-only apart from the reload;
+ *  never fails a batch (ERRORLEVEL 0). */
+static void shell_command_emoji(int argc, char **argv)
+{
+    char sample[5];
+    const char *source;
+
+    if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "reload")) {
+        emoji_pack_reload();
+    } else if (argc > 1 && !shell_text_equals_ignore_case(argv[1], "status")) {
+        shell_print_usage("Usage: emoji [status | reload]");
+        batch_set_errorlevel(2);
+        return;
+    }
+    emoji_pack_init();
+    source = emoji_pack_source();
+    shell_transcript_appendf_ansi(SH_LBL "emoji:" SH_RST " retro DOS fallback active"
+                                  SH_MUTE " (MIT, built in)\n" SH_RST);
+    if (source[0] != '\0' && emoji_pack_count() > 0) {
+        shell_transcript_appendf_ansi(SH_LBL "emoji.pack:" SH_RST " " SH_NUM "%d"
+                                      SH_RST " glyph(s) from " SH_PATH "%s:/EMOJI/EMOJI.INI"
+                                      SH_RST "\n", emoji_pack_count(), source);
+    } else {
+        shell_transcript_appendf_ansi(SH_LBL "emoji.pack:" SH_RST " none "
+                                      SH_MUTE "(add EMOJI/EMOJI.INI to SD or USB)\n"
+                                      SH_RST);
+    }
+    emoji_fallback_utf8(0x1F600, sample);
+    shell_transcript_appendf_ansi(SH_LBL "emoji.sample:" SH_RST " U+1F600 -> U+%04X %s\n",
+                                  (unsigned)emoji_dos_glyph(0x1F600), sample);
+    batch_set_errorlevel(0);
+}
+
 static void shell_command_launch(int argc, char **argv)
 {
     shell_launch_entry_t *table;
@@ -2696,7 +2818,11 @@ static void shell_command_launch(int argc, char **argv)
 
                 ver[0] = '\0';
                 snprintf(verel, sizeof(verel), "sd:/APPS/%s.APPINFO", table[i].name);
-                (void)storage_ini_file_get(verel, "version", ver, sizeof(ver));
+                if (storage_ini_file_get(verel, "version", ver, sizeof(ver)) != ESP_OK) {
+                    snprintf(verel, sizeof(verel), "usb:/APPS/%s.APPINFO",
+                             table[i].name);
+                    (void)storage_ini_file_get(verel, "version", ver, sizeof(ver));
+                }
                 shell_transcript_appendf(" v%s", ver[0] ? ver : "-");
             }
             shell_transcript_appendf("\n");
@@ -2753,7 +2879,9 @@ static void shell_command_launch(int argc, char **argv)
             }
         }
         if (found && batch_path != NULL) {
+            shell_apply_app_transparency(argv[1]);
             shell_execute_batch_file(batch_path, argc - 2, &argv[2]);
+            shell_clear_app_transparency();
             free(batch_path);
             free(table);
             return;
@@ -2832,8 +2960,10 @@ static void shell_command_launch(int argc, char **argv)
             char batch_path[SHELL_SD_PATH_BYTES];
 
             snprintf(batch_path, sizeof(batch_path), "%s", table[sel - 1].path);
+            shell_apply_app_transparency(table[sel - 1].name);
             free(table);
             shell_execute_batch_file(batch_path, 0, NULL);
+            shell_clear_app_transparency();
             return;
         }
     }
@@ -5739,6 +5869,16 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "locate")) {
         shell_command_locate(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "emoji")) {
+        shell_command_emoji(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "html")) {
+        (void)shell_command_html(argc, argv);
         return true;
     }
 

@@ -36,6 +36,9 @@ typedef struct dom_node {
     dom_display_t display;
     uint8_t fg;
     uint8_t bg;
+    uint8_t fg_alpha;     /* 0-255; 255 opaque. Honoured when the node sets fg. */
+    uint8_t bg_alpha;     /* 0-255; 0 = `transparent`. Honoured when bg_set. */
+    uint8_t opacity;      /* CSS `opacity`, multiplies the whole subtree. */
     bool bg_set;         /* an explicit CSS background colour (not inherited) */
     uint8_t align;        /* 0 left, 1 center, 2 right */
     uint8_t font_scale;   /* 1 normal, 2 heading/large */

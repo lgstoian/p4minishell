@@ -120,7 +120,7 @@ echo [M-FILES-NOTES]
 draw clear screen
 draw box 1 1 80 3 single
 draw text 35 2 "NOTE PAD" 14
-draw text 5 5 "Notes stored in sd:/NOTES"
+draw text 5 5 "Notes stored in %APPDRIVE%/NOTES"
 if not exist NOTES md NOTES > NUL
 list "Notes" "New note" "List notes" "View note" "Browse notes" "Back"
 if errorlevel 255 goto :back

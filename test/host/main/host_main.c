@@ -268,6 +268,10 @@ extern void test_dom_render_canvas_fallback(void);
 extern void test_dom_render_canvas_bitmap(void);
 extern void test_dom_css_background_properties(void);
 extern void test_dom_render_fill_bg_callback(void);
+extern void test_dom_background_alpha(void);
+extern void test_dom_transparent_skips_fill(void);
+extern void test_dom_opacity_multiplies_fill(void);
+extern void test_dom_render_text_alpha_composited(void);
 extern void test_dom_raw_text_script_style(void);
 extern void test_css_comments_are_skipped(void);
 
@@ -352,6 +356,13 @@ extern void test_css_color_transparent_and_named(void);
 extern void test_css_color_dos_quantisation(void);
 extern void test_css_color_blend(void);
 extern void test_css_color_is_the_canvas_parser(void);
+
+/* --- test_emoji.c -------------------------------------------- */
+extern void test_emoji_detects_ranges(void);
+extern void test_emoji_detects_modifiers(void);
+extern void test_emoji_fallback_map(void);
+extern void test_emoji_utf8_round_trip(void);
+extern void test_emoji_fallback_is_valid_utf8(void);
 
 /* --- test_js_canvas.c ---------------------------------------- */
 extern void test_js_canvas_fill_rect_and_clear(void);
@@ -605,6 +616,10 @@ void app_main(void)
     RUN_TEST(test_dom_render_canvas_bitmap);
     RUN_TEST(test_dom_css_background_properties);
     RUN_TEST(test_dom_render_fill_bg_callback);
+    RUN_TEST(test_dom_background_alpha);
+    RUN_TEST(test_dom_transparent_skips_fill);
+    RUN_TEST(test_dom_opacity_multiplies_fill);
+    RUN_TEST(test_dom_render_text_alpha_composited);
     RUN_TEST(test_dom_raw_text_script_style);
     RUN_TEST(test_css_comments_are_skipped);
 
@@ -689,6 +704,13 @@ void app_main(void)
     RUN_TEST(test_css_color_dos_quantisation);
     RUN_TEST(test_css_color_blend);
     RUN_TEST(test_css_color_is_the_canvas_parser);
+
+    /* test_emoji.c */
+    RUN_TEST(test_emoji_detects_ranges);
+    RUN_TEST(test_emoji_detects_modifiers);
+    RUN_TEST(test_emoji_fallback_map);
+    RUN_TEST(test_emoji_utf8_round_trip);
+    RUN_TEST(test_emoji_fallback_is_valid_utf8);
 
     /* test_js_canvas.c */
     RUN_TEST(test_js_canvas_fill_rect_and_clear);

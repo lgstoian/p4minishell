@@ -12,6 +12,8 @@
 #include "p4heap.h"
 #include "gfx.h"
 #include "imgdec.h"
+#include "emoji_core.h"
+#include "emoji.h"
 #include "browser.h"
 #include "clock.h"
 #include "command.h"
@@ -621,10 +623,63 @@ static bool browser_load_canvas(void *ctx, dom_node_t *node, dom_image_t *out)
 
 /** CSS background fill: a real LVGL rectangle behind the cell label, so the
  *  text (including spaces) is untouched and the colour shows through. */
-static void browser_fill_bg(void *ctx, int col, int row, int w, int h, uint8_t bg)
+/* Emoji: the browser is the only layer that may see both the page grid and
+ * the emoji core (markdown cannot require emoji: storage already requires
+ * markdown). Pack images blit cells; everything else falls back to the retro
+ * DOS glyph, so a page never shows tofu. */
+static bool browser_put_emoji(void *ctx, int col, int row, const char *seq,
+                              size_t len, int *cells_out)
+{
+    uint32_t cp = 0;
+    int cells = 1;
+    const gfx_surface_t *img;
+
+    (void)ctx;
+    (void)len;
+    if (emoji_utf8_decode(seq, &cp) == 0) {
+        return false;
+    }
+    if (emoji_is_modifier(cp)) {
+        *cells_out = 0;
+        return true;   /* ZWJ / skin tone: consume, draw nothing */
+    }
+    img = emoji_pack_image(cp, &cells);
+    if (img == NULL) {
+        return false;
+    }
+    tui_page_draw_image(col, row, cells, 1, img);
+    *cells_out = cells;
+    return true;
+}
+
+static const char *browser_emoji_fallback(void *ctx, const char *seq,
+                                          size_t len, char buf[5])
+{
+    uint32_t cp = 0;
+
+    (void)ctx;
+    (void)len;
+    if (emoji_utf8_decode(seq, &cp) == 0) {
+        return NULL;
+    }
+    if (emoji_is_modifier(cp)) {
+        buf[0] = '\0';
+        return buf;   /* draw nothing */
+    }
+    if (!emoji_is_codepoint(cp)) {
+        return NULL;
+    }
+    if (emoji_fallback_utf8(cp, buf) == 0) {
+        return NULL;
+    }
+    return buf;
+}
+
+static void browser_fill_bg(void *ctx, int col, int row, int w, int h,
+                            uint8_t bg, uint8_t alpha)
 {
     (void)ctx;
-    tui_page_bg_rect(col, row, w, h, bg);
+    tui_page_bg_rect(col, row, w, h, bg, alpha);
 }
 
 static void browser_page_present(void)
@@ -654,11 +709,20 @@ static void browser_page_render(void)
     ops.load_image = browser_load_image;
     ops.load_canvas = browser_load_canvas;
     ops.fill_bg = browser_fill_bg;
+    ops.put_emoji = browser_put_emoji;
+    ops.emoji_fallback = browser_emoji_fallback;
     ops.load_background = browser_load_image;
     ops.ctx = s_page_base;
     ops.cols = P4_CONFIG_TUI_COLS;
     ops.rows = P4_CONFIG_TUI_PAGE_ROWS;
     ops.tui = true;
+    {
+        uint8_t base_fg = 16;
+        uint8_t base_bg = 0;
+
+        tui_get_default_color(&base_fg, &base_bg);
+        ops.base_bg = (uint8_t)(base_bg & 15);
+    }
     ops.base_url = s_page_base;
     dom_render_tree(s_page_tree, &ops);
     browser_page_present();
@@ -1094,6 +1158,19 @@ int shell_command_browser(int argc, char **argv) {
             return 1;
         }
         shell_print_usage("browser bookmark [add|del|list]");
+        return 2;
+    }
+    return browser_load_url(argv[1]);
+}
+
+/* `html <file|url>` - the batch/native entry point to the page engine. It is
+ * non-blocking exactly like `browser`: the page stays up until the next
+ * command or `appmode` exit, so a script can present a standards-rendered page
+ * with one line and no second renderer. */
+int shell_command_html(int argc, char **argv)
+{
+    if (argc < 2 || argv[1][0] == '/') {
+        shell_print_usage("Usage: html <file|url>  (same engine as `browser`)");
         return 2;
     }
     return browser_load_url(argv[1]);

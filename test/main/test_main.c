@@ -531,6 +531,10 @@ extern void test_dom_render_canvas_fallback(void);
 extern void test_dom_render_canvas_bitmap(void);
 extern void test_dom_css_background_properties(void);
 extern void test_dom_render_fill_bg_callback(void);
+extern void test_dom_background_alpha(void);
+extern void test_dom_transparent_skips_fill(void);
+extern void test_dom_opacity_multiplies_fill(void);
+extern void test_dom_render_text_alpha_composited(void);
 extern void test_dom_render_main_focus(void);
 extern void test_dom_render_depth_cap_keeps_text(void);
 extern void test_filetype_batch(void);
@@ -681,6 +685,11 @@ extern void test_css_color_transparent_and_named(void);
 extern void test_css_color_dos_quantisation(void);
 extern void test_css_color_blend(void);
 extern void test_css_color_is_the_canvas_parser(void);
+extern void test_emoji_detects_ranges(void);
+extern void test_emoji_detects_modifiers(void);
+extern void test_emoji_fallback_map(void);
+extern void test_emoji_utf8_round_trip(void);
+extern void test_emoji_fallback_is_valid_utf8(void);
 extern void test_theme_registry(void);
 extern void test_theme_lookup(void);
 extern void test_theme_set_and_active(void);
@@ -1396,6 +1405,10 @@ void app_main(void)
     RUN_TEST(test_dom_render_canvas_bitmap);
     RUN_TEST(test_dom_css_background_properties);
     RUN_TEST(test_dom_render_fill_bg_callback);
+    RUN_TEST(test_dom_background_alpha);
+    RUN_TEST(test_dom_transparent_skips_fill);
+    RUN_TEST(test_dom_opacity_multiplies_fill);
+    RUN_TEST(test_dom_render_text_alpha_composited);
     RUN_TEST(test_dom_render_main_focus);
     RUN_TEST(test_dom_render_depth_cap_keeps_text);
     UNITY_END();
@@ -1584,6 +1597,11 @@ void app_main(void)
     RUN_TEST(test_css_color_dos_quantisation);
     RUN_TEST(test_css_color_blend);
     RUN_TEST(test_css_color_is_the_canvas_parser);
+    RUN_TEST(test_emoji_detects_ranges);
+    RUN_TEST(test_emoji_detects_modifiers);
+    RUN_TEST(test_emoji_fallback_map);
+    RUN_TEST(test_emoji_utf8_round_trip);
+    RUN_TEST(test_emoji_fallback_is_valid_utf8);
     UNITY_END();
 
     /* Theme registry (font component). */

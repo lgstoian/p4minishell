@@ -17,6 +17,7 @@ in P4MiniShell. Read it, then follow the pointers. It is the companion to
 | Find a module and what governs it | [`BREADCRUMBS.md`](BREADCRUMBS.md) + `breadcrumbs.json` |
 | Change a command | [`command.md`](command.md) |
 | Change the batch language | [`batch.md`](batch.md) |
+| Change emoji, colour, alpha or a TUI/HTML surface | [`documentation.md`](documentation.md) §"Rendering: colour, alpha and emoji" |
 | Add/change a native app | [`ABI.md`](ABI.md), [`SDK.md`](SDK.md), [`docs/native_packaging.md`](docs/native_packaging.md) |
 | Touch hardware (pins, buses, display, audio, power) | [`schematics.md`](schematics.md) first |
 | Add a board | [`PORTING.md`](PORTING.md) |

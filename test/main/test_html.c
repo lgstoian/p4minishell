@@ -183,7 +183,26 @@ typedef struct {
     size_t size;
     int bg_calls;
     int bg_last;
+    int bg_alpha;
 } ansi_sink_t;
+
+/** Records the foreground of every TUI cell the renderer emits, in order. */
+typedef struct {
+    uint8_t *fg;
+    int count;
+    int cap;
+} cell_probe_t;
+
+static void probe_put_cell(void *ctx, int col, int row, const char *utf8,
+                           uint8_t fg, uint8_t bg, uint8_t attr)
+{
+    cell_probe_t *probe = (cell_probe_t *)ctx;
+
+    (void)col; (void)row; (void)utf8; (void)bg; (void)attr;
+    if (probe->count < probe->cap) {
+        probe->fg[probe->count++] = fg;
+    }
+}
 
 static void sink_append_ansi(void *ctx, const char *text)
 {
@@ -207,7 +226,7 @@ void test_dom_render_main_focus(void)
         "</body></html>");
     char ansi[2048] = { 0 };
     char plain[2048];
-    ansi_sink_t sink = { ansi, sizeof(ansi) };
+    ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0, 0 };
     dom_render_ops_t ops = {
         .put_ansi = sink_append_ansi,
         .ctx = &sink,
@@ -248,7 +267,7 @@ void test_dom_render_depth_cap_keeps_text(void)
     size_t used = 0;
     char ansi[2048] = { 0 };
     char plain[2048];
-    ansi_sink_t sink = { ansi, sizeof(ansi) };
+    ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0, 0 };
     dom_render_ops_t ops = {
         .put_ansi = sink_append_ansi,
         .ctx = &sink,
@@ -295,13 +314,15 @@ void test_dom_canvas_attributes(void)
     dom_free(tree);
 }
 
-static void sink_record_fill(void *ctx, int col, int row, int w, int h, uint8_t bg)
+static void sink_record_fill(void *ctx, int col, int row, int w, int h,
+                             uint8_t bg, uint8_t alpha)
 {
     ansi_sink_t *sink = (ansi_sink_t *)ctx;
 
     (void)col; (void)row; (void)w; (void)h;
     sink->bg_calls++;
     sink->bg_last = bg;
+    sink->bg_alpha = alpha;
 }
 
 static bool sink_load_canvas(void *ctx, dom_node_t *node, dom_image_t *out)
@@ -324,7 +345,7 @@ void test_dom_render_canvas_fallback(void)
         "<p>fallback text</p></canvas></body></html>");
     char ansi[1024] = { 0 };
     char plain[1024];
-    ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0 };
+    ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0, 0 };
     dom_render_ops_t ops = {
         .put_ansi = sink_append_ansi,
         .ctx = &sink,
@@ -349,7 +370,7 @@ void test_dom_render_canvas_bitmap(void)
         "<p>fallback text</p></canvas></body></html>");
     char ansi[1024] = { 0 };
     char plain[1024];
-    ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0 };
+    ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0, 0 };
     dom_render_ops_t ops = {
         .put_ansi = sink_append_ansi,
         .load_canvas = sink_load_canvas,
@@ -393,7 +414,7 @@ void test_dom_render_fill_bg_callback(void)
     dom_node_t *node;
     char ansi[1024] = { 0 };
     char plain[1024];
-    ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0 };
+    ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0, 0 };
     dom_render_ops_t ops = {
         .put_ansi = sink_append_ansi,
         .fill_bg = sink_record_fill,
@@ -412,6 +433,140 @@ void test_dom_render_fill_bg_callback(void)
     markdown_strip_ansi(ansi, plain, sizeof(plain));
     TEST_ASSERT_GREATER_THAN_INT(0, sink.bg_calls);
     TEST_ASSERT_EQUAL_INT(4, sink.bg_last);
+}
+
+/** CSS Color alpha reaches the DOM: `rgba()` keeps its alpha and
+ *  `transparent` is an explicit, fully transparent background. */
+void test_dom_background_alpha(void)
+{
+    dom_tree_t *tree = dom_parse(
+        "<html><body><div id=\"d\">x</div></body></html>");
+    dom_node_t *node;
+
+    TEST_ASSERT_NOT_NULL(tree);
+    node = dom_find_by_id(tree, "d");
+    TEST_ASSERT_NOT_NULL(node);
+
+    dom_set_style(node, "background-color", "rgba(0, 0, 0, 0.5)");
+    TEST_ASSERT_TRUE(node->bg_set);
+    TEST_ASSERT_EQUAL_UINT8(0, node->bg);
+    TEST_ASSERT_UINT8_WITHIN(2, 128, node->bg_alpha);
+
+    dom_set_style(node, "background-color", "transparent");
+    TEST_ASSERT_TRUE(node->bg_set);
+    TEST_ASSERT_EQUAL_UINT8(16, node->bg);   /* no DOS colour */
+    TEST_ASSERT_EQUAL_UINT8(0, node->bg_alpha);
+
+    dom_set_style(node, "color", "rgba(255, 255, 255, 0.25)");
+    TEST_ASSERT_EQUAL_UINT8(15, node->fg);
+    TEST_ASSERT_UINT8_WITHIN(2, 64, node->fg_alpha);
+
+    dom_free(tree);
+}
+
+/** `transparent` draws no rectangle at all, so the page behind shows. */
+void test_dom_transparent_skips_fill(void)
+{
+    dom_tree_t *tree = dom_parse(
+        "<html><body><div id=\"d\">x</div></body></html>");
+    dom_node_t *node;
+    char ansi[1024] = { 0 };
+    ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0, 0 };
+    dom_render_ops_t ops = {
+        .put_ansi = sink_append_ansi,
+        .fill_bg = sink_record_fill,
+        .ctx = &sink,
+        .cols = 80,
+        .rows = 25,
+        .tui = false,
+    };
+
+    TEST_ASSERT_NOT_NULL(tree);
+    node = dom_find_by_id(tree, "d");
+    TEST_ASSERT_NOT_NULL(node);
+    dom_set_style(node, "background-color", "transparent");
+    dom_render_tree(tree, &ops);
+    dom_free(tree);
+    TEST_ASSERT_EQUAL_INT(0, sink.bg_calls);
+}
+
+/** `opacity` multiplies the background alpha of the subtree. */
+void test_dom_opacity_multiplies_fill(void)
+{
+    dom_tree_t *tree = dom_parse(
+        "<html><body><div id=\"d\">x</div></body></html>");
+    dom_node_t *node;
+    char ansi[1024] = { 0 };
+    ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0, 0 };
+    dom_render_ops_t ops = {
+        .put_ansi = sink_append_ansi,
+        .fill_bg = sink_record_fill,
+        .ctx = &sink,
+        .cols = 80,
+        .rows = 25,
+        .tui = false,
+    };
+
+    TEST_ASSERT_NOT_NULL(tree);
+    node = dom_find_by_id(tree, "d");
+    TEST_ASSERT_NOT_NULL(node);
+    dom_set_style(node, "background-color", "#aa0000");
+    dom_set_style(node, "opacity", "0.5");
+    TEST_ASSERT_UINT8_WITHIN(2, 128, node->opacity);
+    dom_render_tree(tree, &ops);
+    dom_free(tree);
+    TEST_ASSERT_GREATER_THAN_INT(0, sink.bg_calls);
+    TEST_ASSERT_EQUAL_INT(4, sink.bg_last);
+    TEST_ASSERT_UINT8_WITHIN(2, 128, (uint8_t)sink.bg_alpha);
+}
+
+/** Translucent text is composited to one opaque DOS cell colour: opaque text
+ *  keeps its exact colour, translucent text does not. */
+void test_dom_render_text_alpha_composited(void)
+{
+    static uint8_t cells_fg[256];
+    cell_probe_t probe = { cells_fg, 0, 256 };
+    dom_tree_t *tree = dom_parse(
+        "<html><body><p><span style=\"color:#ffffff\">A</span>"
+        "<span style=\"color:rgba(255,255,255,0.4)\">B</span></p>"
+        "</body></html>");
+    dom_render_ops_t ops = {
+        .put_cell = probe_put_cell,
+        .ctx = &probe,
+        .cols = 80,
+        .rows = 25,
+        .tui = true,
+        .base_bg = 0,
+    };
+
+    TEST_ASSERT_NOT_NULL(tree);
+    {
+        /* An empty ruleset still runs the inline-style pass (that is how the
+         * browser computes styles; inline declarations are applied there). */
+        css_ruleset_t no_rules = { 0 };
+
+        css_compute_styles(tree, &no_rules);
+    }
+    dom_render_tree(tree, &ops);
+    dom_free(tree);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT(2, probe.count);
+    /* Find the opaque-white glyph cell, then the cell after it: the 40% white
+     * must land on a dimmer DOS colour, never the opaque white and never the
+     * invisible/black cell. */
+    {
+        int white = -1;
+
+        for (int i = 0; i < probe.count; i++) {
+            if (cells_fg[i] == 15) {
+                white = i;
+                break;
+            }
+        }
+        TEST_ASSERT_GREATER_OR_EQUAL_INT(0, white);
+        TEST_ASSERT_LESS_THAN_INT(probe.count, white + 1);
+        TEST_ASSERT_NOT_EQUAL_UINT8(15, cells_fg[white + 1]);
+        TEST_ASSERT_NOT_EQUAL_UINT8(0, cells_fg[white + 1]);
+    }
 }
 
 /** <script>/<style> are raw text: '<' inside JS/CSS is not a tag. */

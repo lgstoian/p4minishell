@@ -7,7 +7,7 @@
 > for architecture see [`documentation.md`](documentation.md); for the
 > step-by-step tutorial see [`tutorial_batch.md`](tutorial_batch.md).
 
-- **Version:** v1.4.2 · **Line endings:** CRLF or LF · **Encoding:** UTF-8
+- **Version:** v1.4.3 · **Line endings:** CRLF or LF · **Encoding:** UTF-8
   (FATFS long filenames are UTF-8) · **Size:** ≤128 KB runs RAM-resident
   (`P4_CONFIG_BATCH_FILE_MAX_BYTES`); larger files stream from SD with
   identical semantics.
@@ -25,11 +25,18 @@ lazily-allocated job-private overlay (freed at job exit), and its `himem`
 blocks are owner-tracked, quota-capped, and freed at exit — so a background
 `set`/alloc never leaks into the foreground (no TSRs). Aliases stay global.
 
-**Discovery.** A file becomes an app by living on `PATH` (default `sd:/`) or
-under `sd:/APPS`, with an optional `sd:/APPS/<NAME>.APPINFO` metadata file.
-`launch` lists discovered apps (never shadowing a built-in); `launch <name>`
-runs one. The boot `LAUNCH_APP=` CONFIG.SYS directive can auto-launch after
-`AUTOEXEC.BAT`.
+**Discovery.** A file becomes an app by living on `PATH` (default `sd:/`),
+under `sd:/APPS`, or under `usb:/APPS`, with an optional
+`<drive>:/APPS/<NAME>.APPINFO` metadata file. `launch` lists discovered apps
+(never shadowing a built-in); `launch <name>` runs one. The boot
+`LAUNCH_APP=` CONFIG.SYS directive can auto-launch after `AUTOEXEC.BAT`.
+
+**Drive-aware paths (v1.4.3).** The shell sets `APPDRIVE` (`sd:` or `usb:`),
+`APPROOT` (the script's directory) and `APPNAME` while an app runs, so an app
+writes `%APPDRIVE%/NOTES` rather than `sd:/NOTES` and keeps its data beside
+it on either drive. `apps/push_apps.py --drive usb:` deploys the identical
+bundle. A store that must stay on SD (the service registry) is marked as such
+in the script. See A5 for the variable table.
 
 **Minimal app (`HELLO.BAT`):**
 
@@ -135,6 +142,7 @@ table. `set NAME` prints one value. Undefined `%VAR%` expands to empty (so
 | Form | Meaning |
 |------|---------|
 | `%VAR%` | Environment value (empty when undefined). |
+| `%APPDRIVE%` `%APPROOT%` `%APPNAME%` | Published by the shell for the running `.bat`: `sd:`/`usb:`, the script's directory, and its stem. Set for a top-level script, restored when it returns; library routines keep the app's values. Apps use `%APPDRIVE%` so the same file runs from SD or USB. |
 | `%0` `%1`..`%9` `%*` | Script name / caller args / all args from `%1`. |
 | `%%` | Literal `%`. |
 | `%ERRORLEVEL%` | Current errorlevel as decimal. |
@@ -172,6 +180,23 @@ breaks). `enableextensions`/`disableextensions` are accepted and ignored
 (extensions are always on) so portable scripts parse.
 
 ---
+
+## 5b. Rendering a web page (`html`)
+
+`html <file|url>` renders a page through the same browser page engine as
+`browser` (DOM, CSS, JavaScript, images, `<canvas>`, HTTP(S)), with the same
+opt-in transparency rules. It is non-blocking: the page stays on the TUI
+surface until the next command or `appmode` exit, so an app can render it,
+run more verbs, then continue. Use `browser back|forward` for navigation if
+the app needs history; `html` deliberately skips those verbs.
+
+```bat
+html %APPDRIVE%/WEB/INDEX.HTML
+echo [M-WEB-DONE]
+```
+
+`emoji` renders through the same page text path; see `command.md` for the
+pack format and the retro default.
 
 ## 6. Arrays (indexed variables)
 

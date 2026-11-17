@@ -21,7 +21,17 @@ echo Today is %DATE% at %TIME%.
 ```
 
 Run it by typing its name at the prompt (`HELLO`) or `HELLO.BAT`. Put it
-anywhere on `PATH`, or under `sd:/APPS`, and it also appears in `launch`.
+anywhere on `PATH`, under `sd:/APPS`, or under `usb:/APPS`, and it also appears
+in `launch`.
+
+While the script runs, the shell publishes three variables so one file works
+from either drive: `%APPDRIVE%` (`sd:` or `usb:`), `%APPROOT%` (the script's
+directory) and `%APPNAME%`. Write data through `%APPDRIVE%`:
+
+```bat
+write %APPDRIVE%/HELLO.LOG started %DATE% %TIME%
+```
+(The service registry is the one intentional SD-only store; see `batch.md`.)
 
 Batch files are plain text (UTF-8) with CRLF or LF line endings. `rem` and `::`
 are comments. `@echo off` suppresses command echo.
@@ -192,6 +202,44 @@ link list
 Labels render bright cyan + underline; the first tap previews the target,
 the second tap runs it (`link open <n>` runs immediately). `launch` menus
 already link every app name the same way.
+
+## 7b. Emoji, transparency and web pages
+
+Three v1.4.3 surfaces are one line each from batch.
+
+**Emoji.** Text renders emoji with a retro MS-DOS/CP437 look by default - no
+SD card or network needed - in the TUI and in LVGL. To use colour artwork,
+install a pack under `EMOJI/` on SD or USB (`EMOJI/EMOJI.INI`, see
+`command.md`); `emoji status` reports what is loaded. Nothing else changes:
+the same `draw text`/`echo`/HTML text uses it.
+
+```bat
+emoji status
+draw text 3 3 "Ready 😀 👍"
+```
+
+**Transparency.** Apps opt in through their APPINFO, not code: add `alpha=`
+(the whole surface, 0-255 or a `%`) and `scrim=` (a dim backdrop behind
+modals). Omit them and nothing changes. `apps/tcmd/TCMD.APPINFO` and
+`apps/diag/DIAG.APPINFO` show it.
+
+```ini
+; APPS/MYAPP.APPINFO
+alpha=92%
+scrim=40%
+```
+
+In HTML the standard forms work: `rgba()`, `transparent`, `opacity` (which
+multiplies the subtree), and translucent block backgrounds keep their alpha.
+
+**Web pages.** `html <file|url>` renders a page through the same browser
+engine (DOM, CSS, JavaScript, images, canvas, HTTP(S)). It is non-blocking,
+so an app can present a page, run more verbs, and continue:
+
+```bat
+html %APPDRIVE%/WEB/INDEX.HTML
+echo [M-WEB-SHOWN]
+```
 
 ## 8. Package it
 

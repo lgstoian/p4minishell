@@ -12,6 +12,8 @@
 #include "windows.h"
 #include "ansi.h"
 #include "ansi_palette.h"
+#include "emoji_core.h"
+#include "emoji.h"
 #include "p4minishell_config.h"
 #include "shell.h"
 #include "tui_fonts.h"
@@ -41,6 +43,9 @@ static int s_alt_cur_row = 1;
 static int s_alt_cur_col = 1;
 static uint8_t s_def_fg = 16;
 static uint8_t s_def_bg = 16;
+/* Opt-in translucency of the whole TUI surface (APPINFO `alpha=`). 255 is
+ * opaque; the shell page behind shows through when smaller. */
+static uint8_t s_bg_alpha = 255;
 static lv_obj_t *s_tui_label = NULL;
 static lv_obj_t *s_tui_container = NULL;
 /* Currently bound cell font (NULL until the first layout pass or when
@@ -58,6 +63,7 @@ typedef struct {
     int w;
     int h;
     uint8_t bg;
+    uint8_t alpha;   /* 0-255; 255 opaque, 0 never stored */
     lv_obj_t *obj;
 } tui_bg_rect_t;
 static tui_bg_rect_t s_bg_rects[TUI_MAX_BG_RECTS];
@@ -249,12 +255,16 @@ static void tui_bg_relayout(void)
     }
 }
 
-void tui_page_bg_rect(int col, int row, int w, int h, uint8_t bg)
+void tui_page_bg_rect(int col, int row, int w, int h, uint8_t bg,
+                      uint8_t alpha)
 {
     tui_bg_rect_t *rect;
     lv_obj_t *obj;
 
-    if (!s_active || s_tui_container == NULL || bg == 16 || w <= 0 || h <= 0) {
+    /* alpha 0 is CSS `transparent`: draw nothing, so the surface behind the
+     * page shows through instead of a black box. */
+    if (!s_active || s_tui_container == NULL || bg == 16 || alpha == 0 ||
+        w <= 0 || h <= 0) {
         return;
     }
     if (s_bg_rect_count >= TUI_MAX_BG_RECTS) {
@@ -267,7 +277,7 @@ void tui_page_bg_rect(int col, int row, int w, int h, uint8_t bg)
     if (obj != NULL) {
         lv_obj_remove_style_all(obj);
         lv_obj_set_style_bg_color(obj, lv_color_hex(tui_dos_color_rgb(bg)), 0);
-        lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_opa(obj, (lv_opa_t)alpha, 0);
         lv_obj_set_style_radius(obj, 0, 0);
         lv_obj_set_style_border_width(obj, 0, 0);
         lv_obj_set_style_pad_all(obj, 0, 0);
@@ -278,6 +288,7 @@ void tui_page_bg_rect(int col, int row, int w, int h, uint8_t bg)
         rect->w = w;
         rect->h = h;
         rect->bg = bg;
+        rect->alpha = alpha;
         rect->obj = obj;
         tui_bg_relayout();
     }
@@ -363,6 +374,7 @@ bool tui_init(void)
         return false;
     }
     s_tui_container = surf;
+    lv_obj_set_style_bg_opa(surf, (lv_opa_t)s_bg_alpha, 0);
     s_tui_label = lv_label_create(surf);
     lv_obj_set_style_bg_opa(s_tui_label, LV_OPA_TRANSP, 0);
     lv_label_set_recolor(s_tui_label, true);
@@ -569,19 +581,39 @@ void tui_print_at(int col, int row, const char *text, uint8_t fg, uint8_t bg)
     if (col > s_cols) return;
     int r = row, c = col;
     for (const char *p = text; *p; ) {
-        if (c > s_cols) { c = 1; r++; if (r > s_rows) break; }
-        tui_cell_t *cell = cell_at(r, c);
-        // handle UTF-8: copy one codepoint
+        uint32_t cp = 0;
+        size_t len = shell_utf8_decode(p, strlen(p), &cp, NULL);
         char tmp[5] = {0};
-        int len = 1;
-        unsigned char ch = (unsigned char)*p;
-        if ((ch & 0xE0) == 0xC0) len = 2;
-        else if ((ch & 0xF0) == 0xE0) len = 3;
-        else if ((ch & 0xF8) == 0xF0) len = 4;
-        if ((int)strlen(p) < len) len = 1;
-        strncpy(tmp, p, len);
-        tmp[len] = '\0';
-        tui_cell_set(cell, tmp, fg, bg);
+
+        if (len == 0) len = 1;
+        if (c > s_cols) { c = 1; r++; if (r > s_rows) break; }
+        if (emoji_is_modifier(cp)) {   /* ZWJ / skin tone: draw nothing */
+            p += len;
+            continue;
+        }
+        if (emoji_is_codepoint(cp)) {
+            int cells = 1;
+            const gfx_surface_t *img = emoji_pack_image(cp, &cells);
+
+            if (img != NULL) {
+                /* A pack glyph is a cell-ramp image: same decoder and same
+                 * ANSI glyph ramp as every other image, no new renderer. */
+                if (cells < 1) cells = 1;
+                if (c + cells - 1 > s_cols) { c = 1; r++; if (r > s_rows) break; }
+                tui_draw_image(c, r, cells, 1, img);
+                c += cells;
+                p += len;
+                continue;
+            }
+            if (emoji_fallback_utf8(cp, tmp) == 0) {
+                memcpy(tmp, p, len);
+                tmp[len] = '\0';
+            }
+        } else {
+            memcpy(tmp, p, len);
+            tmp[len] = '\0';
+        }
+        tui_cell_set(cell_at(r, c), tmp, fg, bg);
         p += len;
         c++;
     }
@@ -728,6 +760,17 @@ void tui_fill(int x, int y, int w, int h, char ch, uint8_t fg, uint8_t bg)
     }
 }
 
+void tui_set_background_alpha(uint8_t alpha)
+{
+    s_bg_alpha = alpha;
+    if (s_tui_container != NULL && lvgl_port_lock(0)) {
+        lv_obj_set_style_bg_opa(s_tui_container, (lv_opa_t)alpha, 0);
+        lvgl_port_unlock();
+    }
+}
+
+uint8_t tui_get_background_alpha(void) { return s_bg_alpha; }
+
 void tui_set_default_color(uint8_t fg, uint8_t bg) { s_def_fg = fg; s_def_bg = bg; }
 void tui_get_default_color(uint8_t *fg_out, uint8_t *bg_out) { if (fg_out) *fg_out = s_def_fg; if (bg_out) *bg_out = s_def_bg; }
 
@@ -743,28 +786,26 @@ uint8_t tui_rgb_to_dos(uint32_t rgb)
     return ansi_cga_nearest(rgb);
 }
 
-void tui_draw_image(int x, int y, int w, int h, const gfx_surface_t *img)
+/* One sampler for every image-to-cell blit: the current grid (tui_draw_image)
+ * and the browser page buffer (tui_page_draw_image) share it, so an emoji
+ * pack, screenshot preview and `draw img` all pick the same glyph/colour. */
+typedef void (*tui_pixel_sink_t)(void *ctx, int col, int row, char glyph,
+                                 uint8_t fg);
+
+static void tui_sample_image(int x, int y, int w, int h,
+                             const gfx_surface_t *img,
+                             tui_pixel_sink_t sink, void *ctx)
 {
-    /* The TUI label renders only the foreground colour (LVGL recolor has no
-     * per-span background), so a pixel is drawn as an ASCII glyph chosen from the
-     * shared image ramp (components/ansi: it excludes the recolor delimiter '#'),
-     * coloured with the nearest DOS palette entry as fg. */
     int cy;
 
-    if (s_cells == NULL || img == NULL || img->px == NULL) return;
-    if (w < 1 || h < 1) return;
-
+    if (img == NULL || img->px == NULL || w < 1 || h < 1) return;
     for (cy = 0; cy < h; cy++) {
-        int row = y + cy;
         int sy;
         int cx;
 
-        if (row < 1) continue;
-        if (row > s_rows) break;
         sy = (int)((int64_t)cy * img->h / h);
         if (sy >= img->h) sy = img->h - 1;
         for (cx = 0; cx < w; cx++) {
-            int col = x + cx;
             int sx;
             uint16_t px;
             uint32_t rgb;
@@ -773,28 +814,62 @@ void tui_draw_image(int x, int y, int w, int h, const gfx_surface_t *img)
             int b;
             int lum;
             int level;
-            char ch[2];
 
-            if (col < 1) continue;
-            if (col > s_cols) break;
             sx = (int)((int64_t)cx * img->w / w);
             if (sx >= img->w) sx = img->w - 1;
             px = img->px[(size_t)sy * (size_t)img->w + (size_t)sx];
-            /* RGB565 -> RGB888. */
             r = ((px >> 11) & 0x1F) << 3;
             g = ((px >> 5) & 0x3F) << 2;
             b = (px & 0x1F) << 3;
             rgb = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
-
-            lum = (r * 30 + g * 59 + b * 11) / 100; /* 0..255 luma */
+            lum = (r * 30 + g * 59 + b * 11) / 100;
             level = lum * ANSI_IMAGE_RAMP_LAST / 255;
             if (level < 0) level = 0;
             if (level > ANSI_IMAGE_RAMP_LAST) level = ANSI_IMAGE_RAMP_LAST;
-            ch[0] = ansi_image_glyph(level);
-            ch[1] = '\0';
-            tui_print_at(col, row, ch, tui_rgb_to_dos(rgb), 16);
+            sink(ctx, x + cx, y + cy, ansi_image_glyph((char)level),
+                 tui_rgb_to_dos(rgb));
         }
     }
+}
+
+static void tui_grid_pixel(void *ctx, int col, int row, char glyph, uint8_t fg)
+{
+    char ch[2];
+
+    (void)ctx;
+    if (s_cells == NULL || col < 1 || col > s_cols || row < 1 || row > s_rows) {
+        return;
+    }
+    ch[0] = glyph;
+    ch[1] = '\0';
+    tui_print_at(col, row, ch, fg, 16);
+}
+
+void tui_draw_image(int x, int y, int w, int h, const gfx_surface_t *img)
+{
+    /* The TUI label renders only the foreground colour (LVGL recolor has no
+     * per-span background), so a pixel is drawn as an ASCII glyph chosen from
+     * the shared image ramp (components/ansi: it excludes the recolor
+     * delimiter '#'), coloured with the nearest DOS palette entry as fg. */
+    if (s_cells == NULL) return;
+    tui_sample_image(x, y, w, h, img, tui_grid_pixel, NULL);
+}
+
+static void tui_page_pixel(void *ctx, int col, int row, char glyph, uint8_t fg)
+{
+    char ch[2];
+
+    (void)ctx;
+    ch[0] = glyph;
+    ch[1] = '\0';
+    tui_page_set_cell(col, row, ch, fg, 16, 0);
+}
+
+void tui_page_draw_image(int col, int row, int w, int h,
+                         const gfx_surface_t *img)
+{
+    if (s_page == NULL) return;
+    tui_sample_image(col, row, w, h, img, tui_page_pixel, NULL);
 }
 
 void tui_draw_bar(int x, int y, int w, int pct, char fill_ch, char empty_ch,

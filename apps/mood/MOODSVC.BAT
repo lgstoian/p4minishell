@@ -5,7 +5,7 @@ rem =====================================================================
 rem  MOODSVC.BAT - headless heap sampler feeding the MOOD dashboard.
 rem  Install with `service install moodsampler "MOODSVC" /restart` and open
 rem  the "Service sampler" view in MOOD.BAT: the dashboard reads
-rem  sd:/MOODLAST.INI while this service keeps it fresh. Coordination is
+rem  sd:/MOODLAST.INI (SD-only: the service store) while this service keeps it fresh. Coordination is
 rem  files + the `moodtick` event (no shared handles to rendezvous, and the
 rem  job-private environment cannot leak into the dashboard either way).
 rem  Runs headless (mem/for/set/signal/delay only). Markers: [M-MOODSVC].

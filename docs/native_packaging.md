@@ -8,7 +8,7 @@ execution** — the `.P4X`/`.bin` payload is a verified data blob (see
 [`ABI.md`](../ABI.md) §1). This document is the packaging walk-through; the
 frozen contract is `ABI.md`.
 
-- **Packaging spec:** v1.3 (firmware v1.4.2) · **Target:** ESP32-P4 + ESP32-C6
+- **Packaging spec:** v1.3 (firmware v1.4.3) · **Target:** ESP32-P4 + ESP32-C6
 - Related: [`ABI.md`](../ABI.md) (the contract), [`command.md`](../command.md)
   (`pkg`, `asset`, `store`, `launch`), [`SDK.md`](../SDK.md) (applib ABI),
   `tools/pkg_sign.py`, `tools/make_pkg.py`, `apps/push_pkgs.py`.

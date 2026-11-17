@@ -9,7 +9,7 @@ self-contained computer: a persistent command shell, a real batch-file
 language, an SD-card application ecosystem, a native C app SDK, and a
 display/TUI/GFX stack you can build on.
 
-**Version:** 1.4.2 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
+**Version:** 1.4.3 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
 
 | Shell | TUI apps |
 |---|---|
@@ -28,7 +28,9 @@ CSS colours, block-glyph images (decoded by the gfx core), and JS `onload`/
 
 All screenshots are captured live from the device over USB serial
 (`python tools/capture_docs.py <COM_PORT>`); the full set is in
-[`docs/assets/`](docs/assets/README.md).
+[`docs/assets/`](docs/assets/README.md). The `screenshot` command reports
+success in the header notification only (v1.4.3); the transcript stays clean,
+and only errors are printed.
 
 ---
 
@@ -62,7 +64,7 @@ background jobs, and a C app ABI included.
 
 ---
 
-## Current state (v1.4.2)
+## Current state (v1.4.3)
 
 This is the first public release. The firmware is hardware-verified on the
 ESP32-P4 Function EV Board (JC1060P470C, JD9165 panel, GT911 touch, SD card)
@@ -109,6 +111,23 @@ the host regression runners are green. See
 - **Display:** `draw` TUI verbs, `gfx` RGB565 canvas with sprites and images
   (BMP in `gfx`, **PNG/JPEG in `imgdec`**), `plot` graphs, `font` registry with
   SD TTFs and CJK fallback, and UI themes.
+- **Emoji:** every emoji renders with a **retro MS-DOS/CP437 look** by default
+  (an MIT map in the firmware, no SD card or network needed), in both the TUI
+  and LVGL labels. An optional colour pack (`EMOJI/EMOJI.INI` + BMP/PNG on SD
+  or USB) is drawn as cell-ramp images through the same image pipeline. Add
+  art without touching the firmware; `emoji status` reports what is loaded.
+- **Transparency:** opt-in, per app. CSS `rgba()`, `transparent` and `opacity`
+  are honoured in HTML and the Canvas 2D context, with matching TUI cells,
+  real alpha background rectangles, a modal panel opacity and a dimming
+  backdrop scrim. Apps opt in with `alpha=`/`scrim=` in their `APPINFO`;
+  the default stays fully opaque.
+- **HTML on demand:** `html <file|url>` renders a page through the same
+  browser engine (DOM, CSS, JavaScript, images, canvas, HTTP(S)) for batch and
+  native flows that do not need the browser's history/bookmark verbs.
+- **Runs from USB:** the shell publishes `%APPDRIVE%`/`%APPROOT%` per app,
+  `launch` discovers `usb:/APPS`, and the reference apps keep their data on
+  the drive they run from. `apps/push_apps.py --drive usb:` installs the same
+  bundle on a stick.
 - **Connectivity:** hosted Wi-Fi (station + known-network list), BLE,
   `ping`/`dns`/`httpget`/`tcpterm`, `httpd` file server, `netstat`/`ipconfig`,
   **`browser`** (HTML/CSS pages over HTTP or from an SD file, navigation

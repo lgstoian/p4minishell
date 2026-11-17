@@ -129,7 +129,7 @@ goto menu
 
 :svcview
 rem Service sampler view: the headless MOODSVC service (installed with
-rem `service install moodsampler "MOODSVC" /restart`) keeps sd:/MOODLAST.INI
+rem `service install moodsampler "MOODSVC" /restart`) keeps sd:/MOODLAST.INI (SD-only: service store)
 rem fresh; files are the IPC (no shared handles to rendezvous).
 draw clear screen
 draw box 1 1 80 3 double "MOOD SERVICE"

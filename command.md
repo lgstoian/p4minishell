@@ -2,7 +2,7 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
-> **Applies to firmware v1.4.2** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
+> **Applies to firmware v1.4.3** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
 > the authoritative command reference; the on-device `help /all` mirrors it.
 > Current verified test baselines live in [`test/README.md`](test/README.md).
 > Related docs: [`readme.md`](readme.md) (overview),
@@ -201,19 +201,43 @@ to it with `argc`/`argv` (see `SDK.md`, "Native-app ABI"). ERRORLEVEL: 0.
 
 Discover, list, and run the apps installed on the shell. **Every app launches
 through a batch file** (see [`ABI.md`](ABI.md)): an app is any `*.bat` or
-`*.cmd` in a PATH directory or in the conventional `sd:/APPS` directory (up to
+`*.cmd` in a PATH directory, in `sd:/APPS`, or in `usb:/APPS` (up to
 `P4_CONFIG_LAUNCH_MAX` entries, `.bat` first per directory); its optional
-metadata lives in `sd:/APPS/<name>.APPINFO` (INI format: `title=`,
-`description=`, `version=`, and `type=` — a `hybrid` shim that drives a
-linked-in C `entry=` is tagged ` [hybrid]`), shown when present. Typing an app
-name runs it directly (extensionless names probe `.bat` then `.cmd`);
-`launch` does the same by name.
+metadata lives in `sd:/APPS/<name>.APPINFO` or, for a USB install,
+`usb:/APPS/<name>.APPINFO` (INI format: `title=`, `description=`,
+`version=`, `type=` — a `hybrid` shim that drives a linked-in C `entry=` is
+tagged ` [hybrid]` — and the opt-in `alpha=`/`scrim=` transparency pair,
+described below), shown when present. Typing an app name runs it directly
+(extensionless names probe `.bat` then `.cmd`); `launch` does the same by
+name.
+
+While an app's batch file runs, the shell publishes three variables so one
+script serves both drives:
+
+| Variable | Value |
+|----------|-------|
+| `%APPDRIVE%` | `sd:` or `usb:` — the drive the running script is on |
+| `%APPROOT%` | the script's directory in shell form (e.g. `usb:/APPS`) |
+| `%APPNAME%` | the script's stem (e.g. `NOTES`) |
+
+The reference apps write their data through `%APPDRIVE%`, which is why the
+identical bundle works from SD and USB (`apps/push_apps.py --drive usb:`).
+Library calls (`call LIB.BAT::routine`) keep the running app's values.
+Services are the exception: the service registry and its sample store live on
+SD by design.
 
 - `launch` — list the installed apps as a numbered menu and run the chosen one.
   Each app name is a tap-confirm hyperlink (`launch <name>`).
 - `launch <name>` — run an app by name (PATH resolution, then `sd:/APPS`).
 - `launch /list` — bare list (`name  -  title`, ` [hybrid]` suffix), for scripting.
   Deliberately link-free so `for /f` parsing never sees escape bytes.
+
+**Per-app transparency.** An APPINFO may set `alpha=` (the whole TUI surface
+and every modal panel, 0-255 or `0-100%`) and `scrim=` (a black backdrop
+behind modal panels). Both default to opaque (`255`/`0`); `launch` applies
+them for the app's lifetime and restores the defaults afterwards. Invalid
+values fall back to the default. See `TCMD.APPINFO` and `DIAG.APPINFO` for
+working examples.
 
 ERRORLEVEL: 0 ok, 1 not found, 2 usage.
 
@@ -303,7 +327,7 @@ project's `managed_components/` directories.
 ### Header long-press
 
 Pressing and holding anywhere on the top status bar shows a transient banner
-with the build identity: `P4MiniShell v1.4.2 | built <date> <time> | git
+with the build identity: `P4MiniShell v1.4.3 | built <date> <time> | git
 <hash>`. The same identity is reported by `version`, `about`, and `sysinfo`.
 
 ### header — responsive status bar
@@ -1326,6 +1350,14 @@ partial-destination cleanup on failure.
 BMP format: 24-bit RGB888, bottom-up, no compression, 96 DPI. Pixel-perfect
 capture of the entire screen (1024x600 = 1,228,800 bytes of pixels + 54-byte header).
 
+**Feedback (v1.4.3):** a successful capture prints **nothing** on the
+transcript. The header notification is the acknowledgement (`screenshot
+saved: SHOT.BMP`, `screenshot streamed`, `screenshot: streaming to serial`).
+Errors (no SD, write failure, PSRAM exhaustion, invalid path) still print to
+the transcript and set ERRORLEVEL. Scripts that used to grep for
+`screenshot: saved` should test the file (or the BMPX frame) instead; the
+hardware suite does exactly that.
+
 **Usage:**
 ```
 screenshot                  Stream BMP to serial with magic markers
@@ -1355,6 +1387,53 @@ write failure.
 
 **ERRORLEVEL:** 0 on success, 1 on failure (snapshot error, PSRAM exhaustion, SD
 write error, invalid path), 2 on usage error (too many arguments).
+
+### emoji [status | reload]
+
+Report the emoji renderer or rescan the pack. The built-in **retro DOS
+fallback** is always active: every emoji codepoint maps deterministically to
+a CP437 glyph (smileys, hearts, marks, media, weather, food, transport,
+files, status symbols), so text never shows tofu and the same page renders
+identically every time. An optional third-party pack is read from
+`EMOJI/EMOJI.INI` on SD (then USB):
+
+```ini
+; sd:/EMOJI/EMOJI.INI
+1F600=GRIN.BMP      ; file relative to EMOJI/, BMP or PNG
+1F600.cells=2       ; width in cells, 1-2, default 2
+1F60D=HEART.PNG
+```
+
+Pack glyphs render as cell-ramp images in the TUI/HTML page (one shared image
+sampler), and LVGL labels use the retro fallback through the font chain.
+Single codepoints only in 1.4.3: ZWJ sequences (families/professions), flags
+and skin-tone modifiers fall back to their components. Up to 128 entries, a
+four-glyph PSRAM decode cache; a malformed pack is ignored, never fatal.
+
+```
+emoji            ->  map active; pack count or "none"
+emoji reload     ->  rescan SD then USB
+```
+
+ERRORLEVEL: 0 always (status is informational).
+
+### html <file|url>
+
+Render a page for batch and native flows through the **same browser page
+engine** as `browser`: DOM parsing, the CSS cascade (including the alpha
+forms), JavaScript, images, `<canvas>`, links and HTTP(S). There is no second
+HTML parser or renderer; `html` is the script-facing entry point that skips
+the browser command's history/bookmark verbs. Like `browser`, it is
+non-blocking: the page stays on the TUI surface until the next command or
+`appmode` exit, so an app can present a page, run further verbs (for example
+`browser back`), and continue.
+
+```
+html sd:/WEB/INDEX.HTML
+html https://example.com/
+```
+
+ERRORLEVEL: 0 rendered, 1 fetch/parse/render error, 2 usage.
 
 ### receive <path> <size> [/crc]
 Push a binary from the host into an SD file over the USB-Serial/JTAG console.

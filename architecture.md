@@ -63,6 +63,16 @@ no socket and no parser. The **browser** uses one DOM renderer
 (`components/markdown/dom_render.c`) for its TUI page and ANSI surfaces; CSS,
 images, and in-page JS are layered on the existing DOM/CSS/gfx/jsengine modules.
 
+**Emoji, colour and alpha (v1.4.3).** `components/font/emoji_core.c` is the one
+emoji decision point (retro DOS/CP437 fallback map); the TUI/HTML text path and
+the LVGL font chain are its two adapters. `components/emoji/` reads optional
+third-party packs from `EMOJI/` on SD or USB and decodes them through the
+shared `imgdec`/`gfx` image path. `components/markdown/css_color.c` is the one
+CSS colour/alpha parser (DOM, Canvas 2D, TUI), and `ansi_cga_color()` /
+`ansi_cga_nearest()` are the one DOS palette. Large non-DMA UI scratch buffers
+(the Natural Display layout grid, PSRAM caches, emoji glyphs, page buffers)
+live in PSRAM so internal DRAM stays free for DMA and stacks.
+
 The dependency chain, the two registration tables, and the "never require
 `main`" rule are specified in [`documentation.md`](documentation.md)
 §Architecture/§Layering and [`SDK.md`](SDK.md) §Architecture. This document

@@ -138,6 +138,8 @@
     "components/editor/editor_spell_sd.c": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
     "components/editor/editor_view.c": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
     "components/editor/editor_view.h": "module=editor :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_editor.c :: rules=ai-context.md#module-layering-rules",
+    "components/emoji/emoji.c": "module=emoji :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_emoji.c :: rules=ai-context.md#module-layering-rules",
+    "components/emoji/emoji.h": "module=emoji :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_emoji.c :: rules=ai-context.md#module-layering-rules",
     "components/epub/epub.c": "module=epub :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_epub.c :: rules=ai-context.md#module-layering-rules",
     "components/epub/epub_internal.h": "module=epub :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_epub.c :: rules=ai-context.md#module-layering-rules",
     "components/epub/epub_nav.c": "module=epub :: layer=leaf :: domain=app :: status=stable :: tests=test/main/test_epub.c :: rules=ai-context.md#module-layering-rules",
@@ -150,6 +152,8 @@
     "components/event_bus/include/event_bus_topics.h": "module=event_bus :: layer=leaf :: domain=core :: status=stable :: rules=ai-context.md#module-layering-rules",
     "components/filetype/filetype.c": "module=filetype :: layer=leaf :: domain=fs :: status=stable :: tests=test/main/test_filetype.c :: rules=ai-context.md#module-layering-rules",
     "components/filetype/filetype.h": "module=filetype :: layer=leaf :: domain=fs :: status=stable :: tests=test/main/test_filetype.c :: rules=ai-context.md#module-layering-rules",
+    "components/font/emoji_core.c": "module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules",
+    "components/font/emoji_core.h": "module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules",
     "components/font/font.c": "module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules",
     "components/font/font.h": "module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules",
     "components/font/font_fs.c": "module=font :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_theme.c :: rules=ai-context.md#module-layering-rules",
@@ -745,6 +749,7 @@
       "provides": "the one command dispatcher + worker + built-in verbs",
       "requires": [
         "ansi",
+        "emoji",
         "applib",
         "archive",
         "audio",
@@ -880,6 +885,28 @@
       "status": "stable",
       "tests": [
         "test/main/test_editor.c"
+      ]
+    },
+    "emoji": {
+      "domain": "ui",
+      "header": "components/emoji/emoji.h",
+      "layer": "leaf",
+      "path": "components/emoji",
+      "provides": "emoji pack discovery, lookup and cell-image decode",
+      "requires": [
+        "font",
+        "gfx",
+        "imgdec",
+        "storage",
+        "p4heap",
+        "strutil"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_emoji.c"
       ]
     },
     "epub": {
@@ -1179,6 +1206,7 @@
         "storage",
         "strutil",
         "batch",
+        "p4heap",
         "PRIV_REQUIRES",
         "log"
       ],
@@ -1520,6 +1548,7 @@
         "shell",
         "windows",
         "ansi",
+        "emoji",
         "display",
         "gfx",
         "p4heap",

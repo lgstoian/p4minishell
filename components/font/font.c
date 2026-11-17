@@ -19,6 +19,7 @@
  */
 
 #include "font.h"
+#include "emoji_core.h"
 #include "font_fs.h"
 #include "p4minishell_config.h"
 
@@ -79,6 +80,44 @@ static lv_font_t s_chain[FONT_ROLE_COUNT][2];
 static int s_chain_idx[FONT_ROLE_COUNT];
 static bool s_chain_ready[FONT_ROLE_COUNT];
 static lv_font_t s_fa_chain[FONT_ROLE_COUNT];
+
+/* Emoji fallback link (see emoji_core.h). It sits between the role's primary
+ * font and the FontAwesome chain and remaps an emoji codepoint to the retro
+ * DOS glyph the terminal font already has. This is the LVGL adapter: no glyph
+ * data of its own, no second emoji table, and every label using font_get()
+ * inherits it. */
+typedef struct {
+    const lv_font_t *base;
+} emoji_font_dsc_t;
+
+static lv_font_t s_emoji_font[FONT_ROLE_COUNT];
+static emoji_font_dsc_t s_emoji_dsc[FONT_ROLE_COUNT];
+
+static const void *emoji_font_get_glyph_bitmap(lv_font_glyph_dsc_t *dsc,
+                                               lv_draw_buf_t *draw_buf)
+{
+    (void)dsc;
+    (void)draw_buf;
+    return NULL;   /* never used: resolved_font is the base font */
+}
+
+static bool emoji_font_get_glyph_dsc(const lv_font_t *font,
+                                     lv_font_glyph_dsc_t *dsc_out,
+                                     uint32_t letter, uint32_t letter_next)
+{
+    const emoji_font_dsc_t *dsc = (const emoji_font_dsc_t *)font->dsc;
+    uint32_t glyph;
+
+    if (dsc == NULL || dsc->base == NULL || !emoji_is_codepoint(letter) ||
+        emoji_is_modifier(letter)) {
+        return false;   /* not ours: LVGL continues down the chain */
+    }
+    glyph = emoji_dos_glyph(letter);
+    if (glyph == 0) {
+        return false;
+    }
+    return lv_font_get_glyph_dsc(dsc->base, dsc_out, glyph, letter_next);
+}
 static bool s_fa_ready[FONT_ROLE_COUNT];
 static int s_cjk_slot[FONT_ROLE_COUNT];
 /* Per-role nominal pixel size (bitmaps stay 16) and TTF slot (-1 = builtin). */
@@ -129,8 +168,15 @@ static void font_rebuild_chain_locked(font_role_t role)
     /* Plain struct copy under the port lock (LVGL heap object). On the
      * vanishingly unlikely failure the previous copy stays published. */
     if (lvgl_port_lock(0)) {
+        s_emoji_dsc[role].base = s_font_role_primary[role];
+        s_emoji_font[role] = *s_font_role_primary[role];
+        s_emoji_font[role].get_glyph_dsc = emoji_font_get_glyph_dsc;
+        s_emoji_font[role].get_glyph_bitmap = emoji_font_get_glyph_bitmap;
+        s_emoji_font[role].dsc = &s_emoji_dsc[role];
+        s_emoji_font[role].fallback = &s_fa_chain[role];
+
         s_chain[role][inactive] = *s_font_role_primary[role];
-        s_chain[role][inactive].fallback = &s_fa_chain[role];
+        s_chain[role][inactive].fallback = &s_emoji_font[role];
         s_chain_idx[role] = inactive;
         s_chain_ready[role] = true;
         lvgl_port_unlock();

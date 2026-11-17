@@ -76,6 +76,7 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/keyboard
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/display
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/editor
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/emoji
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/font
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/filetype
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/gfx

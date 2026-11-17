@@ -16,6 +16,7 @@
 #include "dom_render.h"
 
 #include "ansi.h" /* ansi_image_glyph / ANSI_IMAGE_RAMP_* */
+#include "css_color.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -25,6 +26,9 @@
 typedef struct {
     uint8_t fg;
     uint8_t bg;
+    uint8_t fg_alpha;   /* colour alpha of the current colour (255 opaque) */
+    uint8_t bg_alpha;   /* background alpha (0 = transparent, no rect) */
+    uint8_t opacity;    /* cumulative CSS `opacity` of the ancestors + self */
     bool bold;
     bool italic;
     bool underline;
@@ -86,8 +90,17 @@ static style_t style_merge(const dom_node_t *node, const style_t *parent)
     style_t s = *parent;
 
     if (node == NULL || node->type != DOM_NODE_ELEMENT) return s;
-    if (node->fg != 16) s.fg = node->fg;
-    if (node->bg != 16) s.bg = node->bg;
+    if (node->fg != 16 || node->fg_alpha == 0) {
+        s.fg = node->fg;
+        s.fg_alpha = node->fg_alpha;
+    }
+    if (node->bg_set) {
+        s.bg = node->bg;
+        s.bg_alpha = node->bg_alpha;
+    }
+    /* `opacity` multiplies the whole subtree (CSS Compositing and Blending);
+     * it applies even to a node that replaces the inherited colour. */
+    s.opacity = (uint8_t)(((uint32_t)s.opacity * node->opacity) / 255u);
     if (node->bold) s.bold = true;
     if (node->italic) s.italic = true;
     if (node->underline) s.underline = true;
@@ -129,21 +142,41 @@ static void emit_utf8(render_ctx_t *c, const char *seq, size_t len,
 {
     char tmp[8];
     uint8_t attr;
+    uint8_t fg;
+    uint8_t alpha;
 
     if (c->done) return;
     if (len == 0 || len >= sizeof(tmp)) return;
     memcpy(tmp, seq, len);
     tmp[len] = '\0';
+    /* A cell holds one opaque DOS colour, so translucent text is composited
+     * over the effective background here, once, for every surface. The ANSI
+     * sink gets the same nearest colour; TUI cells and ANSI output therefore
+     * agree on what `rgba()` text looks like. */
+    fg = st->fg;
+    alpha = (uint8_t)(((uint32_t)st->fg_alpha * st->opacity) / 255u);
+    if (alpha < 255) {
+        uint8_t over = (st->bg < 16) ? st->bg : c->ops->base_bg;
+        css_rgba_t blended = css_color_blend(
+            css_color_from_dos(fg < 16 ? fg : c->ops->base_bg),
+            css_color_from_dos(over & 15), alpha);
+
+        fg = ansi_cga_nearest(((uint32_t)blended.r << 16) |
+                              ((uint32_t)blended.g << 8) | blended.b);
+    }
     attr = (uint8_t)((st->bold ? 1u : 0u) | (st->italic ? 4u : 0u) |
                      (st->underline ? 8u : 0u));
     if (c->ops->tui && c->ops->put_cell != NULL) {
         c->ops->put_cell(c->ops->ctx, c->col, c->row, tmp,
-                         st->fg, st->bg, attr);
+                         fg, st->bg, attr);
         c->col++;
     } else if (c->ops->put_ansi != NULL) {
         char buf[64];
         size_t n = 0;
-        ansi_sgr(buf, sizeof(buf), st);
+        style_t painted = *st;
+
+        painted.fg = fg;
+        ansi_sgr(buf, sizeof(buf), &painted);
         n = strlen(buf);
         if (n + len < sizeof(buf)) {
             memcpy(buf + n, tmp, len);
@@ -181,6 +214,32 @@ static void emit_text(render_ctx_t *c, const char *text, const style_t *st)
             while (start < p && !c->done) {
                 size_t n = utf8_seq_len(start);
                 if (start + n > p) n = (size_t)(p - start);
+                /* Emoji: one opts-in callback decides, so the markdown leaf
+                 * never owns an emoji table (the caller's core answers). */
+                if (n >= 3 && (c->ops->put_emoji != NULL ||
+                               c->ops->emoji_fallback != NULL)) {
+                    char emoji_buf[5] = { 0 };
+                    int emoji_cells = 0;
+
+                    if (c->ops->put_emoji != NULL &&
+                        c->ops->put_emoji(c->ops->ctx, c->col, c->row, start,
+                                          n, &emoji_cells)) {
+                        c->col += emoji_cells;
+                        start += n;
+                        continue;
+                    }
+                    if (c->ops->emoji_fallback != NULL) {
+                        const char *replacement =
+                            c->ops->emoji_fallback(c->ops->ctx, start, n,
+                                                   emoji_buf);
+
+                        if (replacement != NULL) {
+                            emit_utf8(c, replacement, strlen(replacement), st);
+                            start += n;
+                            continue;
+                        }
+                    }
+                }
                 emit_utf8(c, start, n, st);
                 start += n;
             }
@@ -689,12 +748,16 @@ static void render_block(render_ctx_t *c, dom_node_t *node, style_t st, int inde
             for (int pad = 0; pad < node->padding_bottom; pad++) {
                 newline(c);
             }
-            if (node->bg_set && st.bg != 16 && c->ops->fill_bg != NULL) {
+            if (node->bg_set && st.bg != 16 && st.bg_alpha > 0 &&
+                c->ops->fill_bg != NULL) {
                 /* CSS block background: the whole box width behind the text,
                  * not just the glyph cells. fill_bg changes only the colour,
-                 * so text already drawn keeps its glyph and foreground. */
+                 * so text already drawn keeps its glyph and foreground.
+                 * `transparent` (alpha 0) draws no rectangle at all, so the
+                 * page/surface behind shows through. */
                 c->ops->fill_bg(c->ops->ctx, 1, bg_row, c->ops->cols,
-                                c->row - bg_row + 1, st.bg);
+                                c->row - bg_row + 1, st.bg,
+                                (uint8_t)(((uint32_t)st.bg_alpha * st.opacity) / 255u));
             }
         }
         newline(c);
@@ -796,6 +859,9 @@ void dom_render_tree(dom_tree_t *tree, const dom_render_ops_t *ops)
     memset(&st, 0, sizeof(st));
     st.fg = 16;
     st.bg = 16;
+    st.fg_alpha = 255;
+    st.bg_alpha = 255;
+    st.opacity = 255;
     st.font_scale = 1;
     ctx.ops = ops;
     ctx.row = 1;
@@ -841,7 +907,8 @@ void dom_render_tree(dom_tree_t *tree, const dom_render_ops_t *ops)
                         uint8_t color = (uint8_t)(packed >> 4);
 
                         if (color != 16) {
-                            ops->fill_bg(ops->ctx, c + 1, r + 1, 1, 1, color);
+                            ops->fill_bg(ops->ctx, c + 1, r + 1, 1, 1, color,
+                                         255);
                         }
                     }
                 }
@@ -853,7 +920,11 @@ void dom_render_tree(dom_tree_t *tree, const dom_render_ops_t *ops)
     /* Paint the body background after the content so blank cells (including
      * the gaps inside paragraphs) carry the colour, not only the margins.
      * fill_bg never overwrites a glyph, so the text stays intact. */
-    if (ops->fill_bg != NULL && tree->body->bg != 16) {
-        ops->fill_bg(ops->ctx, 1, 1, ops->cols, ops->rows, tree->body->bg);
+    if (ops->fill_bg != NULL && tree->body->bg != 16 &&
+        tree->body->bg_alpha > 0 && tree->body->opacity > 0) {
+        uint8_t alpha = tree->body->bg_alpha;
+
+        ops->fill_bg(ops->ctx, 1, 1, ops->cols, ops->rows, tree->body->bg,
+                     (uint8_t)(((uint32_t)alpha * tree->body->opacity) / 255u));
     }
 }

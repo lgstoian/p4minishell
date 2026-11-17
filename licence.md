@@ -33,10 +33,21 @@ header.
 ## What the MIT license covers
 
 The MIT license above applies to the original P4MiniShell code: the shell,
-components, batch engine, command verbs, editor, TUI/GFX layers, host tools,
-unit tests, board metadata, and this documentation. You are free to use,
-modify, and redistribute them, including commercially, as long as the
-copyright notice and permission notice are preserved.
+components, batch engine, command verbs, editor, TUI/GFX layers, the built-in
+retro emoji map and its LVGL adapter, host tools, unit tests, board metadata,
+and this documentation. You are free to use, modify, and redistribute them,
+including commercially, as long as the copyright notice and permission notice
+are preserved.
+
+### Emoji packs
+
+The default emoji look is the project's own MIT map
+(`components/font/emoji_core.c`): no third-party emoji artwork ships in the
+repository. A user-installed pack under `EMOJI/` on SD or USB is the user's
+responsibility, including its licence; the firmware only reads the files.
+Packs that bundle Noto Emoji (OFL 1.1), Twemoji (CC-BY 4.0) or similar are
+compatible with this project as long as their own notices travel with the
+files.
 
 ## Third-party components
 
@@ -156,6 +167,7 @@ The co-processor firmware this project ships is built from its own
 | `assets/fonts/DejaVuSerif*.ttf` | Bitstream Vera / DejaVu license (`assets/fonts/LICENSE-DejaVu.txt`) |
 | `assets/fonts/Noto*.ttf` | SIL Open Font License 1.1 (`assets/fonts/OFL.txt`) |
 | `components/gfx/gfx_font.c` | Generated from the public-domain `unscii-8` font |
+| `components/font/emoji_core.c` (retro emoji map) | Project-authored, MIT - the built-in default emoji pack. No third-party emoji artwork is bundled. |
 | `icon/icon-512.png`, `main/assets/icon_splash.c` | Project-authored derivatives |
 
 ### Code adapted from ESP-Brookesia (Apache-2.0)

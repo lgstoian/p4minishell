@@ -69,6 +69,7 @@ idf_component_register(
         test_rss_opml.c
  test_usb_hid_layout.c
  test_css_color.c
+ test_emoji.c
  test_js_canvas.c
         test_browser_cache.c
         test_epub.c

@@ -159,6 +159,14 @@ bool shell_path_has_extension(const char *path, const char *extension);
 const char *shell_get_cwd(void);
 
 /**
+ * Convert an absolute VFS path back to the shell spelling: `/sdcard/APPS/X`
+ * becomes `sd:/APPS/X`, `/usb0/X` becomes `usb:/X`. A path already in
+ * `sd:/`/`usb:/` form, or one that is not on a mounted volume, is copied
+ * verbatim. The one place that answers "which drive is this?" for batch apps.
+ */
+void storage_shell_path(const char *path, char *out, size_t out_size);
+
+/**
  * Replace the shell current working directory.
  * @param absolute_path  Absolute VFS path under the SD mount point.
  */

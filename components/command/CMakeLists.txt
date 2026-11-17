@@ -8,6 +8,7 @@ idf_component_register(
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         ansi
+        emoji
         applib
         archive
         audio

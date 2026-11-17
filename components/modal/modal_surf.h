@@ -112,6 +112,18 @@ int modal_viewer_run_raw(const char *title, const char *file_path, uint32_t time
 int modal_image_run(const char *title, const char *file_path,
                     uint32_t timeout_ms, bool fit);
 
+/**
+ * @brief Set the transparency of every modal panel and its backdrop scrim.
+ *
+ * Opt-in and per app: the shell applies an app's APPINFO `alpha=`/`scrim=`
+ * before it runs and restores the defaults afterwards. Both are 0-255.
+ * `panel_alpha` < 255 makes the panel translucent so the page behind shows
+ * through; `scrim_alpha` > 0 dims that page behind the panel (black at that
+ * opacity). 255/0 is the opaque default: no visible change.
+ */
+void modal_surf_set_alpha(uint8_t panel_alpha, uint8_t scrim_alpha);
+void modal_surf_get_alpha(uint8_t *panel_alpha, uint8_t *scrim_alpha);
+
 #ifdef __cplusplus
 }
 #endif

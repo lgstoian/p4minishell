@@ -105,7 +105,7 @@ goto menu
 
 :export
 db export zettel
-dialog "Notes" "Exported to sd:/DBS/zettel.EXPORT." "OK"
+dialog "Notes" "Exported to %APPDRIVE%/DBS/zettel.EXPORT." "OK"
 goto menu
 
 :import

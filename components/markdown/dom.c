@@ -8,13 +8,24 @@
 #include <ctype.h>
 #include <stdio.h>
 
-dom_node_t *dom_node_new(dom_node_type_t type) {
-    dom_node_t *node = calloc(1, sizeof(dom_node_t));
-    if (!node) return NULL;
+/** Alpha/opacity defaults: 255 means "fully opaque, nothing set". A node's
+ *  fg_alpha is honoured only when the node also sets a colour, bg_alpha only
+ *  when it sets a background, so an inherited value behaves like CSS. */
+static void dom_node_defaults(dom_node_t *node, dom_node_type_t type)
+{
     node->type = type;
     node->display = DOM_DISPLAY_INLINE;
     node->fg = 16;
     node->bg = 16;
+    node->fg_alpha = 255;
+    node->bg_alpha = 255;
+    node->opacity = 255;
+}
+
+dom_node_t *dom_node_new(dom_node_type_t type) {
+    dom_node_t *node = calloc(1, sizeof(dom_node_t));
+    if (!node) return NULL;
+    dom_node_defaults(node, type);
     return node;
 }
 
@@ -25,10 +36,7 @@ dom_node_t *dom_node_new_in(dom_arena_t *arena, dom_node_type_t type) {
         node = (dom_node_t *)dom_arena_alloc(arena, sizeof(dom_node_t));
         if (node != NULL) {
             memset(node, 0, sizeof(*node));
-            node->type = type;
-            node->display = DOM_DISPLAY_INLINE;
-            node->fg = 16;
-            node->bg = 16;
+            dom_node_defaults(node, type);
             node->arena = arena;
             return node;
         }
@@ -607,33 +615,30 @@ void dom_set_text(dom_node_t *node, const char *text) {
     }
 }
 
-/* CSS color name / #rgb / #rrggbb / rgb() -> DOS 16-color index.
- * 16 is "default" (no explicit color). Shared by every style application. */
-static int dom_css_color(const char *value)
+/** Apply one CSS colour to a node's background, keeping its alpha so
+ *  `rgba()`/`transparent` reach the renderer instead of being flattened. */
+static void dom_css_background_colour(dom_node_t *node, const char *value)
 {
     css_rgba_t color;
 
     if (!css_color_parse(value, &color)) {
-        return 16;
+        return;
     }
-    return css_color_to_dos(&color);
+    node->bg = css_color_to_dos(&color);
+    node->bg_alpha = color.a;
+    node->bg_set = true;
 }
 
 static void dom_css_background(dom_node_t *node, const char *value)
 {
     const char *url;
-    uint8_t color;
 
     if (node == NULL || value == NULL) {
         return;
     }
     url = strstr(value, "url(");
     if (url == NULL) {
-        color = dom_css_color(value);
-        if (color != 16) {
-            node->bg = color;
-            node->bg_set = true;
-        }
+        dom_css_background_colour(node, value);
         return;
     }
     url += 4;
@@ -654,11 +659,7 @@ static void dom_css_background(dom_node_t *node, const char *value)
         const char *close = strchr(url, ')');
 
         if (close != NULL) {
-            color = dom_css_color(close + 1);
-            if (color != 16) {
-                node->bg = color;
-                node->bg_set = true;
-            }
+            dom_css_background_colour(node, close + 1);
         }
     }
 }
@@ -670,14 +671,21 @@ void dom_set_style(dom_node_t *node, const char *property, const char *value) {
         else if (strcmp(value, "block") == 0) node->display = DOM_DISPLAY_BLOCK;
         else if (strcmp(value, "inline") == 0) node->display = DOM_DISPLAY_INLINE;
     } else if (strcmp(property, "color") == 0) {
-        node->fg = (uint8_t)dom_css_color(value);
-    } else if (strcmp(property, "background-color") == 0) {
-        uint8_t color = (uint8_t)dom_css_color(value);
+        css_rgba_t color;
 
-        if (color != 16) {
-            node->bg = color;
-            node->bg_set = true;
+        if (css_color_parse(value, &color)) {
+            node->fg = css_color_to_dos(&color);
+            node->fg_alpha = color.a;
         }
+    } else if (strcmp(property, "opacity") == 0) {
+        /* CSS opacity multiplies the subtree, it does not replace it. */
+        double amount = strtod(value, NULL);
+
+        if (amount < 0.0) amount = 0.0;
+        if (amount > 1.0) amount = 1.0;
+        node->opacity = (uint8_t)(amount * 255.0 + 0.5);
+    } else if (strcmp(property, "background-color") == 0) {
+        dom_css_background_colour(node, value);
     } else if (strcmp(property, "background-image") == 0) {
         dom_css_background(node, value);
     } else if (strcmp(property, "background") == 0) {
