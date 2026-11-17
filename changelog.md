@@ -97,8 +97,8 @@ open bugs see [`bugs.md`](bugs.md).
 
 - Firmware builds clean on both profiles (JC1060P470C, M5Stack Tab5) and the
   standalone `test/` project builds for both; the on-board unit suite is
-  **681/0/2 on COM3 and COM6** (the 15 new colour/emoji/alpha cases included);
-  the host lane is **283/283**; `green_guard` (739), `comment_index` and
+  **682/0/2 on COM3 and COM6** (the 16 new colour/emoji/alpha cases included);
+  the host lane is **284/284**; `green_guard` (740), `comment_index` and
   `breadcrumbs` pass; `tools/harness/verify.py` is green.
 - COM3 hardware spot-checks: `version` reports v1.4.3, `emoji` prints the
   retro map and pack status, `help html`/`html` resolve, `launch /list` lists
