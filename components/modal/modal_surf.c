@@ -63,6 +63,12 @@ static void surf_timeout_cb(TimerHandle_t timer)
 static uint8_t s_panel_alpha = 255;
 static uint8_t s_scrim_alpha = 0;
 
+/* The container/scrim of the surface that is currently open, so a runtime
+ * rotation can resize them in place. Set by surf_create_container() and
+ * validated through lv_obj_is_valid() (a close deletes them). */
+static lv_obj_t *s_active_panel = NULL;
+static lv_obj_t *s_active_scrim = NULL;
+
 void modal_surf_set_alpha(uint8_t panel_alpha, uint8_t scrim_alpha)
 {
     s_panel_alpha = panel_alpha;
@@ -107,6 +113,7 @@ static lv_obj_t *surf_create_container(lv_obj_t *parent)
             lv_obj_set_style_radius(scrim, 0, 0);
             lv_obj_set_style_border_width(scrim, 0, 0);
             lv_obj_set_style_pad_all(scrim, 0, 0);
+            s_active_scrim = scrim;
         }
     }
 
@@ -137,7 +144,47 @@ static lv_obj_t *surf_create_container(lv_obj_t *parent)
      * passes that follow (V1). */
     lv_obj_update_layout(parent);
     lv_obj_scroll_to_y(parent, lv_obj_get_y(c), LV_ANIM_OFF);
+    s_active_panel = c;
     return c;
+}
+
+/**
+ * Re-apply the open surface's panel to the live transcript rect after a
+ * rotation/resolution change. Runs on the command worker (the modal runtime's
+ * reflow hook); takes the port lock. The panel was created by
+ * surf_create_container(), which is the one sizing implementation.
+ */
+static void surf_reflow(void *ctx)
+{
+    lv_obj_t *parent;
+    lv_coord_t w;
+    lv_coord_t h;
+
+    (void)ctx;
+    if (s_active_panel == NULL || !lv_obj_is_valid(s_active_panel)) {
+        s_active_panel = NULL;
+        s_active_scrim = NULL;
+        return;
+    }
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    parent = lv_obj_get_parent(s_active_panel);
+    if (parent != NULL) {
+        w = lv_obj_get_content_width(parent);
+        h = lv_obj_get_content_height(parent);
+        lv_obj_set_width(s_active_panel, LV_PCT(100));
+        if (h > 0) {
+            lv_obj_set_height(s_active_panel, h);
+        }
+        if (s_active_scrim != NULL && lv_obj_is_valid(s_active_scrim) && w > 0 && h > 0) {
+            lv_obj_set_size(s_active_scrim, w, h);
+            lv_obj_set_pos(s_active_scrim, 0, 0);
+        }
+        lv_obj_update_layout(parent);
+        lv_obj_scroll_to_y(parent, lv_obj_get_y(s_active_panel), LV_ANIM_OFF);
+    }
+    lvgl_port_unlock();
 }
 
 static lv_obj_t *surf_create_title(lv_obj_t *parent, const char *title)
@@ -332,6 +379,7 @@ static const modal_surface_t dialog_surface = {
     .close = dialog_surface_close,
     .handle_usb_key = dialog_handle_usb_key,
     .handle_serial_line = dialog_handle_serial_line,
+    .reflow = surf_reflow,
     .abort_cancels = true,
 };
 
@@ -494,6 +542,7 @@ static const modal_surface_t list_surface = {
     .close = list_surface_close,
     .handle_usb_key = list_handle_usb_key,
     .handle_serial_line = list_handle_serial_line,
+    .reflow = surf_reflow,
     .abort_cancels = true,
 };
 
@@ -639,6 +688,7 @@ static const modal_surface_t ask_surface = {
     .close = ask_surface_close,
     .handle_usb_key = ask_handle_usb_key,
     .handle_serial_line = ask_handle_serial_line,
+    .reflow = surf_reflow,
     .abort_cancels = true,
 };
 
@@ -907,6 +957,7 @@ static const modal_surface_t fb_surface = {
     .close = fb_surface_close,
     .handle_usb_key = fb_handle_usb_key,
     .handle_serial_line = fb_handle_serial_line,
+    .reflow = surf_reflow,
     .abort_cancels = true,
 };
 
@@ -1132,6 +1183,7 @@ static const modal_surface_t viewer_surface = {
     .close = viewer_surface_close,
     .handle_usb_key = viewer_handle_usb_key,
     .handle_serial_line = viewer_handle_serial_line,
+    .reflow = surf_reflow,
     .abort_cancels = true,
 };
 
@@ -1445,6 +1497,7 @@ static const modal_surface_t image_surface = {
     .close = image_surface_close,
     .handle_usb_key = image_handle_usb_key,
     .handle_serial_line = image_handle_serial_line,
+    .reflow = surf_reflow,
     .abort_cancels = true,
 };
 
@@ -1640,6 +1693,7 @@ static const modal_surface_t hex_surface = {
     .close = hex_surface_close,
     .handle_usb_key = hex_handle_usb_key,
     .handle_serial_line = hex_handle_serial_line,
+    .reflow = surf_reflow,
     .abort_cancels = true,
 };
 
@@ -1939,6 +1993,7 @@ static const modal_surface_t form_surface = {
     .close = form_surface_close,
     .handle_usb_key = form_handle_usb_key,
     .handle_serial_line = form_handle_serial_line,
+    .reflow = surf_reflow,
     .abort_cancels = true,
 };
 

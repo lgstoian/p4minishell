@@ -71,6 +71,7 @@ static tui_bg_rect_t s_bg_rects[TUI_MAX_BG_RECTS];
 static int s_bg_rect_count;
 static void tui_bg_clear(void);
 static void tui_bg_relayout(void);
+static void tui_title_hide(void);
 /* Title-on-border overlay: the grid label markup carries foreground only,
  * so a title with an explicit background (bg < 16) gets a same-font overlay
  * label positioned over its cells. Tracked at draw time; any later write
@@ -214,6 +215,116 @@ static void tui_alloc_cells(void)
     size_t bytes = total * sizeof(tui_cell_t);
     s_cells = p4heap_alloc_psram(bytes);
     if (s_cells) memset(s_cells, 0, bytes);
+}
+
+/* ==== Logical grid geometry ====
+ * The grid follows the PANEL aspect instead of a hard-coded 80x25: the same
+ * 80-column DOS grid on a landscape panel, and the number of rows/columns that
+ * the committed cell font can fill on a portrait one. A minimum cell keeps the
+ * grid usable (and keeps the landscape board's 80x25 layout: the 12x24 cell
+ * cannot fit 25 rows in ~510 px, so the 12x20 cell wins there exactly as
+ * before). */
+
+/** Smallest column count the narrow (below-DOS-width) fallback may choose. */
+#define TUI_GRID_MIN_COLS 40
+/** Smallest row count any layout must keep (the documented DOS grid rows). */
+#define TUI_GRID_MIN_ROWS 24
+
+/**
+ * Pick the logical grid for a @p w x @p h viewport.
+ *
+ * Compatibility first: every reference app hard-codes 80-column geometry, so
+ * while a committed cell still fits the documented 80 columns (>= 8 px wide)
+ * AND the 25-row floor, the grid stays 80 columns wide and the extra panel
+ * height becomes MORE ROWS. That keeps app frames/T-junctions unclipped and
+ * lets the page use the whole portrait height (a 720x1280 panel becomes
+ * 80x97 at 8x12 instead of a 640x300 strip). Only a panel too narrow for 80
+ * columns falls back to the aspect grid (largest cell that still gives a
+ * usable pane grid).
+ *
+ * Pure: no LVGL, no allocation, so `tui status` and the host tests can query
+ * any viewport.
+ */
+static int tui_grid_pick(int w, int h, int *cols_out, int *rows_out)
+{
+    int cols = P4_CONFIG_TUI_COLS;
+    int rows = P4_CONFIG_TUI_ROWS;
+    int pick = tui_font_cell_count - 1;   /* smallest cell = fallback */
+
+    if (w > 0 && h > 0 && tui_font_cell_count > 0) {
+        bool found = false;
+
+        /* 1) Keep the documented 80-column grid when a committed cell fits it
+         *    with the 25-row floor (largest such cell wins: 12x20 at 1024x600,
+         *    12x24 on the Tab5 landscape, 8x12 on 720x1280 portrait). */
+        for (int i = 0; i < tui_font_cell_count; i++) {
+            const tui_font_cell_t *c = &tui_font_cells[i];
+            int ncols = w / c->cell_w;
+            int nrows = h / c->cell_h;
+
+            if (ncols < P4_CONFIG_TUI_COLS || nrows < TUI_GRID_MIN_ROWS) {
+                continue;
+            }
+            cols = P4_CONFIG_TUI_COLS;
+            rows = nrows;
+            pick = i;
+            found = true;
+            break;   /* table is ordered largest cell first */
+        }
+
+        /* 2) Narrow panel: largest-cell aspect grid that still gives a usable
+         *    pane grid. Landscape never reaches this branch on the supported
+         *    boards; it exists so a small panel still gets a real TUI. */
+        if (!found) {
+            for (int i = 0; i < tui_font_cell_count; i++) {
+                const tui_font_cell_t *c = &tui_font_cells[i];
+                int ncols = w / c->cell_w;
+                int nrows = h / c->cell_h;
+
+                if (ncols < TUI_GRID_MIN_COLS || nrows < TUI_GRID_MIN_ROWS) {
+                    continue;
+                }
+                cols = ncols;
+                rows = nrows;
+                pick = i;
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            /* Too small for a contract grid: use the smallest cell. */
+            const tui_font_cell_t *c = &tui_font_cells[pick];
+
+            cols = w / c->cell_w;
+            rows = h / c->cell_h;
+            if (cols > P4_CONFIG_TUI_COLS) cols = P4_CONFIG_TUI_COLS;
+            if (cols < 1) cols = 1;
+            if (rows < 1) rows = 1;
+        }
+    }
+    if (cols_out != NULL) *cols_out = cols;
+    if (rows_out != NULL) *rows_out = rows;
+    return pick;
+}
+
+void tui_grid_resolve(int w, int h, int *cols_out, int *rows_out,
+                      int *cell_w_out, int *cell_h_out)
+{
+    int pick = tui_grid_pick(w, h, cols_out, rows_out);
+
+    if (cell_w_out != NULL) *cell_w_out = tui_font_cells[pick].cell_w;
+    if (cell_h_out != NULL) *cell_h_out = tui_font_cells[pick].cell_h;
+}
+
+int tui_get_cols(void)
+{
+    return s_cols;
+}
+
+int tui_get_rows(void)
+{
+    return s_rows;
 }
 
 static void tui_bg_clear(void)
@@ -504,26 +615,14 @@ static void tui_touch_event_cb(lv_event_t *event)
     }
 }
 
-static void tui_apply_layout(void)
+/** Largest committed cell whose grid @p cols x @p rows fits the rect. */
+static const tui_font_cell_t *tui_fit_font(lv_coord_t cw, lv_coord_t ch)
 {
-    lv_coord_t cw;
-    lv_coord_t ch;
     const tui_font_cell_t *best = NULL;
-    lv_coord_t gw;
-    lv_coord_t gh;
 
-    if (s_tui_label == NULL || s_tui_container == NULL || s_cols <= 0 || s_rows <= 0) {
-        return;
-    }
-    cw = lv_obj_get_content_width(s_tui_container);
-    ch = lv_obj_get_content_height(s_tui_container);
-    if (cw <= 0 || ch <= 0) {
-        window_rect_t vp = windows_get_app_viewport();
-        cw = vp.width;
-        ch = vp.height;
-    }
     for (int i = 0; i < tui_font_cell_count; i++) {
         const tui_font_cell_t *c = &tui_font_cells[i];
+
         if ((int64_t)c->cell_w * s_cols > cw || (int64_t)c->cell_h * s_rows > ch) {
             continue;
         }
@@ -535,6 +634,129 @@ static void tui_apply_layout(void)
     if (best == NULL) {
         best = &tui_font_cells[tui_font_cell_count - 1]; /* smallest fallback */
     }
+    return best;
+}
+
+/**
+ * Allocate a @p new_cols x @p new_rows cell buffer and copy the overlapping
+ * top-left region out of @p old (row-major, @p old_cols cells per row), so a
+ * reflow (rotation, fullscreen) keeps what the app already drew.
+ */
+static tui_cell_t *tui_grid_alloc_copy(const tui_cell_t *old, int old_cols,
+                                       int old_rows, int new_cols, int new_rows)
+{
+    size_t bytes = (size_t)new_cols * (size_t)new_rows * sizeof(tui_cell_t);
+    tui_cell_t *buf = p4heap_alloc_psram(bytes);
+
+    if (buf == NULL) {
+        return NULL;
+    }
+    memset(buf, 0, bytes);
+    if (old != NULL && old_cols > 0 && old_rows > 0) {
+        int cols = old_cols < new_cols ? old_cols : new_cols;
+        int rows = old_rows < new_rows ? old_rows : new_rows;
+
+        for (int r = 0; r < rows; r++) {
+            memcpy(&buf[(size_t)r * new_cols],
+                   &old[(size_t)r * old_cols],
+                   (size_t)cols * sizeof(tui_cell_t));
+        }
+    }
+    return buf;
+}
+
+/**
+ * Re-commit the live grid to @p cols x @p rows. Every grid-sized buffer (the
+ * cell buffer, the alt-screen copy and the 2000-row page) moves together, so
+ * no later reader can index one with another's stride. Returns false (and
+ * leaves the live grid untouched) when a buffer cannot be allocated.
+ */
+static bool tui_grid_commit(int cols, int rows)
+{
+    tui_cell_t *cells;
+    tui_cell_t *alt = NULL;
+    tui_cell_t *page = NULL;
+
+    if (cols <= 0 || rows <= 0 || (cols == s_cols && rows == s_rows)) {
+        return true;
+    }
+    cells = tui_grid_alloc_copy(s_cells, s_cols, s_rows, cols, rows);
+    if (cells == NULL) {
+        return false;
+    }
+    if (s_alt_cells != NULL) {
+        alt = tui_grid_alloc_copy(s_alt_cells, s_cols, s_rows, cols, rows);
+        if (alt == NULL) {
+            heap_caps_free(cells);
+            return false;
+        }
+    }
+    if (s_page != NULL && s_page_rows > 0) {
+        page = tui_grid_alloc_copy(s_page, s_cols, s_page_rows, cols, s_page_rows);
+        if (page == NULL) {
+            heap_caps_free(cells);
+            heap_caps_free(alt);
+            return false;
+        }
+    }
+    if (s_cells != NULL) heap_caps_free(s_cells);
+    if (s_alt_cells != NULL) heap_caps_free(s_alt_cells);
+    if (s_page != NULL) heap_caps_free(s_page);
+    s_cells = cells;
+    s_alt_cells = alt;
+    s_page = page;
+    s_cols = cols;
+    s_rows = rows;
+    if (s_cur_row > s_rows) s_cur_row = s_rows;
+    if (s_saved_row > s_rows) s_saved_row = s_rows;
+    if (s_cur_col > s_cols) s_cur_col = s_cols;
+    if (s_saved_col > s_cols) s_saved_col = s_cols;
+    if (s_scroll_offset > s_page_rows - s_rows) {
+        s_scroll_offset = s_page_rows - s_rows;
+        if (s_scroll_offset < 0) s_scroll_offset = 0;
+    }
+    /* Grid coordinates changed: a stale title overlay or selection box would
+     * paint at the old pitch, so retire both. */
+    tui_title_hide();
+    s_selecting = false;
+    return true;
+}
+
+static void tui_apply_layout(void)
+{
+    lv_coord_t cw;
+    lv_coord_t ch;
+    const tui_font_cell_t *best = NULL;
+    lv_coord_t gw;
+    lv_coord_t gh;
+    int grid_cols;
+    int grid_rows;
+    bool grid_changed = false;
+
+    if (s_tui_label == NULL || s_tui_container == NULL || s_cols <= 0 || s_rows <= 0) {
+        return;
+    }
+    cw = lv_obj_get_content_width(s_tui_container);
+    ch = lv_obj_get_content_height(s_tui_container);
+    if (cw <= 0 || ch <= 0) {
+        window_rect_t vp = windows_get_app_viewport();
+        cw = vp.width;
+        ch = vp.height;
+    }
+    /* Reflow the logical grid to the visible rect before binding the font: an
+     * 80-column grid on a 720 px portrait panel would force 8 px cells and use
+     * a third of the height. Landscape keeps the documented 80-column grid
+     * (tui_grid_pick clamps the count). */
+    (void)tui_grid_pick(cw, ch, &grid_cols, &grid_rows);
+    if (grid_cols != s_cols || grid_rows != s_rows) {
+        if (!tui_grid_commit(grid_cols, grid_rows)) {
+            /* Keep the previous grid when the new buffers cannot be
+             * allocated; the font fit below still honours it. */
+        } else {
+            grid_changed = true;
+        }
+    }
+    best = tui_fit_font(cw, ch);
     s_bound_cell = best;
     gw = (lv_coord_t)(best->cell_w * s_cols);
     gh = (lv_coord_t)(best->cell_h * s_rows);
@@ -555,6 +777,14 @@ static void tui_apply_layout(void)
     }
     lv_obj_update_layout(s_tui_label);
     tui_bg_relayout();
+    if (grid_changed && s_active) {
+        /* Repaint at the new pitch now: an idle app would otherwise keep the
+         * old grid's markup until its next draw. */
+        if (s_page != NULL) {
+            tui_page_render();
+        }
+        tui_flush();
+    }
     ESP_LOGD(TUI_TAG, "tui layout: cell %dx%d grid %dx%d in %dx%d",
              best->cell_w, best->cell_h, (int)gw, (int)gh, (int)cw, (int)ch);
 }
@@ -564,8 +794,9 @@ bool tui_init(void)
     if (s_active) return true;
     /* Hand the snapshot model the live-page accessor (see the seam above). */
     tui_page_shot_set_view(&s_page_shot_view, NULL);
-    s_rows = P4_CONFIG_TUI_ROWS;
-    s_cols = P4_CONFIG_TUI_COLS;
+    /* Keep the committed grid: it tracks the panel aspect, and any live page
+     * buffer was sized with it (the statics start at the configured 80x25 and
+     * the first tui_apply_layout reflows to the panel). */
     tui_alloc_cells();
     if (!s_cells) return false;
     s_cur_row = 1;

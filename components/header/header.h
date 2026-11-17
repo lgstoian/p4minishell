@@ -116,6 +116,11 @@ void header_register_status_action(header_status_action_cb_t cb);
  * caller's visibility state is handled by the caller. */
 int header_get_height(void);
 
+/** Re-apply the resolution-scaled height/padding and re-render the live bar.
+ * Called by the window manager's in-place rotation reflow; no-op before
+ * header_init(). */
+void header_refresh_layout(void);
+
 /** Select the layout mode (AUTO by default; re-lays out on next render). */
 void header_set_mode(header_mode_t mode);
 header_mode_t header_get_mode(void);

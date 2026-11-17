@@ -7227,6 +7227,43 @@ static bool command_modal_console_command(const char *line)
     if (line == NULL) {
         return false;
     }
+    /* Console-local read-only diagnostics: the live grid is exactly what a
+     * rotation/portrait report needs, and the worker is blocked anyway. */
+    if (strncasecmp(line, "tui", 3) == 0 && (line[3] == ' ' || line[3] == '\t')) {
+        const char *sub = line + 3;
+        char *tui_argv[2];
+
+        while (*sub == ' ' || *sub == '\t') sub++;
+        if (shell_text_equals_ignore_case(sub, "status") ||
+            shell_text_equals_ignore_case(sub, "stats") ||
+            shell_text_equals_ignore_case(sub, "selftest")) {
+            tui_argv[0] = (char *)"tui";
+            tui_argv[1] = (char *)sub;
+            shell_command_tui(2, tui_argv);
+            return true;
+        }
+    }
+    /* `rotate <0|90|180|270>` is a display-manager action, not app input: claim
+     * it even while a foreground app owns the worker/input so a mid-app
+     * rotation reflows the open surface instead of being eaten as keys. */
+    if (strncasecmp(line, "rotate", 6) == 0 && (line[6] == ' ' || line[6] == '\t')) {
+        char arg[16];
+        char *rot_argv[2];
+        const char *p = line + 6;
+
+        while (*p == ' ' || *p == '\t') p++;
+        snprintf(arg, sizeof(arg), "%s", p);
+        if (arg[0] != '\0') {
+            rot_argv[0] = (char *)"rotate";
+            rot_argv[1] = arg;
+            shell_command_rotate(2, rot_argv);
+        }
+        return true;
+    }
+    /* Captures and touch automation are host/diagnostic actions: while the
+     * worker is blocked (modal or a foreground app's key loop) they run on this
+     * console-reader task instead of being swallowed as app input. They claim
+     * only their own tokens and return false otherwise. */
     /* Touch automation must run while a modal blocks the worker: parse and
      * drive it on this console-reader task (returns false when not a `ui`
      * line). */

@@ -13,10 +13,15 @@
  * @hard-rule ai-context.md#module-layering-rules
  * @brief TUI cell buffer + drawing primitives for P4MiniShell.
  *
- * Logical grid P4_CONFIG_TUI_COLS x ROWS (default 80x25, 1-based DOS coords)
- * maps to the live transcript region's pixel rect (rotation/keyboard-aware).
- * The buffer is heap (PSRAM preferred) and flushed to an LVGL label inside the
- * transcript container via windows TUI mode.
+ * Logical grid: the live grid follows the panel aspect (tui_get_cols/rows).
+ * It keeps the documented 80-column DOS grid whenever a committed cell still
+ * fits it (so app frames authored for 80 columns are never clipped) and turns
+ * the extra panel height into more rows; only a panel too narrow for 80
+ * columns falls back to a narrower aspect grid (1-based DOS coords). The grid
+ * maps to the live transcript region's pixel rect
+ * (rotation/keyboard/fullscreen-aware). The buffer is heap (PSRAM preferred)
+ * and flushed to an LVGL label inside the transcript container via windows TUI
+ * mode.
  *
  * Architecture:
  *   - tui_init() creates the buffer and enters windows TUI mode (hides shell
@@ -67,6 +72,24 @@ bool tui_ready(void);
 /** Re-resolve the TUI label font after a font switch (stale-pointer fix).
  * No-op unless TUI mode is active. */
 void tui_refresh_fonts(void);
+
+/** Live logical grid width in cells. Keeps the documented 80-column DOS grid
+ *  whenever a committed cell fits it (the width is always
+ *  <= P4_CONFIG_TUI_COLS, the fixed-buffer ceiling); only a panel too narrow
+ *  for 80 columns reports fewer. */
+int tui_get_cols(void);
+
+/** Live logical grid height in cells (see tui_get_cols()). */
+int tui_get_rows(void);
+
+/**
+ * Resolve the logical grid that fills a @p w x @p h pixel viewport with the
+ * largest committed TUI cell font, keeping a usable grid (at least 40 columns
+ * and 24 rows) and clamping columns to P4_CONFIG_TUI_COLS. Pure: no LVGL, no
+ * allocation, so `tui status` and host tests can query any viewport.
+ */
+void tui_grid_resolve(int w, int h, int *cols_out, int *rows_out,
+                      int *cell_w_out, int *cell_h_out);
 
 /** Clear entire grid (ED 2J) with default colors. */
 void tui_clear(void);

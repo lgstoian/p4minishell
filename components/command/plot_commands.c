@@ -206,8 +206,8 @@ static void plot_build_view(gfx_view_t *v, bool tui)
         } else {
             px = 1;
             py = 1;
-            pw = P4_CONFIG_TUI_COLS;
-            ph = P4_CONFIG_TUI_ROWS;
+            pw = tui_get_cols();
+            ph = tui_get_rows();
         }
     } else {
         gfx_surface_t *s = gfx_canvas_surface();

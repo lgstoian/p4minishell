@@ -211,6 +211,64 @@ void test_tui_bound_cell_inactive(void)
     tui_bound_cell_info(NULL, NULL, NULL);
 }
 
+/** The logical grid keeps the documented 80 columns on a portrait panel (so
+ *  app frames authored for 80 columns never clip) and turns the extra height
+ *  into rows of the largest cell that still fits 80 columns. */
+void test_tui_grid_resolve_portrait(void)
+{
+    int cols = 0;
+    int rows = 0;
+    int cw = 0;
+    int ch = 0;
+
+    tui_grid_resolve(720, 1168, &cols, &rows, &cw, &ch);
+    TEST_ASSERT_EQUAL_INT(80, cols);
+    TEST_ASSERT_EQUAL_INT(8, cw);
+    TEST_ASSERT_EQUAL_INT(12, ch);
+    TEST_ASSERT_EQUAL_INT(1168 / 12, rows);
+    TEST_ASSERT_TRUE((int64_t)cols * cw <= 720);
+    TEST_ASSERT_TRUE((int64_t)rows * ch <= 1168);
+    TEST_ASSERT_TRUE((int64_t)rows * ch >= (int64_t)1168 * 9 / 10);
+
+    /* NULL outs are ignored (a caller may only want the grid). */
+    tui_grid_resolve(720, 1168, NULL, NULL, NULL, NULL);
+}
+
+/** The reference landscape panel keeps the documented 80x25 DOS grid. */
+void test_tui_grid_resolve_landscape(void)
+{
+    int cols = 0;
+    int rows = 0;
+    int cw = 0;
+    int ch = 0;
+
+    tui_grid_resolve(1024, 510, &cols, &rows, &cw, &ch);
+    TEST_ASSERT_EQUAL_INT(80, cols);
+    TEST_ASSERT_EQUAL_INT(25, rows);
+    TEST_ASSERT_TRUE(cw * cols <= 1024);
+    TEST_ASSERT_TRUE(ch * rows <= 510);
+    /* Bigger fonts cannot satisfy the row floor, so 12x20 (not 12x24) wins. */
+    TEST_ASSERT_EQUAL_INT(12, cw);
+    TEST_ASSERT_EQUAL_INT(20, ch);
+}
+
+/** A viewport too small for the contract grid still yields a usable one. */
+void test_tui_grid_resolve_tiny(void)
+{
+    int cols = 0;
+    int rows = 0;
+    int cw = 0;
+    int ch = 0;
+
+    tui_grid_resolve(160, 120, &cols, &rows, &cw, &ch);
+    TEST_ASSERT_TRUE(cols >= 1);
+    TEST_ASSERT_TRUE(rows >= 1);
+    TEST_ASSERT_TRUE(cw >= 8);
+    TEST_ASSERT_TRUE(ch >= 8);
+    TEST_ASSERT_TRUE(cw * cols <= 160);
+    TEST_ASSERT_TRUE(ch * rows <= 120);
+}
+
 /** Page snapshots carry their own size: a truncated or corrupted blob is
  *  refused instead of being memcpy'd past its allocation. The browser page
  *  cache depends on this. */

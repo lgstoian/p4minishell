@@ -485,11 +485,11 @@ bool shell_command_draw(int argc, char **argv)
         for (c = 0; c < ncols; c++) {
             if (widths[c] > DRAW_TABLE_COL_MAX) widths[c] = DRAW_TABLE_COL_MAX;
         }
-        if (tui_table_total_width(ncols, widths) > P4_CONFIG_TUI_COLS) {
+        if (tui_table_total_width(ncols, widths) > tui_get_cols()) {
             free(rows);
             free(cells);
             shell_transcript_appendf_ansi(SH_ERR "draw table: too wide (max %d columns of grid)\n" SH_RST,
-                                          P4_CONFIG_TUI_COLS);
+                                          tui_get_cols());
             batch_set_errorlevel(2);
             return false;
         }
@@ -1622,7 +1622,7 @@ void shell_command_color(int argc, char **argv)
 void shell_command_locate(int argc, char **argv)
 {
     if (argc != 3) {
-        shell_print_usage("Usage: locate <row> <col>  (1-based, 1..25 1..80)");
+        shell_print_usage("Usage: locate <row> <col>  (1-based, 1..rows 1..cols of the live grid)");
         batch_set_errorlevel(2);
         return;
     }
@@ -1630,9 +1630,9 @@ void shell_command_locate(int argc, char **argv)
     int row = atoi(argv[1]);
     int col = atoi(argv[2]);
     if (row < 1) row = 1;
-    if (row > P4_CONFIG_TUI_ROWS) row = P4_CONFIG_TUI_ROWS;
+    if (row > tui_get_rows()) row = tui_get_rows();
     if (col < 1) col = 1;
-    if (col > P4_CONFIG_TUI_COLS) col = P4_CONFIG_TUI_COLS;
+    if (col > tui_get_cols()) col = tui_get_cols();
     if (tui_is_active()) {
         tui_set_cursor(row, col);
         draw_maybe_flush();
@@ -1678,12 +1678,30 @@ void shell_command_tui(int argc, char **argv)
         int cell_w = 0;
         int cell_h = 0;
         int cell_index = -1;
+        int fit_cols = 0;
+        int fit_rows = 0;
+        int fit_cw = 0;
+        int fit_ch = 0;
 
         shell_print_field("tui", "%s", tui_is_active() ? "active" : "inactive");
         shell_print_field("fullscreen", "%s", tui_is_fullscreen() ? "on" : "off");
         window_rect_t r = windows_get_rect(WINDOW_REGION_TRANSCRIPT);
         shell_print_field("transcript rect", "%dx%d at %d,%d", r.width, r.height, r.x, r.y);
-        shell_print_field("cols/rows", "%d x %d", P4_CONFIG_TUI_COLS, P4_CONFIG_TUI_ROWS);
+        shell_print_field("cols/rows", "%d x %d", tui_get_cols(), tui_get_rows());
+        /* The grid an app gets right now: the rect with the keyboard reclaimed
+         * (TUI mode hides it), resolved through the same pure helper the live
+         * layout uses. Printed even while TUI is inactive so the mapping is
+         * diagnosable without launching an app. */
+        {
+            int app_h = windows_get_display_height()
+                - windows_get_rect(WINDOW_REGION_HEADER).height
+                - windows_get_rect(WINDOW_REGION_INPUT_ROW).height;
+            window_rect_t app = windows_get_app_viewport();
+
+            tui_grid_resolve(app.width, app_h, &fit_cols, &fit_rows, &fit_cw, &fit_ch);
+            shell_print_field("grid fit", "%dx%d -> %d x %d, cell %dx%d",
+                              app.width, app_h, fit_cols, fit_rows, fit_cw, fit_ch);
+        }
         tui_bound_cell_info(&cell_w, &cell_h, &cell_index);
         if (cell_index >= 0) {
             shell_print_field("cell font", "%dx%d (slot %d of %d)",
@@ -1810,11 +1828,11 @@ void shell_command_tui(int argc, char **argv)
         if (from < 1) from = 1;
         if (to < from) to = from;
         shell_transcript_appendf("tui.dump cols=%d from=%d to=%d\n",
-                                 P4_CONFIG_TUI_COLS, from, to);
+                                 tui_get_cols(), from, to);
         for (int r = from; r <= to; r++) {
             char line[P4_CONFIG_TUI_COLS * 4 + 1];
             size_t pos = 0;
-            for (int c = 1; c <= P4_CONFIG_TUI_COLS; c++) {
+            for (int c = 1; c <= tui_get_cols(); c++) {
                 char u[8];
                 if (!tui_page_get_cell(c, r, u, sizeof(u), NULL, NULL, NULL)) {
                     continue;
@@ -1839,7 +1857,7 @@ void shell_command_tui(int argc, char **argv)
                 int run_end = 0;
 
                 runs[0] = '\0';
-                for (int c = 1; c <= P4_CONFIG_TUI_COLS; c++) {
+                for (int c = 1; c <= tui_get_cols(); c++) {
                     char u[8];
                     uint8_t fg = 0;
 

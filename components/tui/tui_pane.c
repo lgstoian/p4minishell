@@ -80,7 +80,7 @@ bool tui_pane_add(const char *name, int x, int y, int w, int h, const char *titl
     if (name == NULL || name[0] == '\0') return false;
     if (strlen(name) >= P4_CONFIG_WS_PANE_NAME_BYTES) return false;
     if (w < 3 || h < 3) return false;
-    if (x < 1 || y < 1 || x + w - 1 > P4_CONFIG_TUI_COLS || y + h - 1 > P4_CONFIG_TUI_ROWS) return false;
+    if (x < 1 || y < 1 || x + w - 1 > tui_get_cols() || y + h - 1 > tui_get_rows()) return false;
     if (pane_find(name) != NULL) return false;
 
     p = pane_free_slot();
@@ -202,7 +202,7 @@ bool tui_pane_split(const char *name, bool horizontal)
         ny = p->y;
         nh = p->h;
     }
-    if (nx + nw - 1 > P4_CONFIG_TUI_COLS || ny + nh - 1 > P4_CONFIG_TUI_ROWS) return false;
+    if (nx + nw - 1 > tui_get_cols() || ny + nh - 1 > tui_get_rows()) return false;
     np = pane_free_slot();
     if (np == NULL) return false;
 
@@ -576,7 +576,7 @@ void tui_hud_render(void)
 {
     int i;
     int left_col = 1;
-    int right_col = P4_CONFIG_TUI_COLS;
+    int right_col = tui_get_cols();
 
     for (i = 0; i < P4_CONFIG_WS_HUD_MAX; i++) {
         ws_hud_cell_t *cell = &s_hud_cells[i];

@@ -63,6 +63,7 @@
 #include "imu.h"
 #include "usb.h"
 #include "windows.h"
+#include "modal.h"
 #include "ui_test.h"
 #include "icon_splash.h"
 #include "rss_store.h"
@@ -779,11 +780,26 @@ static void shell_splash_show(void)
  * ======================================================================== */
 
 /**
- * Rebuild the whole LVGL surface. Registered with the display manager so it
+ * Rebuild/reflow the LVGL surface. Registered with the display manager so it
  * runs on the LVGL task (with adequate stack) after a rotation change.
+ *
+ * A foreground surface (TUI/gfx app, editor or ready-made modal) cannot be
+ * torn down without killing the command under it, so a rotation while one is
+ * open re-applies every resolution-dependent geometry IN PLACE instead
+ * (windows_reflow_ui -> header/keyboard/transcript/app viewport; the open
+ * modal re-applies its panel through the modal runtime's reflow hook). The
+ * plain shell has no live state to preserve, so it takes the full rebuild.
  */
 static void shell_rebuild_ui_callback(void)
 {
+    if (editor_view_is_open() || windows_app_surface_active() ||
+        modal_runtime_is_active()) {
+        windows_reflow_ui();
+        if (editor_view_is_open()) {
+            editor_view_reflow();
+        }
+        return;
+    }
     shell_build_ui();
 }
 

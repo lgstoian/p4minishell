@@ -13,6 +13,7 @@
 #include "modal.h"
 
 #include "shell.h"
+#include "windows.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -140,6 +141,7 @@ esp_err_t modal_surface_run(const modal_surface_t *surface, void *ctx, int *erro
     bool opened = false;
     esp_err_t result = ESP_OK;
     EventBits_t bits;
+    uint32_t layout_gen = windows_layout_generation();
 
     if (surface == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -208,6 +210,18 @@ esp_err_t modal_surface_run(const modal_surface_t *surface, void *ctx, int *erro
 
         if (bits != 0 && surface->service != NULL) {
             surface->service(ctx, bits);
+        }
+
+        /* A rotation/resolution change (in-place windows reflow) bumps the
+         * window manager's layout generation. Re-apply this surface's panel
+         * geometry instead of dying with the old one. */
+        if (surface->reflow != NULL) {
+            uint32_t now = windows_layout_generation();
+
+            if (now != layout_gen) {
+                layout_gen = now;
+                surface->reflow(ctx);
+            }
         }
 
         if ((bits & MODAL_EVENT_CLOSE_REQUEST) != 0) {

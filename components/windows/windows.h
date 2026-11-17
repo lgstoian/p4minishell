@@ -160,6 +160,24 @@ void windows_transcript_trim(void);
 void windows_apply_transcript_height(void);
 
 /**
+ * Re-apply every geometry that depends on the display resolution WITHOUT
+ * tearing the UI (or a running app/modal) down: screen padding, header
+ * height/pads, input-row height, keyboard height, transcript slot and the
+ * foreground app-surface layout callback (which reflows the TUI grid and the
+ * page buffer). Bumps windows_layout_generation(). LVGL task, and the port
+ * lock must be held (it is recursive). Used by the rotation handler so a
+ * mid-app rotation reflows in place.
+ */
+void windows_reflow_ui(void);
+
+/**
+ * Monotonic counter bumped whenever the committed geometry changes (init and
+ * every windows_reflow_ui()). Foreground surfaces poll it to re-apply their
+ * own layout (modal panel, browser page) without a second geometry source.
+ */
+uint32_t windows_layout_generation(void);
+
+/**
  * Scroll the transcript to the end.
  */
 void windows_scroll_transcript_to_end(void);

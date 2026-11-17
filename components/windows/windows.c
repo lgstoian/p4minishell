@@ -141,6 +141,10 @@ static struct {
     .transcript_measure = NULL,
 };
 
+/* Bumped on every committed geometry change (windows_init + windows_reflow_ui)
+ * so foreground surfaces can re-apply their own layout against one source. */
+static uint32_t s_layout_generation = 1;
+
 /* ========================================================================
  * FORWARD DECLARATIONS
  * ======================================================================== */
@@ -1361,12 +1365,21 @@ static void windows_transcript_render_window(bool pin_bottom, bool force)
     }
 
     first = windows_transcript_start_row(px_top);
+    if (first >= count) {
+        /* The container can be scrolled past the (new) content end for one
+         * pass after a height change (rotation reflow, keyboard toggle); the
+         * row window must never index `rows[count]`. */
+        first = count - 1;
+    }
     if (first > 0 && s_transcript_prefix[first] > px_top) {
         first--; /* the row split by the top edge is partially visible */
     }
     last = windows_transcript_start_row(px_bottom);
     if (last <= first) {
         last = first + 1; /* never materialize an empty window */
+    }
+    if (last > count) {
+        last = count;
     }
     if (last - first > P4_CONFIG_TRANSCRIPT_WINDOW_ROWS) {
         last = first + P4_CONFIG_TRANSCRIPT_WINDOW_ROWS;
@@ -1818,6 +1831,61 @@ void windows_apply_transcript_height(void)
     lv_obj_update_layout(container);
 }
 
+uint32_t windows_layout_generation(void)
+{
+    return s_layout_generation;
+}
+
+/**
+ * In-place rotation/resolution reflow. Unlike the full rebuild path (which
+ * lv_obj_clean()s the screen and therefore must close a foreground app or
+ * modal), this only re-applies geometry, so a running TUI app, a modal or the
+ * editor survives a rotate in both directions. The TUI grid reflows through
+ * the registered app-surface callback; the shell chrome re-sizes through each
+ * owner (header/keyboard/transcript), which is the single source of truth for
+ * those numbers.
+ */
+void windows_reflow_ui(void)
+{
+    lv_coord_t row_h;
+    lv_coord_t th;
+
+    if (!s_windows.initialized || s_windows.screen == NULL) {
+        return;
+    }
+    windows_apply_screen_style();
+    header_refresh_layout();
+    if (s_windows.input_row != NULL) {
+        row_h = windows_scale_height_percent(P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_PCT,
+                                             P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_MIN,
+                                             P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_MAX);
+        lv_obj_set_height(s_windows.input_row, row_h);
+    }
+    keyboard_refresh_layout();
+    th = windows_get_rect(WINDOW_REGION_TRANSCRIPT).height;
+    if (s_windows.transcript != NULL) {
+        lv_obj_set_height(s_windows.transcript, th);
+    }
+    if (!s_windows.app_surface_active && !s_windows.editor_mode) {
+        /* Also re-measures/rebuilds the transcript window for the new width. */
+        windows_apply_transcript_height();
+    }
+    /* Settle the new screen/region sizes first: the app-surface callback reads
+     * the container's content size to pick the logical grid, so it must see the
+     * rotated geometry, not the previous one. */
+    lv_obj_update_layout(s_windows.screen);
+    /* Foreground cell/canvas surface: reflow the grid and the page stride. */
+    if (s_windows.app_surface_active && s_windows.app_surface_layout_cb != NULL) {
+        s_windows.app_surface_layout_cb();
+    }
+    lv_obj_update_layout(s_windows.screen);
+    lv_obj_invalidate(s_windows.screen);
+    s_layout_generation++;
+    ESP_LOGI(WINDOWS_TAG, "reflow: %" PRId32 "x%" PRId32 " generation=%" PRIu32,
+             (int32_t)windows_get_display_width(),
+             (int32_t)windows_get_display_height(), s_layout_generation);
+}
+
 lv_obj_t *windows_get_input_line(void)
 {
     return s_windows.input_line;
@@ -2004,6 +2072,7 @@ esp_err_t windows_init(void)
     windows_apply_transcript_height();
 
     s_windows.initialized = true;
+    s_layout_generation++;
 
     ESP_LOGI(WINDOWS_TAG, "Window manager initialized: %" PRId32 "x%" PRId32,
              (int32_t)windows_get_display_width(),
@@ -2441,7 +2510,20 @@ void windows_exit_app_mode(void)
 
 window_rect_t windows_get_app_viewport(void)
 {
-    return windows_get_rect(WINDOW_REGION_TRANSCRIPT);
+    window_rect_t r = windows_get_rect(WINDOW_REGION_TRANSCRIPT);
+
+    /* The screen root keeps a symmetric horizontal margin
+     * (P4_CONFIG_WINDOW_SCREEN_PAD_HOR) and every region is a 100%-width child
+     * of that content box, so the area an app surface can actually fill is the
+     * INNER width (the same width the container reports). Reporting the raw
+     * panel width here made a scaled canvas sit 8 px off-centre and made the
+     * TUI pack one column less than the diagnostics claimed. */
+    r.x += P4_CONFIG_WINDOW_SCREEN_PAD_HOR;
+    r.width -= 2 * P4_CONFIG_WINDOW_SCREEN_PAD_HOR;
+    if (r.width < 1) {
+        r.width = 1;
+    }
+    return r;
 }
 
 bool windows_app_surface_active(void)
@@ -2558,6 +2640,14 @@ void windows_refresh_tui_surface(void)
 {
     if (!s_windows.tui_mode || !s_windows.tui_surface) return;
     lv_obj_set_height(s_windows.tui_surface, windows_get_rect(WINDOW_REGION_TRANSCRIPT).height);
+    lv_obj_update_layout(s_windows.tui_surface);
+    /* The logical grid/font is bound to this slot's pixel size: re-map it when
+     * the keyboard shows/hides or fullscreen changes the slot, or a portrait
+     * grid would overflow into the keyboard (and the page/buffer stride would
+     * disagree with the drawn cells). One callback, no second geometry pass. */
+    if (s_windows.app_surface_layout_cb != NULL) {
+        s_windows.app_surface_layout_cb();
+    }
     lv_obj_update_layout(s_windows.tui_surface);
 }
 

@@ -3073,6 +3073,22 @@ void editor_view_refresh_fonts(void)
     lvgl_port_unlock();
 }
 
+/** Re-flow the open editor after a rotation/resolution change: the rebuild
+ *  re-measures wrap chunks against the new surface width and re-places the
+ *  cursor/selection. No-op unless open; takes the port lock. */
+void editor_view_reflow(void)
+{
+    if (!s_editor_view.open) {
+        return;
+    }
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    editor_width_invalidate();
+    editor_rebuild();
+    lvgl_port_unlock();
+}
+
 void editor_view_notify_saved(bool ok)
 {
     if (!s_editor_view.open) {

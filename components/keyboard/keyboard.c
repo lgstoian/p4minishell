@@ -458,6 +458,20 @@ void keyboard_refresh_theme(void)
     lvgl_port_unlock();
 }
 
+/** Re-apply the resolution-scaled height after a rotation/resolution change so
+ *  the keyboard, transcript and header stay one layout (in-place rotation). */
+void keyboard_refresh_layout(void)
+{
+    if (!s_keyboard.initialized || s_keyboard.widget == NULL) {
+        return;
+    }
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    lv_obj_set_height(s_keyboard.widget, keyboard_get_configured_height());
+    lvgl_port_unlock();
+}
+
 void keyboard_deinit(void)
 {
     if (!s_keyboard.initialized) {

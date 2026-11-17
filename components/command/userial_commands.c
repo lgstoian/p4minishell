@@ -63,14 +63,6 @@
 #define P4_CONFIG_VT100_PENDING_BYTES 64
 #endif
 
-#ifndef P4_CONFIG_TUI_COLS
-#define P4_CONFIG_TUI_COLS 80
-#endif
-
-#ifndef P4_CONFIG_TUI_ROWS
-#define P4_CONFIG_TUI_ROWS 25
-#endif
-
 /** Key-poll slice inside the `term` pump loop. */
 #define USERIAL_TERM_POLL_MS 50
 
@@ -342,10 +334,10 @@ static void vt_advance(void)
     int col = 1;
 
     tui_get_cursor(&row, &col);
-    if (col >= P4_CONFIG_TUI_COLS) {
-        if (row >= P4_CONFIG_TUI_ROWS) {
+    if (col >= tui_get_cols()) {
+        if (row >= tui_get_rows()) {
             tui_scroll_up();
-            tui_set_cursor(P4_CONFIG_TUI_ROWS, 1);
+            tui_set_cursor(tui_get_rows(), 1);
         } else {
             tui_set_cursor(row + 1, 1);
         }
@@ -360,9 +352,9 @@ static void vt_newline(void)
     int col = 1;
 
     tui_get_cursor(&row, &col);
-    if (row >= P4_CONFIG_TUI_ROWS) {
+    if (row >= tui_get_rows()) {
         tui_scroll_up();
-        tui_set_cursor(P4_CONFIG_TUI_ROWS, 1);
+        tui_set_cursor(tui_get_rows(), 1);
     } else {
         tui_set_cursor(row + 1, 1);
     }
@@ -395,7 +387,7 @@ static void vt_putc(char ch, uint8_t fg, uint8_t bg)
 
         tui_get_cursor(&row, &col);
         next = ((col - 1) / 8 + 1) * 8 + 1;
-        if (next > P4_CONFIG_TUI_COLS) {
+        if (next > tui_get_cols()) {
             vt_newline();
         } else {
             tui_set_cursor(row, next);

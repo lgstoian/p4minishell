@@ -199,8 +199,36 @@ def run(dev, ctx):
 
         st = dev.run("tui status")
         c.expect("tui status active", "tui active", st)
-        c.expect("tui status grid", "80 x 25", st)
         c.expect("tui status rect", "transcript rect", st)
+        # The live grid keeps the 80-column DOS contract on both orientations
+        # (reference apps draw 80-wide frames) and a portrait panel turns the
+        # extra height into more rows of the largest cell that fits 80 columns.
+        grid_m = re.search(r"cols/rows (\d+) x (\d+)", st)
+        cell_m = re.search(r"cell font (\d+)x(\d+)", st)
+        c.check("tui status grid reported", grid_m is not None, st[-200:])
+        if grid_m is not None:
+            cols, rows = int(grid_m.group(1)), int(grid_m.group(2))
+            if disp_w >= disp_h:
+                c.equals("tui status grid (landscape 80x25)",
+                         (cols, rows), (80, 25))
+            else:
+                # Portrait keeps the documented 80 columns (reference apps draw
+                # 80-wide frames) and turns the extra height into more rows.
+                c.equals("portrait grid keeps the 80-column contract", cols, 80)
+                c.check("portrait grid adds rows for the extra height", rows > 25,
+                        "rows=%d (panel %dx%d)" % (rows, disp_w, disp_h))
+                if cell_m is not None:
+                    cell_w, cell_h = int(cell_m.group(1)), int(cell_m.group(2))
+                    c.check("portrait glyph cell is readable",
+                            cell_w >= 8 and cell_h >= 8,
+                            "cell=%dx%d" % (cell_w, cell_h))
+                    rect_m = re.search(r"transcript rect (\d+)x(\d+)", st)
+                    if rect_m is not None:
+                        rect_h = int(rect_m.group(2))
+                        fill = 100.0 * rows * cell_h / max(1, rect_h)
+                        c.check("portrait grid fills >= 70% of the height",
+                                fill >= 70.0,
+                                "grid=%dpx rect=%dpx (%.1f%%)" % (rows * cell_h, rect_h, fill))
 
         tui_raw = dev.run("tui stats")
         stats = parse_perf_report(tui_raw)

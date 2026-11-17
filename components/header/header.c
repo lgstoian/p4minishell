@@ -1807,6 +1807,27 @@ bool header_get_visible(void)
     return s_header_visible;
 }
 
+void header_refresh_layout(void)
+{
+    lv_coord_t vert_pad;
+    lv_coord_t horz_pad;
+
+    if (s_header_root == NULL) {
+        return;
+    }
+    s_header_height = header_scale_height();
+    vert_pad = s_header_height >= 48 ? 6 : 4;
+    horz_pad = s_header_height >= 48 ? 10 : 6;
+    s_header_pad_h = horz_pad;
+    lv_obj_set_height(s_header_root, s_header_height);
+    lv_obj_set_style_pad_left(s_header_root, horz_pad, 0);
+    lv_obj_set_style_pad_right(s_header_root, horz_pad, 0);
+    lv_obj_set_style_pad_top(s_header_root, vert_pad, 0);
+    lv_obj_set_style_pad_bottom(s_header_root, vert_pad, 0);
+    /* Widths are resolution-dependent: re-run the layout policy + render. */
+    header_render();
+}
+
 void header_deinit(void)
 {
     /* The notification-display timer is an LVGL timer, not a widget: it is

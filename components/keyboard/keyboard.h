@@ -92,6 +92,10 @@ void keyboard_deinit(void);
 void keyboard_refresh_fonts(void);
 void keyboard_refresh_theme(void);
 
+/** Re-apply the resolution-scaled keyboard height after a rotation or
+ *  resolution change. No-op before init; takes the port lock. */
+void keyboard_refresh_layout(void);
+
 /**
  * Check if the keyboard manager is initialized.
  * @return true if keyboard_init() completed successfully.

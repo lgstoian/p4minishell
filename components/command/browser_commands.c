@@ -687,8 +687,11 @@ static void browser_page_render(void)
     ops.emoji_fallback = browser_emoji_fallback;
     ops.load_background = browser_load_image;
     ops.ctx = s_page_base;
-    ops.cols = P4_CONFIG_TUI_COLS;
-    ops.rows = P4_CONFIG_TUI_PAGE_ROWS;
+    /* One source of truth: the page wraps to the live logical grid, which the
+     * TUI reflowed for this panel (80 columns wherever a committed cell fits
+     * that width, with the extra height becoming rows on a portrait panel). */
+    ops.cols = tui_get_cols();
+    ops.rows = tui_viewport_get_page_rows();
     ops.tui = true;
     {
         uint8_t base_fg = 16;
@@ -1184,6 +1187,18 @@ static void html_surface_close(void *ctx_ptr)
     }
 }
 
+/** Rotation/resolution reflow: the window manager already reflowed the TUI
+ *  grid, so re-render the parsed page at the new logical width (the DOM
+ *  renderer takes ops.cols from tui_get_cols() inside the same function). */
+static void html_surface_reflow(void *ctx_ptr)
+{
+    (void)ctx_ptr;
+    if (s_page_tree == NULL) {
+        return;
+    }
+    browser_page_render();
+}
+
 static bool html_surface_key(void *ctx_ptr, uint8_t key_code, uint8_t modifiers,
                              char ascii)
 {
@@ -1240,6 +1255,7 @@ static const modal_surface_t s_html_surface = {
     .close = html_surface_close,
     .handle_usb_key = html_surface_key,
     .handle_serial_line = html_surface_serial,
+    .reflow = html_surface_reflow,
     .abort_cancels = true,
 };
 

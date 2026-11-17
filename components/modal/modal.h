@@ -92,6 +92,13 @@ struct modal_surface {
     bool (*handle_serial_line)(void *ctx, const char *line);
 
     /**
+     * @brief Called on the worker task when the display layout changed
+     * (rotation / resolution), so the surface can re-apply its panel geometry
+     * in place instead of being torn down. NULL when the surface needs none.
+     */
+    void (*reflow)(void *ctx);
+
+    /**
      * @brief When true, a foreground break (Ctrl+C / Stop) cancels the surface.
      *
      * Ready-made input/pick surfaces (dialog/list/ask/form/browse/view/…) set

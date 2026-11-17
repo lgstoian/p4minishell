@@ -2750,6 +2750,57 @@ static void shell_uart_console_task(void *arg)
             size_t chunk_start = length - got;
             size_t forwarded = 0;
 
+            /* A COMPLETE line that names a console-level action (rotate,
+             * screenshot, ui) is still a host command while an app owns the key
+             * queue: claim it before forwarding, so a mid-app `rotate 90`
+             * reflows the surface instead of being eaten as a keypress. Only a
+             * newline-terminated line is probed, so bare keypresses are never
+             * stolen. */
+            {
+                char *nl = memchr(line, '\n', length);
+                bool claimed = false;
+
+                if (nl != NULL &&
+                    shell_core_command_ops.modal_console_command != NULL) {
+                    /* Console actions are short verbs; a longer line is app
+                     * input and must be forwarded untouched. Keeps this probe
+                     * off the reader task's stack budget. */
+                    char probe[192];
+                    size_t plen = (size_t)(nl - line);
+
+                    while (plen > 0 &&
+                           (line[plen - 1] == '\r' ||
+                            line[plen - 1] == ' ' ||
+                            line[plen - 1] == '\t')) {
+                        plen--;
+                    }
+                    if (plen < sizeof(probe)) {
+                        const char *trimmed;
+
+                        memcpy(probe, line, plen);
+                        probe[plen] = '\0';
+                        trimmed = shell_trim(probe);
+                        if (trimmed[0] != '\0') {
+                            claimed = shell_core_command_ops.modal_console_command(trimmed);
+                        }
+                    }
+                    if (claimed) {
+                        /* Drop the claimed line, keep any bytes after it. */
+                        size_t consumed = (size_t)(nl - line) + 1;
+
+                        if (consumed < length) {
+                            memmove(line, line + consumed, length - consumed);
+                            length -= consumed;
+                        } else {
+                            length = 0;
+                        }
+                        line_done_us = esp_timer_get_time();
+                        prompt_visible = false;
+                        continue;
+                    }
+                }
+            }
+
             /* Forward whole UTF-8 codepoints (not bytes): a multibyte key
              * is one queue item, so key waits never see fragments. ASCII
              * keeps the single-char fast path. */
@@ -2829,22 +2880,25 @@ static void shell_uart_console_task(void *arg)
                  * commands (the worker is blocked in the modal session). */
                 bool modal_active = shell_core_command_ops.modal_is_active != NULL &&
                                     shell_core_command_ops.modal_is_active();
+                /* The worker can also be blocked inside a foreground app
+                 * (launch TCMD, a batch `key?` loop) without a modal. Commands
+                 * that are display-level (rotate) or capture-level (screenshot,
+                 * ui) must still be reachable there; the hook claims only its
+                 * own tokens and never app input. */
+                bool worker_busy = shell_is_command_busy();
+
+                if ((modal_active || worker_busy) &&
+                    shell_core_command_ops.modal_console_command != NULL &&
+                    shell_core_command_ops.modal_console_command(trimmed)) {
+                    length = 0;
+                    line_done_us = esp_timer_get_time();
+                    prompt_visible = false;
+                    continue;
+                }
 
                 if (modal_active) {
-                    /* Console-local commands that must run on THIS task while
-                     * the worker is blocked (the streaming `screenshot`, so a
-                     * modal can be captured). The handler claims only its own
-                     * exact tokens and returns false otherwise, so the modal
-                     * still receives its input. */
-                    if (shell_core_command_ops.modal_console_command != NULL &&
-                        shell_core_command_ops.modal_console_command(trimmed)) {
-                        length = 0;
-                        line_done_us = esp_timer_get_time();
-                        prompt_visible = false;
-                        continue;
-                    }
                     /* The modal OWNS the input while it is open and the worker
-                     * is blocked inside it, so a line the modal does not claim
+                     * is blocked inside it, so a line the hook did not claim
                      * MUST NOT be queued: the worker cannot run it until the
                      * modal closes, and a burst then overflows the command
                      * queue and drops input (including the modal's own quit

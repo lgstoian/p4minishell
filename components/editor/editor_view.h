@@ -74,6 +74,11 @@ void editor_view_set_blink_ms(uint32_t blink_ms);
  * No-op unless open (spans re-resolve per rebuild). */
 void editor_view_refresh_fonts(void);
 
+/** Re-flow the open editor after a rotation/resolution change (re-measures
+ *  wrapped rows against the new surface width, keeps the cursor visible).
+ *  No-op unless open; takes the port lock. */
+void editor_view_reflow(void);
+
 /**
  * Handle a USB key press routed to the editor. Runs on the LVGL task.
  * @return true when the key was consumed by the editor.
