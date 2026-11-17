@@ -83,11 +83,17 @@ def _usb_ready(dev, c):
     """
     out = _run(dev, c, "usb msc status", "usb status", timeout=25)
     low = out.lower()
-    ok = ("usb.msc: connected=yes" in low and "mounted=yes" in low)
-    if not ok:
+    if "connected=yes" not in low:
         c.note("no USB stick in the P4 host port")
         return False
-    out = _run(dev, c, "list the USB root", "dir usb:", timeout=25)
+    if "mounted=yes" not in low:
+        # Automount is off by default; mounting is the documented explicit step.
+        _run(dev, c, "mount USB slot 0", "usb mount 0", timeout=25)
+        out = _run(dev, c, "usb msc status after mount", "usb status", timeout=25)
+        if "mounted=yes" not in out.lower():
+            c.note("USB stick present but could not be mounted")
+            return False
+    out = _run(dev, c, "list the USB root", "dir usb:/", timeout=25)
     return "error" not in out.lower() and "not found" not in out.lower()
 
 

@@ -41,6 +41,10 @@ gates = [
     ('breadcrumbs', 'breadcrumbs.py'),
     ('green guard', 'green_guard.py'),
 ]
+# The static-DRAM budget gate needs a firmware image; only run it when one has
+# been built, so a fresh checkout (no build/) never fails the host gate.
+if os.path.exists(os.path.join(ROOT, 'build', 'p4minishell.elf')):
+    gates.append(('size budget', 'size_budget.py'))
 failed = 0
 for label, script in gates:
     rc = subprocess.run([sys.executable, os.path.join(ROOT, 'tools', script)],

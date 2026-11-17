@@ -29,11 +29,15 @@ open bugs see [`bugs.md`](bugs.md).
   `HEXCODEPOINT.cells=1|2`), parsed by the shared INI core and decoded by the
   shared `imgdec`/`gfx` path into a four-entry PSRAM cache. Pack glyphs render
   as cell-ramp images through the one image sampler shared by `draw img`,
-  screenshots and emoji; LVGL labels get the retro fallback through a
-  glyph-remapping font link installed once in `font_get()`. `emoji [status |
-  reload]` reports the map and pack. Single codepoints only in 1.4.3: ZWJ
-  sequences, flags and skin-tone modifiers fall back to their components
-  (documented in `documentation.md`).
+  screenshots and emoji; LVGL labels now draw the **same colour glyph** through
+  a glyph-remapping font link in `font_get()` backed by an RGB565 image
+  descriptor from the pack's PSRAM cache (no LVGL filesystem driver, no second
+  image decoder). The TUI reduces each icon to one representative colour per
+  cell, so an inline emoji stays one row high. `emoji status|list|check|path`
+  reports and validates the pack; `emoji reload` rescans. A project-authored,
+  MIT sample pack ships in `apps/emoji/` and deploys to `EMOJI/`. Single
+  codepoints only in 1.4.3: ZWJ sequences, flags and skin-tone modifiers fall
+  back to their components (documented in `documentation.md`).
 - **Opt-in transparency.** One CSS RGBA parser
   (`components/markdown/css_color.{h,c}`) now serves HTML, the Canvas 2D
   context and the TUI: `#rgba`, `#rrggbbaa`, `rgb()/rgba()` (numbers or
@@ -49,28 +53,37 @@ open bugs see [`bugs.md`](bugs.md).
   identically. **Default is opaque**; an app opts in through its existing
   `APPINFO` (`alpha=`/`scrim=`, 0-255 or a `%`), applied by `launch` for the
   app's lifetime. TCMD and DIAG ship with it enabled as examples.
-- **`html` page verb and app-drive variables.** `html <file|url>` renders a
-  page through the same browser page engine as `browser` (DOM, CSS,
-  JavaScript, images, canvas, HTTP(S)) for batch and native flows that do not
-  want the browser's history/bookmark verbs; it is non-blocking like
-  `browser`. The shell now publishes `APPDRIVE` (`sd:`/`usb:`), `APPROOT`
+- **`html` page verb and app-drive variables.** `html [/no] <file|url>`
+  renders a page through the same browser page engine as `browser` (DOM, CSS,
+  JavaScript, images, canvas, HTTP(S)). It is a real modal: the page blocks
+  until Esc/q (or `q`/`close` on the serial console) and then restores the
+  transcript; `/no` keeps the old non-blocking surface. Native apps get the
+  same entry point through `applib_html_open()` (a new `applib_ui_ops_t`
+  hook, so applib stays a leaf). The shell now publishes `APPDRIVE` (`sd:`/`usb:`), `APPROOT`
   (the running script's directory) and `APPNAME` for every `.bat`, and
   `launch` discovers apps under `usb:/APPS` with the same pattern scan and
   metadata lookup it uses for SD. The reference apps use `%APPDRIVE%`
   instead of a hardcoded `sd:/`, so the same payload runs from either drive
   and keeps its data beside it; `apps/push_apps.py --drive usb:` deploys the
-  identical bundle. Intentional SD-only stores (the service registry and its
-  sample file) are marked in the scripts.
+  identical bundle. `service install` now pins a bare script name to
+  `usb:/APPS/<name>` when that is the only copy, so a service installed from a
+  USB app publishes `APPDRIVE=usb:` and writes its data to the stick; the
+  service *registry* (`SERVICES.INI`) stays SD-only by design.
 - **Screenshot feedback is header-only.** A successful `screenshot` no longer
   prints `captured`/`saved`/`streamed` lines into the transcript: success is a
   header notification, errors stay on the transcript, and `s21_wikipedia`
   gates on the BMP file instead of a removed line.
 - **Internal DRAM freed for the app.** The Natural Display layout grid was an
   81 KB function-local static in internal DRAM and the valid path allocated a
-  second copy per render without freeing it. It is now one PSRAM singleton
-  (`math_disp_get_layout()`), taking static DIRAM from 397 KB used / 48 KB
-  free to 315 KB used / 130 KB free on the JC1060P470C build - the image size
-  is unchanged.
+  second copy per render without freeing it; it is now one PSRAM singleton
+  (`math_disp_get_layout()`). The modal runtime's macro/map/command/scope
+  tables (29 KB of `.bss` in `tui_modal.c`) became one lazily-allocated PSRAM
+  block behind an idempotent `modal_ensure_tables()`, and the emoji pack, page
+  and image caches are PSRAM. Static DIRAM went from **396,950 bytes used /
+  48,442 free** (89.1%) to **286,174 used / 159,218 free** (64.2%) on the
+  JC1060P470C build, with the image size unchanged. A new
+  `tools/size_budget.py` gate (wired into `tools/harness/verify.py`) fails a
+  build that exceeds the recorded DIRAM ceiling plus 4 KB.
 
 ### Changed
 
@@ -100,13 +113,15 @@ open bugs see [`bugs.md`](bugs.md).
   **682/0/2 on COM3 and COM6** (the 16 new colour/emoji/alpha cases included);
   the host lane is **284/284**; `green_guard` (740), `comment_index` and
   `breadcrumbs` pass; `tools/harness/verify.py` is green.
-- COM3 hardware spot-checks: `version` reports v1.4.3, `emoji` prints the
-  retro map and pack status, `help html`/`html` resolve, `launch /list` lists
-  the deployed apps, `s20_website` 7/7, `s21_wikipedia` 13/13 (including the
-  header-only screenshot gate), `s22_canvas` 13/13. The drive-aware path was
-  verified on SD with a probe (`drive=sd: root=sd:/APPS name=SDPROBE`);
-  `s23_apps_usb` requires a USB stick, which was not attached to the bench for
-  this run, so its USB half remains to be recorded.
+- COM3/COM6 hardware: `version` reports v1.4.3; `emoji list/check/path` and a
+  real colour pack render in the transcript (LVGL) and the TUI; `html`
+  blocks and closes on Esc and `html /no` stays non-blocking. Suites:
+  `s14_apps` 127/127, `s19_app_features` 37/37, `s20_website` 7/7,
+  `s21_wikipedia` 13/13 (header-only screenshot gate), `s22_canvas` 13/13,
+  `s23_apps_usb` 9/9 (USB stick), `s24_render_alpha` 31/31 (transparency
+  blend, dialog with scrim, emoji glyph). `s23` also exposed and now covers a
+  real bug: USB `APPS` discovery used the SD-only wildcard matcher, so
+  USB-installed apps were invisible to `launch`.
 - Static DIRAM dropped from 396,950 to 315,022 bytes used (48,442 -> 130,370
   free) with the image size unchanged.
 

@@ -183,15 +183,17 @@ breaks). `enableextensions`/`disableextensions` are accepted and ignored
 
 ## 5b. Rendering a web page (`html`)
 
-`html <file|url>` renders a page through the same browser page engine as
-`browser` (DOM, CSS, JavaScript, images, `<canvas>`, HTTP(S)), with the same
-opt-in transparency rules. It is non-blocking: the page stays on the TUI
-surface until the next command or `appmode` exit, so an app can render it,
-run more verbs, then continue. Use `browser back|forward` for navigation if
-the app needs history; `html` deliberately skips those verbs.
+`html [/no] <file|url>` renders a page through the same browser page engine
+as `browser` (DOM, CSS, JavaScript, images, `<canvas>`, HTTP(S)), with the same
+opt-in transparency rules. It is a **blocking modal** by default: the script
+waits until Esc/q (or `q`/`close` on the serial console) and the previous
+transcript returns. Use `/no` when the app must continue immediately; the
+page then stays up until the next command or `appmode` exit. Use
+`browser back|forward` for navigation; `html` deliberately skips those verbs.
 
 ```bat
-html %APPDRIVE%/WEB/INDEX.HTML
+html %APPDRIVE%/WEB/INDEX.HTML          rem wait for the user
+html /no %APPDRIVE%/WEB/INDEX.HTML      rem render and continue
 echo [M-WEB-DONE]
 ```
 

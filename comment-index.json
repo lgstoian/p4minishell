@@ -511,9 +511,9 @@
       "path": "components/emoji",
       "provides": "emoji pack discovery, lookup and cell-image decode",
       "requires": [
-        "font",
         "gfx",
-        "imgdec",
+        "imagefile",
+        "lvgl__lvgl",
         "storage",
         "p4heap",
         "strutil"
@@ -636,6 +636,25 @@
       "status": "stable",
       "tests": [
         "test/main/test_header.c"
+      ]
+    },
+    "imagefile": {
+      "domain": "ui",
+      "header": "components/imagefile/imagefile.h",
+      "layer": "leaf",
+      "path": "components/imagefile",
+      "provides": "decode BMP/PNG/JPEG bytes to a scaled RGB565 gfx surface",
+      "requires": [
+        "gfx",
+        "imgdec",
+        "p4heap"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_emoji.c"
       ]
     },
     "imagefmt": {

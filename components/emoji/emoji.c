@@ -8,9 +8,10 @@
  */
 
 #include "emoji.h"
+#include "imagefile.h"
 
-#include "emoji_core.h"
-#include "imgdec.h"
+#include "esp_log.h"
+
 #include "p4heap.h"
 #include "storage.h"
 
@@ -32,12 +33,24 @@ typedef struct {
     bool used;
 } emoji_cache_slot_t;
 
+/* LVGL label glyphs are square and role-sized, so they need their own decode
+ * size. Four slots match the TUI cache budget. */
+typedef struct {
+    uint32_t cp;
+    int px;
+    uint16_t *pixels;
+    lv_image_dsc_t dsc;
+    bool used;
+} emoji_lvgl_slot_t;
+
 static emoji_entry_t *s_entries = NULL;   /* PSRAM, EMOJI_PACK_MAX_ENTRIES */
 static int s_entry_count = 0;
 static char s_source[8] = "";
 static bool s_loaded = false;
 static emoji_cache_slot_t s_cache[EMOJI_PACK_CACHE_SLOTS];
 static int s_cache_next = 0;
+static emoji_lvgl_slot_t s_lvgl_cache[EMOJI_PACK_CACHE_SLOTS];
+static int s_lvgl_next = 0;
 
 static int hex_value(char c)
 {
@@ -175,6 +188,10 @@ void emoji_pack_free(void)
             gfx_surface_free(&s_cache[i].surface);
             s_cache[i].used = false;
         }
+        if (s_lvgl_cache[i].used) {
+            p4heap_free(s_lvgl_cache[i].pixels);
+            s_lvgl_cache[i].used = false;
+        }
     }
     if (s_entries != NULL) {
         p4heap_free(s_entries);
@@ -201,6 +218,25 @@ const char *emoji_pack_source(void)
     return s_source;
 }
 
+bool emoji_pack_entry_at(int index, uint32_t *cp, char *file, size_t file_size,
+                         int *cells)
+{
+    emoji_pack_init();
+    if (index < 0 || index >= s_entry_count) {
+        return false;
+    }
+    if (cp != NULL) {
+        *cp = s_entries[index].cp;
+    }
+    if (file != NULL && file_size > 0) {
+        snprintf(file, file_size, "%s", s_entries[index].file);
+    }
+    if (cells != NULL) {
+        *cells = s_entries[index].cells;
+    }
+    return true;
+}
+
 bool emoji_pack_lookup(uint32_t cp, char *path, size_t path_size, int *cells)
 {
     emoji_entry_t *entry;
@@ -211,7 +247,7 @@ bool emoji_pack_lookup(uint32_t cp, char *path, size_t path_size, int *cells)
         return false;
     }
     if (path != NULL && path_size > 0) {
-        snprintf(path, path_size, "%s/EMOJI/%s",
+        snprintf(path, path_size, "%sEMOJI/%s",
                  strcmp(s_source, "usb") == 0 ? "usb:/" : "sd:/", entry->file);
     }
     if (cells != NULL) {
@@ -267,7 +303,7 @@ const gfx_surface_t *emoji_pack_image(uint32_t cp, int *cells)
     size_t len = 0;
     uint8_t *data;
     gfx_surface_t surface;
-    imgdec_image_t imd;
+    gfx_surface_t full;
 
     if (!emoji_pack_lookup(cp, path, sizeof(path), &width_cells)) {
         return NULL;
@@ -285,16 +321,43 @@ const gfx_surface_t *emoji_pack_image(uint32_t cp, int *cells)
         return NULL;
     }
     /* One cell grid is 8x8 pixels for the ramp; the draw path samples it to
-     * whatever the live font cell is. */
-    if (!imgdec_decode_scaled(data, len, width_cells * 8, 8, &imd)) {
-        p4heap_free(data);
+     * whatever the live font cell is. The shared decoder owns the
+     * BMP-vs-PNG/JPEG choice (gfx_image_decode_mem). */
+    /* A TUI cell shows one ramp glyph, so a `cells`-wide inline emoji has only
+     * `cells` samples. Decode the icon once at a readable grid, then pick the
+     * brightest pixel of each cell block: a plain nearest-neighbour decode to
+     * 2x1 samples the icon's top-left background and renders nothing. */
+    if (!imagefile_decode_mem(data, len, width_cells * 8, 8, &full)) {
+            p4heap_free(data);
         return NULL;
     }
     p4heap_free(data);
-    memset(&surface, 0, sizeof(surface));
-    surface.px = imd.pixels;
-    surface.w = imd.width;
-    surface.h = imd.height;
+    if (!gfx_surface_alloc(&surface, width_cells, 1)) {
+        gfx_surface_free(&full);
+        return NULL;
+    }
+    for (int cx = 0; cx < width_cells; cx++) {
+        uint16_t best = 0;
+        int best_lum = -1;
+
+        for (int y = 0; y < full.h; y++) {
+            for (int x = cx * full.w / width_cells;
+                 x < (cx + 1) * full.w / width_cells && x < full.w; x++) {
+                uint16_t px = full.px[(size_t)y * (size_t)full.w + (size_t)x];
+                int r = ((px >> 11) & 0x1F) << 3;
+                int g = ((px >> 5) & 0x3F) << 2;
+                int b = (px & 0x1F) << 3;
+                int lum = (r * 30 + g * 59 + b * 11) / 100;
+
+                if (lum > best_lum) {
+                    best_lum = lum;
+                    best = px;
+                }
+            }
+        }
+        surface.px[cx] = best;
+    }
+    gfx_surface_free(&full);
 
     {
         int slot = s_cache_next;
@@ -308,5 +371,66 @@ const gfx_surface_t *emoji_pack_image(uint32_t cp, int *cells)
         s_cache[slot].surface = surface;
         s_cache[slot].used = true;
         return &s_cache[slot].surface;
+    }
+}
+
+const lv_image_dsc_t *emoji_pack_lvgl_image(uint32_t cp, int px)
+{
+    char path[128];
+    int cells = EMOJI_PACK_MAX_CELLS;
+    size_t len = 0;
+    uint8_t *data;
+    gfx_surface_t surface;
+
+    if (px < 8) px = 8;
+    if (px > 64) px = 64;
+    if (!emoji_pack_lookup(cp, path, sizeof(path), &cells)) {
+        ESP_LOGD("emoji_pack", "lvgl cp=%lx: not in pack", (unsigned long)cp);
+        return NULL;
+    }
+    (void)cells;
+    for (int i = 0; i < EMOJI_PACK_CACHE_SLOTS; i++) {
+        if (s_lvgl_cache[i].used && s_lvgl_cache[i].cp == cp &&
+            s_lvgl_cache[i].px == px) {
+            return &s_lvgl_cache[i].dsc;
+        }
+    }
+    data = read_file(path, &len);
+    if (data == NULL) {
+        ESP_LOGD("emoji_pack", "lvgl cp=%lx: read %s failed", (unsigned long)cp, path);
+        return NULL;
+    }
+    if (!imagefile_decode_mem(data, len, px, px, &surface)) {
+        ESP_LOGD("emoji_pack", "lvgl cp=%lx: decode %u bytes failed",
+                 (unsigned long)cp, (unsigned)len);
+        p4heap_free(data);
+        return NULL;
+    }
+    ESP_LOGD("emoji_pack", "lvgl cp=%lx: %dx%d ok", (unsigned long)cp, surface.w,
+             surface.h);
+    p4heap_free(data);
+
+    {
+        int slot = s_lvgl_next;
+        emoji_lvgl_slot_t *entry;
+
+        s_lvgl_next = (s_lvgl_next + 1) % EMOJI_PACK_CACHE_SLOTS;
+        entry = &s_lvgl_cache[slot];
+        if (entry->used) {
+            p4heap_free(entry->pixels);
+        }
+        memset(entry, 0, sizeof(*entry));
+        entry->cp = cp;
+        entry->px = px;
+        entry->pixels = surface.px;
+        entry->dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+        entry->dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+        entry->dsc.header.w = (uint32_t)surface.w;
+        entry->dsc.header.h = (uint32_t)surface.h;
+        entry->dsc.header.stride = (uint32_t)(surface.w * 2);
+        entry->dsc.data_size = (uint32_t)(surface.w * surface.h * 2);
+        entry->dsc.data = (const uint8_t *)surface.px;
+        entry->used = true;
+        return &entry->dsc;
     }
 }

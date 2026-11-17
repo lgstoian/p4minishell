@@ -23,6 +23,25 @@
 extern "C" {
 #endif
 
+/* ========================================================================
+ * UI OPS (upward inversion)
+ * ========================================================================
+ * applib is a leaf: it cannot include the command/browser layer. The shell
+ * registers the small set of UI actions a native app may trigger; every hook
+ * is NULL-checked so an app still links and degrades cleanly without them.
+ */
+typedef struct {
+    /** Render a page with the browser engine in the blocking HTML surface.
+     *  @return true on a successful render/close. */
+    bool (*open_html)(const char *target);
+} applib_ui_ops_t;
+
+void applib_register_ui_ops(const applib_ui_ops_t *ops);
+
+/** Render @p target (SD path or URL) in the blocking HTML surface.
+ *  @return true when the page rendered and closed cleanly. */
+bool applib_html_open(const char *target);
+
 /**
  * Enter app mode: the current transcript is saved (colours preserved) and,
  * when @p full_screen is true, the shell input widgets are hidden so the

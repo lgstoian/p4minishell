@@ -169,6 +169,7 @@ def _deploy(dev, c):
         try:
             dev.run("md APPS", timeout=20)
             dev.run("md WEB", timeout=20)
+            dev.run("md EMOJI", timeout=20)
             break
         except PanicError:
             raise

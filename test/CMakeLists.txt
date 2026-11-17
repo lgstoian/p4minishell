@@ -80,6 +80,7 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/font
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/filetype
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/gfx
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/imagefile
 ${CMAKE_CURRENT_SOURCE_DIR}/../components/imgdec
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/markdown
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/mcp

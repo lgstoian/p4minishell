@@ -60,6 +60,21 @@ bool font_builtin_monospace(int index);
  * (monospace rule for cell math). Returns false on unknown name/refusal. */
 bool font_set(font_role_t role, const char *name);
 
+/* ========================================================================
+ * EMOJI PACK IMAGES (v1.4.3, upward inversion)
+ * ========================================================================
+ * The font module owns the LVGL glyph link but cannot require the pack
+ * loader (emoji -> storage -> header -> font would be a cycle). The command
+ * layer, which can see both, registers the source once at init. Until then
+ * (and for a missing pack) the link falls back to the retro DOS glyph.
+ */
+typedef bool (*font_emoji_image_cb_t)(uint32_t cp, int px,
+                                      const lv_image_dsc_t **image);
+
+/** Register the pack image source. @p cb returns true with an image owned by
+ *  the pack cache (valid for the immediate draw). NULL unregisters. */
+void font_set_emoji_image_source(font_emoji_image_cb_t cb);
+
 /** Best-effort boot restore (NULL = keep current). False if any name invalid. */
 bool font_restore(const char *terminal, const char *ui, const char *reading);
 

@@ -231,16 +231,19 @@ Five user-facing goals, each behind one implementation.
 - **Memory.** The 81 KB Natural Display layout grid moved to PSRAM (and a
   per-render leak was fixed), taking static DIRAM from 89% to 71% used.
 
-**Status in v1.4.3:** shipped. Verified on both boards at the unit level
-(682/0/2) and on COM3 for the browser/HTML5 suites, the emoji verb and the
-SD half of the drive-aware path. `s23_apps_usb` needs a USB stick and remains
-to be recorded on a bench that has one.
+**Status in v1.4.3:** shipped and hardware-verified. Colour packs render in
+LVGL through an RGB565 image glyph from the shared PSRAM cache; `html` is a
+blocking modal with `/no` for scripts and `applib_html_open()` for native
+apps; `emoji list|check|path` plus a sample pack cover pack management;
+services installed from USB pin their drive; the modal tables moved to PSRAM
+(static DIRAM 64.2%). Suites: s14 127/127, s19 37/37, s20 7/7, s21 13/13,
+s22 13/13, s23 9/9 (USB stick), s24 31/31.
 
-**Next:** colour emoji in LVGL chrome (needs a filesystem + image-font path or
-a custom glyph cache), a pack-management surface (`emoji install`/`emoji
-list`), richer CSS alpha composition (per-cell background alpha inside inline
-spans), and a true modal HTML presenter if a modal-hosted page is wanted
-beyond the current non-blocking TUI surface.
+**Next:** richer CSS alpha composition (per-cell background alpha inside
+inline spans), an `emoji install` from a ZIP (today `archive extract` is the
+documented path), and a pack picker UI. `s24` documents a stale-surface quirk
+on long sessions that needs a power-cycle; investigate when the TUI surface
+is next touched.
 
 ## Part 2 — Where we are going
 

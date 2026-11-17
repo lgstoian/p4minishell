@@ -68,7 +68,8 @@ components/jsengine/            QuickJS engine + DOM/FS/shell bindings + Canvas 
 components/mcp/                 MCP (Model Context Protocol) JSON-RPC client (networking + json)
 components/font/                Font registry (roles/sizes/fallbacks), SD TTF loader, CJK attach, themes,
                                 emoji_core.c (retro DOS map) + the LVGL glyph-remap fallback link
-components/emoji/               Third-party EMOJI/ packs: INI index + shared imgdec/gfx cell decode (PSRAM cache)
+components/emoji/               Third-party EMOJI/ packs: INI index, shared image decode, PSRAM cell/LVGL-glyph caches
+components/imagefile/           The one in-memory BMP/PNG/JPEG -> scaled RGB565 decoder (gfx BMP + imgdec PNG/JPEG)
 components/db/                  Palm-OS-style SD record store (sd:/DBS/<name>.DB)
 components/alarm/               SD alarm store + single background checker (sd:/ALARMS)
 components/pim/                 Single vCard/iCalendar codecs + sync identity/newer-wins merge (pim_doc/parse/store/vcard/ical)
@@ -165,8 +166,12 @@ deterministic range defaults. Two adapters consume it:
   by the one cell-ramp sampler shared with `draw img`) or emit the retro
   glyph. Zero-width modifiers (ZWJ, VS16, skin tones) are consumed.
 - LVGL: `font_get()` inserts a glyph-remapping font link between the role's
-  primary font and the FontAwesome fallback, so every label using the
-  registry gets the same retro glyph with no glyph data and no second table.
+  primary font and the FontAwesome fallback. With a pack installed the link
+  returns an RGB565 `lv_image_dsc_t` from the pack's PSRAM cache (drawn by
+  LVGL's own image path, no filesystem driver, no second decoder); without
+  one it substitutes the same retro glyph as the TUI. `command_init()` wires
+  the pack lookup in through `font_set_emoji_image_source()` because font
+  cannot require storage (the upward-inversion rule).
 
 Limits are deliberate and documented: single codepoints only (ZWJ
 sequences, flags and skin tones fall back to their components); colour pack
@@ -1687,14 +1692,17 @@ A new component under `components/` must be added to BOTH the root `CMakeLists.t
 - SD directory listings bounded to 128 entries
 - `sd cat` preview bounded to 8192 bytes
 - **PSRAM first for UI scratch (v1.4.3).** Non-DMA UI state belongs in the
-  32 MB PSRAM pool: emoji pack glyphs (4-entry PSRAM cache), browser image and
-  page caches, TUI page buffers, and the Natural Display layout grid (was an
-  81 KB internal `.bss`, now one PSRAM singleton; the valid path also leaked a
-  second copy per render, fixed). On the JC1060P470C build this took static
-  DIRAM from 396,950 bytes used / 48,442 free (89.1%) to 315,022 used /
-  130,370 free (70.7%), with the image size unchanged; internal DRAM stays
-  reserved for DMA descriptors, stacks, LVGL draw buffers and latency-critical
-  paths.
+  32 MB PSRAM pool: emoji pack glyphs (TUI and LVGL caches), browser image and
+  page caches, TUI page buffers, the modal runtime's macro/map/command/scope
+  tables (29 KB of `.bss`, now one lazily-allocated PSRAM block), and the
+  Natural Display layout grid (was an 81 KB internal `.bss`, now one PSRAM
+  singleton; the valid path also leaked a second copy per render, fixed). On
+  the JC1060P470C build this took static DIRAM from 396,950 bytes used /
+  48,442 free (89.1%) to **286,174 used / 159,218 free (64.2%)**, with the
+  image size unchanged; internal DRAM stays reserved for DMA descriptors,
+  stacks, LVGL draw buffers and latency-critical paths. `tools/size_budget.py`
+  enforces the recorded ceiling (+4 KB headroom) from
+  `tools/harness/verify.py`.
 
 ### Boot Scripting (components/boot)
 

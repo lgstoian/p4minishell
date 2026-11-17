@@ -472,6 +472,25 @@ void app_sysinfo(char *buf, size_t buflen)
  * 4. NETWORKING HELPERS (state through the registered ops table)
  * ======================================================================== */
 
+static applib_ui_ops_t s_ui_ops;
+
+void applib_register_ui_ops(const applib_ui_ops_t *ops)
+{
+    if (ops != NULL) {
+        s_ui_ops = *ops;
+    } else {
+        s_ui_ops.open_html = NULL;
+    }
+}
+
+bool applib_html_open(const char *target)
+{
+    if (target == NULL || s_ui_ops.open_html == NULL) {
+        return false;
+    }
+    return s_ui_ops.open_html(target);
+}
+
 static applib_net_ops_t s_net_ops;
 
 void applib_register_net_ops(const applib_net_ops_t *ops)

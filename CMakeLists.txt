@@ -37,6 +37,7 @@ set(EXTRA_COMPONENT_DIRS
   components/font
   components/filetype
   components/gfx
+  components/imagefile
 components/imgdec
   components/header
   components/imagefmt

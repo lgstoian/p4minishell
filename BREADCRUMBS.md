@@ -63,6 +63,7 @@ invert the only upward edges. Never add a trampoline.
 | font | leaf | ui | font registry, SD TTF, CJK, theme registry | [t](test/main/test_theme.c) | `ai-context.md#module-layering-rules` | `components/font` |
 | gfx | leaf | ui | RGB565 raster, BMP parser/decoder, scaling, 8x8 font | [t](test/main/test_gfx.c) | `ai-context.md#image-support-rules` | `components/gfx` |
 | header | leaf | ui | status header: layout, classification, notifications, refresh | [t](test/main/test_header.c) | `ai-context.md#header-bar-rules` | `components/header` |
+| imagefile | leaf | ui | decode BMP/PNG/JPEG bytes to a scaled RGB565 gfx surface | [t](test/main/test_emoji.c) | `ai-context.md#module-layering-rules` | `components/imagefile` |
 | imagefmt | leaf | media | image format caps and validation | - | `ai-context.md#image-support-rules` | `components/imagefmt` |
 | imgdec | leaf | media | the ONE PNG + JPEG decoder (LodePNG / TJpgDec, the libs LVGL already compiles) | [t](test/main/test_imgdec.c) | `ai-context.md#image-support-rules` | `components/imgdec` |
 | imu | leaf | platform | BMI270 accelerometer/gyro + orientation | [t](test/main/test_hardware.c) | `ai-context.md#module-layering-rules` | `components/imu` |
@@ -271,6 +272,8 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/header/header_refresh.h` :: module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules
 - `components/header/header_status.c` :: module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules
 - `components/header/header_status.h` :: module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules
+- `components/imagefile/imagefile.c` :: module=imagefile :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_emoji.c :: rules=ai-context.md#module-layering-rules
+- `components/imagefile/imagefile.h` :: module=imagefile :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_emoji.c :: rules=ai-context.md#module-layering-rules
 - `components/imagefmt/imagefmt.c` :: module=imagefmt :: layer=leaf :: domain=media :: status=stable :: rules=ai-context.md#image-support-rules
 - `components/imagefmt/include/imagefmt.h` :: module=imagefmt :: layer=leaf :: domain=media :: status=stable :: rules=ai-context.md#image-support-rules
 - `components/imgdec/imgdec.c` :: module=imgdec :: layer=leaf :: domain=media :: status=stable :: tests=test/main/test_imgdec.c :: rules=ai-context.md#image-support-rules

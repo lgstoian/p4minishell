@@ -568,6 +568,10 @@ int shell_command_browser(int argc, char **argv);
  *  Returns an ERRORLEVEL: 0 ok, 1 error, 2 usage. */
 int shell_command_html(int argc, char **argv);
 
+/** Render a page in the blocking HTML surface (the `html` implementation).
+ *  @return 0 on a clean render/close, 1 on fetch/parse/render failure. */
+int browser_html_show(const char *target);
+
 /** Render an in-memory HTML document into the TUI page (the exact path the
  *  networked `browser <url>` uses after a fetch). Parses the DOM, applies the
  *  document's `<style>` rules, draws the page and flushes it. @p base_url is

@@ -92,6 +92,16 @@ def _parse_bmp(data: bytes) -> Bmp:
     return Bmp(width, height, bpp, top_down, data, stride, data_offset)
 
 
+def parse_bmp(data: bytes) -> Bmp:
+    """Parse a BMP captured on the device (``screenshot <file>`` -> pull).
+
+    The streaming path returns a :class:`Bmp` already; suites that compare an
+    app-written BMP (for example TCMD's documented ``p`` snap key) parse the
+    pulled bytes with this so both paths share one pixel model.
+    """
+    return _parse_bmp(data)
+
+
 def capture(dev: DeviceSession, out_dir: Optional[str] = None,
             name: Optional[str] = None, timeout: float = 40.0,
             unwind: bool = True) -> Bmp:

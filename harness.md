@@ -219,6 +219,7 @@ Suites (`tools/suites/sNN_*.py`) and what they cover:
 | `s21_wikipedia` | the browser acceptance gate: deploys a trimmed `en.wikipedia.org/wiki/ESP32` fixture (infobox, table, list, links, a PNG and a JPEG) and asserts the rendered structure, link colour, missing-image alt text and a BMP capture. `P4_WIFI_LIVE=1` adds a live HTTPS fetch (credentials from `tools/wifi_local.json`) |
 | `s22_canvas` | the HTML5 subset gate: renders `apps/website/canvas.html` (CSS page/banner backgrounds + a 96x48 canvas drawn through the 2D context), asserts the canvas width/height reached JS, the bitmap replaced the fallback, the red/green/cyan colour runs and pixels, background pixels, no panic, and a BMP capture |
 | `s23_apps_usb` | the drive-aware apps gate: installs the fixture and HYBRID under `usb:/APPS`, asserts `launch /list` discovers them, that `%APPDRIVE%`/`%APPROOT%`/`%APPNAME%` report the USB root, that the same app on SD reports `sd:`, and that HYBRID completes from USB. **Requires a mounted USB stick**; without one it reports an explicit skip (0 checks, no false green) so the rest of the full tier can run |
+| `s24_render_alpha` | the v1.4.3 presentation gate: launches TCMD three times (opaque, opaque control, `alpha=40%`/`scrim=40%`), snapshots its TUI with the documented `p` snap key, and asserts the two opaque runs are pixel-identical while the translucent run blends the surface background across the screen without changing content or text ink; restores the installed `TCMD.APPINFO`; opens a real `dialog /t:3` with `scrim` set (host capture while the modal is up, no panic); asserts `draw text "😀"` stores the retro U+263A glyph by comparing panel snapshots against a literal U+263A page and a cleared cell. **Reboots first** (the transcript surface keeps stale LVGL background state across a session) |
 
 The framework (`tools/p4test/`): `session.py` (DTR-safe open, marker-synced
 `run()`, panic detection, byte-exact `BMPX`/`SDFX` framing, ANSI+OSC 8 strip
@@ -241,6 +242,11 @@ a pixel model), `sdbridge.py` (`receive`/`send`), `perf.py` (frame stats),
   with `--boards` the other board finishes its current suite, skips the rest
   (marked SKIP), and the merged table names the red board. `--keep-going`
   restores run-to-completion.
+- **Skips:** a suite that returns `SuiteResult(skipped=N)` with no failures is
+  reported `SKIP` and counted separately (`RESULT OK (n/m suites, k skipped)`),
+  never as `PASS 0/1` and never as a failure. A suite that asserts nothing at
+  all stays a failure (the false-green rule), and a skip mixed with a failure
+  is a failure.
 - **Flakes vs bugs:** `--retry N` re-runs a failed suite (never a panic); a
   pass-on-retry is reported FLAKY for quarantine, fail-twice is a bug.
 - **Clean-boot areas:** the runner samples `mem.internal` and `mem.dma.free`

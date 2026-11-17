@@ -10,7 +10,10 @@ A suite is a module under ``tools/suites/`` exposing:
   :class:`~p4test.asserts.SuiteResult`.
 
 The runner opens ONE device session per board, runs the selected suites in
-order, and prints a single PASS/FAIL table with a non-zero exit on failure.
+order, and prints a single PASS/FAIL/SKIP table with a non-zero exit on
+failure. A suite that reports only skipped checks (a missing prerequisite) is
+SKIP: counted separately, never a ``PASS 0/1`` and never a failure. A suite
+that asserts nothing stays a failure (no false green).
 With ``--boards`` several boards run concurrently (one thread each) and the
 report merges per-board results, flags board-only failures, and (under
 fail-fast) stops the other boards at the first failure.
@@ -218,6 +221,44 @@ def _run_one_suite(mod, dev, ctx) -> Tuple[SuiteResult, List[str]]:
                 ["exception"])
 
 
+def _is_skip(res: SuiteResult) -> bool:
+    """True when a suite recorded only skipped checks (an honest SKIP).
+
+    A suite that needs a prerequisite the board lacks (an app on a USB stick,
+    a sensor) returns ``SuiteResult(skipped=1)``: it asserted nothing because
+    there was nothing to assert, and reporting it as ``PASS 0/1`` would read
+    like verified coverage. Zero-assertion non-skipped suites stay failures:
+    they have ``skipped == 0`` and ``SuiteResult.ok`` is already False for
+    them (``vacuous``), so they can never be mistaken for a skip here.
+    """
+    return res.error is None and res.failed == 0 and res.skipped > 0
+
+
+def format_suite_summary(results) -> Tuple[List[str], int, int]:
+    """Per-suite table rows plus (failed, skipped) counts - no device needed.
+
+    Pure so the SKIP/PASS/FAIL/zero-assertion verdict can be checked on the
+    host (``p4test_run.py --self-test``) without a board. A suite that only
+    skipped checks is SKIP; a suite that asserted nothing is still FAIL.
+    """
+    rows: List[str] = []
+    failed = 0
+    skipped = 0
+    for r in results:
+        extra = (" - %s" % r.error) if r.error else ""
+        if _is_skip(r):
+            skipped += 1
+            rows.append("  %-4s %-34s %3d skipped%s"
+                        % ("SKIP", r.name[:34], r.skipped, extra))
+            continue
+        if not r.ok:
+            failed += 1
+        rows.append("  %-4s %-34s %3d/%3d checks%s"
+                    % ("PASS" if r.ok else "FAIL", r.name[:34],
+                       r.passed, r.total, extra))
+    return rows, failed, skipped
+
+
 def run_suites(mods, port: Optional[str], quick: bool = False,
                keep_going: bool = True) -> int:
     results: List[SuiteResult] = []
@@ -239,17 +280,14 @@ def run_suites(mods, port: Optional[str], quick: bool = False,
     print("\n" + "=" * 62)
     print("REGRESSION SUMMARY")
     print("=" * 62)
-    failed = 0
-    for r in results:
-        status = "PASS" if r.ok else "FAIL"
-        if not r.ok:
-            failed += 1
-        extra = (" - %s" % r.error) if r.error else ""
-        print("  %-4s %-34s %3d/%3d checks%s"
-              % (status, r.name[:34], r.passed, r.total, extra))
+    rows, failed, skipped = format_suite_summary(results)
+    for row in rows:
+        print(row)
     total = len(results)
-    print("\nRESULT %s (%d/%d suites)" % ("OK" if failed == 0 else "FAIL",
-                                          total - failed, total))
+    skip_note = (", %d skipped" % skipped) if skipped else ""
+    print("\nRESULT %s (%d/%d suites%s)"
+          % ("OK" if failed == 0 else "FAIL", total - failed - skipped, total,
+             skip_note))
     return 1 if failed else 0
 
 
@@ -406,6 +444,7 @@ def run_boards(board_tokens: List[str], mods, quick: bool = False,
     print("=" * 62)
     suite_names = [getattr(m, "NAME", m.__name__) for m in mods]
     failed = 0
+    skipped_all: List[Tuple[str, str]] = []
     flaky_all: List[Tuple[str, str]] = []
     for name in suite_names:
         cells = []
@@ -420,8 +459,9 @@ def run_boards(board_tokens: List[str], mods, quick: bool = False,
                 cells.append("%s:?" % label)
                 continue
             res, _failed_names, skipped = entry
-            if skipped:
+            if skipped or _is_skip(res):
                 cells.append("%s:SKIP" % label)
+                skipped_all.append((label, name))
             elif res.ok:
                 cells.append("%s:PASS(%d)" % (label, res.passed))
             else:
@@ -431,6 +471,10 @@ def run_boards(board_tokens: List[str], mods, quick: bool = False,
     for label, port, results, flaky, _setup in collected:
         for name in flaky:
             flaky_all.append((label, name))
+    if skipped_all:
+        print("\nSKIPPED (prerequisite unavailable; not a failure):")
+        for label, name in skipped_all:
+            print("  %s: %s" % (label, name))
     if flaky_all:
         print("\nFLAKY (passed on retry, quarantine for re-run):")
         for label, name in flaky_all:
@@ -523,7 +567,7 @@ def _write_baseline(path: str, report: Dict) -> None:
             continue
         per = {}
         for name, res, _failed, skipped in entry[1]:
-            if not skipped:
+            if not skipped and not _is_skip(res):
                 per[name] = round(res.duration, 1)
         data[label] = per
     try:
@@ -535,10 +579,44 @@ def _write_baseline(path: str, report: Dict) -> None:
         print("warning: cannot write baseline %s: %s" % (path, exc))
 
 
+def _self_test_summary() -> int:
+    """Host-only check of the SKIP/PASS/FAIL summary verdict (no board).
+
+    Guards the rules the runner must never get wrong: a prerequisite skip is
+    SKIP (green), a zero-assertion suite is FAIL (no false green), and a
+    genuine failure still fails the run.
+    """
+    cases = [
+        ("pass", [SuiteResult("ok", 7, 0)], "PASS", 0, 0),
+        ("skip", [SuiteResult("needs-usb", 0, 0, skipped=1)], "SKIP", 0, 1),
+        # skipped>0 with a failure is a FAIL, never a silent skip.
+        ("skip+fail", [SuiteResult("mixed", 0, 1, skipped=1)],
+         "FAIL", 1, 0),
+        # No assertions and no skip: a false green, so FAIL.
+        ("vacuous", [SuiteResult("empty", 0, 0)], "FAIL", 1, 0),
+    ]
+    bad = 0
+    for label, results, want_status, want_failed, want_skipped in cases:
+        rows, failed, skipped = format_suite_summary(results)
+        text = "\n".join(rows)
+        ok = (rows and rows[0].split()[0] == want_status
+              and failed == want_failed and skipped == want_skipped)
+        print("%-4s summary %-10s -> %s (failed=%d skipped=%d)"
+              % ("OK" if ok else "FAIL", label, rows[0].strip(), failed, skipped))
+        if not ok:
+            bad += 1
+            print("     expected %s failed=%d skipped=%d, got:\n%s"
+                  % (want_status, want_failed, want_skipped, text))
+    print("summary self-test %s" % ("OK" if bad == 0 else "FAIL"))
+    return 1 if bad else 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="P4MiniShell host test runner")
     ap.add_argument("port", nargs="?", default=None, help="COMx (argv/P4_PORT/COM11)")
     ap.add_argument("--list", action="store_true", help="list suites and exit")
+    ap.add_argument("--self-test", action="store_true",
+                    help="host-only summary verdict check (no board)")
     ap.add_argument("--only", default=None, help="comma-separated suite names")
     ap.add_argument("--skip", default=None, help="comma-separated suite names")
     ap.add_argument("--tag", default=None, help="only suites with this tag")
@@ -565,6 +643,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--static", action="store_true",
                     help="run only the static gates (no hardware) and exit")
     args = ap.parse_args(argv)
+
+    if args.self_test:
+        return _self_test_summary()
 
     if args.static or args.guard:
         rc = run_static_gates()

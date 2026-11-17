@@ -1176,6 +1176,51 @@ const gfx_surface_t *emoji_pack_image(uint32_t cp, int *cells);
 - `storage_path.h`: `storage_shell_path(path, out, size)` maps a VFS path back
   to `sd:/`/`usb:/` (used to publish `APPROOT`).
 
+### `components/imagefile/imagefile.h`
+
+```c
+bool imagefile_decode_mem(const uint8_t *data, size_t len, int w, int h,
+                          gfx_surface_t *out);
+     /* The one in-memory image decoder: BMP via gfx, PNG/JPEG via imgdec.
+      * Lives in its own leaf because gfx must stay LVGL-free for the host
+      * lane; consumers own `out` (gfx_surface_free). */
+```
+
+### LVGL colour emoji
+
+```c
+/* font.h - upward inversion: command_init() registers the pack lookup. */
+typedef bool (*font_emoji_image_cb_t)(uint32_t cp, int px,
+                                      const lv_image_dsc_t **image);
+void font_set_emoji_image_source(font_emoji_image_cb_t cb);
+
+/* emoji.h - the pack side. */
+bool emoji_pack_entry_at(int index, uint32_t *cp, char *file, size_t size,
+                         int *cells);
+const lv_image_dsc_t *emoji_pack_lvgl_image(uint32_t cp, int px);
+     /* RGB565 descriptor owned by the 4-slot PSRAM cache; valid for the
+      * immediate draw. NULL = not in the pack. */
+```
+
+`font_get()`'s emoji link asks the registered callback first and falls back to
+the retro CP437 glyph. The image is drawn by LVGL's normal image path from the
+descriptor, so there is no filesystem driver and no second decoder.
+
+### Blocking HTML surface and native apps
+
+```c
+/* command.h */
+int  browser_html_show(const char *target);   /* 0 rendered+closed, 1 error */
+
+/* applib_ui.h - native apps reach it without command/browser headers. */
+typedef struct { bool (*open_html)(const char *target); } applib_ui_ops_t;
+void applib_register_ui_ops(const applib_ui_ops_t *ops);
+bool applib_html_open(const char *target);
+```
+
+`html` calls `browser_html_show()`; `/no` calls the non-blocking
+`browser_load_url()` path instead. `command_init()` registers the applib hook.
+
 ## Batch Module API
 
 Declared in `components/batch/batch.h`.

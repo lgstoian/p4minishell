@@ -27,6 +27,9 @@
  */
 
 #include "batch.h"
+#include "storage_path.h"
+
+#include <stdio.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -228,9 +231,83 @@ void svc_slot_released(int slot)
     }
 }
 
+/** True when @p shell_path resolves to a readable regular file. */
+static bool svc_file_exists(const char *shell_path)
+{
+    char resolved[P4_CONFIG_SD_PATH_BYTES];
+    FILE *probe;
+
+    if (shell_fs_resolve_path(shell_path, resolved, sizeof(resolved)) != ESP_OK) {
+        return false;
+    }
+    probe = fopen(resolved, "rb");
+    if (probe == NULL) {
+        return false;
+    }
+    fclose(probe);
+    return true;
+}
+
+/** Pin a bare script name to its drive when it only exists on USB.
+ *
+ * `service install moodsampler "MOODSVC"` would otherwise run whatever
+ * `PATH`/cwd finds (SD), so an app installed on a stick would still write its
+ * data to SD. At install time we resolve the first token once: if SD/PATH does
+ * not have it but `usb:/APPS` does, the registry stores the explicit
+ * `usb:/APPS/<name>` path and the batch frame publishes `APPDRIVE=usb:`.
+ * The line is copied verbatim in every other case (arguments preserved).
+ *
+ * @return true when @p out received the line to store. */
+static bool svc_resolve_line(const char *line, char *out, size_t out_size)
+{
+    char token[P4_CONFIG_SVC_NAME_BYTES + 8];
+    const char *space;
+    size_t len;
+    static const char *const exts[] = { "", ".BAT", ".CMD", ".bat", ".cmd" };
+
+    if (line == NULL || out == NULL || out_size == 0) {
+        return false;
+    }
+    snprintf(out, out_size, "%s", line);
+    space = strchr(line, ' ');
+    len = (space != NULL) ? (size_t)(space - line) : strlen(line);
+    if (len == 0 || len >= sizeof(token)) {
+        return true;
+    }
+    memcpy(token, line, len);
+    token[len] = '\0';
+    if (strchr(token, '/') != NULL || strchr(token, ':') != NULL) {
+        return true;   /* already an explicit path */
+    }
+    for (size_t i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) {
+        char sd_path[P4_CONFIG_SD_PATH_BYTES];
+        char usb_path[P4_CONFIG_SD_PATH_BYTES];
+
+        snprintf(sd_path, sizeof(sd_path), "sd:/APPS/%s%s", token, exts[i]);
+        if (svc_file_exists(sd_path)) {
+            return true;
+        }
+        snprintf(usb_path, sizeof(usb_path), "usb:/APPS/%s%s", token, exts[i]);
+        if (svc_file_exists(usb_path)) {
+            /* Replace only the first token, keeping any arguments. `out`
+             * already holds the line, so splice in place with bounds checks. */
+            size_t used = strlen(usb_path);
+            const char *rest = (space != NULL) ? space : "";
+
+            if (used + strlen(rest) + 1 <= out_size) {
+                memmove(out + used, rest, strlen(rest) + 1);
+                memcpy(out, usb_path, used);
+            }
+            return true;
+        }
+    }
+    return true;
+}
+
 esp_err_t svc_install(const char *name, const char *line, bool restart, bool auto_start)
 {
     char resolved[P4_CONFIG_SD_PATH_BYTES];
+    char resolved_line[P4_CONFIG_COMMAND_BYTES];
     const batch_io_ops_t *io = batch_io_ops_get();
     svc_entry_t *e;
 
@@ -244,6 +321,11 @@ esp_err_t svc_install(const char *name, const char *line, bool restart, bool aut
     if (s_svc == NULL) {
         return ESP_ERR_NO_MEM;
     }
+    /* Resolve the command's drive once, at install time (not per boot). */
+    if (!svc_resolve_line(line, resolved_line, sizeof(resolved_line))) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    line = resolved_line;
     e = svc_find(name);
     if (e == NULL) {
         for (int i = 0; i < (int)P4_CONFIG_SVC_MAX; i++) {

@@ -168,6 +168,7 @@ The co-processor firmware this project ships is built from its own
 | `assets/fonts/Noto*.ttf` | SIL Open Font License 1.1 (`assets/fonts/OFL.txt`) |
 | `components/gfx/gfx_font.c` | Generated from the public-domain `unscii-8` font |
 | `components/font/emoji_core.c` (retro emoji map) | Project-authored, MIT - the built-in default emoji pack. No third-party emoji artwork is bundled. |
+| `apps/emoji/` (sample pack BMPs + INI) | Project-authored, MIT - a deployable example/fixture for the pack format. |
 | `icon/icon-512.png`, `main/assets/icon_splash.c` | Project-authored derivatives |
 
 ### Code adapted from ESP-Brookesia (Apache-2.0)

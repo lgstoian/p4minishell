@@ -93,12 +93,37 @@ typedef struct {
 static lv_font_t s_emoji_font[FONT_ROLE_COUNT];
 static emoji_font_dsc_t s_emoji_dsc[FONT_ROLE_COUNT];
 
+/** Registered by the command layer (see font.h): pack images for LVGL. */
+static font_emoji_image_cb_t s_emoji_image_cb;
+
+void font_set_emoji_image_source(font_emoji_image_cb_t cb)
+{
+    s_emoji_image_cb = cb;
+}
+
 static const void *emoji_font_get_glyph_bitmap(lv_font_glyph_dsc_t *dsc,
                                                lv_draw_buf_t *draw_buf)
 {
-    (void)dsc;
-    (void)draw_buf;
-    return NULL;   /* never used: resolved_font is the base font */
+    const lv_font_t *wrapper;
+    const emoji_font_dsc_t *ctx;
+
+    if (dsc == NULL) {
+        return NULL;
+    }
+    /* Image glyphs carry the lv_image_dsc_t in gid.src (see get_glyph_dsc). */
+    if (dsc->format == LV_FONT_GLYPH_FORMAT_IMAGE) {
+        return dsc->gid.src;
+    }
+    /* Retro fallback: lv_font_get_glyph_dsc() records the WRAPPER as the
+     * resolved font, so the bitmap request lands here even though the glyph
+     * descriptor came from the base. Delegate to the base explicitly - a
+     * NULL here would silently drop the glyph. */
+    wrapper = dsc->resolved_font;
+    ctx = (wrapper != NULL) ? (const emoji_font_dsc_t *)wrapper->dsc : NULL;
+    if (ctx != NULL && ctx->base != NULL && ctx->base->get_glyph_bitmap != NULL) {
+        return ctx->base->get_glyph_bitmap(dsc, draw_buf);
+    }
+    return NULL;
 }
 
 static bool emoji_font_get_glyph_dsc(const lv_font_t *font,
@@ -112,6 +137,24 @@ static bool emoji_font_get_glyph_dsc(const lv_font_t *font,
         emoji_is_modifier(letter)) {
         return false;   /* not ours: LVGL continues down the chain */
     }
+    /* Colour pack first (v1.4.3): an image glyph sized to the role's line. */
+    if (s_emoji_image_cb != NULL) {
+        const lv_image_dsc_t *image = NULL;
+        int px = dsc->base->line_height;
+
+        if (s_emoji_image_cb(letter, px, &image) && image != NULL) {
+            dsc_out->is_placeholder = 0;
+            dsc_out->adv_w = (uint16_t)image->header.w;
+            dsc_out->box_w = (uint16_t)image->header.w;
+            dsc_out->box_h = (uint16_t)image->header.h;
+            dsc_out->ofs_x = 0;
+            dsc_out->ofs_y = 0;
+            dsc_out->format = LV_FONT_GLYPH_FORMAT_IMAGE;
+            dsc_out->gid.src = image;
+            return true;
+        }
+    }
+    /* No pack: the retro DOS/CP437 glyph from the base font. */
     glyph = emoji_dos_glyph(letter);
     if (glyph == 0) {
         return false;

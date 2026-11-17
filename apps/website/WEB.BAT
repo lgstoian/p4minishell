@@ -28,7 +28,7 @@ echo [M-WEB-LOADED]
 rem Let the marker's transcript repaint settle so the browser's TUI page is
 rem the last surface painted before the capture.
 delay 500
-html %APPDRIVE%/WEB/INDEX.HTML
+html /no %APPDRIVE%/WEB/INDEX.HTML
 if errorlevel 1 goto :fail
 
 rem Capture the clean boot state (the JS boot message) for the showcase.

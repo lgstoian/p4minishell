@@ -9,6 +9,7 @@
 
 #include "tui_modal.h"
 #include "p4minishell_config.h"
+#include "p4heap.h"
 #include "esp_heap_caps.h"
 #include <string.h>
 #include <stdlib.h>
@@ -25,7 +26,6 @@ typedef struct {
     bool used;
 } modal_frame_t;
 
-static modal_frame_t s_frames[P4_CONFIG_MODAL_MAX_FRAMES];
 static int s_frame_count = 0;
 
 static modal_label_exec_fn s_exec_cb = NULL;
@@ -48,14 +48,12 @@ typedef struct {
     bool used;
 } modal_map_t;
 
-static modal_map_t s_maps[P4_CONFIG_MODAL_MAX_MAPS];
 static char s_leader[2] = {P4_CONFIG_MODAL_LEADER_KEY, '\0'};
 
 /* ========================================================================
  * CHORD BUFFER
  * ======================================================================== */
 
-static char s_pending[P4_CONFIG_MODAL_MAX_PENDING][P4_CONFIG_MODAL_MAX_CHORD_BYTES];
 static int s_pending_count = 0;
 
 /* ========================================================================
@@ -68,8 +66,6 @@ typedef struct {
     char doc[P4_CONFIG_MODAL_MAX_CMD_DOC_BYTES];
     bool used;
 } modal_cmd_t;
-
-static modal_cmd_t s_cmds[P4_CONFIG_MODAL_MAX_CMDS];
 
 /* ========================================================================
  * SCOPE BAGS
@@ -85,16 +81,14 @@ typedef struct {
     bool used;
 } modal_scope_t;
 
-static modal_scope_t s_scopes[P4_CONFIG_MODAL_MAX_SCOPES];
-
 /* ========================================================================
  * GUARDS
  * ======================================================================== */
 
-static struct {
+typedef struct {
     char label[32];
     bool used;
-} s_guards[MODAL_GUARD_KIND_COUNT][MODAL_FRAME_TYPE_COUNT];
+} modal_guard_t;
 
 /* ========================================================================
  * DIALOGS
@@ -108,9 +102,7 @@ typedef struct {
     bool used;
 } modal_dialog_t;
 
-static modal_dialog_t s_dialogs[P4_CONFIG_MODAL_MAX_DIALOGS];
 static int s_dialog_count = 0;
-static char s_last_result[P4_CONFIG_MODAL_MAX_DIALOG_RESULT_BYTES] = {0};
 
 /* ========================================================================
  * MACROS
@@ -124,7 +116,95 @@ typedef struct {
     bool used;
 } modal_macro_t;
 
-static modal_macro_t s_macros[P4_CONFIG_MODAL_MAX_MACROS];
+/* ========================================================================
+ * TABLE STORAGE
+ * ========================================================================
+ * The modal tables are bulk state (~29 KB; the keymaps alone are 12 KB) and
+ * are used by the command worker and the LVGL input callbacks. They are not
+ * .bss: internal DRAM is the scarce pool on the Tab5 (the command worker and
+ * the Wi-Fi task need large contiguous blocks there), so every table is
+ * allocated on first use, PSRAM first, and only then falls back to the
+ * general pool and finally to internal RAM. Allocations are zeroed, which is
+ * exactly what the previous BSS tables were.
+ *
+ * modal_ensure_tables() publishes each pointer once; a second call is a
+ * no-op (the tables are never reallocated or freed, so a table pointer stays
+ * valid for the lifetime of the layer). If every pool is exhausted the layer
+ * degrades to the answers an empty table gives - the same "nothing defined
+ * yet" results - instead of dereferencing NULL. No new lock: the modal tables
+ * have never been serialised internally, and callers already arrange the
+ * ordering (modal_init runs at boot, before input is routed to the layer).
+ */
+
+static modal_frame_t *s_frames = NULL;
+static modal_map_t *s_maps = NULL;
+static char (*s_pending)[P4_CONFIG_MODAL_MAX_CHORD_BYTES] = NULL;
+static modal_cmd_t *s_cmds = NULL;
+static modal_scope_t *s_scopes = NULL;
+static modal_guard_t (*s_guards)[MODAL_FRAME_TYPE_COUNT] = NULL;
+static modal_dialog_t *s_dialogs = NULL;
+static char *s_last_result = NULL;
+static modal_macro_t *s_macros = NULL;
+
+/** Allocate the modal tables (PSRAM first). False when out of memory. */
+static bool modal_ensure_tables(void)
+{
+    if (s_frames == NULL) {
+        s_frames = p4heap_calloc_psram(P4_CONFIG_MODAL_MAX_FRAMES, sizeof(*s_frames));
+        if (s_frames == NULL) {
+            return false;
+        }
+    }
+    if (s_maps == NULL) {
+        s_maps = p4heap_calloc_psram(P4_CONFIG_MODAL_MAX_MAPS, sizeof(*s_maps));
+        if (s_maps == NULL) {
+            return false;
+        }
+    }
+    if (s_pending == NULL) {
+        s_pending = p4heap_calloc_psram(P4_CONFIG_MODAL_MAX_PENDING, sizeof(*s_pending));
+        if (s_pending == NULL) {
+            return false;
+        }
+    }
+    if (s_cmds == NULL) {
+        s_cmds = p4heap_calloc_psram(P4_CONFIG_MODAL_MAX_CMDS, sizeof(*s_cmds));
+        if (s_cmds == NULL) {
+            return false;
+        }
+    }
+    if (s_scopes == NULL) {
+        s_scopes = p4heap_calloc_psram(P4_CONFIG_MODAL_MAX_SCOPES, sizeof(*s_scopes));
+        if (s_scopes == NULL) {
+            return false;
+        }
+    }
+    if (s_guards == NULL) {
+        s_guards = p4heap_calloc_psram(MODAL_GUARD_KIND_COUNT, sizeof(*s_guards));
+        if (s_guards == NULL) {
+            return false;
+        }
+    }
+    if (s_dialogs == NULL) {
+        s_dialogs = p4heap_calloc_psram(P4_CONFIG_MODAL_MAX_DIALOGS, sizeof(*s_dialogs));
+        if (s_dialogs == NULL) {
+            return false;
+        }
+    }
+    if (s_last_result == NULL) {
+        s_last_result = p4heap_calloc_psram(1, P4_CONFIG_MODAL_MAX_DIALOG_RESULT_BYTES);
+        if (s_last_result == NULL) {
+            return false;
+        }
+    }
+    if (s_macros == NULL) {
+        s_macros = p4heap_calloc_psram(P4_CONFIG_MODAL_MAX_MACROS, sizeof(*s_macros));
+        if (s_macros == NULL) {
+            return false;
+        }
+    }
+    return true;
+}
 
 /* ========================================================================
  * REPEAT
@@ -149,20 +229,22 @@ bool modal_init(modal_label_exec_fn exec_cb, modal_env_get_fn get_cb,
 
 void modal_reset(void)
 {
-    memset(s_frames, 0, sizeof(s_frames));
+    if (modal_ensure_tables()) {
+        memset(s_frames, 0, P4_CONFIG_MODAL_MAX_FRAMES * sizeof(s_frames[0]));
+        memset(s_maps, 0, P4_CONFIG_MODAL_MAX_MAPS * sizeof(s_maps[0]));
+        memset(s_pending, 0, P4_CONFIG_MODAL_MAX_PENDING * sizeof(s_pending[0]));
+        memset(s_cmds, 0, P4_CONFIG_MODAL_MAX_CMDS * sizeof(s_cmds[0]));
+        memset(s_scopes, 0, P4_CONFIG_MODAL_MAX_SCOPES * sizeof(s_scopes[0]));
+        memset(s_guards, 0, MODAL_GUARD_KIND_COUNT * sizeof(s_guards[0]));
+        memset(s_dialogs, 0, P4_CONFIG_MODAL_MAX_DIALOGS * sizeof(s_dialogs[0]));
+        memset(s_macros, 0, P4_CONFIG_MODAL_MAX_MACROS * sizeof(s_macros[0]));
+        s_last_result[0] = '\0';
+    }
     s_frame_count = 0;
-    memset(s_maps, 0, sizeof(s_maps));
     s_leader[0] = P4_CONFIG_MODAL_LEADER_KEY;
     s_leader[1] = '\0';
-    memset(s_pending, 0, sizeof(s_pending));
     s_pending_count = 0;
-    memset(s_cmds, 0, sizeof(s_cmds));
-    memset(s_scopes, 0, sizeof(s_scopes));
-    memset(s_guards, 0, sizeof(s_guards));
-    memset(s_dialogs, 0, sizeof(s_dialogs));
     s_dialog_count = 0;
-    s_last_result[0] = '\0';
-    memset(s_macros, 0, sizeof(s_macros));
     s_repeat_count = 0;
     s_chord_timeout = P4_CONFIG_MODAL_CHORD_TIMEOUT_MS;
 }
@@ -185,6 +267,7 @@ void modal_set_status_render_callback(modal_frame_type_t type, const char *forma
 
 bool modal_mode_push(const char *name, modal_frame_type_t type, const char *map_name)
 {
+    if (!modal_ensure_tables()) return false;
     if (s_frame_count >= P4_CONFIG_MODAL_MAX_FRAMES) return false;
     if (name == NULL || name[0] == '\0') return false;
 
@@ -202,6 +285,7 @@ bool modal_mode_push(const char *name, modal_frame_type_t type, const char *map_
 
 bool modal_mode_pop(void)
 {
+    if (!modal_ensure_tables()) return false;
     if (s_frame_count <= 0) return false;
 
     modal_frame_t *f = &s_frames[s_frame_count - 1];
@@ -219,6 +303,7 @@ bool modal_mode_pop(void)
 
 bool modal_mode_switch(const char *name)
 {
+    if (!modal_ensure_tables()) return false;
     /* Pop until we find the named frame. */
     for (int i = s_frame_count - 1; i >= 0; i--) {
         if (strcmp(s_frames[i].name, name) == 0) {
@@ -235,12 +320,14 @@ bool modal_mode_switch(const char *name)
 
 int modal_mode_top(void)
 {
+    if (!modal_ensure_tables()) return -1;
     if (s_frame_count <= 0) return -1;
     return s_frame_count - 1;
 }
 
 bool modal_mode_get_name(int depth, char *buf, size_t buf_size)
 {
+    if (!modal_ensure_tables()) return false;
     if (buf == NULL || buf_size == 0) return false;
     int idx = s_frame_count - 1 - depth;
     if (idx < 0 || idx >= s_frame_count) return false;
@@ -250,16 +337,22 @@ bool modal_mode_get_name(int depth, char *buf, size_t buf_size)
 
 modal_frame_type_t modal_mode_get_type(int depth)
 {
+    if (!modal_ensure_tables()) return MODAL_FRAME_NORMAL;
     int idx = s_frame_count - 1 - depth;
     if (idx < 0 || idx >= s_frame_count) return MODAL_FRAME_NORMAL;
     return s_frames[idx].type;
 }
 
-int modal_mode_count(void) { return s_frame_count; }
+int modal_mode_count(void)
+{
+    if (!modal_ensure_tables()) return 0;
+    return s_frame_count;
+}
 
 int modal_mode_drop_by_type(modal_frame_type_t type)
 {
     int dropped = 0;
+    if (!modal_ensure_tables()) return 0;
     for (int i = s_frame_count - 1; i >= 0; i--) {
         if (s_frames[i].type == type) {
             /* Pop from top down to this frame. */
@@ -281,6 +374,7 @@ uint32_t modal_get_chord_timeout(void) { return s_chord_timeout; }
 
 int modal_map_create(const char *map_name)
 {
+    if (!modal_ensure_tables()) return -1;
     if (map_name == NULL || map_name[0] == '\0') return -1;
     int idx = modal_map_find(map_name);
     if (idx >= 0) return idx;
@@ -298,6 +392,7 @@ int modal_map_create(const char *map_name)
 
 int modal_map_find(const char *map_name)
 {
+    if (!modal_ensure_tables()) return -1;
     if (map_name == NULL) return -1;
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_MAPS; i++) {
         if (s_maps[i].used && strcmp(s_maps[i].name, map_name) == 0) return i;
@@ -307,6 +402,7 @@ int modal_map_find(const char *map_name)
 
 bool modal_bind(const char *map_name, const char *chord, const char *label)
 {
+    if (!modal_ensure_tables()) return false;
     int idx = modal_map_create(map_name);
     if (idx < 0) return false;
     modal_map_t *map = &s_maps[idx];
@@ -326,6 +422,7 @@ bool modal_bind(const char *map_name, const char *chord, const char *label)
 
 bool modal_unbind(const char *map_name, const char *chord)
 {
+    if (!modal_ensure_tables()) return false;
     int idx = modal_map_find(map_name);
     if (idx < 0) return false;
     modal_map_t *map = &s_maps[idx];
@@ -362,6 +459,7 @@ int modal_bind_count(const char *map_name)
 
 bool modal_bind_get_chord(const char *map_name, int index, char *buf, size_t buf_size)
 {
+    if (!modal_ensure_tables()) return false;
     if (buf == NULL || buf_size == 0) return false;
     int idx = modal_map_find(map_name);
     if (idx < 0 || index < 0 || index >= s_maps[idx].bind_count) return false;
@@ -371,6 +469,7 @@ bool modal_bind_get_chord(const char *map_name, int index, char *buf, size_t buf
 
 bool modal_bind_get_label(const char *map_name, int index, char *buf, size_t buf_size)
 {
+    if (!modal_ensure_tables()) return false;
     if (buf == NULL || buf_size == 0) return false;
     int idx = modal_map_find(map_name);
     if (idx < 0 || index < 0 || index >= s_maps[idx].bind_count) return false;
@@ -394,6 +493,7 @@ static void chord_expand_leader(char *chord)
 
 bool modal_chord_push(const char *stroke, char *label_out, size_t label_size)
 {
+    if (!modal_ensure_tables()) return false;
     if (s_pending_count >= P4_CONFIG_MODAL_MAX_PENDING) {
         modal_chord_clear();
         return false;
@@ -454,7 +554,7 @@ bool modal_chord_push(const char *stroke, char *label_out, size_t label_size)
 bool modal_chord_pending(char *buf, size_t buf_size)
 {
     if (buf == NULL || buf_size == 0) return false;
-    if (s_pending_count == 0) {
+    if (!modal_ensure_tables() || s_pending_count == 0) {
         buf[0] = '\0';
         return false;
     }
@@ -468,7 +568,8 @@ bool modal_chord_pending(char *buf, size_t buf_size)
 
 void modal_chord_clear(void)
 {
-    memset(s_pending, 0, sizeof(s_pending));
+    if (!modal_ensure_tables()) return;
+    memset(s_pending, 0, P4_CONFIG_MODAL_MAX_PENDING * sizeof(s_pending[0]));
     s_pending_count = 0;
 }
 
@@ -478,6 +579,7 @@ void modal_chord_clear(void)
 
 bool modal_cmd_def(const char *name, const char *label, const char *doc)
 {
+    if (!modal_ensure_tables()) return false;
     if (name == NULL || name[0] == '\0' || label == NULL) return false;
     /* Replace existing. */
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_CMDS; i++) {
@@ -502,6 +604,7 @@ bool modal_cmd_def(const char *name, const char *label, const char *doc)
 
 bool modal_cmd_undef(const char *name)
 {
+    if (!modal_ensure_tables()) return false;
     if (name == NULL) return false;
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_CMDS; i++) {
         if (s_cmds[i].used && strcmp(s_cmds[i].name, name) == 0) {
@@ -514,6 +617,7 @@ bool modal_cmd_undef(const char *name)
 
 const char *modal_cmd_find(const char *name)
 {
+    if (!modal_ensure_tables()) return NULL;
     if (name == NULL) return NULL;
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_CMDS; i++) {
         if (s_cmds[i].used && strcmp(s_cmds[i].name, name) == 0) return s_cmds[i].label;
@@ -523,6 +627,7 @@ const char *modal_cmd_find(const char *name)
 
 const char *modal_cmd_get_doc(const char *name)
 {
+    if (!modal_ensure_tables()) return NULL;
     if (name == NULL) return NULL;
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_CMDS; i++) {
         if (s_cmds[i].used && strcmp(s_cmds[i].name, name) == 0) return s_cmds[i].doc;
@@ -533,12 +638,14 @@ const char *modal_cmd_get_doc(const char *name)
 int modal_cmd_count(void)
 {
     int n = 0;
+    if (!modal_ensure_tables()) return 0;
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_CMDS; i++) if (s_cmds[i].used) n++;
     return n;
 }
 
 bool modal_cmd_get_name(int index, char *buf, size_t buf_size)
 {
+    if (!modal_ensure_tables()) return false;
     if (buf == NULL || buf_size == 0) return false;
     int n = 0;
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_CMDS; i++) {
@@ -566,6 +673,7 @@ int modal_cmd_run(const char *name)
 
 bool modal_scope_save(const char *mode_name, int count, const char **vars)
 {
+    if (!modal_ensure_tables()) return false;
     if (mode_name == NULL || vars == NULL || count <= 0) return false;
     if (count > P4_CONFIG_MODAL_MAX_SCOPE_VARS) count = P4_CONFIG_MODAL_MAX_SCOPE_VARS;
 
@@ -601,6 +709,7 @@ bool modal_scope_save(const char *mode_name, int count, const char **vars)
 
 bool modal_scope_restore(const char *mode_name)
 {
+    if (!modal_ensure_tables()) return false;
     if (mode_name == NULL || s_env_set_cb == NULL) return false;
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_SCOPES; i++) {
         if (s_scopes[i].used && strcmp(s_scopes[i].mode_name, mode_name) == 0) {
@@ -615,6 +724,7 @@ bool modal_scope_restore(const char *mode_name)
 
 int modal_scope_list(const char *mode_name, char *buf, size_t buf_size)
 {
+    if (!modal_ensure_tables()) return 0;
     if (mode_name == NULL || buf == NULL || buf_size == 0) return 0;
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_SCOPES; i++) {
         if (s_scopes[i].used && strcmp(s_scopes[i].mode_name, mode_name) == 0) {
@@ -632,6 +742,7 @@ int modal_scope_list(const char *mode_name, char *buf, size_t buf_size)
 
 bool modal_scope_clear(const char *mode_name)
 {
+    if (!modal_ensure_tables()) return false;
     if (mode_name == NULL) return false;
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_SCOPES; i++) {
         if (s_scopes[i].used && strcmp(s_scopes[i].mode_name, mode_name) == 0) {
@@ -648,6 +759,7 @@ bool modal_scope_clear(const char *mode_name)
 
 bool modal_guard_set(modal_guard_kind_t kind, modal_frame_type_t type, const char *label)
 {
+    if (!modal_ensure_tables()) return false;
     if (kind < 0 || kind >= MODAL_GUARD_KIND_COUNT) return false;
     if (type < 0 || type >= MODAL_FRAME_TYPE_COUNT) return false;
     if (label == NULL || label[0] == '\0') return false;
@@ -658,6 +770,7 @@ bool modal_guard_set(modal_guard_kind_t kind, modal_frame_type_t type, const cha
 
 bool modal_guard_clear(modal_guard_kind_t kind, modal_frame_type_t type)
 {
+    if (!modal_ensure_tables()) return false;
     if (kind < 0 || kind >= MODAL_GUARD_KIND_COUNT) return false;
     if (type < 0 || type >= MODAL_FRAME_TYPE_COUNT) return false;
     memset(&s_guards[kind][type], 0, sizeof(s_guards[kind][type]));
@@ -666,6 +779,7 @@ bool modal_guard_clear(modal_guard_kind_t kind, modal_frame_type_t type)
 
 const char *modal_guard_get(modal_guard_kind_t kind, modal_frame_type_t type)
 {
+    if (!modal_ensure_tables()) return NULL;
     if (kind < 0 || kind >= MODAL_GUARD_KIND_COUNT) return NULL;
     if (type < 0 || type >= MODAL_FRAME_TYPE_COUNT) return NULL;
     if (!s_guards[kind][type].used) return NULL;
@@ -678,6 +792,7 @@ const char *modal_guard_get(modal_guard_kind_t kind, modal_frame_type_t type)
 
 bool modal_dialog_push(const char *type, const char *title)
 {
+    if (!modal_ensure_tables()) return false;
     if (s_dialog_count >= P4_CONFIG_MODAL_MAX_DIALOGS) return false;
     modal_dialog_t *d = &s_dialogs[s_dialog_count];
     memset(d, 0, sizeof(*d));
@@ -692,16 +807,23 @@ bool modal_dialog_push(const char *type, const char *title)
 
 void modal_dialog_set_result(const char *value)
 {
+    if (!modal_ensure_tables()) return;
     if (s_dialog_count <= 0) return;
     modal_dialog_t *d = &s_dialogs[s_dialog_count - 1];
     snprintf(d->result, sizeof(d->result), "%s", value != NULL ? value : "");
-    snprintf(s_last_result, sizeof(s_last_result), "%s", value != NULL ? value : "");
+    snprintf(s_last_result, P4_CONFIG_MODAL_MAX_DIALOG_RESULT_BYTES, "%s",
+             value != NULL ? value : "");
 }
 
-const char *modal_dialog_get_result(void) { return s_last_result; }
+const char *modal_dialog_get_result(void)
+{
+    if (!modal_ensure_tables()) return "";
+    return s_last_result;
+}
 
 int modal_dialog_pop(void)
 {
+    if (!modal_ensure_tables()) return 0;
     if (s_dialog_count <= 0) return 0;
     modal_dialog_t *d = &s_dialogs[s_dialog_count - 1];
     int el = d->errorlevel;
@@ -710,7 +832,11 @@ int modal_dialog_pop(void)
     return el;
 }
 
-int modal_dialog_count(void) { return s_dialog_count; }
+int modal_dialog_count(void)
+{
+    if (!modal_ensure_tables()) return 0;
+    return s_dialog_count;
+}
 
 /* ========================================================================
  * MACROS
@@ -718,6 +844,7 @@ int modal_dialog_count(void) { return s_dialog_count; }
 
 bool modal_macro_record(const char *name)
 {
+    if (!modal_ensure_tables()) return false;
     if (name == NULL || name[0] == '\0') return false;
     /* Find existing or free slot. */
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_MACROS; i++) {
@@ -742,6 +869,7 @@ bool modal_macro_record(const char *name)
 
 int modal_macro_stop(void)
 {
+    if (!modal_ensure_tables()) return 0;
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_MACROS; i++) {
         if (s_macros[i].used && s_macros[i].recording) {
             s_macros[i].recording = false;
@@ -753,6 +881,7 @@ int modal_macro_stop(void)
 
 bool modal_macro_capture(const char *event)
 {
+    if (!modal_ensure_tables()) return false;
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_MACROS; i++) {
         if (s_macros[i].used && s_macros[i].recording) {
             if (s_macros[i].event_count >= P4_CONFIG_MODAL_MAX_MACRO_EVENTS) return false;
@@ -767,6 +896,7 @@ bool modal_macro_capture(const char *event)
 
 int modal_macro_replay(const char *name, int times)
 {
+    if (!modal_ensure_tables()) return 2;
     if (name == NULL || times <= 0) return 2;
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_MACROS; i++) {
         if (s_macros[i].used && strcmp(s_macros[i].name, name) == 0) {
@@ -788,12 +918,14 @@ int modal_macro_replay(const char *name, int times)
 int modal_macro_count(void)
 {
     int n = 0;
+    if (!modal_ensure_tables()) return 0;
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_MACROS; i++) if (s_macros[i].used) n++;
     return n;
 }
 
 bool modal_macro_get_name(int index, char *buf, size_t buf_size)
 {
+    if (!modal_ensure_tables()) return false;
     if (buf == NULL || buf_size == 0) return false;
     int n = 0;
     for (int i = 0; i < P4_CONFIG_MODAL_MAX_MACROS; i++) {

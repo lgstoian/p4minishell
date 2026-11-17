@@ -233,8 +233,8 @@ In HTML the standard forms work: `rgba()`, `transparent`, `opacity` (which
 multiplies the subtree), and translucent block backgrounds keep their alpha.
 
 **Web pages.** `html <file|url>` renders a page through the same browser
-engine (DOM, CSS, JavaScript, images, canvas, HTTP(S)). It is non-blocking,
-so an app can present a page, run more verbs, and continue:
+engine (DOM, CSS, JavaScript, images, canvas, HTTP(S)). It is blocking (Esc
+closes); use html /no when the app should continue immediately:
 
 ```bat
 html %APPDRIVE%/WEB/INDEX.HTML

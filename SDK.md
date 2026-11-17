@@ -404,6 +404,9 @@ leaves; consume them, never fork them:
 - Surface knobs: `tui_set_background_alpha()` (whole TUI page),
   `modal_surf_set_alpha(panel, scrim)` (modal panels and backdrop), and the
   `dom_render_ops_t` emoji/alpha hooks for a custom presenter.
+- Pages: `html` is a blocking modal (Esc/q closes); `html /no` and `browser`
+  stay non-blocking. Native apps call `applib_html_open()`; command registers
+  it through `applib_ui_ops_t`, so applib keeps its leaf contract.
 - App paths: `storage_shell_path()` maps a VFS path back to `sd:/`/`usb:/`;
   the shell publishes `APPDRIVE`/`APPROOT`/`APPNAME` for batch apps, and
   `launch` reads `APPINFO` from either drive. Native apps that need their own

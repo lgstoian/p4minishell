@@ -41,6 +41,7 @@
 #include <stdint.h>
 
 #include "gfx.h"
+#include "lvgl.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -67,6 +68,11 @@ void emoji_pack_reload(void);
 /** Number of entries in the loaded pack (0 = built-in map only). */
 int emoji_pack_count(void);
 
+/** Describe entry @p index (0-based). Fills the codepoint, file name (relative
+ *  to EMOJI/) and cell width. False when @p index is out of range. */
+bool emoji_pack_entry_at(int index, uint32_t *cp, char *file, size_t file_size,
+                         int *cells);
+
 /** Volume the pack came from ("sd", "usb", or "" when none). */
 const char *emoji_pack_source(void);
 
@@ -81,6 +87,16 @@ bool emoji_pack_lookup(uint32_t cp, char *path, size_t path_size, int *cells);
  *  The result is owned by the pack's small cache and must not be freed.
  *  @return NULL when the codepoint is not in the pack or decoding failed. */
 const gfx_surface_t *emoji_pack_image(uint32_t cp, int *cells);
+
+/** LVGL glyph image for @p cp at @p px square pixels.
+ *
+ * Returns a descriptor whose `data` points at the pack cache (RGB565), so the
+ * LVGL label draw path can blit the same decoded artwork the TUI uses - no
+ * LVGL filesystem driver and no second image decoder. The descriptor is owned
+ * by the cache and valid until the next few glyph requests; the font wrapper
+ * uses it immediately (LVGL draws synchronously after get_glyph_bitmap).
+ * @return NULL when the codepoint is not in the pack or decoding failed. */
+const lv_image_dsc_t *emoji_pack_lvgl_image(uint32_t cp, int px);
 
 #ifdef __cplusplus
 }

@@ -14,6 +14,7 @@
 #include "imgdec.h"
 #include "emoji_core.h"
 #include "emoji.h"
+#include "modal.h"
 #include "browser.h"
 #include "clock.h"
 #include "command.h"
@@ -1163,15 +1164,140 @@ int shell_command_browser(int argc, char **argv) {
     return browser_load_url(argv[1]);
 }
 
-/* `html <file|url>` - the batch/native entry point to the page engine. It is
- * non-blocking exactly like `browser`: the page stays up until the next
- * command or `appmode` exit, so a script can present a standards-rendered page
- * with one line and no second renderer. */
+/* `html [/no] <file|url>` - the batch/native entry point to the page engine.
+ * At most one renderer: this is the same parse/CSS/JS/render path `browser`
+ * uses. Blocking by default (Esc/q closes); `/no` keeps the page up like
+ * `browser`, for scripts that continue immediately. */
+/* ---- Blocking HTML surface (v1.4.3) ----
+ *
+ * The page is the same TUI page the browser renders; only the event loop is
+ * modal. Esc/q (or an empty/`q`/`close` serial line) closes and restores the
+ * previous transcript. `html /no` keeps the non-blocking behaviour `browser`
+ * has always had. */
+typedef struct {
+    const char *target;
+    EventGroupHandle_t eg;
+} html_ctx_t;
+
+static void html_request_close(html_ctx_t *ctx)
+{
+    if (ctx != NULL && ctx->eg != NULL) {
+        xEventGroupSetBits(ctx->eg, MODAL_EVENT_CLOSE_REQUEST);
+    }
+}
+
+static bool html_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
+{
+    html_ctx_t *ctx = (html_ctx_t *)ctx_ptr;
+
+    ctx->eg = eg;
+    return browser_load_url(ctx->target) == 0;
+}
+
+static void html_surface_service(void *ctx_ptr, EventBits_t bits)
+{
+    (void)ctx_ptr;
+    (void)bits;
+}
+
+static void html_surface_close(void *ctx_ptr)
+{
+    html_ctx_t *ctx = (html_ctx_t *)ctx_ptr;
+
+    tui_deinit();   /* restore the shell transcript */
+    if (ctx != NULL && ctx->eg != NULL) {
+        xEventGroupSetBits(ctx->eg, MODAL_EVENT_CLOSED);
+    }
+}
+
+static bool html_surface_key(void *ctx_ptr, uint8_t key_code, uint8_t modifiers,
+                             char ascii)
+{
+    html_ctx_t *ctx = (html_ctx_t *)ctx_ptr;
+
+    (void)modifiers;
+    if (key_code == 0x29 || ascii == 'q' || ascii == 'Q') {   /* Esc / q */
+        html_request_close(ctx);
+        return true;
+    }
+    if (key_code == 0x52) {   /* Up */
+        tui_viewport_scroll_by(-1);
+        browser_page_present();
+        return true;
+    }
+    if (key_code == 0x51) {   /* Down */
+        tui_viewport_scroll_by(1);
+        browser_page_present();
+        return true;
+    }
+    return false;
+}
+
+static bool html_surface_serial(void *ctx_ptr, const char *line)
+{
+    html_ctx_t *ctx = (html_ctx_t *)ctx_ptr;
+
+    if (line == NULL) {
+        return true;
+    }
+    while (*line == ' ' || *line == '\t') line++;
+    if (*line == '\0' || strcmp(line, "q") == 0 || strcmp(line, "Q") == 0 ||
+        strcmp(line, "quit") == 0 || strcmp(line, "close") == 0) {
+        html_request_close(ctx);
+        return true;
+    }
+    if (strcmp(line, "down") == 0) {
+        tui_viewport_scroll_by(1);
+        browser_page_present();
+        return true;
+    }
+    if (strcmp(line, "up") == 0) {
+        tui_viewport_scroll_by(-1);
+        browser_page_present();
+        return true;
+    }
+    return false;
+}
+
+static const modal_surface_t s_html_surface = {
+    .name = "html",
+    .open = html_surface_open,
+    .service = html_surface_service,
+    .close = html_surface_close,
+    .handle_usb_key = html_surface_key,
+    .handle_serial_line = html_surface_serial,
+    .abort_cancels = true,
+};
+
+int browser_html_show(const char *target)
+{
+    html_ctx_t ctx = { .target = target, .eg = NULL };
+    int errorlevel = 0;
+
+    if (target == NULL || target[0] == '\0') {
+        return 1;
+    }
+    if (modal_surface_run(&s_html_surface, &ctx, &errorlevel) != ESP_OK) {
+        return 1;
+    }
+    return errorlevel;
+}
+
 int shell_command_html(int argc, char **argv)
 {
-    if (argc < 2 || argv[1][0] == '/') {
-        shell_print_usage("Usage: html <file|url>  (same engine as `browser`)");
+    bool nonblocking = false;
+    const char *target = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "/no") == 0) {
+            nonblocking = true;
+        } else if (target == NULL) {
+            target = argv[i];
+        }
+    }
+    if (target == NULL || target[0] == '/') {
+        shell_print_usage("Usage: html [/no] <file|url>  (Esc closes; /no keeps the page up)");
         return 2;
     }
-    return browser_load_url(argv[1]);
+    return nonblocking ? browser_load_url(target) : browser_html_show(target);
 }

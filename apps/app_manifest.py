@@ -80,6 +80,12 @@ APP_PAYLOADS = [
     ("taskmgr", "TASKMGR.APPINFO", "apps"),
     ("pkgtest", "PKGTEST.BAT", "root"),
     ("pkgtest", "PKGTEST.APPINFO", "apps"),
+
+    # Sample emoji pack (project-authored, MIT): sd:/EMOJI or usb:/EMOJI.
+    ("emoji", "EMOJI.INI", "emoji"),
+    ("emoji", "GRIN.BMP", "emoji"),
+    ("emoji", "HEART.BMP", "emoji"),
+    ("emoji", "STAR.BMP", "emoji"),
 ]
 
 # Companion menu + sub-apps; ``push_sd.py`` deploys only this group.
@@ -102,12 +108,15 @@ def remote_target(filename, target):
     """SD path for one payload.
 
     ``apps`` -> ``APPS/<name>`` (launcher metadata), ``web`` -> ``WEB/<name>``
-    (the browser showcase site), ``root`` -> the filename at the SD root.
+    (the browser showcase site), ``emoji`` -> ``EMOJI/<name>`` (a pack),
+    ``root`` -> the filename at the SD root.
     """
     if target == "apps":
         return "APPS/" + filename
     if target == "web":
         return "WEB/" + filename
+    if target == "emoji":
+        return "EMOJI/" + filename
     return filename
 
 

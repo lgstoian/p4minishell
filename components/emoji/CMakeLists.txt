@@ -4,9 +4,9 @@ idf_component_register(
     SRCS "emoji.c"
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
-        font
         gfx
-        imgdec
+        imagefile
+        lvgl__lvgl
         storage
         p4heap
         strutil

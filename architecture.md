@@ -66,8 +66,11 @@ images, and in-page JS are layered on the existing DOM/CSS/gfx/jsengine modules.
 **Emoji, colour and alpha (v1.4.3).** `components/font/emoji_core.c` is the one
 emoji decision point (retro DOS/CP437 fallback map); the TUI/HTML text path and
 the LVGL font chain are its two adapters. `components/emoji/` reads optional
-third-party packs from `EMOJI/` on SD or USB and decodes them through the
-shared `imgdec`/`gfx` image path. `components/markdown/css_color.c` is the one
+third-party packs from `EMOJI/` on SD or USB and decodes them through
+`components/imagefile/` (BMP via gfx, PNG/JPEG via imgdec). In LVGL the font
+link draws the packed RGB565 image itself, so a colour emoji is a real glyph
+rather than a monochrome substitute; the TUI keeps one representative colour
+per cell. `components/markdown/css_color.c` is the one
 CSS colour/alpha parser (DOM, Canvas 2D, TUI), and `ansi_cga_color()` /
 `ansi_cga_nearest()` are the one DOS palette. Large non-DMA UI scratch buffers
 (the Natural Display layout grid, PSRAM caches, emoji glyphs, page buffers)

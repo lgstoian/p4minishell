@@ -57,7 +57,7 @@ def main():
     ser.reset_input_buffer()
 
     ser.reset_input_buffer()
-    for directory in (b"APPS", b"WEB"):
+    for directory in (b"APPS", b"WEB", b"EMOJI"):
         ser.write(("md %s/" % drive).encode() + directory + b"\n")
         time.sleep(0.5)
         ser.read(ser.in_waiting or 1)

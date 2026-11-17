@@ -872,6 +872,12 @@ service stop svc                        (admin off switch: never restarted)
 service remove svc                      (refused while running)
 ```
 
+**Drive-aware installs (v1.4.3).** When the installed command's first token
+is a bare script name and only `usb:/APPS/<name>` exists, the registry stores
+that explicit path; the service then runs with `APPDRIVE=usb:` and keeps its
+data on the stick. SD/PATH copies win and are stored unchanged. The registry
+itself (`sd:/SERVICES.INI`) stays on SD by design.
+
 `start` launches immediately and marks supervised; unexpected exits (anything
 except `service stop`, **including `taskkill`**) restart within one tick,
 bounded by `P4_CONFIG_SVC_RESTART_MAX` restarts per boot (then `parked`).
@@ -1388,14 +1394,17 @@ write failure.
 **ERRORLEVEL:** 0 on success, 1 on failure (snapshot error, PSRAM exhaustion, SD
 write error, invalid path), 2 on usage error (too many arguments).
 
-### emoji [status | reload]
+### emoji [status | list | check | path <cp> | reload]
 
 Report the emoji renderer or rescan the pack. The built-in **retro DOS
 fallback** is always active: every emoji codepoint maps deterministically to
 a CP437 glyph (smileys, hearts, marks, media, weather, food, transport,
 files, status symbols), so text never shows tofu and the same page renders
 identically every time. An optional third-party pack is read from
-`EMOJI/EMOJI.INI` on SD (then USB):
+`EMOJI/EMOJI.INI` on SD (then USB) and renders as **colour** glyphs: a real
+RGB565 image in LVGL labels and a representative colour per cell in the TUI.
+A project-authored MIT sample pack ships in `apps/emoji/` (deploy with
+`python apps/push_apps.py <COM>`):
 
 ```ini
 ; sd:/EMOJI/EMOJI.INI
@@ -1415,21 +1424,32 @@ emoji            ->  map active; pack count or "none"
 emoji reload     ->  rescan SD then USB
 ```
 
-ERRORLEVEL: 0 always (status is informational).
+```
+emoji                (summary: map active, pack source/count, sample)
+emoji list           (every entry: codepoint, file, cells)
+emoji check          (resolve/open every file, flag missing/oversized)
+emoji path 1F600     (resolved path for one codepoint)
+emoji reload         (rescan SD then USB)
+```
 
-### html <file|url>
+ERRORLEVEL: 0 for status/list/path hits, 1 for `check` problems or a missing
+codepoint, 2 usage.
+
+### html [/no] <file|url>
 
 Render a page for batch and native flows through the **same browser page
 engine** as `browser`: DOM parsing, the CSS cascade (including the alpha
 forms), JavaScript, images, `<canvas>`, links and HTTP(S). There is no second
 HTML parser or renderer; `html` is the script-facing entry point that skips
-the browser command's history/bookmark verbs. Like `browser`, it is
-non-blocking: the page stays on the TUI surface until the next command or
-`appmode` exit, so an app can present a page, run further verbs (for example
-`browser back`), and continue.
+the browser command's history/bookmark verbs. It is a **blocking modal** by
+default: the page stays up until Esc/q (or an empty/`q`/`close` serial line),
+then the previous transcript is restored. `/no` keeps the non-blocking
+surface `browser` has always had, for scripts that continue immediately.
+Up/down (or `up`/`down` on the console) scroll the page.
 
 ```
-html sd:/WEB/INDEX.HTML
+html sd:/WEB/INDEX.HTML          blocks until closed
+html /no sd:/WEB/INDEX.HTML      renders and returns (WEB.BAT uses this)
 html https://example.com/
 ```
 

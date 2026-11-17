@@ -114,16 +114,18 @@ the host regression runners are green. See
 - **Emoji:** every emoji renders with a **retro MS-DOS/CP437 look** by default
   (an MIT map in the firmware, no SD card or network needed), in both the TUI
   and LVGL labels. An optional colour pack (`EMOJI/EMOJI.INI` + BMP/PNG on SD
-  or USB) is drawn as cell-ramp images through the same image pipeline. Add
-  art without touching the firmware; `emoji status` reports what is loaded.
+  or USB) renders as real colour glyphs in LVGL and as per-cell colour in the
+  TUI, through one shared image decoder and PSRAM cache. A project-authored
+  MIT sample pack ships in `apps/emoji/`; `emoji list|check|path` manage it.
 - **Transparency:** opt-in, per app. CSS `rgba()`, `transparent` and `opacity`
   are honoured in HTML and the Canvas 2D context, with matching TUI cells,
   real alpha background rectangles, a modal panel opacity and a dimming
   backdrop scrim. Apps opt in with `alpha=`/`scrim=` in their `APPINFO`;
   the default stays fully opaque.
 - **HTML on demand:** `html <file|url>` renders a page through the same
-  browser engine (DOM, CSS, JavaScript, images, canvas, HTTP(S)) for batch and
-  native flows that do not need the browser's history/bookmark verbs.
+  browser engine (DOM, CSS, JavaScript, images, canvas, HTTP(S)) as a blocking
+  modal (Esc closes); `html /no` keeps it non-blocking for scripts, and native
+  apps reach it with `applib_html_open()`.
 - **Runs from USB:** the shell publishes `%APPDRIVE%`/`%APPROOT%` per app,
   `launch` discovers `usb:/APPS`, and the reference apps keep their data on
   the drive they run from. `apps/push_apps.py --drive usb:` installs the same

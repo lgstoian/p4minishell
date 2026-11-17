@@ -64,6 +64,7 @@
 #include "tui.h"
 #include "tui_modal.h"
 #include "emoji_core.h"
+#include "font.h"
 #include "emoji.h"
 #include "clock.h"
 #include "usb.h"
@@ -2354,6 +2355,39 @@ static bool shell_launch_scan_pattern(shell_launch_entry_t *table, int *count,
     return true;
 }
 
+/** Add every `.bat`/`.cmd` in a shell-format directory (e.g. `usb:/APPS`).
+ *
+ * The shared wildcard matcher works on the SD volume only (it maps a VFS path
+ * through shell_sd_vfs_to_fatfs_path), so a USB stick is scanned through the
+ * POSIX VFS instead. `shell_launch_add()` still owns the extension filter,
+ * duplicate rule and APPINFO lookup - this is one listing, not a second
+ * discovery path. */
+static void shell_launch_scan_shell_dir(shell_launch_entry_t *table, int *count,
+                                        const char *dir)
+{
+    char resolved[SHELL_SD_PATH_BYTES];
+    DIR *listing;
+    struct dirent *entry;
+
+    if (dir == NULL || shell_fs_resolve_path(dir, resolved, sizeof(resolved)) != ESP_OK) {
+        return;
+    }
+    listing = opendir(resolved);
+    if (listing == NULL) {
+        return;   /* volume absent: not an error for discovery */
+    }
+    while ((entry = readdir(listing)) != NULL && *count < P4_CONFIG_LAUNCH_MAX) {
+        char path[SHELL_SD_PATH_BYTES];
+
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
+        shell_launch_add(table, count, path);
+    }
+    closedir(listing);
+}
+
 static int shell_launch_discover(shell_launch_entry_t *table)
 {
     const char *path_env;
@@ -2427,13 +2461,10 @@ static int shell_launch_discover(shell_launch_entry_t *table)
     if (count < P4_CONFIG_LAUNCH_MAX) {
         shell_launch_scan_pattern(table, &count, "sd:/APPS/*.cmd");
     }
-    /* Apps installed on a USB stick are discoverable too: same pattern scan,
-     * only the root differs. `usb:/` resolves to the mounted slot. */
+    /* Apps installed on a USB stick are discoverable too. The FATFS wildcard
+     * matcher is SD-only, so list the mounted volume through the VFS. */
     if (count < P4_CONFIG_LAUNCH_MAX) {
-        shell_launch_scan_pattern(table, &count, "usb:/APPS/*.bat");
-    }
-    if (count < P4_CONFIG_LAUNCH_MAX) {
-        shell_launch_scan_pattern(table, &count, "usb:/APPS/*.cmd");
+        shell_launch_scan_shell_dir(table, &count, "usb:/APPS");
     }
     return count;
 }
@@ -2752,6 +2783,45 @@ static void shell_clear_app_transparency(void)
 /** `emoji [status|reload]` - report the retro DOS fallback and the loaded
  *  third-party pack, or rescan the volumes. Read-only apart from the reload;
  *  never fails a batch (ERRORLEVEL 0). */
+/** Parse a hex codepoint argument (`1F600`, `0x1F600`, `U+1F600`). */
+static bool emoji_parse_cp(const char *text, uint32_t *cp_out)
+{
+    uint32_t value = 0;
+    int digits = 0;
+
+    if (text == NULL) {
+        return false;
+    }
+    if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+        text += 2;
+    } else if (text[0] == 'U' && text[1] == '+') {
+        text += 2;
+    } else if (text[0] == 'u' && text[1] == '+') {
+        text += 2;
+    }
+    while (*text != '\0') {
+        int v;
+
+        if (*text >= '0' && *text <= '9') v = *text - '0';
+        else if (*text >= 'a' && *text <= 'f') v = *text - 'a' + 10;
+        else if (*text >= 'A' && *text <= 'F') v = *text - 'A' + 10;
+        else return false;
+        value = (value << 4) | (uint32_t)v;
+        digits++;
+        text++;
+    }
+    if (digits == 0 || digits > 6) {
+        return false;
+    }
+    *cp_out = value;
+    return true;
+}
+
+/** `emoji [status | list | check | path <cp> | reload]`.
+ *
+ * status is the summary (v1.4.3 default), list/check/path are the pack
+ * management surface, reload rescans SD then USB. The built-in retro DOS map
+ * is always active; a pack is optional. */
 static void shell_command_emoji(int argc, char **argv)
 {
     char sample[5];
@@ -2759,11 +2829,116 @@ static void shell_command_emoji(int argc, char **argv)
 
     if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "reload")) {
         emoji_pack_reload();
+    } else if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "list")) {
+        int total = 0;
+
+        emoji_pack_init();
+        for (int i = 0; i < emoji_pack_count(); i++) {
+            uint32_t cp = 0;
+            char file[64] = "";
+            int cells = 0;
+
+            if (!emoji_pack_entry_at(i, &cp, file, sizeof(file), &cells)) {
+                break;
+            }
+            shell_transcript_appendf_ansi(SH_LBL "U+%04X" SH_RST "  " SH_VAL "%s"
+                                          SH_RST "  " SH_MUTE "%d cell(s)\n" SH_RST,
+                                          (unsigned)cp, file, cells);
+            total++;
+        }
+        if (total == 0) {
+            shell_print_muted("emoji: no pack entries (built-in retro map only)");
+        } else {
+            shell_transcript_appendf_ansi(SH_MUTE "%d entr%s from %s:/EMOJI/EMOJI.INI\n"
+                                          SH_RST, total, total == 1 ? "y" : "ies",
+                                          emoji_pack_source());
+        }
+        batch_set_errorlevel(0);
+        return;
+    } else if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "check")) {
+        int missing = 0;
+        int total = 0;
+
+        emoji_pack_init();
+        for (int i = 0; i < emoji_pack_count(); i++) {
+            uint32_t cp = 0;
+            char file[64] = "";
+            int cells = 0;
+            char path[128];
+            char resolved[P4_CONFIG_SD_PATH_BYTES];
+            FILE *probe;
+
+            if (!emoji_pack_entry_at(i, &cp, file, sizeof(file), &cells)) {
+                break;
+            }
+            total++;
+            if (!emoji_pack_lookup(cp, path, sizeof(path), NULL)) {
+                continue;
+            }
+            if (shell_fs_resolve_path(path, resolved, sizeof(resolved)) != ESP_OK) {
+                shell_transcript_appendf_ansi(SH_ERR "emoji: U+%04X %s cannot resolve\n"
+                                              SH_RST, (unsigned)cp, file);
+                missing++;
+                continue;
+            }
+            probe = fopen(resolved, "rb");
+            if (probe == NULL) {
+                shell_transcript_appendf_ansi(SH_ERR "emoji: U+%04X %s missing\n"
+                                              SH_RST, (unsigned)cp, file);
+                missing++;
+                continue;
+            }
+            {
+                long size;
+
+                fseek(probe, 0, SEEK_END);
+                size = ftell(probe);
+                fclose(probe);
+                if (size <= 0 || size > (long)GFX_BMP_MAX_BYTES) {
+                    shell_transcript_appendf_ansi(SH_ERR "emoji: U+%04X %s size %ld "
+                                                  "out of range\n" SH_RST,
+                                                  (unsigned)cp, file, size);
+                    missing++;
+                }
+            }
+        }
+        if (total == 0) {
+            shell_print_muted("emoji: no pack entries to check");
+        } else if (missing == 0) {
+            shell_print_ok("emoji: %d entr%s, all files present", total,
+                           total == 1 ? "y" : "ies");
+        } else {
+            shell_print_error("emoji: %d problem(s) in %d entr%s", missing, total,
+                              total == 1 ? "y" : "ies");
+        }
+        batch_set_errorlevel(missing == 0 ? 0 : 1);
+        return;
+    } else if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "path")) {
+        uint32_t cp = 0;
+        char path[128];
+        int cells = 0;
+
+        if (argc < 3 || !emoji_parse_cp(argv[2], &cp)) {
+            shell_print_usage("Usage: emoji path <hex codepoint>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        emoji_pack_init();
+        if (!emoji_pack_lookup(cp, path, sizeof(path), &cells)) {
+            shell_print_error("emoji: U+%04X is not in the pack", (unsigned)cp);
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_transcript_appendf_ansi(SH_PATH "%s" SH_RST "  " SH_MUTE "(%d cell(s))\n"
+                                      SH_RST, path, cells);
+        batch_set_errorlevel(0);
+        return;
     } else if (argc > 1 && !shell_text_equals_ignore_case(argv[1], "status")) {
-        shell_print_usage("Usage: emoji [status | reload]");
+        shell_print_usage("Usage: emoji [status | list | check | path <cp> | reload]");
         batch_set_errorlevel(2);
         return;
     }
+
     emoji_pack_init();
     source = emoji_pack_source();
     shell_transcript_appendf_ansi(SH_LBL "emoji:" SH_RST " retro DOS fallback active"
@@ -2851,16 +3026,22 @@ static void shell_command_launch(int argc, char **argv)
                        (strcmp(argv[1], ".") == 0) || (strcmp(argv[1], "..") == 0) ||
                        (argv[1][0] == '\0');
             if (!bad) {
-                char *cand = malloc(3u * SHELL_SD_PATH_BYTES);
+                char *cand = malloc(6u * SHELL_SD_PATH_BYTES);
 
                 if (cand != NULL) {
-                    char *slot[3] = { cand, cand + SHELL_SD_PATH_BYTES,
-                                      cand + 2u * SHELL_SD_PATH_BYTES };
+                    char *slot[6] = { cand, cand + SHELL_SD_PATH_BYTES,
+                                      cand + 2u * SHELL_SD_PATH_BYTES,
+                                      cand + 3u * SHELL_SD_PATH_BYTES,
+                                      cand + 4u * SHELL_SD_PATH_BYTES,
+                                      cand + 5u * SHELL_SD_PATH_BYTES };
 
                     snprintf(slot[0], SHELL_SD_PATH_BYTES, "sd:/APPS/%s", argv[1]);
                     snprintf(slot[1], SHELL_SD_PATH_BYTES, "sd:/APPS/%s.BAT", argv[1]);
                     snprintf(slot[2], SHELL_SD_PATH_BYTES, "sd:/APPS/%s.CMD", argv[1]);
-                    for (i = 0; i < 3 && !found; i++) {
+                    snprintf(slot[3], SHELL_SD_PATH_BYTES, "usb:/APPS/%s", argv[1]);
+                    snprintf(slot[4], SHELL_SD_PATH_BYTES, "usb:/APPS/%s.BAT", argv[1]);
+                    snprintf(slot[5], SHELL_SD_PATH_BYTES, "usb:/APPS/%s.CMD", argv[1]);
+                    for (i = 0; i < 6 && !found; i++) {
                         char resolved[SHELL_SD_PATH_BYTES];
                         FILE *probe;
 
@@ -7089,6 +7270,25 @@ static bool command_debug_confirm_destructive(const char *operation,
     return shell_confirm_destructive(operation, warning, detail);
 }
 
+/** applib's html hook: the same blocking surface as the `html` verb. */
+static bool command_applib_open_html(const char *target)
+{
+    return browser_html_show(target) == 0;
+}
+
+/** Bridge from the LVGL font link to the emoji pack image cache. */
+static bool command_emoji_image_source(uint32_t cp, int px,
+                                       const lv_image_dsc_t **image)
+{
+    const lv_image_dsc_t *found = emoji_pack_lvgl_image(cp, px);
+
+    if (found == NULL) {
+        return false;
+    }
+    *image = found;
+    return true;
+}
+
 void command_init(void)
 {
     static const shell_command_ops_t shell_ops = {
@@ -7257,6 +7457,15 @@ void command_init(void)
         applib_register_env_ops(&applib_env_ops);
     }
 
+    /* UI actions a native app may trigger without including command/browser
+     * headers. Only the blocking HTML surface is published today. */
+    {
+        static const applib_ui_ops_t applib_ui_ops = {
+            .open_html = command_applib_open_html,
+        };
+        applib_register_ui_ops(&applib_ui_ops);
+    }
+
     /* Publish the worker-queue hook to the alarm store. The store itself
      * starts lazily on the first `alarm`/`cal` command (see
      * shell_alarm_ensure_init() in alarm_commands.c): creating the checker
@@ -7296,6 +7505,11 @@ void command_init(void)
         }
     }
 #endif
+
+    /* Let the LVGL font chain draw colour pack glyphs. font cannot require
+     * the pack loader (emoji -> storage -> header -> font), so the command
+     * layer, which sees both, publishes the source here. */
+    font_set_emoji_image_source(command_emoji_image_source);
 
     s_initialized = true;
 
