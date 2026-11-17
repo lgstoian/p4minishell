@@ -462,6 +462,14 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
         free(data);
         return false;
     }
+    /* A photographic PNG/JPEG at 80x40 cells is unreadable noise; render its
+     * alt text instead (icons/logos stay). BMP site assets are not filtered. */
+    if ((fmt == IMGDEC_FMT_PNG || fmt == IMGDEC_FMT_JPEG) &&
+        (native_w > P4_CONFIG_BROWSER_IMAGE_NATIVE_MAX_PX ||
+         native_h > P4_CONFIG_BROWSER_IMAGE_NATIVE_MAX_PX)) {
+        free(data);
+        return false;
+    }
     /* Fit the native size to the TUI image budget. */
     w = native_w > 0 ? native_w : 1;
     h = native_h > 0 ? native_h : 1;

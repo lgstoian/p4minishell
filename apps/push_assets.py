@@ -11,7 +11,7 @@ APPS/<APP>.ASSETS manifests (path=HEXCRC lines) verifiable on-device via
 Also emits manifests for the reference .BAT apps (pushed by push_apps.py)
 so `asset check BOUNCE|SNAKE|TCMD|ELITE` covers them too.
 
-Usage: python push_assets.py [COMx]
+Usage: python push_assets.py [COMx] [--drive sd:|usb:|usbN:]
 """
 import os
 import sys
@@ -24,6 +24,12 @@ from push_sd import push_file, wait_shell, open_port  # noqa: E402
 
 import push_apps  # noqa: E402
 import push_sd  # noqa: E402
+from app_manifest import (  # noqa: E402
+    APP_PAYLOADS,
+    COMPANION_PAYLOADS,
+    payload_path,
+    remote_target,
+)
 
 APPS_DIR = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = os.path.join(os.getcwd(), "assets_out")
@@ -94,7 +100,24 @@ def push_one(ser, target, data):
 
 
 def main():
-    port = sys.argv[1] if len(sys.argv) > 1 else "COM11"
+    args = sys.argv[1:]
+    drive = "sd:"
+    if "--drive" in args:
+        idx = args.index("--drive")
+        if idx + 1 < len(args):
+            drive = args[idx + 1].rstrip("/")
+            del args[idx:idx + 2]
+    port = args[0] if args else "COM11"
+
+    def remote(target):
+        """Mirror push_apps.py's install layout (USB scripts live in APPS/)."""
+        if drive == "sd:":
+            return target
+        bare = "/" not in target
+        if bare and target.lower().endswith((".bat", ".cmd")):
+            target = "APPS/" + target
+        return "%s/%s" % (drive, target)
+
     # 1. Generate sprites locally.
     blobs = {}
     for name, maker in SPRITES:
@@ -105,21 +128,16 @@ def main():
         print("GEN  %s (%d bytes)" % (path, len(blobs[name])), flush=True)
     # 2. Manifests for the .BAT apps (bytes identical to push_apps sources).
     manifests = {}
-    for subdir, name, appinfo in push_apps.FILES:
+    for subdir, name, target in APP_PAYLOADS + COMPANION_PAYLOADS:
+        if name.endswith((".HTML", ".TXT", ".words")):
+            continue
         app = os.path.splitext(name)[0]
-        with open(os.path.join(APPS_DIR, subdir, name), "rb") as f:
+        with open(payload_path(subdir, name), "rb") as f:
             data = f.read()
-        target = ("APPS/" + name) if appinfo else name
-        manifests.setdefault(app, []).append((target, crc_hex(data)))
+        manifests.setdefault(app, []).append(
+            (remote(remote_target(name, target)), crc_hex(data)))
     manifests.setdefault("SPR", []).extend(
-        (name, crc_hex(blobs[name])) for name, _ in SPRITES)
-    # Companion (pushed by apps/companion/push_sd.py): root BATs + README plus
-    # the APPS/COMPANION.APPINFO metadata.
-    for name in push_sd.FILES:
-        with open(os.path.join(APPS_DIR, "companion", name), "rb") as f:
-            data = f.read()
-        target = ("APPS/" + name) if name.endswith(".APPINFO") else name
-        manifests.setdefault("COMPANION", []).append((target, crc_hex(data)))
+        (remote(name), crc_hex(blobs[name])) for name, _ in SPRITES)
     # 3. Push sprites + manifests.
     ser = open_port(port, 115200, 1)
     ser.reset_input_buffer()
@@ -129,12 +147,12 @@ def main():
         return 1
     time.sleep(20.0)
     ser.reset_input_buffer()
-    ser.write(b"md APPS\n")
+    ser.write(("md %s/APPS\n" % drive).encode() if drive != "sd:" else b"md APPS\n")
     time.sleep(0.5)
     ser.read(ser.in_waiting or 1)
     ok = True
     for name, _ in SPRITES:
-        ok = push_one(ser, name, blobs[name]) and ok
+        ok = push_one(ser, remote(name), blobs[name]) and ok
     for app, entries in sorted(manifests.items()):
         if app == "ALIASES":
             continue  # three same-named sources overwrite one target; unattributable
@@ -142,7 +160,8 @@ def main():
                 % (app, app)).encode()
         for target, crc in entries:
             body += ("%s=%s\n" % (target, crc)).encode()
-        ok = push_one(ser, "APPS/%s.ASSETS" % app, body) and ok
+        ok = push_one(ser, "%s/APPS/%s.ASSETS" % (drive.rstrip("/"), app)
+                      if drive != "sd:" else "APPS/%s.ASSETS" % app, body) and ok
     ser.close()
     print("RESULT %s" % ("OK" if ok else "FAIL"), flush=True)
     return 0 if ok else 1

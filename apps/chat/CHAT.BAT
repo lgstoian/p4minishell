@@ -18,13 +18,13 @@ rem           [M-CHAT-DONE].
 rem  Foreground-only: the menu renders with the TUI/draw surface.
 rem =====================================================================
 setlocal
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-CHAT]
-title "Chat"
+title "Chat 💬"
 
 :menu
 draw clear screen
-draw box 1 1 80 3 double "P4 CHAT"
+draw box 1 1 80 3 double "P4 CHAT 💬"
 draw text 24 2 "Board-to-board chat over the local link" 14
 draw box 1 5 80 13 single "Menu"
 draw text 5 7  "1  Host      start/stop the SoftAP host"
@@ -38,7 +38,8 @@ draw text 5 14 "8  Help      command reference"
 draw text 5 15 "9  Quit"
 draw box 1 19 80 3 single
 draw text 5 21 "Tip: the host prints 192.168.4.1; the peer joins that address."
-list "P4 Chat" "Host" "Join" "Send" "Poll" "Log" "Status" "Clear" "Help" "Quit"
+draw refresh
+list "P4 Chat 💬" "Host" "Join" "Send" "Poll" "Log" "Status" "Clear" "Help" "Quit"
 on %errorlevel%+1 goto :host,:peer,:send,:poll,:log,:status,:clear,:help,:quit
 goto :menu
 

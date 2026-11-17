@@ -14,8 +14,8 @@ rem  how a batch app can keep time-based work, calendar checks and DB
 rem  maintenance running while the shell stays live.
 rem  Markers: [M-SVC] / [M-SVC-TICK] / [M-SVC] stopped.
 rem =====================================================================
-echo [M-SVC] service started
-title "Companion Service"
+echo [M-SVC] ⚙ service started
+title "Companion Service ⚙"
 notify /t:3 "background service running"
 :loop
 rem Each tick: report the next scheduled alarm and keep the record store

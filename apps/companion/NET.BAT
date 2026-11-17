@@ -7,17 +7,17 @@ rem  Uses TUI for Wi-Fi status, connect, ping, dns, fetch.
 rem =====================================================================
 
 :main
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
-title "Network Tools"
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
+title "Network Tools 🌐"
 echo [M-NET]
 draw clear screen
 draw box 1 1 80 3 single
-draw text 32 2 "NETWORK TOOLS" 14
+draw text 32 2 "NETWORK TOOLS 🌐" 14
 draw box 1 4 80 10 single "Tools"
 draw text 5 6 "Wi-Fi status, connect, ping, dns, fetch"
 draw box 1 15 80 8 single "Status"
 draw text 5 17 "Offline handling: all ops degrade gracefully"
-list "Network Tools" "Wi-Fi status (TUI)" "Connect Wi-Fi" "Pick known network" "Ping (TUI)" "DNS lookup" "Fetch a joke" "Messaging (MQTT)" "Back"
+list "Network Tools 🌐" "Wi-Fi status (TUI)" "Connect Wi-Fi" "Pick known network" "Ping (TUI)" "DNS lookup" "Fetch a joke" "Messaging (MQTT)" "Back"
 on %errorlevel%+1 goto :status,:connect,:known,:ping,:dns,:joke,:msg,:back
 goto :back
 
@@ -26,12 +26,12 @@ tui fullscreen on
 draw clear screen
 draw box 1 1 80 3 single
 draw text 32 2 "WI-FI STATUS" 14
-wifi status > _net.txt
-view _net.txt
-del /p _net.txt > NUL
-wifi known > _known.txt
-view _known.txt
-del /p _known.txt > NUL
+wifi status > %APPDRIVE%/_net.txt
+view %APPDRIVE%/_net.txt
+del /p %APPDRIVE%/_net.txt > NUL
+wifi known > %APPDRIVE%/_known.txt
+view %APPDRIVE%/_known.txt
+del /p %APPDRIVE%/_known.txt > NUL
 tui fullscreen off
 draw clear screen
 goto main
@@ -51,9 +51,9 @@ if not errorlevel 1 dialog "Wi-Fi" "Connected to %ssid%!" "OK"
 goto main
 
 :known
-wifi known > _known.txt
-view _known.txt
-del /p _known.txt > NUL
+wifi known > %APPDRIVE%/_known.txt
+view %APPDRIVE%/_known.txt
+del /p %APPDRIVE%/_known.txt > NUL
 ask /v:ssid "SSID from known (or blank to abort)"
 if errorlevel 1 goto main
 if "%ssid%"=="" goto main
@@ -69,9 +69,9 @@ draw text 38 2 "PING" 14
 ask /v:host "Host to ping" "1.1.1.1"
 if errorlevel 1 goto main
 draw text 5 10 "Pinging %host%..." 14
-ping %host% 3 > _ping.txt
-view _ping.txt
-del /p _ping.txt > NUL
+ping %host% 3 > %APPDRIVE%/_ping.txt
+view %APPDRIVE%/_ping.txt
+del /p %APPDRIVE%/_ping.txt > NUL
 goto main
 
 :dns
@@ -80,29 +80,29 @@ draw text 37 2 "DNS LOOKUP" 14
 ask /v:host "Hostname" "example.com"
 if errorlevel 1 goto main
 draw text 5 10 "Resolving %host%..." 14
-dns %host% > _dns.txt
-view _dns.txt
-del /p _dns.txt > NUL
+dns %host% > %APPDRIVE%/_dns.txt
+view %APPDRIVE%/_dns.txt
+del /p %APPDRIVE%/_dns.txt > NUL
 goto main
 
 :joke
-appconfig companion get fun_url > funurl.txt
+appconfig companion get fun_url > %APPDRIVE%/funurl.txt
 if errorlevel 1 goto :joke_default
-for /f "eol= tokens=*" %%u in (funurl.txt) do set funurl=%%u
-del /p funurl.txt > NUL
+for /f "eol= tokens=*" %%u in (%APPDRIVE%/funurl.txt) do set funurl=%%u
+del /p %APPDRIVE%/funurl.txt > NUL
 goto :joke_go
 :joke_default
-del /p funurl.txt > NUL
+del /p %APPDRIVE%/funurl.txt > NUL
 set funurl=https://icanhazdadjoke.com/
 :joke_go
 draw box 1 1 80 3 single
 draw text 35 2 "FETCH JOKE" 14
 draw text 5 10 "Fetching: %funurl%" 14
-httpget %funurl% _joke.txt
+httpget %funurl% %APPDRIVE%/_joke.txt
 echo [M-NET-FETCHED]
 if errorlevel 1 dialog "Fetch" "Fetch failed - offline or endpoint down." "OK"
-if not errorlevel 1 view _joke.txt
-del /p _joke.txt > NUL
+if not errorlevel 1 view %APPDRIVE%/_joke.txt
+del /p %APPDRIVE%/_joke.txt > NUL
 goto main
 
 :back
@@ -132,8 +132,9 @@ draw text 5 20 "net msg | net outbox               last message / queue"
 draw text 5 22 "Offline publishes queue in the SD outbox."
 net outbox /b
 echo [M-NET-OUTBOX]
-draw text 5 24 "Press any key to return."
-pause
+rem A list modal (not a pause) so the messaging page can be captured by the
+rem serial `screenshot` and driven by the documented entry number.
+list "Messaging" "Back"
 echo [M-NET-MSG-BACK]
 draw clear screen
 goto main

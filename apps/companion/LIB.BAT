@@ -3,7 +3,7 @@ rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
 rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  LIB.BAT - shared routines for the P4 Companion.
-rem  Every routine is reached with `call LIB.BAT::<routine> [args]`.
+rem  Every routine is reached with `call %APPROOT%/LIB.BAT::<routine> [args]`.
 rem  Routine calls run in an isolated environment scope, so temporary
 rem  variables here never leak into the caller.
 rem =====================================================================
@@ -63,7 +63,7 @@ goto :eof
 rem ---- selftest: %~ modifiers -------------------------------------------
 rem %1 = value to dissect. Exercises the `%~[fdpnx]N` expansion on the
 rem live engine: dequote, name, extension, dir, full. Callable headless:
-rem   call LIB.BAT::selftest_tilde "sd:/DIR/FILE.TXT"
+rem   call %APPROOT%/LIB.BAT::selftest_tilde "sd:/DIR/FILE.TXT"
 :selftest_tilde
 echo SELFTEST raw=[%1]
 echo SELFTEST stripped=[%~1]
@@ -72,7 +72,7 @@ goto :eof
 
 rem ---- selftest: for /f command form ------------------------------------
 rem Iterates command output instead of a file (no temp file needed).
-rem Callable headless: call LIB.BAT::selftest_forf_cmd
+rem Callable headless: call %APPROOT%/LIB.BAT::selftest_forf_cmd
 :selftest_forf_cmd
 for /f "eol= tokens=*" %%v in ('echo hello-forf') do echo SELFTEST forf-cmd got=[%%v]
 goto :eof
@@ -80,7 +80,7 @@ goto :eof
 rem ---- selftest: defined/empty observation -------------------------------
 rem Reports (not judges) the `set NAME=` + `if defined` semantics so the
 rem board session can confirm cmd parity. Callable headless:
-rem   call LIB.BAT::selftest_defined
+rem   call %APPROOT%/LIB.BAT::selftest_defined
 :selftest_defined
 set SELFTEST_X=
 if defined SELFTEST_X echo SELFTEST defined-after-clear=1
@@ -93,7 +93,7 @@ goto :eof
 rem ---- selftest: substring/replace + for /A ------------------------------
 rem Exercises the `%VAR:~%` / `%VAR:old=new%` expansions and the associative
 rem `for /A` binding (index in %%k, live slot value in the next letter).
-rem Callable headless: call LIB.BAT::selftest_expansion
+rem Callable headless: call %APPROOT%/LIB.BAT::selftest_expansion
 :selftest_expansion
 set SELFTEST_WORD=cloudpilot
 echo SELFTEST substr=[%SELFTEST_WORD:~0,4%]
@@ -110,9 +110,12 @@ rem ---- selftest: all ------------------------------------------------------
 rem Runs every selftest routine above. Callable headless:
 rem   call LIB.BAT::selftest_all
 :selftest_all
-call LIB.BAT::selftest_tilde "sd:/DIR/FILE.TXT"
-call LIB.BAT::selftest_forf_cmd
-call LIB.BAT::selftest_defined
-call LIB.BAT::selftest_expansion
+rem Library calls keep an app's APPROOT, but a headless shell call has none:
+rem the selftests are read-only, so SD is a safe fallback for the recursion.
+if "%APPROOT%"=="" set APPROOT=sd:
+call %APPROOT%/LIB.BAT::selftest_tilde "sd:/DIR/FILE.TXT"
+call %APPROOT%/LIB.BAT::selftest_forf_cmd
+call %APPROOT%/LIB.BAT::selftest_defined
+call %APPROOT%/LIB.BAT::selftest_expansion
 echo SELFTEST done
 goto :eof

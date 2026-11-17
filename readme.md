@@ -125,7 +125,13 @@ the host regression runners are green. See
 - **HTML on demand:** `html <file|url>` renders a page through the same
   browser engine (DOM, CSS, JavaScript, images, canvas, HTTP(S)) as a blocking
   modal (Esc closes); `html /no` keeps it non-blocking for scripts, and native
-  apps reach it with `applib_html_open()`.
+  apps reach it with `applib_html_open()`. Real pages up to 2 MB render
+  (Wikipedia's article is fetched whole); photographic images fall back to
+  alt text so a page stays readable instead of turning into unreadable cell
+  noise.
+- **Pointer parity:** touch drag and the mouse wheel scroll the browser/TUI
+  page and the modal viewers; long-press then drag selects text on the page
+  (tap the selection to copy), and the editor keeps its drag selection.
 - **Runs from USB:** the shell publishes `%APPDRIVE%`/`%APPROOT%` per app,
   `launch` discovers `usb:/APPS`, and the reference apps keep their data on
   the drive they run from. `apps/push_apps.py --drive usb:` installs the same

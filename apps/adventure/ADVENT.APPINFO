@@ -1,5 +1,9 @@
 ; APPINFO metadata for the text adventure (INI format, read by `launch`).
 ; Copied to sd:/APPS/ADVENT.APPINFO by apps/push_apps.py.
-title=Text Adventure
-description=A tiny pure-batch text adventure: rooms, inventory, score, save/load
+title=Text Adventure ⚔
+description=A tiny pure-batch text adventure: rooms, inventory, score, save/load on the app drive
 version=1.0
+; Opt-in transparency (v1.4.3): translucent room page + modal scrim. Kept
+; high so the room prose stays readable over the shell.
+alpha=97%
+scrim=50%

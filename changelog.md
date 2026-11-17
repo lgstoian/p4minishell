@@ -85,6 +85,20 @@ open bugs see [`bugs.md`](bugs.md).
   `tools/size_budget.py` gate (wired into `tools/harness/verify.py`) fails a
   build that exceeds the recorded DIRAM ceiling plus 4 KB.
 
+- **Pointer parity and selection.** Touch drag and the mouse wheel scroll the
+  browser/TUI page and keep the viewport in step with the page buffer; the
+  modal viewers/editor already had drag+wheel. Long-press then drag selects a
+  cell range on the page (highlight overlay); a tap inside it copies to the
+  shell clipboard, and `tui copy` / `tui select clear` are the script forms.
+- **Real pages fetch whole.** The HTTP body budget is 2 MB and the page holds
+  2000 rows in PSRAM; the live English Wikipedia article (353 KB) renders end
+  to end with no size-cap degradation. Photographic PNG/JPEGs above 96 px fall
+  back to alt text so pages stay legible; logos/icons still render as cell art.
+- **Parsers fixed for real markup.** A tag attribute longer than the 512-byte
+  store (Parsoid's `data-mw` JSON on Wikipedia) used to leak its tail into the
+  document as text (`{{cite web ...}}`); the scanner now consumes the rest of
+  an over-long name/value safely.
+
 ### Changed
 
 - `dom_render` threads style alpha through its cell and rectangle sinks, and

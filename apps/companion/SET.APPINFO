@@ -1,0 +1,9 @@
+; APPINFO metadata for the Companion Preferences app (INI, `launch`).
+; Copied to <drive>/APPS/SET.APPINFO by apps/push_apps.py. SET is also a
+; sub-app of COMPANION; launched standalone it applies its own transparency.
+title=Preferences ⚙
+description=Brightness, volume, rotate, theme, fonts, input and security (CONFIG.SYS)
+version=1.0
+; Opt-in transparency (v1.4.3): translucent preferences + modal scrim.
+alpha=95%
+scrim=45%

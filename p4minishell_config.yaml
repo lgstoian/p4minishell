@@ -1211,7 +1211,7 @@ http_client:
     description: "Network timeout in milliseconds for a single httpget request"
     range: "1000..120000"
   max_body_bytes:
-    value: 524288
+    value: 2097152
     type: size_t
     description: >-
       Maximum response body bytes httpget buffers into PSRAM. A larger
@@ -3374,7 +3374,7 @@ browser:
     description: "Decoded images kept in the browser PSRAM image cache (a hit skips the fetch and the decode)"
     range: "1..2048"
   page_cache_max:
-    value: 6
+    value: 3
     type: int
     description: "Rendered pages kept in the browser PSRAM back/forward cache (a hit restores by memcpy)"
     range: "1..64"
@@ -3777,3 +3777,4 @@ alarm:
     value: 1
     type: bool
     description: "Compile out the /run: batch action entirely for size (0 = keep it)."
+browser_image_native_max_px: 96

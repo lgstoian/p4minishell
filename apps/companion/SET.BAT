@@ -18,15 +18,15 @@ rem  Indices below are 0-based (list returns the selected 0-based index).
 rem =====================================================================
 
 :main
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
-title "Settings"
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
+title "Settings ⚙"
 echo [M-SET]
 draw clear screen
 draw box 1 1 80 3 single
-draw text 34 2 "PREFERENCES" 14
+draw text 34 2 "PREFERENCES ⚙" 14
 draw box 1 4 80 16 single "Options"
 draw text 5 6 "Settings persist in CONFIG.SYS"
-list "Preferences" "Brightness" "Volume" "Rotate" "Idle timeout" "Header" "Theme" "Fonts" "Cursor" "Keyboard page" "System" "Security" "Show settings" "Back" "Quick settings"
+list "Preferences ⚙" "Brightness" "Volume" "Rotate" "Idle timeout" "Header" "Theme" "Fonts" "Cursor" "Keyboard page" "System" "Security" "Show settings" "Back" "Quick settings"
 on %errorlevel%+1 goto :brightness,:volume,:rotate,:idle,:header,:theme,:fonts,:cursor,:keyboard,:system,:security,:show_all,:back,:quick
 goto :back
 
@@ -112,9 +112,9 @@ goto :theme
 
 :theme_show
 echo [M-SET-THEME-SHOW]
-theme show > _theme.txt
-view _theme.txt
-del /p _theme.txt > NUL
+theme show > %APPDRIVE%/_theme.txt
+view %APPDRIVE%/_theme.txt
+del /p %APPDRIVE%/_theme.txt > NUL
 goto :theme
 
 :fonts
@@ -176,9 +176,9 @@ dialog "Fonts" "Saved UI size=%val%." "OK"
 goto :fonts
 
 :fonts_show
-font list > _font.txt
-view _font.txt
-del /p _font.txt > NUL
+font list > %APPDRIVE%/_font.txt
+view %APPDRIVE%/_font.txt
+del /p %APPDRIVE%/_font.txt > NUL
 goto :fonts
 
 :fonts_default
@@ -278,9 +278,9 @@ goto :security
 draw clear screen
 draw box 1 1 80 3 single
 draw text 33 2 "ALL SETTINGS" 14
-config /b > _set.txt
-view _set.txt
-del /p _set.txt > NUL
+config /b > %APPDRIVE%/_set.txt
+view %APPDRIVE%/_set.txt
+del /p %APPDRIVE%/_set.txt > NUL
 goto :main
 
 :back

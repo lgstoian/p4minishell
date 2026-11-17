@@ -8,9 +8,9 @@ rem  background by scheduling it: alarm add DATE TIME /run:AGENDA.BAT
 rem  (see command.md for the exact alarm add syntax).
 rem  Markers: [M-AGENDA] / [M-AGENDA-DONE].
 rem =====================================================================
-echo [M-AGENDA]
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
-title "Agenda"
+echo [M-AGENDA] 📅
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
+title "Agenda 📅"
 cal today
 cal next
 notify /t:3 "agenda checked"

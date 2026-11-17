@@ -6,8 +6,8 @@ rem  PKGTEST.BAT - minimal package-management demo app. Installed from the
 rem  bundle PKGS/PKGTEST by `pkg install PKGTEST`; uninstalled with
 rem  `pkg remove PKGTEST`. Markers: [M-PKGTEST] / [M-PKGTEST-DONE].
 rem =====================================================================
-echo [M-PKGTEST]
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
-title "Package Test"
-echo pkgtest: installed package is running
+echo [M-PKGTEST] 📦
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
+title "Package Test 📦"
+echo pkgtest: installed package is running on %APPDRIVE%
 echo [M-PKGTEST-DONE]

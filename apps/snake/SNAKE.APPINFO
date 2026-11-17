@@ -1,5 +1,9 @@
 ; APPINFO metadata for the TUI snake game (INI format, read by `launch`).
 ; Copied to sd:/APPS/SNAKE.APPINFO by apps/push_apps.py.
-title=Snake
+title=Snake 🐍
 description=TUI snake: fixed body slots, timeout steering, one flush per frame
 version=1.0
+; Opt-in transparency (v1.4.3): very light blend so the playfield stays
+; readable; the game must never become see-through.
+alpha=97%
+scrim=45%

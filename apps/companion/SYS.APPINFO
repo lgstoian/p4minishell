@@ -1,0 +1,9 @@
+; APPINFO metadata for the Companion Live System dashboard (INI, `launch`).
+; Copied to <drive>/APPS/SYS.APPINFO by apps/push_apps.py. SYS is also a
+; sub-app of COMPANION; launched standalone it applies its own transparency.
+title=Live System 🖥
+description=Live dashboard: memory (heap + PSRAM), tasks, services, packages
+version=1.0
+; Opt-in transparency (v1.4.3): translucent dashboard + modal scrim.
+alpha=94%
+scrim=45%

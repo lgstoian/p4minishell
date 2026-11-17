@@ -15,9 +15,9 @@ rem  x menu, s swap panes, 1/2 jump pane to a root, q quit.
 rem  Markers: [M-TCMD] / [M-TCMD-R] / [M-TCMD-OP] / [M-TCMD-DONE].
 rem  Foreground-only: draw/browse refuse in background jobs (see :nogfx).
 setlocal
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-TCMD]
-title "Commander"
+title "Commander 📂"
 set LD=/
 set RD=/APPS
 set LCUR=1
@@ -38,14 +38,14 @@ rem Create the scratch dir only when missing: a redundant `md` on an
 rem existing directory is an error and would spam the pane each refresh.
 if not exist %APPDRIVE%/tmp md %APPDRIVE%/tmp > NUL
 if "%LD%"=="%LDONE%" goto ldone
-dir /o:gn /b sd:%LD% > %APPDRIVE%/tmp/_LT.txt
+dir /o:gn /b %APPDRIVE%%LD% > %APPDRIVE%/tmp/_LT.txt
 rem Line counts via draw list's /count (a for-loop counter would flood:
 rem this shell's `set /a` echoes its result).
 draw list 1 4 39 17 %APPDRIVE%/tmp/_LT.txt /count:LN /countonly
 set LDONE=%LD%
 :ldone
 if "%RD%"=="%RDONE%" goto rdone
-dir /o:gn /b sd:%RD% > %APPDRIVE%/tmp/_RT.txt
+dir /o:gn /b %APPDRIVE%%RD% > %APPDRIVE%/tmp/_RT.txt
 draw list 41 4 39 17 %APPDRIVE%/tmp/_RT.txt /count:RN /countonly
 set RDONE=%RD%
 :rdone
@@ -68,8 +68,8 @@ set RAC=7
 if %PA%==L set LAC=15
 if %PA%==R set RAC=15
 rem Frame.
-draw box 1 1 80 3 double TCMD
-draw text 3 2 "dual-pane commander"
+draw box 1 1 80 3 double "Commander 📂"
+draw text 3 2 "dual-pane commander  (%APPNAME% on %APPDRIVE%)"
 draw text 55 2 "1:/ 2:/APPS"
 draw list 1 4 39 17 %APPDRIVE%/tmp/_LT.txt %LAC% 16 /top:%LTOP% /cursor:%LCUR% /title:%LD%
 draw list 41 4 39 17 %APPDRIVE%/tmp/_RT.txt %RAC% 16 /top:%RTOP% /cursor:%RCUR% /title:%RD%
@@ -114,14 +114,14 @@ rem legitimately begin with `;`, so the pane listing must not drop it.
 for /f "eol= skip=%SKP%" %%a in (%APPDRIVE%/tmp/_LT.txt) do set FN=%%a & goto openL
 :openL
 if "%FN%"=="" goto refresh
-cd sd:%LD%/%FN%
+cd %APPDRIVE%%LD%/%FN%
 if errorlevel 1 goto viewL
 set LD=%LD%/%FN%
 set LCUR=1
 set ST=entered %FN%
 goto refresh
 :viewL
-browse /v:FN sd:%LD%
+browse /v:FN %APPDRIVE%%LD%
 set ST=opened
 goto refresh
 :openR
@@ -130,14 +130,14 @@ set FN=
 for /f "eol= skip=%SKP%" %%a in (%APPDRIVE%/tmp/_RT.txt) do set FN=%%a & goto openR2
 :openR2
 if "%FN%"=="" goto refresh
-cd sd:%RD%/%FN%
+cd %APPDRIVE%%RD%/%FN%
 if errorlevel 1 goto viewR
 set RD=%RD%/%FN%
 set RCUR=1
 set ST=entered %FN%
 goto refresh
 :viewR
-browse /v:FN sd:%RD%
+browse /v:FN %APPDRIVE%%RD%
 set ST=opened
 goto refresh
 
@@ -161,15 +161,15 @@ set ST=refreshed
 goto refresh
 
 :menu
-list "Commander" "Copy to other" "Move to other" "Delete file" "Mkdir here" "Rename file" "View file" "Edit file" "Change path" "Refresh" "Quit"
+list "Commander 📂" "Copy to other" "Move to other" "Delete file" "Mkdir here" "Rename file" "View file" "Edit file" "Change path" "Refresh" "Quit"
 on %errorlevel%+1 goto :copyf,:movef,:delf,:mkdirf,:renf,:viewf,:editf,:chdir,:forcerelist,:done
 goto refresh
 
 :copyf
 set ST=copy to %RD%
-browse /v:F sd:%LD%
+browse /v:F %APPDRIVE%%LD%
 if errorlevel 1 goto refresh
-copy %F% sd:%RD%
+copy %F% %APPDRIVE%%RD%
 set ST=copied
 set LDONE=
 set RDONE=
@@ -178,9 +178,9 @@ goto refresh
 
 :movef
 set ST=move to %RD%
-browse /v:F sd:%LD%
+browse /v:F %APPDRIVE%%LD%
 if errorlevel 1 goto refresh
-move %F% sd:%RD%
+move %F% %APPDRIVE%%RD%
 set ST=moved
 set LDONE=
 set RDONE=
@@ -188,7 +188,7 @@ echo [M-TCMD-OP] move %F%
 goto refresh
 
 :delf
-browse /v:F sd:%LD%
+browse /v:F %APPDRIVE%%LD%
 if errorlevel 1 goto refresh
 ask /v:YN "Delete %F%? (yes/no)" no
 if "%YN%"=="yes" del %F% > NUL
@@ -201,14 +201,14 @@ goto refresh
 :mkdirf
 ask /v:N "New dir name"
 if "%N%"=="" goto refresh
-if %PA%==R (md sd:%RD%/%N% > NUL & set ST=mkdir %RD%) else (md sd:%LD%/%N% > NUL & set ST=mkdir %LD%)
+if %PA%==R (md %APPDRIVE%%RD%/%N% > NUL & set ST=mkdir %RD%) else (md %APPDRIVE%%LD%/%N% > NUL & set ST=mkdir %LD%)
 set LDONE=
 set RDONE=
 echo [M-TCMD-OP] mkdir %N%
 goto refresh
 
 :renf
-browse /v:F sd:%LD%
+browse /v:F %APPDRIVE%%LD%
 if errorlevel 1 goto refresh
 ask /v:N "New name"
 if "%N%"=="" goto refresh
@@ -220,13 +220,13 @@ echo [M-TCMD-OP] ren %F%
 goto refresh
 
 :viewf
-browse /v:F sd:%LD%
+browse /v:F %APPDRIVE%%LD%
 if errorlevel 1 goto refresh
 view %F%
 goto refresh
 
 :editf
-browse /v:F sd:%LD%
+browse /v:F %APPDRIVE%%LD%
 if errorlevel 1 goto refresh
 edit %F%
 goto refresh
@@ -246,7 +246,7 @@ goto end
 
 :snap
 rem Save the current commander screen to the SD card (test/debug aid).
-screenshot TCMD.BMP
+screenshot %APPDRIVE%/TCMD.BMP
 set ST=snapped
 goto refresh
 

@@ -1,5 +1,9 @@
 ; APPINFO metadata for the turn-based space trader (INI format, read by `launch`).
 ; Copied to sd:/APPS/ELITE.APPINFO by apps/push_apps.py.
-title=Elite Trader
-description=Turn-based space trading: markets, travel, pirates, saves
+title=Elite Trader 🚀
+description=Turn-based space trading: markets, travel, pirates, saves on the app drive
 version=1.0
+; Opt-in transparency (v1.4.3): translucent dock page + modal scrim, high
+; enough that the market table stays readable.
+alpha=96%
+scrim=45%

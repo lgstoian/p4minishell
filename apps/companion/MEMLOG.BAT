@@ -5,15 +5,16 @@ rem =====================================================================
 rem  MEMLOG.BAT - ambient memory-logging service. Every tick it appends one
 rem  `date,time,heap-free` CSV line to %APPDRIVE%/MEMLOG.CSV under the `memlog`
 rem  mutex (so a second instance, or a manual sample, can never interleave
-rem  a line) and sets the `memlogtick` event for any waiter. The log is
-rem  bounded: past 200 lines it rotates to MEMLOG.OLD first (two files,
-rem  never growth without bound).
+rem  a line) and sets the `memlogtick` event for any waiter. `mem` also
+rem  reports the PSRAM pool; this service keeps the bounded heap series.
+rem  Past 200 lines it rotates to MEMLOG.OLD first (two files, never growth
+rem  without bound).
 rem  Install with `service install memlog "MEMLOG" /restart`. Headless
 rem  (mem/for/set/append/lock/signal/delay only).
 rem  Markers: [M-MEMLOG] / [M-MEMLOG-SAMPLE].
 rem  Tick ms comes from %1 (default 300000 = 5 min; the suite passes 2000).
 rem =====================================================================
-echo [M-MEMLOG] logger started
+echo [M-MEMLOG] ▒ logger started (mem reports heap + PSRAM)
 set every=300000
 if not "%1"=="" set every=%1
 :loop

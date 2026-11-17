@@ -4,14 +4,16 @@ rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  APPLIB.BAT - shared routines for the reference apps.
 rem
-rem  Every entry app calls `gosub APPLIB.BAT::probe` once at startup. The
-rem  probe is OPT-IN: with P4_APP_FEATURES unset it is a no-op, so the
+rem  Every entry app calls `gosub %APPROOT%/APPLIB.BAT::probe` once at
+rem  startup: %APPROOT% is the running script's own directory, so the same
+rem  line finds the library whether the bundle is installed at sd:/ or
+rem  usb:/APPS. The probe is OPT-IN: with P4_APP_FEATURES unset it is a no-op, so the
 rem  normal app transcript and pace are unchanged. The regression harness
 rem  sets `P4_APP_FEATURES=1` to make every app exercise the newer firmware
 rem  surfaces (locale, JS engine, browser verb, cookie jar) and emit the
 rem  [M-FEAT-*] markers s19_app_features.py asserts.
 rem
-rem  Routines (call with `gosub APPLIB.BAT::<name> [args]`):
+rem  Routines (call with `gosub %APPROOT%/APPLIB.BAT::<name> [args]`):
 rem    :probe          feature exercise, opt-in via P4_APP_FEATURES=1
 rem    :paths          default APPDRIVE/APPROOT when a script runs outside
 rem                    the shell's .bat launcher (apps use %APPDRIVE% instead

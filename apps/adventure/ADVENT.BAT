@@ -11,7 +11,7 @@ rem  (take key) stay an if-chain: switch matches are split on spaces.
 rem  Type lowercase commands. Markers: [M-ADV] / [M-ADV-WIN] / [M-ADV-QUIT].
 rem =====================================================================
 setlocal enabledelayedexpansion
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 set room=courtyard
 set ITEM[lantern]=0
 set ITEM[key]=0
@@ -19,7 +19,7 @@ set ITEM[amulet]=0
 set score=0
 set moves=0
 echo [M-ADV]
-title "Adventure"
+title "Adventure ⚔"
 goto room_courtyard
 
 :back_to_room
@@ -28,9 +28,9 @@ switch %room% hall:room_hall library:room_library tower:room_tower cellar:room_c
 :room_courtyard
 set room=courtyard
 draw clear screen
-draw box 1 1 80 3 double "COURTYARD"
+draw box 1 1 80 3 double "COURTYARD ⚔"
 draw text 5 5 "A quiet stone courtyard. A hall lies north, a garden east."
-draw text 5 6 "Exits: n e"
+draw text 5 6 "Exits: n e    (%APPNAME% on %APPDRIVE%)"
 goto prompt
 
 :room_hall
@@ -166,19 +166,19 @@ pause
 goto back_to_room
 
 :save
-echo set room=%room% > ADVENT.SAV
-echo set ITEM[lantern]=!ITEM[lantern]! >> ADVENT.SAV
-echo set ITEM[key]=!ITEM[key]! >> ADVENT.SAV
-echo set ITEM[amulet]=!ITEM[amulet]! >> ADVENT.SAV
-echo set score=%score% >> ADVENT.SAV
-echo set moves=%moves% >> ADVENT.SAV
+echo set room=%room% > %APPDRIVE%/ADVENT.SAV
+echo set ITEM[lantern]=!ITEM[lantern]! >> %APPDRIVE%/ADVENT.SAV
+echo set ITEM[key]=!ITEM[key]! >> %APPDRIVE%/ADVENT.SAV
+echo set ITEM[amulet]=!ITEM[amulet]! >> %APPDRIVE%/ADVENT.SAV
+echo set score=%score% >> %APPDRIVE%/ADVENT.SAV
+echo set moves=%moves% >> %APPDRIVE%/ADVENT.SAV
 echo [M-ADV-SAVED]
 dialog "Adventure" "Saved." "OK"
 goto prompt
 
 :load
-if not exist ADVENT.SAV dialog "Adventure" "No save yet." "OK" & goto prompt
-call ADVENT.SAV
+if not exist %APPDRIVE%/ADVENT.SAV dialog "Adventure" "No save yet." "OK" & goto prompt
+call %APPDRIVE%/ADVENT.SAV
 echo [M-ADV-LOADED]
 dialog "Adventure" "Loaded." "OK"
 goto back_to_room

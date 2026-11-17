@@ -1,7 +1,7 @@
 ; APPINFO metadata for the dual-pane file commander (INI format, read by `launch`).
 ; Copied to sd:/APPS/TCMD.APPINFO by apps/push_apps.py.
-title=Commander
-description=Dual-pane file commander: browse selectors plus copy/move/delete/mkdir/rename/view/edit
+title=Commander 📂
+description=Dual-pane file commander: browse selectors plus copy/move/delete/mkdir/rename/view/edit on the app drive
 version=1.0
 ; Opt-in transparency (v1.4.3): a translucent TUI page over the shell and
 ; a dimmed backdrop behind its modals. Percent or 0-255; omit = opaque.

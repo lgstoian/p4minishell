@@ -6,14 +6,14 @@ rem  COMPANION.BAT - entry point for the P4 Companion.
 rem  Enhanced TUI with fullscreen, draw boxes, and status.
 rem =====================================================================
 setlocal
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
-title "P4 Companion"
-gosub LIB.BAT::load_settings
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
+title "P4 Companion ★"
+gosub %APPROOT%/LIB.BAT::load_settings
 
 :main_menu
 draw clear screen
-draw box 1 1 80 3 double "P4 COMPANION"
-draw text 22 2 "Pure-batch helper for P4MiniShell" 14
+draw box 1 1 80 3 double "P4 COMPANION ★"
+draw text 22 2 "Pure-batch helper for P4MiniShell (%APPDRIVE%)" 14
 draw box 1 4 80 15 single "Main Menu"
 draw text 5 6 "What would you like to do?"
 draw text 5 8 "Live System  - dashboard & status"
@@ -24,24 +24,24 @@ draw text 5 12 "Settings     - brightness, volume"
 draw box 1 20 80 3 single
 draw text 5 22 "Use list to select, ESC to cancel"
 echo [C-MENU]
-list "P4 Companion" "Live System" "File Tools" "Network Tools" "Fun / Demos" "Settings" "Exit"
+list "P4 Companion ★" "Live System" "File Tools" "Network Tools" "Fun / Demos" "Settings" "Exit"
 on %errorlevel%+1 goto :opt_sys,:opt_files,:opt_net,:opt_fun,:opt_settings,:opt_exit
 goto main_menu
 
 :opt_sys
-gosub SYS.BAT::main
+gosub %APPROOT%/SYS.BAT::main
 goto main_menu
 :opt_files
-gosub FILES.BAT::main
+gosub %APPROOT%/FILES.BAT::main
 goto main_menu
 :opt_net
-gosub NET.BAT::main
+gosub %APPROOT%/NET.BAT::main
 goto main_menu
 :opt_fun
-gosub FUN.BAT::main
+gosub %APPROOT%/FUN.BAT::main
 goto main_menu
 :opt_settings
-gosub SET.BAT::main
+gosub %APPROOT%/SET.BAT::main
 goto main_menu
 :opt_exit
 echo [C-EXIT]

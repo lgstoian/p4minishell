@@ -187,6 +187,10 @@ static void parse_attributes(const char **p, dom_node_t *node) {
             (*p)++;
         }
         attr_name[i] = '\0';
+        while (**p && !isspace((unsigned char)**p) && **p != '=' && **p != '>' &&
+               **p != '/') {
+            (*p)++;   /* over-long name: consume the rest, keep the prefix */
+        }
         skip_whitespace(p);
         if (**p == '=') {
             (*p)++;
@@ -202,7 +206,19 @@ static void parse_attributes(const char **p, dom_node_t *node) {
                 (*p)++;
             }
             attr_value[i] = '\0';
-            if (quote && **p == quote) (*p)++;
+            /* Consume the remainder of an over-long value. Real pages carry
+             * attributes far larger than the 512-byte store (Parsoid's
+             * `data-mw` JSON is kilobytes); stopping at the buffer edge left
+             * the scanner inside the value, and the rest leaked into the
+             * document as text (`{{cite web ...}}` on a live Wikipedia page). */
+            if (quote) {
+                while (**p && **p != quote) (*p)++;
+                if (**p == quote) (*p)++;
+            } else {
+                while (**p && !isspace((unsigned char)**p) && **p != '>' && **p != '/') {
+                    (*p)++;
+                }
+            }
         }
         if (strcmp(attr_name, "id") == 0) {
             strncpy(node->id, attr_value, sizeof(node->id) - 1);

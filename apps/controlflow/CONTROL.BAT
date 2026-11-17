@@ -12,10 +12,10 @@ rem
 rem  Markers: [M-CONTROL] / [M-CONTROL-DONE].
 rem =====================================================================
 setlocal
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-CONTROL]
-title "Control Flow Tour"
-echo CONTROL: start
+title "Control Flow Tour ★"
+echo CONTROL: start ★
 set n=2
 call :banner
 on %n% goto :one,:two,:three
@@ -118,16 +118,16 @@ echo.
 echo CONTROL: discarded > NUL
 echo CONTROL: nul-ok
 echo CONTROL: console-echo > CON
-echo CONTROL: handle-merge 2> _p4parity_h.txt
-type < _p4parity_h.txt
-del /p _p4parity_h.txt > NUL
-write _p4parity_in.txt "CONTROL: stdin-type ok"
-type < _p4parity_in.txt
-del /p _p4parity_in.txt > NUL
+echo CONTROL: handle-merge 2> %APPDRIVE%/_p4parity_h.txt
+type < %APPDRIVE%/_p4parity_h.txt
+del /p %APPDRIVE%/_p4parity_h.txt > NUL
+write %APPDRIVE%/_p4parity_in.txt "CONTROL: stdin-type ok"
+type < %APPDRIVE%/_p4parity_in.txt
+del /p %APPDRIVE%/_p4parity_in.txt > NUL
 gosub :parity_shift a b c d
-write _p4parity_eol.txt ";kept"
-for /f "eol= tokens=*" %%e in (_p4parity_eol.txt) do echo CONTROL: eol-keep %%e
-del /p _p4parity_eol.txt > NUL
+write %APPDRIVE%/_p4parity_eol.txt ";kept"
+for /f "eol= tokens=*" %%e in (%APPDRIVE%/_p4parity_eol.txt) do echo CONTROL: eol-keep %%e
+del /p %APPDRIVE%/_p4parity_eol.txt > NUL
 return
 
 :parity_shift

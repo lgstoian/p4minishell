@@ -1,0 +1,9 @@
+; APPINFO metadata for the Companion Fun / Demos menu (INI, `launch`).
+; Copied to <drive>/APPS/FUN.APPINFO by apps/push_apps.py. FUN is also a
+; sub-app of COMPANION; launched standalone it applies its own transparency.
+title=Fun / Demos ★
+description=Melody, RGB effects, number guessing, calc, Snake and Elite Trader
+version=1.0
+; Opt-in transparency (v1.4.3): translucent demos page + modal scrim.
+alpha=96%
+scrim=45%

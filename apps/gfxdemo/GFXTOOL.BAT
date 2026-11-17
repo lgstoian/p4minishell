@@ -9,8 +9,8 @@ rem  GFXTOOL.BMP, and exits. Needs PHOTO.BMP (apps/push_assets.py).
 rem  Markers: [M-GFXTOOL] / [M-GFXTOOL-IMG|NOIMG] / [M-GFXTOOL-DONE].
 rem =====================================================================
 echo [M-GFXTOOL]
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
-title "GFX Tool"
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
+title "GFX Tool 🎨"
 gfx init 320 200
 if errorlevel 1 goto :nofx
 gfx clear 0x101820
@@ -28,17 +28,17 @@ rem Sprite stamp row (blitmany): load the 16x16 BALL sprite once and stamp a
 rem diagonal row of copies, rotating each step 90 degrees. The stamps land
 rem in the free area below the triangle/ellipse and beside the PHOTO blit,
 rem so no representative primitive pixel (gfx_toolkit_test.py) is touched.
-gfx load 0 BALL.BMP
+gfx load 0 %APPDRIVE%/BALL.BMP
 set /a sx=24
 set /a sy=160
 for /L %%s in (0,1,3) do call :stamp %%s
 echo [M-GFXTOOL-BLIT]
 rem Scaled BMP blit below the text and above the hline: 232..312 x 154..186
 rem is outside every primitive/text region checked by gfx_toolkit_test.py.
-gfx image PHOTO.BMP 232 154 80 32
+gfx image %APPDRIVE%/PHOTO.BMP 232 154 80 32
 if errorlevel 1 echo [M-GFXTOOL-NOIMG]
 if not errorlevel 1 echo [M-GFXTOOL-IMG]
-gfx save GFXTOOL.BMP
+gfx save %APPDRIVE%/GFXTOOL.BMP
 gfx close
 echo [M-GFXTOOL-DONE]
 return

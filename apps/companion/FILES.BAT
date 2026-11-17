@@ -7,19 +7,19 @@ rem  Enhanced TUI with draw boxes, fullscreen, and window management.
 rem =====================================================================
 
 :main
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 :files_menu
-title "File Tools"
+title "File Tools 📁"
 echo [M-FILES]
 draw clear screen
 draw box 1 1 80 3 single
-draw text 35 2 "FILE TOOLS" 14
+draw text 35 2 "FILE TOOLS 📁" 14
 draw box 1 4 80 12 single "Tools"
-draw text 5 6 "Browse SD with full TUI file browser"
+draw text 5 6 "Browse the app drive with the full TUI file browser"
 draw text 5 7 "Quick dir, search, trash, clipboard, notes"
 draw box 1 17 80 8 single "Status"
-draw text 5 19 "Use Browse for full-screen file picker"
-list "File Tools" "Browse SD (TUI)" "Quick dir" "Search files" "Trash browser" "Clipboard" "Note pad" "Hexview demo" "Commander" "Back"
+draw text 5 19 "Use Browse for full-screen file picker  (%APPDRIVE%)"
+list "File Tools 📁" "Browse SD (TUI)" "Quick dir" "Search files" "Trash browser" "Clipboard" "Note pad" "Hexview demo" "Commander" "Back"
 on %errorlevel%+1 goto :browse,:dir,:search,:trash,:clipboard,:notes,:hex_demo,:tcmd,:back
 goto :back
 
@@ -61,23 +61,23 @@ goto files_menu
 :dir
 draw box 1 1 80 3 single
 draw text 35 2 "DIRECTORY" 14
-dir /a > _dir.txt
-view _dir.txt
-del /p _dir.txt > NUL
+dir /a > %APPDRIVE%/_dir.txt
+view %APPDRIVE%/_dir.txt
+del /p %APPDRIVE%/_dir.txt > NUL
 goto files_menu
 
 :search
 ask /v:pat "Search pattern (e.g. *.txt)" "*.txt"
 if errorlevel 1 goto files_menu
-find /NAME:%pat% > _search.txt
-view _search.txt
-del /p _search.txt > NUL
+find /NAME:%pat% > %APPDRIVE%/_search.txt
+view %APPDRIVE%/_search.txt
+del /p %APPDRIVE%/_search.txt > NUL
 goto files_menu
 
 :trash
-trash list > _trash.txt
-view _trash.txt
-del /p _trash.txt > NUL
+trash list > %APPDRIVE%/_trash.txt
+view %APPDRIVE%/_trash.txt
+del /p %APPDRIVE%/_trash.txt > NUL
 ask /v:idx "Restore entry number (blank = back)"
 if errorlevel 1 goto files_menu
 if "%idx%"=="NONE" goto files_menu
@@ -110,9 +110,9 @@ clip read %f%
 if errorlevel 1 dialog "Clipboard" "Could not read that file." "OK"
 goto clipboard
 :clip_view
-clip > _clip.txt
-view _clip.txt
-del /p _clip.txt > NUL
+clip > %APPDRIVE%/_clip.txt
+view %APPDRIVE%/_clip.txt
+del /p %APPDRIVE%/_clip.txt > NUL
 goto clipboard
 
 :notes
@@ -121,7 +121,7 @@ draw clear screen
 draw box 1 1 80 3 single
 draw text 35 2 "NOTE PAD" 14
 draw text 5 5 "Notes stored in %APPDRIVE%/NOTES"
-if not exist NOTES md NOTES > NUL
+if not exist %APPDRIVE%/NOTES md %APPDRIVE%/NOTES > NUL
 list "Notes" "New note" "List notes" "View note" "Browse notes" "Back"
 if errorlevel 255 goto :back
 if errorlevel 4 goto :back
@@ -135,26 +135,26 @@ ask /v:NNAME "Note name (no spaces)"
 if errorlevel 1 goto notes
 ask /v:NBODY "Body"
 if errorlevel 1 goto notes
-echo [%DATE% %TIME%] >> NOTES/%NNAME%.txt
-echo %NBODY% >> NOTES/%NNAME%.txt
+echo [%DATE% %TIME%] >> %APPDRIVE%/NOTES/%NNAME%.txt
+echo %NBODY% >> %APPDRIVE%/NOTES/%NNAME%.txt
 echo [M-FILES-NOTED]
-dialog "Notes" "Saved NOTES/%NNAME%.txt" "OK"
+dialog "Notes" "Saved %APPDRIVE%/NOTES/%NNAME%.txt" "OK"
 goto notes
 
 :list_notes
-dir NOTES > _notes.txt
-view _notes.txt
-del /p _notes.txt > NUL
+dir %APPDRIVE%/NOTES > %APPDRIVE%/_notes.txt
+view %APPDRIVE%/_notes.txt
+del /p %APPDRIVE%/_notes.txt > NUL
 goto notes
 
 :view_note
 ask /v:NNAME "Note name"
 if errorlevel 1 goto notes
-view NOTES/%NNAME%.txt
+view %APPDRIVE%/NOTES/%NNAME%.txt
 goto notes
 
 :browse_notes
-browse /v:NNAME NOTES
+browse /v:NNAME %APPDRIVE%/NOTES
 if errorlevel 1 goto notes
 view %NNAME%
 goto notes
@@ -165,5 +165,5 @@ draw clear screen
 goto :eof
 
 :tcmd
-call TCMD.BAT
+call %APPROOT%/TCMD.BAT
 goto files_menu

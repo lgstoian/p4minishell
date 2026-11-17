@@ -3138,6 +3138,7 @@ A literal `#` in cell text (e.g. bar `#` fills) is recolor-escaped by
 | `tui clear` | Clear TUI grid (same as `draw clear`). |
 | `tui fullscreen on\|off` | Per-app fullscreen: `on` hides header (`windows_set_fullscreen`), `off` restores; kept visible by default. |
 | `tui refresh` | Re-apply transcript rect via `windows_notify_keyboard_visibility` / `windows_refresh_tui_surface` (call after rotation/keyboard). |
+| `tui copy` / `tui select clear` | Copy the pointer selection to the shell clipboard, or clear it. On the page, long-press then drag to select; a tap inside the selection copies it. Works in the browser/TUI page and `html`; the editor has its own selection. |
 | `tui dump [from] [to] [/a]` | Read-only text dump of the logical page (1-based rows). `/a` (or `attrs`) appends one `NNN@start-end:fg ...` colour-run line per row, so a suite can assert link/heading colouring without pixels. |
 | `tui selftest` | Run pure headless checks (palette spec, glyph coverage, metrics) and report per-group PASS/FAIL with location. Safe in background jobs; zero display dependency. Returns ERRORLEVEL 0 on clean, 1 on any failure. |
 

@@ -14,18 +14,18 @@ rem  [M-TMGR-BACK].
 rem =====================================================================
 
 :main
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
-title "Task Manager"
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
+title "Task Manager 📊"
 echo [M-TMGR]
 tui fullscreen on
 :refresh
 draw clear screen
-draw box 1 1 80 3 double "TASK MANAGER"
-draw text 5 5 "Jobs, services and events. Pick an action:"
+draw box 1 1 80 3 double "TASK MANAGER 📊"
+draw text 5 5 "Jobs, services and events (mem reports heap + PSRAM). Pick an action:"
 start
 ps /O:C
 service list
-list "Tasks" "Refresh view" "Kill job" "Suspend job" "Resume job" "Job priority" "Services" "Events" "Save snapshot" "Back"
+list "Tasks 📊" "Refresh view" "Kill job" "Suspend job" "Resume job" "Job priority" "Services" "Events" "Save snapshot" "Back"
 on %errorlevel%+1 goto :do_refresh,:tm_kill,:tm_susp,:tm_res,:tm_nice,:tm_svc,:tm_events,:tm_save,:tm_back
 goto :tm_back
 
@@ -89,11 +89,11 @@ dialog "Events" "tmgr_exit fires per job exit; tmgr_svc_restart per supervisor r
 goto :refresh
 
 :tm_save
-start /b > TMGR_SNAP.TXT
-ps /b >> TMGR_SNAP.TXT
-service list >> TMGR_SNAP.TXT
+start /b > %APPDRIVE%/TMGR_SNAP.TXT
+ps /b >> %APPDRIVE%/TMGR_SNAP.TXT
+service list >> %APPDRIVE%/TMGR_SNAP.TXT
 echo [M-TMGR-SAVED]
-dialog "Saved" "Snapshot saved to TMGR_SNAP.TXT" "OK"
+dialog "Saved" "Snapshot saved to %APPDRIVE%/TMGR_SNAP.TXT" "OK"
 goto :refresh
 
 :tm_back

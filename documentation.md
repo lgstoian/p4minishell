@@ -174,9 +174,18 @@ deterministic range defaults. Two adapters consume it:
   cannot require storage (the upward-inversion rule).
 
 Limits are deliberate and documented: single codepoints only (ZWJ
-sequences, flags and skin tones fall back to their components); colour pack
-glyphs render in the TUI/HTML page, while LVGL chrome uses the retro
-fallback. A malformed or missing pack is not an error.
+sequences, flags and skin tones fall back to their components). A malformed
+or missing pack is not an error.
+
+**Page interaction (v1.4.3).** The browser/TUI page is a cell grid, so LVGL
+text selection does not apply. One transparent overlay over the grid captures
+pointer input and implements the page gestures: vertical drag and the wheel
+scroll the page (one row per cell), long-press then drag selects a cell range
+(highlight rectangles over the glyphs), and a tap inside the selection copies
+it to the shell clipboard (`tui copy` / `tui select clear` are the script
+equivalents). The editor keeps its own drag/keyboard selection. The web budget
+is 2 MB per page and 2000 page rows in PSRAM; photographic PNG/JPEGs above
+96 px are replaced by alt text, while logos/icons still render as cell art.
 
 ## Configuration system
 

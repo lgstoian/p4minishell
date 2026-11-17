@@ -1,7 +1,10 @@
-title=Hybrid demo
+title=Hybrid demo ⚡
 description=Batch shim driving the linked hello entry (hybrid app model)
 version=1.0
 type=hybrid
 abi=applib-1
 arch=esp32p4
 entry=hello
+; Opt-in transparency (v1.4.3): translucent transcript page + modal scrim.
+alpha=96%
+scrim=40%

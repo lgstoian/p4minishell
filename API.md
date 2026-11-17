@@ -1170,7 +1170,9 @@ const gfx_surface_t *emoji_pack_image(uint32_t cp, int *cells);
   multiplies the subtree; `background-color: transparent` sets `bg_alpha = 0`.
 - `tui.h`: `tui_page_bg_rect(col,row,w,h,bg,alpha)`,
   `tui_page_draw_image(col,row,w,h,surf)`,
-  `tui_set_background_alpha(uint8_t)` / `tui_get_background_alpha()`.
+  `tui_set_background_alpha(uint8_t)` / `tui_get_background_alpha()`,
+  `tui_selection_copy()` / `tui_selection_clear()` (the pointer-selection
+  clipboard entry points used by the tap and `tui copy`).
 - `modal_surf.h`: `modal_surf_set_alpha(panel_alpha, scrim_alpha)` /
   `modal_surf_get_alpha()`.
 - `storage_path.h`: `storage_shell_path(path, out, size)` maps a VFS path back

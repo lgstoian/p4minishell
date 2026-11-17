@@ -9,17 +9,17 @@ rem  array + while/gosub sampling + draw bar trend + rgb + tone.
 rem  Markers: [M-MOOD] / [M-MOOD-SAMPLE] / [M-MOOD-TREND].
 rem =====================================================================
 setlocal
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-MOOD]
-title "Mood"
+title "Mood ♥"
 goto menu
 
 :menu
 draw clear screen
-draw box 1 1 80 3 double "MOOD"
-draw text 5 2 "board mood from live heap" 14
+draw box 1 1 80 3 double "MOOD ♥"
+draw text 5 2 "board mood from live heap (mem includes PSRAM)" 14
 draw text 45 2 "local %TIME%" 7
-list "Mood" "Live mood (5 samples)" "RGB demo" "Tone demo" "Snapshot" "Service sampler" "Back"
+list "Mood ♥" "Live mood (5 samples)" "RGB demo" "Tone demo" "Snapshot" "Service sampler" "Back"
 on %errorlevel%+1 goto :live,:rgb_demo,:tone_demo,:snapshot,:svcview,:back
 goto back
 
@@ -45,14 +45,14 @@ goto menu
 :live_tick
 set /a round+=1
 if %round% GTR 1 delay 2000
-mem > _mood.txt
+mem > %APPDRIVE%/_mood.txt
 rem No del: `>` overwrites each round, and a hot-loop delete risks the
 rem occasional slow-SD unlink stalling the worker (see bugs.md O6).
 set heapf=0
 set heapt=1
 set pct=0
-for /f "eol= tokens=1,2,5 delims==,b" %%a in (_mood.txt) do if "%%a"=="  mem.heap: free" set heapf=%%b
-for /f "eol= tokens=1,2,5 delims==,b" %%a in (_mood.txt) do if "%%a"=="  mem.heap: free" set heapt=%%c
+for /f "eol= tokens=1,2,5 delims==,b" %%a in (%APPDRIVE%/_mood.txt) do if "%%a"=="  mem.heap: free" set heapf=%%b
+for /f "eol= tokens=1,2,5 delims==,b" %%a in (%APPDRIVE%/_mood.txt) do if "%%a"=="  mem.heap: free" set heapt=%%c
 if %heapt% GTR 100 set /a hunit=%heapt% / 100
 if %heapt% GTR 100 set /a pct=%heapf% / %hunit%
 set SAMPLE[%round%]=%pct%
@@ -116,21 +116,23 @@ tone 784 250
 goto menu
 
 :snapshot
-mem > _m.txt
-sysinfo > _s.txt
+rem `mem` reports internal heap/DMA and the PSRAM pool; keep the four views.
+mem > %APPDRIVE%/_m.txt
+sysinfo > %APPDRIVE%/_s.txt
 rem Show the auto-synced local clock (SNTP + network-detected timezone).
-timezone > _tz.txt
-date > _d.txt
-view _m.txt
-view _s.txt
-view _tz.txt
-view _d.txt
+timezone > %APPDRIVE%/_tz.txt
+date > %APPDRIVE%/_d.txt
+view %APPDRIVE%/_m.txt
+view %APPDRIVE%/_s.txt
+view %APPDRIVE%/_tz.txt
+view %APPDRIVE%/_d.txt
 goto menu
 
 :svcview
 rem Service sampler view: the headless MOODSVC service (installed with
-rem `service install moodsampler "MOODSVC" /restart`) keeps sd:/MOODLAST.INI (SD-only: service store)
-rem fresh; files are the IPC (no shared handles to rendezvous).
+rem `service install moodsampler "MOODSVC" /restart`) keeps sd:/MOODLAST.INI
+rem fresh; that file is the SD-only service store by design, while the app's
+rem own scratch files use %APPDRIVE%. Files are the IPC (no shared handles).
 draw clear screen
 draw box 1 1 80 3 double "MOOD SERVICE"
 if not exist sd:/MOODLAST.INI goto svcnone

@@ -13,8 +13,11 @@ adds it explicitly).
 A payload is ``(subdir, filename, target)``:
 
 * ``subdir`` is relative to ``apps/`` (``""`` for the shared root payloads).
-* ``target`` is ``"root"`` (SD root, on PATH so ``launch``/``gosub`` find it)
-  or ``"apps"`` (``sd:/APPS``, the ``launch`` metadata directory).
+* ``target`` is ``"root"`` (the drive root, on PATH so ``launch``/``gosub``
+  find it on SD), ``"apps"`` (``<drive>/APPS``, the ``launch`` metadata
+  directory and the USB install directory), ``"web"`` (``<drive>/WEB``),
+  ``"emoji"`` (``<drive>/EMOJI``) or ``"docs"`` (``<drive>/DOCS``, the local
+  pages an app opens with the ``html`` verb).
 """
 
 import os
@@ -81,21 +84,28 @@ APP_PAYLOADS = [
     ("pkgtest", "PKGTEST.BAT", "root"),
     ("pkgtest", "PKGTEST.APPINFO", "apps"),
 
-    # Sample emoji pack (project-authored, MIT): sd:/EMOJI or usb:/EMOJI.
+    # Sample emoji pack (project-authored, MIT): <drive>/EMOJI.
     ("emoji", "EMOJI.INI", "emoji"),
     ("emoji", "GRIN.BMP", "emoji"),
     ("emoji", "HEART.BMP", "emoji"),
     ("emoji", "STAR.BMP", "emoji"),
 ]
 
-# Companion menu + sub-apps; ``push_sd.py`` deploys only this group.
+# Companion menu + sub-apps; ``push_sd.py`` deploys only this group. The
+# sub-apps are existing batch files, reachable with `launch <NAME>`; their
+# APPINFO adds the v1.4.3 alpha/scrim opt-in and a launch-list title (it does
+# not add a new app). The local HTML page is opened by SYS -> View details.
 COMPANION_PAYLOADS = [
     ("companion", name, "apps" if name.endswith(".APPINFO") else "root")
     for name in (
         "LIB.BAT", "COMPANION.BAT", "SYS.BAT", "FILES.BAT", "NET.BAT",
         "FUN.BAT", "SET.BAT", "ALIASES.BAT", "SVC.BAT", "MEMLOG.BAT",
         "AGENDA.BAT", "README.TXT", "COMPANION.APPINFO",
+        "SYS.APPINFO", "FILES.APPINFO", "NET.APPINFO", "FUN.APPINFO",
+        "SET.APPINFO", "AGENDA.APPINFO",
     )
+] + [
+    ("companion", "SYS.HTML", "docs"),
 ]
 
 
@@ -109,7 +119,8 @@ def remote_target(filename, target):
 
     ``apps`` -> ``APPS/<name>`` (launcher metadata), ``web`` -> ``WEB/<name>``
     (the browser showcase site), ``emoji`` -> ``EMOJI/<name>`` (a pack),
-    ``root`` -> the filename at the SD root.
+    ``docs`` -> ``DOCS/<name>`` (local HTML pages for the `html` verb),
+    ``root`` -> the filename at the drive root.
     """
     if target == "apps":
         return "APPS/" + filename
@@ -117,6 +128,8 @@ def remote_target(filename, target):
         return "WEB/" + filename
     if target == "emoji":
         return "EMOJI/" + filename
+    if target == "docs":
+        return "DOCS/" + filename
     return filename
 
 

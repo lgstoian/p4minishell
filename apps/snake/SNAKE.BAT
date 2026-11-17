@@ -16,12 +16,12 @@ rem  (99,99) fills the spare slots and never matches a live head; guarded
 rem  draws keep it off-screen.
 rem =====================================================================
 setlocal
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-SNAKE]
-title "Snake"
+title "Snake 🐍"
 draw hold on
 if errorlevel 1 goto nogfx
-draw box 1 2 44 22 double SNAKE
+draw box 1 2 44 22 double "SNAKE 🐍"
 if errorlevel 1 goto nogfx
 set hh=596
 set dir=1
@@ -51,12 +51,12 @@ goto frame
 
 :frame
 draw clear
-draw box 1 2 44 22 double SNAKE
+draw box 1 2 44 22 double "SNAKE 🐍"
 draw text 48 4 Score %score%
 draw text 48 6 Length %len%
 draw text 48 8 wasd move
 draw text 48 9 Enter on serial
-draw text 48 10 q quit
+draw text 48 10 p snap  q quit
 draw text 48 12 1s per step
 draw text %fx% %fy% *
 rem Draw the body once per frame: head gets the @, the rest get O.
@@ -66,7 +66,8 @@ if %dir% EQU 0 set dc=w
 if %dir% EQU 1 set dc=d
 if %dir% EQU 2 set dc=s
 if %dir% EQU 3 set dc=a
-choice /C:wasdq /N /T:%dc%,1 Move?
+choice /C:wasdqp /N /T:%dc%,1 Move?
+if errorlevel 6 goto snap
 if errorlevel 5 goto quit
 if errorlevel 4 goto go_d
 if errorlevel 3 goto go_s
@@ -135,11 +136,17 @@ if %1 EQU 0 draw text %t% %q% @
 if not %1 EQU 0 draw text %t% %q% O
 return
 
+:snap
+rem Documented snap key (p): save the live playfield for the docs gallery.
+screenshot %APPDRIVE%/SNAKE.BMP
+echo [M-SNAKE-SNAP]
+goto frame
+
 :dead
 draw text 48 13 GAME OVER
 draw text 48 14 Score %score%
 draw refresh
-screenshot SNAKE.BMP
+screenshot %APPDRIVE%/SNAKE.BMP
 echo [M-SNAKE-DONE] score=%score% len=%len%
 goto end
 
@@ -147,7 +154,7 @@ goto end
 draw text 48 13 YOU WIN
 draw text 48 14 Score %score%
 draw refresh
-screenshot SNAKE.BMP
+screenshot %APPDRIVE%/SNAKE.BMP
 echo [M-SNAKE-DONE] score=%score% len=%len% WIN
 goto end
 

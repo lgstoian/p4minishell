@@ -1182,6 +1182,7 @@
       "provides": "80x25 cell buffer, draw primitives, workspace/pane/HUD",
       "requires": [
         "shell",
+        "header",
         "windows",
         "ansi",
         "emoji",

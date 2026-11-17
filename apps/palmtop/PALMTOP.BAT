@@ -9,17 +9,17 @@ rem  Markers: [M-PALM], [M-PALM-TIMER], [M-PALM-CALC], [M-PALM-CSV],
 rem           [M-PALM-CRYPT], [M-PALM-BIND], [M-PALM-TCP].
 rem =====================================================================
 setlocal
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-PALM]
-title "Palmtop"
+title "PalmTop 📟"
 goto menu
 
 :menu
 draw clear screen
-draw box 1 1 80 3 double "PALMTOP"
-draw text 5 2 "palmtop-parity primitives demo" 14
+draw box 1 1 80 3 double "PALMTOP 📟"
+draw text 5 2 "palmtop-parity primitives demo  (%APPNAME% on %APPDRIVE%)" 14
 draw text 45 2 "local %TIME%" 7
-list "PalmTop" "Calculator + conversions" "Stopwatch" "CSV sheet (=EXPR)" "Encrypt a note" "Bind an F-key" "TCP probe" "Back"
+list "PalmTop 📟" "Calculator + conversions" "Stopwatch" "CSV sheet (=EXPR)" "Encrypt a note" "Bind an F-key" "TCP probe" "Back"
 on %errorlevel%+1 goto :calc_demo,:timer,:sheet,:crypt,:bind,:tcp,:back
 goto back
 
@@ -62,34 +62,34 @@ goto menu
 
 :sheet
 rem Build a tiny sheet and let csv eval resolve the =EXPR cells.
-write _palm.csv item,qty,price
-append _palm.csv apple,3,0.5
-append _palm.csv pear,10,=R3C2*R2C3
-append _palm.csv total,,=R2C3+R3C3
+write %APPDRIVE%/_palm.csv item,qty,price
+append %APPDRIVE%/_palm.csv apple,3,0.5
+append %APPDRIVE%/_palm.csv pear,10,=R3C2*R2C3
+append %APPDRIVE%/_palm.csv total,,=R2C3+R3C3
 echo [M-PALM-CSV]
 draw clear screen
 draw box 1 1 80 3 double "CSV"
-csv eval _palm.csv
+csv eval %APPDRIVE%/_palm.csv
 draw text 5 15 "Press any key..." 7
 pause
-del _palm.csv > NUL
+del %APPDRIVE%/_palm.csv > NUL
 goto menu
 
 :crypt
-write _palm_note.txt secret palmtop note
-crypt lock _palm_note.txt _palm_note.enc /p:open123
-crypt unlock _palm_note.enc _palm_note.out /p:open123
+write %APPDRIVE%/_palm_note.txt secret palmtop note
+crypt lock %APPDRIVE%/_palm_note.txt %APPDRIVE%/_palm_note.enc /p:open123
+crypt unlock %APPDRIVE%/_palm_note.enc %APPDRIVE%/_palm_note.out /p:open123
 echo [M-PALM-CRYPT]
 draw clear screen
 draw box 1 1 80 3 double "CRYPT"
 draw text 5 5 "Locked then unlocked _palm_note.txt" 14
-type < _palm_note.out > _palm_view.txt
+type < %APPDRIVE%/_palm_note.out > %APPDRIVE%/_palm_view.txt
 draw text 5 7 "Plaintext recovered:" 7
-view _palm_view.txt
-del _palm_note.txt > NUL
-del _palm_note.enc > NUL
-del _palm_note.out > NUL
-del _palm_view.txt > NUL
+view %APPDRIVE%/_palm_view.txt
+del %APPDRIVE%/_palm_note.txt > NUL
+del %APPDRIVE%/_palm_note.enc > NUL
+del %APPDRIVE%/_palm_note.out > NUL
+del %APPDRIVE%/_palm_view.txt > NUL
 goto menu
 
 :bind

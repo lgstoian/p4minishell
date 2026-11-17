@@ -1,5 +1,9 @@
 ; APPINFO metadata for the browser showcase (INI format, read by `launch`).
 ; Copied to sd:/APPS/WEB.APPINFO by apps/push_apps.py.
-title=Browser
-description=Renders a basic website served from sd:/WEB/ with the browser verb
+title=Browser 🌍
+description=Renders a basic website from <drive>/WEB/ with the html page verb
 version=1.0
+; Opt-in transparency (v1.4.3): a light blend behind the rendered page so
+; page backgrounds stay readable.
+alpha=96%
+scrim=45%

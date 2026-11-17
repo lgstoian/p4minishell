@@ -16,6 +16,7 @@
 #include "emoji.h"
 #include "p4minishell_config.h"
 #include "shell.h"
+#include "header.h"
 #include "tui_fonts.h"
 #include "esp_heap_caps.h"
 #include "p4heap.h"
@@ -304,6 +305,205 @@ void tui_page_bg_rect(int col, int row, int w, int h, uint8_t bg,
  * visibility, fullscreen and rotation changes. Must run under the LVGL port
  * lock.
  */
+/* ==== Interaction overlay: scroll, drag selection, copy ====
+ *
+ * The TUI page lives in a single LVGL label, so it cannot use LVGL's own text
+ * selection and its container scroll is disabled in tui_mode. One transparent
+ * overlay over the grid captures pointer input and implements both:
+ *   - vertical drag / wheel  -> tui_viewport_scroll_by() (page rows)
+ *   - long-press then drag   -> cell selection (highlight + copy)
+ *   - tap inside a selection -> copy it to the shell clipboard
+ * A tall invisible spacer gives the overlay a scroll range so LVGL emits
+ * SCROLL for both touch and wheel; the overlay's own position never moves.
+ */
+static lv_obj_t *s_touch;
+static lv_obj_t *s_sel_layer;
+static bool s_selecting;
+static int s_sel_ar = 1, s_sel_ac = 1, s_sel_fr = 1, s_sel_fc = 1;
+static lv_coord_t s_last_scroll;
+static lv_coord_t s_press_y;
+static int s_press_acc;
+static bool s_ignore_scroll;
+
+bool tui_selection_copy(void);
+void tui_selection_clear(void);
+
+static void tui_sel_rects_clear(void)
+{
+    if (s_sel_layer != NULL) {
+        lv_obj_clean(s_sel_layer);
+    }
+}
+
+static void tui_sel_rects_draw(void)
+{
+    int r0, r1, c0, c1;
+    int cw, ch;
+
+    if (!s_selecting || s_sel_layer == NULL || s_bound_cell == NULL) {
+        return;
+    }
+    tui_sel_rects_clear();
+    r0 = s_sel_ar < s_sel_fr ? s_sel_ar : s_sel_fr;
+    r1 = s_sel_ar > s_sel_fr ? s_sel_ar : s_sel_fr;
+    c0 = s_sel_ac < s_sel_fc ? s_sel_ac : s_sel_fc;
+    c1 = s_sel_ac > s_sel_fc ? s_sel_ac : s_sel_fc;
+    cw = s_bound_cell->cell_w;
+    ch = s_bound_cell->cell_h;
+    for (int r = r0; r <= r1; r++) {
+        int row_start = (r == r0) ? c0 : 1;
+        int row_end = (r == r1) ? c1 : s_cols;
+        int x = (row_start - 1) * cw;
+        int w = (row_end - row_start + 1) * cw;
+
+        if (w <= 0) {
+            continue;
+        }
+        lv_obj_t *box = lv_obj_create(s_sel_layer);
+
+        if (box == NULL) {
+            break;
+        }
+        lv_obj_remove_style_all(box);
+        lv_obj_set_pos(box, x, (r - 1) * ch);
+        lv_obj_set_size(box, w, ch);
+        lv_obj_set_style_bg_color(box, lv_color_hex(0x2D7FF9), 0);
+        lv_obj_set_style_bg_opa(box, LV_OPA_50, 0);
+        lv_obj_set_style_border_color(box, lv_color_hex(0x7FB2FF), 0);
+        lv_obj_set_style_border_width(box, 1, 0);
+        lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    }
+}
+
+/** Point (screen coords) -> 1-based cell in the grid. */
+static void tui_point_to_cell(lv_point_t p, int *row, int *col)
+{
+    lv_area_t a;
+
+    *row = 1;
+    *col = 1;
+    if (s_touch == NULL || s_bound_cell == NULL) {
+        return;
+    }
+    lv_obj_get_coords(s_touch, &a);
+    *col = (p.x - a.x1) / s_bound_cell->cell_w + 1;
+    *row = (p.y - a.y1) / s_bound_cell->cell_h + 1;
+    if (*col < 1) *col = 1;
+    if (*col > s_cols) *col = s_cols;
+    if (*row < 1) *row = 1;
+    if (*row > s_rows) *row = s_rows;
+}
+
+static void tui_touch_scroll_rows(int rows)
+{
+    if (rows == 0) {
+        return;
+    }
+    tui_viewport_scroll_by(rows);
+    tui_page_render();
+    tui_flush();
+}
+
+static void tui_touch_event_cb(lv_event_t *event)
+{
+    lv_event_code_t code = lv_event_get_code(event);
+    lv_indev_t *indev = lv_indev_get_act();
+    lv_point_t p = { 0, 0 };
+    int row, col;
+
+    if (indev != NULL) {
+        lv_indev_get_point(indev, &p);
+    }
+
+    switch (code) {
+    case LV_EVENT_PRESSED:
+        s_press_y = p.y;
+        s_press_acc = 0;
+        s_last_scroll = 0;
+        s_ignore_scroll = false;
+        break;
+    case LV_EVENT_SCROLL:
+        /* Wheel (no press). Touch drags are handled in PRESSING so the page
+         * moves exactly with the finger; the overlay's own scroll is only a
+         * wheel source. */
+        if (s_selecting || s_ignore_scroll) {
+            break;
+        }
+        {
+            lv_coord_t sy = lv_obj_get_scroll_y(s_touch);
+            int step = (s_bound_cell != NULL) ? s_bound_cell->cell_h : 16;
+            int rows = (step > 0) ? (int)((sy - s_last_scroll) / step) : 0;
+
+            if (rows > 8) rows = 8;
+            if (rows < -8) rows = -8;
+            if (rows != 0) {
+                s_last_scroll += rows * step;
+                tui_touch_scroll_rows(rows);
+            }
+            if (sy > 400 || sy < -400) {
+                lv_obj_scroll_to_y(s_touch, 0, LV_ANIM_OFF);
+                s_last_scroll = 0;
+            }
+        }
+        break;
+    case LV_EVENT_LONG_PRESSED:
+        tui_point_to_cell(p, &row, &col);
+        s_sel_ar = s_sel_fr = row;
+        s_sel_ac = s_sel_fc = col;
+        s_selecting = true;
+        lv_obj_clear_flag(s_touch, LV_OBJ_FLAG_SCROLLABLE);
+        tui_sel_rects_draw();
+        break;
+    case LV_EVENT_PRESSING:
+        if (s_selecting) {
+            tui_point_to_cell(p, &row, &col);
+            if (row != s_sel_fr || col != s_sel_fc) {
+                s_sel_fr = row;
+                s_sel_fc = col;
+                tui_sel_rects_draw();
+            }
+            break;
+        }
+        {
+            int step = (s_bound_cell != NULL) ? s_bound_cell->cell_h : 16;
+            int dy = p.y - s_press_y;
+
+            s_press_y = p.y;
+            s_press_acc += dy;
+            if (step > 0 && (s_press_acc >= step || s_press_acc <= -step)) {
+                int rows = s_press_acc / step;
+
+                s_press_acc -= rows * step;
+                tui_touch_scroll_rows(rows);
+            }
+        }
+        break;
+    case LV_EVENT_RELEASED:
+        if (s_selecting) {
+            lv_obj_add_flag(s_touch, LV_OBJ_FLAG_SCROLLABLE);
+        }
+        s_ignore_scroll = true;   /* ignore the elastic snap-back */
+        break;
+    case LV_EVENT_CLICKED:
+        if (s_selecting) {
+            int r0 = s_sel_ar < s_sel_fr ? s_sel_ar : s_sel_fr;
+            int r1 = s_sel_ar > s_sel_fr ? s_sel_ar : s_sel_fr;
+            int c0 = s_sel_ac < s_sel_fc ? s_sel_ac : s_sel_fc;
+            int c1 = s_sel_ac > s_sel_fc ? s_sel_ac : s_sel_fc;
+
+            tui_point_to_cell(p, &row, &col);
+            if (row >= r0 && row <= r1 && col >= c0 && col <= c1) {
+                (void)tui_selection_copy();
+            } else {
+                tui_selection_clear();
+            }
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 static void tui_apply_layout(void)
 {
     lv_coord_t cw;
@@ -343,6 +543,16 @@ static void tui_apply_layout(void)
     lv_obj_set_style_text_line_space(s_tui_label, 0, 0);
     lv_obj_set_size(s_tui_label, gw, gh);
     lv_obj_set_pos(s_tui_label, (cw - gw) / 2, (ch - gh) / 2);
+    if (s_sel_layer != NULL) {
+        lv_obj_set_pos(s_sel_layer, (cw - gw) / 2, (ch - gh) / 2);
+        lv_obj_set_size(s_sel_layer, gw, gh);
+    }
+    if (s_touch != NULL) {
+        lv_obj_set_pos(s_touch, (cw - gw) / 2, (ch - gh) / 2);
+        lv_obj_set_size(s_touch, gw, gh);
+        lv_obj_move_foreground(s_touch);
+        tui_sel_rects_draw();
+    }
     lv_obj_update_layout(s_tui_label);
     tui_bg_relayout();
     ESP_LOGD(TUI_TAG, "tui layout: cell %dx%d grid %dx%d in %dx%d",
@@ -383,6 +593,36 @@ bool tui_init(void)
      * 80-column row and produced the doubled border (V5). */
     lv_label_set_long_mode(s_tui_label, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_pad_all(s_tui_label, 0, 0);
+    s_sel_layer = lv_obj_create(surf);
+    if (s_sel_layer != NULL) {
+        lv_obj_remove_style_all(s_sel_layer);
+        lv_obj_add_flag(s_sel_layer, LV_OBJ_FLAG_IGNORE_LAYOUT);
+        lv_obj_clear_flag(s_sel_layer, LV_OBJ_FLAG_SCROLLABLE |
+                                      LV_OBJ_FLAG_CLICKABLE);
+    }
+    s_touch = lv_obj_create(surf);
+    if (s_touch != NULL) {
+        lv_obj_remove_style_all(s_touch);
+        lv_obj_add_flag(s_touch, LV_OBJ_FLAG_IGNORE_LAYOUT |
+                                  LV_OBJ_FLAG_CLICKABLE |
+                                  LV_OBJ_FLAG_SCROLLABLE |
+                                  LV_OBJ_FLAG_SCROLL_ELASTIC);
+        lv_obj_set_scroll_dir(s_touch, LV_DIR_VER);
+        lv_obj_set_scrollbar_mode(s_touch, LV_SCROLLBAR_MODE_OFF);
+        lv_obj_set_style_bg_opa(s_touch, LV_OPA_TRANSP, 0);
+        {
+            lv_obj_t *spacer = lv_obj_create(s_touch);
+
+            if (spacer != NULL) {
+                lv_obj_remove_style_all(spacer);
+                lv_obj_set_size(spacer, 1, 200000);
+                lv_obj_clear_flag(spacer, LV_OBJ_FLAG_SCROLLABLE |
+                                            LV_OBJ_FLAG_CLICKABLE);
+            }
+        }
+        lv_obj_add_event_cb(s_touch, tui_touch_event_cb, LV_EVENT_ALL, NULL);
+        lv_obj_move_foreground(s_touch);
+    }
     tui_apply_layout();
     /* Re-map the grid when the viewport changes (keyboard, fullscreen). */
     windows_set_surface_layout_cb(tui_apply_layout);
@@ -420,6 +660,13 @@ void tui_deinit(void)
     windows_exit_tui_mode();
     s_tui_container = NULL;
     s_bound_cell = NULL;
+    s_touch = NULL;
+    s_sel_layer = NULL;
+    s_selecting = false;
+    s_last_scroll = 0;
+    s_press_y = 0;
+    s_press_acc = 0;
+    s_ignore_scroll = true;
     lvgl_port_unlock();
     if (s_cells) {
         heap_caps_free(s_cells);
@@ -1594,6 +1841,78 @@ void tui_page_clear(void)
     s_link_count = 0;
     memset(s_links, 0, sizeof(s_links));
 }
+bool tui_selection_copy(void)
+{
+    int r0, r1, c0, c1;
+    size_t cap;
+    char *out;
+    size_t pos = 0;
+
+    if (!s_selecting || s_tui_label == NULL) {
+        return false;
+    }
+    r0 = s_sel_ar < s_sel_fr ? s_sel_ar : s_sel_fr;
+    r1 = s_sel_ar > s_sel_fr ? s_sel_ar : s_sel_fr;
+    c0 = s_sel_ac < s_sel_fc ? s_sel_ac : s_sel_fc;
+    c1 = s_sel_ac > s_sel_fc ? s_sel_ac : s_sel_fc;
+    cap = (size_t)(c1 - c0 + 2) * (size_t)(r1 - r0 + 1) * 5u + 1u;
+    out = p4heap_alloc_psram(cap);
+    if (out == NULL) {
+        return false;
+    }
+    for (int r = r0; r <= r1; r++) {
+        size_t line = pos;
+        size_t line_end;
+
+        for (int c = c0; c <= c1; c++) {
+            char utf8[5] = { 0 };
+            uint8_t fg = 0, bg = 0, attr = 0;
+
+            if (!tui_page_get_cell(c, s_scroll_offset + r, utf8, sizeof(utf8),
+                                   &fg, &bg, &attr)) {
+                continue;
+            }
+            if (utf8[0] == '\0') {
+                utf8[0] = ' ';
+                utf8[1] = '\0';
+            }
+            for (size_t i = 0; utf8[i] != '\0' && pos + 1 < cap; i++) {
+                out[pos++] = utf8[i];
+            }
+        }
+        /* Trim trailing blanks on the copied line. */
+        line_end = pos;
+        while (line_end > line && (out[line_end - 1] == ' ' ||
+                                   out[line_end - 1] == '\t')) {
+            line_end--;
+        }
+        pos = line_end;
+        if (pos + 1 < cap) {
+            out[pos++] = '\n';
+        }
+    }
+    if (pos > 0 && out[pos - 1] == '\n') {
+        pos--;
+    }
+    out[pos] = '\0';
+    if (pos == 0) {
+        p4heap_free(out);
+        tui_selection_clear();
+        return false;
+    }
+    shell_clipboard_set(out);
+    p4heap_free(out);
+    header_notify(HEADER_NOTIFY_INFO, "selection copied", 1500);
+    tui_selection_clear();
+    return true;
+}
+
+void tui_selection_clear(void)
+{
+    s_selecting = false;
+    tui_sel_rects_clear();
+}
+
 void tui_page_render(void)
 {
     if (!s_page || !s_cells) return;

@@ -1655,6 +1655,7 @@ void shell_command_tui(int argc, char **argv)
         !shell_text_equals_ignore_case(argv[1], "stats") &&
         !shell_text_equals_ignore_case(argv[1], "selftest") &&
         !shell_text_equals_ignore_case(argv[1], "dump") &&
+        !shell_text_equals_ignore_case(argv[1], "copy") &&
         !draw_require_foreground("tui")) {
         return;
     }
@@ -1759,6 +1760,22 @@ void shell_command_tui(int argc, char **argv)
     } else if (shell_text_equals_ignore_case(argv[1], "clear")) {
         if (tui_is_active()) tui_clear();
         draw_maybe_flush();
+        batch_set_errorlevel(0);
+        return;
+    } else if (shell_text_equals_ignore_case(argv[1], "copy")) {
+        /* Copy the pointer selection (long-press drag on the TUI page, or a
+         * tap inside an existing selection). This is the script/accessibility
+         * entry point for the same core the tap uses. */
+        if (tui_selection_copy()) {
+            shell_print_ok("tui: selection copied");
+        } else {
+            shell_print_warning("tui: no selection (long-press and drag on the page)");
+        }
+        batch_set_errorlevel(0);
+        return;
+    } else if (shell_text_equals_ignore_case(argv[1], "select") &&
+               argc >= 3 && shell_text_equals_ignore_case(argv[2], "clear")) {
+        tui_selection_clear();
         batch_set_errorlevel(0);
         return;
     } else if (shell_text_equals_ignore_case(argv[1], "dump")) {

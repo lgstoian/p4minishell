@@ -9,15 +9,15 @@ rem  Systems and goods live in SYSNAME[]/MULT[]/PRICE[]/HOLD[] arrays; the
 rem  buy/sell lists return the good index straight into `set /a g=%%err`,
 rem  prices/holds read via set /a live-name lookups (PRICE[%%g%%]...), and
 rem  the dock menu dispatches through one `on` statement. Saves echo the
-rem  array slots in set form (call ADVENT.SAV pattern). Markers:
+rem  array slots in set form (call %APPDRIVE%/ELITE.SAV pattern). Markers:
 rem  [M-ELITE] / [M-ELITE-DOCKED] / [M-ELITE-SAVED] / [M-ELITE-DONE].
 rem  Foreground-only (draw/list refuse in bg, see :nogfx).
 rem =====================================================================
 setlocal enabledelayedexpansion
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-ELITE]
-title "Elite"
-if exist ELITE.SAV call ELITE.SAV
+title "Elite 🚀"
+if exist %APPDRIVE%/ELITE.SAV call %APPDRIVE%/ELITE.SAV
 if not defined credits set credits=100
 if not defined sys set sys=0
 if not defined HOLD[0] set HOLD[0]=0
@@ -44,7 +44,7 @@ set /a PRICE[1]=40+%mult%*2
 set /a PRICE[2]=120-%mult%*3
 echo [M-ELITE-DOCKED] %sname%
 draw clear
-draw box 1 1 80 3 double ELITE
+draw box 1 1 80 3 double "ELITE 🚀"
 draw text 3 2 %sname% station
 draw table 3 5 14 0 "Good|Price|Hold" "Food|%PRICE[0]%|%HOLD[0]%" "Textiles|%PRICE[1]%|%HOLD[1]%" "Computers|%PRICE[2]%|%HOLD[2]%"
 draw text 3 14 Credits %credits%
@@ -52,7 +52,7 @@ draw text 3 15 Hull %hull%%
 draw text 50 14 Buy low
 draw text 50 15 sell high
 draw refresh
-list "Elite" "Buy" "Sell" "Travel" "Save" "Quit"
+list "Elite 🚀" "Buy" "Sell" "Travel" "Save" "Quit"
 on %errorlevel%+1 goto :buy,:sell,:travel,:save,:done
 goto done
 
@@ -131,12 +131,12 @@ delay 1500
 goto dock
 
 :save
-echo set credits=%credits% > ELITE.SAV
-echo set sys=%sys% >> ELITE.SAV
-echo set HOLD[0]=%HOLD[0]% >> ELITE.SAV
-echo set HOLD[1]=%HOLD[1]% >> ELITE.SAV
-echo set HOLD[2]=%HOLD[2]% >> ELITE.SAV
-echo set hull=%hull% >> ELITE.SAV
+echo set credits=%credits% > %APPDRIVE%/ELITE.SAV
+echo set sys=%sys% >> %APPDRIVE%/ELITE.SAV
+echo set HOLD[0]=%HOLD[0]% >> %APPDRIVE%/ELITE.SAV
+echo set HOLD[1]=%HOLD[1]% >> %APPDRIVE%/ELITE.SAV
+echo set HOLD[2]=%HOLD[2]% >> %APPDRIVE%/ELITE.SAV
+echo set hull=%hull% >> %APPDRIVE%/ELITE.SAV
 echo [M-ELITE-SAVED]
 draw text 50 18 saved
 draw refresh
@@ -146,7 +146,7 @@ goto dock
 :dead
 draw text 50 18 DESTROYED
 draw refresh
-screenshot ELITE.BMP
+screenshot %APPDRIVE%/ELITE.BMP
 echo [M-ELITE-DONE] destroyed credits=%credits%
 goto end
 

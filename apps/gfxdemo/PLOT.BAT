@@ -7,8 +7,8 @@ rem  world-coordinate drawings on the gfx canvas, then a TUI bar chart.
 rem  Saves PLOT.BMP. Markers: [M-PLOT] / [M-PLOT-DONE].
 rem =====================================================================
 echo [M-PLOT]
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
-title "Plot"
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
+title "Plot 📈"
 calc /rad
 gfx init 320 200
 if errorlevel 1 goto :nofx
@@ -23,7 +23,7 @@ rem with `calc` (angle mode already /rad) in a gosub fed by a for /L index;
 rem plot point then places the world coordinate on the canvas.
 for /L %%i in (1,1,48) do call :scatter %%i
 gfx show
-gfx save PLOT.BMP
+gfx save %APPDRIVE%/PLOT.BMP
 gfx close
 echo [M-PLOT-DONE]
 return

@@ -1,5 +1,8 @@
 ; APPINFO metadata for the gfx bouncing-ball demo (INI format, read by `launch`).
 ; Copied to sd:/APPS/BOUNCE.APPINFO by apps/push_apps.py.
-title=Bounce Demo
-description=Gfx pixel-canvas bouncing ball: raster verbs plus batch math in a killable frame loop
+title=Bounce Demo ⚫
+description=Gfx pixel-canvas bouncing ball on the app drive: raster verbs plus batch math in a killable frame loop
 version=1.0
+; Opt-in transparency (v1.4.3): a light blend behind the canvas app's page.
+alpha=96%
+scrim=40%

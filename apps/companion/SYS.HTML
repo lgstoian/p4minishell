@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>P4 Companion - System Guide</title>
+<style>
+body { background: #000080; color: #c0c0c0; }
+h1 { color: #ffff55; }
+h2 { color: #55ffff; }
+table { border: 1; }
+th { background: #0000aa; color: #ffffff; }
+td { color: #c0c0c0; }
+a { color: #55ffff; }
+</style>
+</head>
+<body>
+<h1>P4 Companion - System Guide</h1>
+<p>This page is a local file (DOCS/SYS.HTML) opened by the <b>html</b> verb.
+No access point, cloud service or HTTP server is involved.</p>
+
+<h2>What the dashboard shows</h2>
+<ul>
+<li>Memory: internal heap, DMA pool, tasks and the 32 MB PSRAM pool.</li>
+<li>Tasks: the shell worker, display, services and background jobs.</li>
+<li>Services: resident batch jobs supervised across reboots.</li>
+<li>Packages: apps installed from a PKGS bundle.</li>
+</ul>
+
+<h2>Where the app keeps its data</h2>
+<p>Every path below uses the app drive, so the same page describes an SD or a
+USB install. The shell publishes that drive to batch apps as %APPDRIVE%.</p>
+<table>
+<tr><th>Store</th><th>Location</th></tr>
+<tr><td>Snapshots</td><td>&lt;app drive&gt;/SYS_SNAP.TXT</td></tr>
+<tr><td>Notes</td><td>&lt;app drive&gt;/NOTES</td></tr>
+<tr><td>Service registry</td><td>sd:/SERVICES.INI (SD-only by design)</td></tr>
+</table>
+
+<h2>Keys</h2>
+<p>Use the on-screen list or type the entry number and press Enter.
+<b>Back</b> returns to the Companion menu; <b>q</b> (or Esc) closes this
+page.</p>
+
+<h2>Version</h2>
+<p>P4MiniShell 1.4.3 adds drive-aware apps (%APPDRIVE%), the html page verb,
+opt-in alpha/scrim and retro emoji. Run <b>version</b> at the prompt for the
+exact build.</p>
+</body>
+</html>

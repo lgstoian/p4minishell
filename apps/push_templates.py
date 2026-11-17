@@ -6,7 +6,7 @@
 Templates are new-file seeds used by `edit <file> /template <name>`
 (writerdeck). Each apps/templates/<NAME>.MD lands at sd:/TEMPLATES/<NAME>.MD.
 
-Usage: python push_templates.py [COMx]
+Usage: python push_templates.py [COMx] [--drive sd:|usb:|usbN:]
 """
 import os
 import sys
@@ -21,7 +21,14 @@ TEMPLATES = os.path.join(HERE, "templates")
 
 
 def main():
-    port = sys.argv[1] if len(sys.argv) > 1 else "COM11"
+    args = sys.argv[1:]
+    drive = "sd:"
+    if "--drive" in args:
+        idx = args.index("--drive")
+        if idx + 1 < len(args):
+            drive = args[idx + 1].rstrip("/")
+            del args[idx:idx + 2]
+    port = args[0] if args else "COM11"
     names = [n for n in sorted(os.listdir(TEMPLATES)) if n.endswith(".MD")]
     if not names:
         print("FAIL: no templates in %s" % TEMPLATES)
@@ -36,7 +43,8 @@ def main():
     # The open above usually reboots the board (DTR transition); let it settle.
     time.sleep(20.0)
     ser.reset_input_buffer()
-    ser.write(b"md TEMPLATES\n")
+    ser.write(("md %s/TEMPLATES\n" % drive).encode() if drive != "sd:"
+              else b"md TEMPLATES\n")
     time.sleep(0.5)
     ser.read(ser.in_waiting or 1)
 
@@ -44,7 +52,8 @@ def main():
     for name in names:
         with open(os.path.join(TEMPLATES, name), "rb") as f:
             data = f.read()
-        target = "TEMPLATES/" + name
+        target = ("%s/TEMPLATES/%s" % (drive, name)) if drive != "sd:" \
+            else "TEMPLATES/" + name
         pushed = False
         for attempt in range(3):
             if push_file(ser, target, data):

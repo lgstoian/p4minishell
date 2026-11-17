@@ -292,6 +292,10 @@ void tui_page_bg_rect(int col, int row, int w, int h, uint8_t bg,
                       uint8_t alpha);
 void tui_page_render(void);
 
+/** Copy the current pointer selection to the shell clipboard. */
+bool tui_selection_copy(void);
+void tui_selection_clear(void);
+
 /** Blit an image into the browser PAGE buffer as cell-ramp glyphs (1-based
  *  cells). Shares the sampler with tui_draw_image(); used for emoji pack
  *  glyphs so a page shows colour emoji on the next tui_page_render(). */

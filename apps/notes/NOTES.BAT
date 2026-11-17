@@ -9,15 +9,18 @@ rem  and `on`-dispatched menus (list's 0-based index -> 1-based on target).
 rem  Markers: [M-NOTE] / [M-NOTE-SAVED] / [M-NOTE-COUNT].
 rem =====================================================================
 setlocal
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-NOTE]
-title "Notes"
-db info zettel > _zinit.txt
+title "Zettelkasten 📝"
+rem The `db` record store is SD-owned by design (sd:/DBS/zettel.DB); everything
+rem else this app writes uses %APPDRIVE% so the shell and editor data follow
+rem the drive the app was launched from.
+db info zettel > %APPDRIVE%/_zinit.txt
 if errorlevel 1 goto first_run
-del /p _zinit.txt > NUL
+del /p %APPDRIVE%/_zinit.txt > NUL
 goto menu
 :first_run
-del /p _zinit.txt > NUL
+del /p %APPDRIVE%/_zinit.txt > NUL
 db create zettel /cr:NOTE /tp:ZTL /vr:1
 db categories zettel set 0 Fleeting
 db categories zettel set 1 Permanent
@@ -27,9 +30,9 @@ dialog "Notes" "Created the zettel store." "OK"
 
 :menu
 draw clear screen
-draw box 1 1 80 3 double "ZETTELKASTEN"
+draw box 1 1 80 3 double "ZETTELKASTEN 📝"
 draw text 5 2 "📝 linked notes on the db store" 14
-list "Zettelkasten" "New note" "List notes" "View note" "Search" "Delete note" "Export" "Import" "Back"
+list "Zettelkasten 📝" "New note" "List notes" "View note" "Search" "Delete note" "Export" "Import" "Back"
 on %errorlevel%+1 goto :new_note,:list_notes,:view_note,:search,:del_note,:export,:import,:back
 goto :back
 
@@ -56,10 +59,10 @@ dialog "Notes" "Saved [%zkey%]." "OK"
 goto menu
 
 :body_file
-edit _zettel.txt
-db add zettel /cat:%zcat% /key:%zkey% _zettel.txt
+edit %APPDRIVE%/_zettel.txt
+db add zettel /cat:%zcat% /key:%zkey% %APPDRIVE%/_zettel.txt
 if errorlevel 1 dialog "Notes" "Could not save." "OK" & goto menu
-del /p _zettel.txt > NUL
+del /p %APPDRIVE%/_zettel.txt > NUL
 echo [M-NOTE-SAVED]
 dialog "Notes" "Saved [%zkey%] from editor." "OK"
 goto menu
@@ -105,7 +108,7 @@ goto menu
 
 :export
 db export zettel
-dialog "Notes" "Exported to %APPDRIVE%/DBS/zettel.EXPORT." "OK"
+dialog "Notes" "Exported to sd:/DBS/zettel.EXPORT (db store is SD-only)." "OK"
 goto menu
 
 :import

@@ -5,6 +5,7 @@ idf_component_register(
     INCLUDE_DIRS "." "${CMAKE_SOURCE_DIR}"
     REQUIRES
         shell
+        header
         windows
         ansi
         emoji

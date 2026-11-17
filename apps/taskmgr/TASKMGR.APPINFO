@@ -1,5 +1,8 @@
 ; APPINFO metadata for the task manager (INI format, read by the `launch`
 ; command). Copied to sd:/APPS/TASKMGR.APPINFO by push_apps.py.
-title=Task Manager
-description=Batch task manager: pool jobs, priorities, services, events
+title=Task Manager 📊
+description=Batch task manager: pool jobs, priorities, services, events; pool view reports mem incl. PSRAM
 version=1.0
+; Opt-in transparency (v1.4.3): translucent manager page + modal scrim.
+alpha=93%
+scrim=45%

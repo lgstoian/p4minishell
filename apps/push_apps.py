@@ -11,9 +11,12 @@ sd:/APPS.
 Usage:
     python push_apps.py [COMx] [--drive sd:|usb:|usbN:]
 
-The same payload runs from SD or a USB stick (v1.4.3): `--drive usb:` writes
-the identical bundle to usb:/APPS + usb:/WEB, and the shell's `launch`, path
-resolution and `%APPDRIVE%` make the apps behave identically there.
+The same payload runs from SD or a USB stick (v1.4.3). On SD the entry
+``.BAT`` files go to the root (on PATH) and metadata to ``sd:/APPS``; on USB
+they go to ``usb:/APPS`` next to their ``.APPINFO``, which is exactly where
+``launch`` looks for a USB-installed app. Data/assets stay at the drive root
+(``usb:/WEB``, ``usb:/EMOJI``, ``usb:/DOCS``), and the apps address them
+through ``%APPDRIVE%``, so the identical payload behaves the same either way.
 """
 
 import os
@@ -57,14 +60,21 @@ def main():
     ser.reset_input_buffer()
 
     ser.reset_input_buffer()
-    for directory in (b"APPS", b"WEB", b"EMOJI"):
+    for directory in (b"APPS", b"WEB", b"EMOJI", b"DOCS"):
         ser.write(("md %s/" % drive).encode() + directory + b"\n")
         time.sleep(0.5)
         ser.read(ser.in_waiting or 1)
 
     ok = True
     for path, target in deploy_list():
-        target = "%s/%s" % (drive, target) if drive != "sd:" else target
+        if drive != "sd:":
+            # USB install: scripts live in APPS/ so `launch <name>` (and the
+            # shell's explicit usb:/APPS fallback) finds them; data payloads
+            # keep their WEB/EMOJI/DOCS subdirectory at the drive root.
+            bare = "/" not in target
+            if bare and target.lower().endswith((".bat", ".cmd")):
+                target = "APPS/" + target
+            target = "%s/%s" % (drive, target)
         with open(path, "rb") as f:
             data = f.read()
         pushed = False

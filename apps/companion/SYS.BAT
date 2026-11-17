@@ -8,39 +8,45 @@ rem  appmode if TUI not available. Shows sysinfo, mem, ps, battery, wifi.
 rem =====================================================================
 
 :main
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
-title "Live System"
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
+title "Live System 🖥"
 echo [M-SYS]
 tui fullscreen on
 draw clear screen
-draw box 1 1 80 3 double "LIVE SYSTEM DASHBOARD"
-draw box 1 4 80 10 single "System - Press View for details"
-draw box 1 15 40 10 single "Memory"
+draw box 1 1 80 3 double "LIVE SYSTEM DASHBOARD 🖥"
+draw box 1 4 80 10 single "System - View opens the local HTML guide"
+draw box 1 15 40 10 single "Memory (heap + PSRAM)"
 draw box 41 15 40 10 single "Tasks"
 draw text 5 6 "System dashboard ready"
-draw text 5 7 "Use View to see sysinfo/mem/ps"
-draw text 5 8 "Use Save to keep snapshot"
+draw text 5 7 "Use View for the HTML guide"
+draw text 5 8 "Use Save to keep a snapshot on the app drive"
 :refresh
-list "Dashboard" "Refresh" "View details" "Save snapshot" "Services" "Packages" "Back"
+list "Dashboard 🖥" "Refresh" "View details" "Save snapshot" "Services" "Packages" "Back"
 on %errorlevel%+1 goto :do_refresh,:view_details,:save,:services,:packages,:back
 goto :back
 :do_refresh
 draw clear screen
-draw box 1 1 80 3 double "LIVE SYSTEM DASHBOARD"
+draw box 1 1 80 3 double "LIVE SYSTEM DASHBOARD 🖥"
 draw box 1 4 80 10 single "System - Refreshed"
-draw box 1 15 40 10 single "Memory"
+draw box 1 15 40 10 single "Memory (heap + PSRAM)"
 draw box 41 15 40 10 single "Tasks"
 draw text 5 6 "Refreshed at %TIME%"
 goto refresh
 :view_details
-dialog "Details" "Heap, tasks and uptime shown above. Use Save to keep a snapshot." "OK"
+rem Help/about flow: a small local page deployed by app_manifest to
+rem <drive>/DOCS/SYS.HTML, rendered by the v1.4.3 blocking `html` verb
+rem (Esc or q closes it). No network is touched.
+draw hold off
+draw close
+html %APPDRIVE%/DOCS/SYS.HTML
+if errorlevel 1 dialog "Details" "Heap, tasks and uptime are shown above. Push apps/push_apps.py to install DOCS/SYS.HTML." "OK"
 goto refresh
 :save
-sysinfo > SYS_SNAP.TXT
-mem >> SYS_SNAP.TXT
-ps /O:C >> SYS_SNAP.TXT
+sysinfo > %APPDRIVE%/SYS_SNAP.TXT
+mem >> %APPDRIVE%/SYS_SNAP.TXT
+ps /O:C >> %APPDRIVE%/SYS_SNAP.TXT
 echo [M-SYS-SAVED]
-dialog "Saved" "Snapshot saved to SYS_SNAP.TXT" "OK"
+dialog "Saved" "Snapshot saved to %APPDRIVE%/SYS_SNAP.TXT" "OK"
 goto refresh
 :back
 echo [M-SYS-BACK]

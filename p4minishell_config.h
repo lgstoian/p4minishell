@@ -376,7 +376,7 @@
 #define P4_CONFIG_JS_HTTP_MAX_BYTES           (32768)
 #define P4_CONFIG_JS_DB_MAX_RESULTS           64
 
-#define P4_CONFIG_TUI_PAGE_ROWS               200
+#define P4_CONFIG_TUI_PAGE_ROWS               2000
 
 /** Print-to-file layout (writerdeck): fixed page geometry for the `print`
  *  export format, wrapped and paginated for sharing/printing. */
@@ -597,6 +597,10 @@
 
 /** Maximum image height in terminal rows. */
 #define P4_CONFIG_BROWSER_IMAGE_MAX_HEIGHT      40
+/** Native images larger than this (either side, PNG/JPEG) render as alt text
+ *  instead of 80x40 cell art: a photo at that scale is unreadable noise, while
+ *  logos/icons stay recognizable. BMP site assets are unaffected. */
+#define P4_CONFIG_BROWSER_IMAGE_NATIVE_MAX_PX   96
 
 /** Maximum total in-page JavaScript bytes per page. */
 #define P4_CONFIG_BROWSER_JS_MAX_BYTES          (16 * 1024)
@@ -613,7 +617,7 @@
 
 /** Rendered pages kept in the browser's PSRAM back/forward cache. A hit restores
  *  the cell grid and link regions by memcpy - no fetch, parse or render. */
-#define P4_CONFIG_BROWSER_PAGE_CACHE_MAX        6
+#define P4_CONFIG_BROWSER_PAGE_CACHE_MAX        3
 
 /** Arena block size for parsed DOM nodes (PSRAM). A page builds hundreds of
  *  ~3.6 KB nodes; handing them from a few large blocks keeps the heap out of it. */
@@ -1351,7 +1355,7 @@
 
 /** Maximum response body bytes `httpget` buffers into PSRAM. A larger
  *  response is refused with a clear error rather than exhausting memory. */
-#define P4_CONFIG_HTTP_MAX_BODY_BYTES       (512 * 1024)
+#define P4_CONFIG_HTTP_MAX_BODY_BYTES       (2 * 1024 * 1024)
 
 /** Follow HTTP redirects (1) or treat a 3xx status as an error (0). */
 #define P4_CONFIG_HTTP_FOLLOW_REDIRECTS     1

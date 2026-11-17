@@ -15,12 +15,12 @@ rem  Foreground-only: the canvas is a shared display surface, so `gfx`
 rem  refuses inside `start` background jobs (like modal verbs).
 rem =====================================================================
 setlocal
-if "%P4_APP_FEATURES%"=="1" gosub APPLIB.BAT::probe
+if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-BOUNCE]
-title "Bounce"
+title "Bounce ⚫"
 gfx init 240 180
 if errorlevel 1 goto nogfx
-gfx load 0 BALL.BMP
+gfx load 0 %APPDRIVE%/BALL.BMP
 set x=120
 set y=90
 set dx=3
@@ -29,7 +29,7 @@ set n=0
 gfx stats reset
 while n LSS 240 do call :frame
 rem Capture the final frame once, off the animation loop.
-screenshot BOUNCE.BMP
+screenshot %APPDRIVE%/BOUNCE.BMP
 rem Report frame pacing from the canvas stats (frames/min/avg/max/jitter).
 gfx stats
 gfx close
