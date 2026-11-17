@@ -1102,6 +1102,26 @@ static const char *shell_expand_token_text(char *token, char *errorlevel_buf,
     }
 }
 
+/** Is @p len characters at @p s a legal `%NAME%` token?
+ *
+ * cmd.exe names never contain whitespace or quotes. Refusing such a token is
+ * what keeps an interactive `for %f in (A) do echo %f` intact: the first `%`
+ * pairs with the one in the body, and the "name" between them is a sentence,
+ * not a variable. Treating it as one silently deleted the loop variable and
+ * the whole command did nothing. */
+static bool shell_expand_name_like(const char *s, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)s[i];
+
+        if (isspace(c) || c == '"' || c == '\'' || c == '(' || c == ')' ||
+            c == '=') {
+            return false;
+        }
+    }
+    return len > 0;
+}
+
 void shell_expand_variables(const char *input, char *output, size_t output_size)
 {
     size_t out_index = 0;
@@ -1235,6 +1255,12 @@ void shell_expand_variables(const char *input, char *output, size_t output_size)
 
                     if (token_len == 0) {
                         replacement = "%";
+                    } else if (token_len < sizeof(token) &&
+                               !shell_expand_name_like(input + 1, token_len)) {
+                        /* A sentence between two `%`: not a name (see above),
+                         * so the percent stays literal and scanning resumes
+                         * right after it. */
+                        token_len = 0;
                     } else if (token_len < sizeof(token)) {
                         char pseudo_buf[40];
 
@@ -1244,7 +1270,9 @@ void shell_expand_variables(const char *input, char *output, size_t output_size)
                                                               pseudo_buf, strbuf,
                                                               sizeof(strbuf));
                     }
-                    after = end + 1;
+                    if (replacement != NULL) {
+                        after = end + 1;   /* consumed the closing percent */
+                    }
                 }
                 /* No closing `%`: the percent is copied literally below. */
             }
