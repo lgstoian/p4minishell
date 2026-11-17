@@ -389,6 +389,30 @@ and font modules — no new app model:
   preview use `windows_get_reading_font()`, cell-metric surfaces stay on
   `FONT_ROLE_TERMINAL`.
 
+## Rendering surfaces (v1.4.3)
+
+Three small APIs cover emoji, colour/alpha and drive-aware app paths. They are
+leaves; consume them, never fork them:
+
+- `components/markdown/css_color.h` - the one CSS colour parser
+  (`css_color_parse`, `css_color_to_dos`, `css_color_blend`). The Canvas 2D
+  colour type aliases it; `dom_css_color` is a DOS-index wrapper.
+- `components/font/emoji_core.h` - emoji detection plus the retro DOS/CP437
+  fallback. The LVGL font chain and `tui_print_at` both call it. Optional
+  colour packs (`components/emoji/emoji.h`) are decoded by the shared
+  `imgdec`/`gfx` path and drawn by the one cell sampler.
+- Surface knobs: `tui_set_background_alpha()` (whole TUI page),
+  `modal_surf_set_alpha(panel, scrim)` (modal panels and backdrop), and the
+  `dom_render_ops_t` emoji/alpha hooks for a custom presenter.
+- App paths: `storage_shell_path()` maps a VFS path back to `sd:/`/`usb:/`;
+  the shell publishes `APPDRIVE`/`APPROOT`/`APPNAME` for batch apps, and
+  `launch` reads `APPINFO` from either drive. Native apps that need their own
+  data location should resolve it the same way rather than hardcoding `sd:/`.
+
+Defaults are opaque and message-free: alpha 255, scrim 0, no emoji pack. A
+native surface that opts into transparency must restore the defaults when it
+returns (that is what `launch` does for batch apps).
+
 ## Networking ownership
 
 Every `esp_hosted_*`, `esp_wifi_*`, `esp_netif_*`, NimBLE, and HTTP call belongs in

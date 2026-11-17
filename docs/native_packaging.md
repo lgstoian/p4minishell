@@ -52,6 +52,7 @@ its install-relative path and the `.APPINFO`/`.ASSETS` into `APPS/`.
 | `arch` | hybrid/native | `esp32p4` |
 | `entry` | hybrid/native | C entry name the shim/dispatcher invokes; hybrid bundles MUST set it |
 | `handles`, `setup`, `autostart`, `alias`, `data`, `requires`, `min_fw` | no | Registration keys, same as batch apps (see [`ABI.md`](../../ABI.md) §3) |
+| `alpha`, `scrim` | no | Opt-in TUI/modal transparency (v1.4.3), 0-255 or `0-100%`; applied by `launch`, carried by `pkg` as ordinary metadata |
 | `services` | no | Comma-separated dependency list (`APP>=1.2`, `APP=2`, `APP>3`, or a bare `APP` = any version). Enforced at install: every declared service must be installed and satisfy its version. Reported by `pkg info`. Additive metadata — no ABI bump. |
 
 ```ini
