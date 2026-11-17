@@ -19,18 +19,22 @@ display/TUI/GFX stack you can build on.
 
 **The browser, rendering a real website on the device.** `browser` parses HTML
 and CSS, lays out headings, lists, links, tables, images and in-page JavaScript
-into the 80x25 TUI page, and can read the page from SD with no network at all.
-CSS colours, block-glyph images (decoded by the gfx core), and JS `onload`/
-`onclick` handlers are live on the device. The showcase dashboard ships in
+into an 80-column page that holds 2000 rows in PSRAM (25 visible, with touch/
+wheel scrolling), and can read the page from SD with no network at all. CSS
+colours and `background-image` backdrops, block-glyph images (BMP/PNG/JPEG
+through the one decoder) and JS `onload`/`onclick` handlers are live on the
+device - the live Wikipedia article is fetched and rendered whole. The showcase dashboard ships in
 `apps/website/` and is driven by `WEB.BAT`.
 
 ![The P4MiniShell browser rendering the device dashboard from sd:/WEB/INDEX.HTML](docs/assets/browser-website.png)
 
 All screenshots are captured live from the device over USB serial
 (`python tools/capture_docs.py <COM_PORT>`); the full set is in
-[`docs/assets/`](docs/assets/README.md). The `screenshot` command reports
-success in the header notification only (v1.4.3); the transcript stays clean,
-and only errors are printed.
+[`docs/assets/`](docs/assets/README.md), and every reference app has its own
+captured main screen in the [`app gallery`](docs/apps.md).
+
+The `screenshot` command reports success in the header notification only
+(v1.4.3); the transcript stays clean, and only errors are printed.
 
 ---
 
@@ -126,9 +130,8 @@ the host regression runners are green. See
   browser engine (DOM, CSS, JavaScript, images, canvas, HTTP(S)) as a blocking
   modal (Esc closes); `html /no` keeps it non-blocking for scripts, and native
   apps reach it with `applib_html_open()`. Real pages up to 2 MB render
-  (Wikipedia's article is fetched whole); photographic images fall back to
-  alt text so a page stays readable instead of turning into unreadable cell
-  noise.
+  (Wikipedia's article is fetched whole) and every supported image renders,
+  including CSS `background-image` backdrops tiled behind the text.
 - **Pointer parity:** touch drag and the mouse wheel scroll the browser/TUI
   page and the modal viewers; long-press then drag selects text on the page
   (tap the selection to copy), and the editor keeps its drag selection.

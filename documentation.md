@@ -184,8 +184,10 @@ scroll the page (one row per cell), long-press then drag selects a cell range
 (highlight rectangles over the glyphs), and a tap inside the selection copies
 it to the shell clipboard (`tui copy` / `tui select clear` are the script
 equivalents). The editor keeps its own drag/keyboard selection. The web budget
-is 2 MB per page and 2000 page rows in PSRAM; photographic PNG/JPEGs above
-96 px are replaced by alt text, while logos/icons still render as cell art.
+is 2 MB per page and 2000 page rows in PSRAM. Images are never dropped for
+being large: BMP/PNG/JPEG all render as cell art, and a CSS `background-image`
+is tiled behind the text (coalesced into a few rectangles, so a solid or banded
+backdrop covers the whole page).
 
 ## Configuration system
 

@@ -43,6 +43,8 @@ APP_PAYLOADS = [
     ("website", "PAGE2.HTML", "web"),
     ("website", "canvas.html", "web"),
     ("website", "LOGO.BMP", "web"),
+    ("website", "PIX.PNG", "web"),
+    ("website", "BGIMG.HTML", "web"),
 
     ("notes", "NOTES.BAT", "root"),
     ("notes", "NOTES.APPINFO", "apps"),

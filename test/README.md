@@ -8,7 +8,7 @@ the Unity framework (included in ESP-IDF) and run in two places:
   ESP-IDF `linux` target, 285 cases at v1.4.3). See `harness.md` 2.2 and
   section "Host suite" below.
 
-Current baseline: **682 tests, 0 failures, 2 ignored** on COM3 and COM6
+Current baseline: **683 tests, 0 failures, 2 ignored** on COM3 and COM6
 (v1.4.3, after the 16 new colour/emoji/alpha cases), and the host lane is
 **285/285** green. The static case count is **741** (what `tools/green_guard.py` sees in
 `test/main/test_*.c`); the difference is cases that only compile for the

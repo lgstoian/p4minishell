@@ -92,8 +92,17 @@ open bugs see [`bugs.md`](bugs.md).
   shell clipboard, and `tui copy` / `tui select clear` are the script forms.
 - **Real pages fetch whole.** The HTTP body budget is 2 MB and the page holds
   2000 rows in PSRAM; the live English Wikipedia article (353 KB) renders end
-  to end with no size-cap degradation. Photographic PNG/JPEGs above 96 px fall
-  back to alt text so pages stay legible; logos/icons still render as cell art.
+  to end with no size-cap degradation, and every supported image renders as
+  cell art (no size filter).
+- **PNG decoding fixed, and real background images.** LVGL's vendored LodePNG
+  returns an `lv_draw_buf_t` (ARGB8888, R,G,B,A) rather than raw RGBA bytes;
+  treating that struct as pixels turned every PNG on a page white, and a wrong
+  channel order tinted backgrounds. Both are fixed and covered by `s22_canvas`
+  (a real 16x16 PNG background + inline `<img>` asserted from the screenshot).
+  CSS `background-image` now tiles the whole page: equal cells are coalesced
+  into rectangles in both axes, so a solid backdrop is one rectangle and a
+  banded/patterned one is one per band, instead of exhausting the backdrop pool
+  after a couple of rows.
 - **Parsers fixed for real markup.** A tag attribute longer than the 512-byte
   store (Parsoid's `data-mw` JSON on Wikipedia) used to leak its tail into the
   document as text (`{{cite web ...}}`); the scanner now consumes the rest of

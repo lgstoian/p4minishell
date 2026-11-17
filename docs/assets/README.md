@@ -29,9 +29,16 @@ Committed, curated screenshots for the public docs. This folder is the
 | `browser-website.png` | `WEB.BAT` showing the browser rendering `sd:/WEB/INDEX.HTML` (headings, links, list, table) |
 | `header-status.png` | Close crop or full shell showing Wi-Fi/MEM/CPU/BAT header |
 | `wifi-status.png` | `wifi status` connected output |
+| `wiki-live.png` | Live `en.wikipedia.org/wiki/ESP32` (render action) fetched and rendered whole |
+| `apps/<app>.png` | One main-screen capture per reference app (`s25_apps_gallery`); indexed in [`../apps.md`](../apps.md) |
 
 Aim for ~12 shots minimum: shell, files, editor, one modal, TUI, gfx, plot,
-one app, one theme variant, header, and the browser. The browser shot is
+one app, one theme variant, header, and the browser.
+
+`docs/assets/apps/` holds the per-app gallery captures (35 PNGs, 1024x600,
+`<app>.png`). They are produced by
+`python tools/p4test_run.py <COMx> --only s25_apps_gallery`, and
+`python tools/gen_apps_gallery.py` writes [`../apps.md`](../apps.md) from them. The browser shot is
 reproduced by `python tools/p4test_run.py <COMx> --only s20_website`, which
 renders `apps/website/INDEX.HTML` offline and leaves the BMP in
 `screenshots/regression/browser-website.bmp`; convert it to

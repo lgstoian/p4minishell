@@ -241,9 +241,10 @@ s22 13/13, s23 9/9 (USB stick), s24 31/31.
 
 **Late additions in the same release:** page pointer parity (touch/wheel
 scroll, long-press drag selection + clipboard) and real-page parsing (2 MB
-body budget, 2000-row page, Parsoid long attributes, photographic images as
-alt text). The live English Wikipedia article renders end to end and is
-captured in `docs/assets/wiki-live.png`.
+body budget, 2000-row page, Parsoid long attributes, every image rendered as
+cell art, and CSS background images tiled behind the page). The live English
+Wikipedia article renders end to end and is captured in
+`docs/assets/wiki-live.png`.
 
 **Next:** richer CSS alpha composition (per-cell background alpha inside
 inline spans), an `emoji install` from a ZIP (today `archive extract` is the
