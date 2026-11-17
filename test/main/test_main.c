@@ -526,6 +526,7 @@ extern void test_html_render_malformed_is_tolerated(void);
 extern void test_dom_canvas_attributes(void);
 extern void test_html_canvas_fallback_ansi(void);
 extern void test_dom_raw_text_script_style(void);
+extern void test_html_long_attribute_does_not_leak(void);
 extern void test_css_comments_are_skipped(void);
 extern void test_dom_render_canvas_fallback(void);
 extern void test_dom_render_canvas_bitmap(void);
@@ -1401,6 +1402,7 @@ void app_main(void)
     RUN_TEST(test_dom_canvas_attributes);
     RUN_TEST(test_html_canvas_fallback_ansi);
     RUN_TEST(test_dom_raw_text_script_style);
+    RUN_TEST(test_html_long_attribute_does_not_leak);
     RUN_TEST(test_css_comments_are_skipped);
     RUN_TEST(test_dom_render_canvas_fallback);
     RUN_TEST(test_dom_render_canvas_bitmap);

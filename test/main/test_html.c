@@ -569,6 +569,38 @@ void test_dom_render_text_alpha_composited(void)
     }
 }
 
+/** A tag attribute larger than the parser's store must not leak.
+ *
+ * Parsoid (Wikipedia) puts kilobytes of JSON in `data-mw='...'`; the old
+ * scanner stopped at its 512-byte buffer edge and re-parsed the remainder as
+ * text, so `{{cite web ...}}` appeared in the rendered article. The value is
+ * now consumed to its closing quote.
+ */
+void test_html_long_attribute_does_not_leak(void)
+{
+    char html[2048];
+    size_t pos = 0;
+    dom_tree_t *tree;
+    dom_node_t *p;
+
+    pos += (size_t)snprintf(html + pos, sizeof(html) - pos,
+                            "<html><body><p data-mw='");
+    while (pos < 1200) {
+        html[pos++] = 'x';
+    }
+    pos += (size_t)snprintf(html + pos, sizeof(html) - pos,
+                            "{{cite web|title=Espressif}}'>Hello</p></body></html>");
+    TEST_ASSERT_TRUE(pos < sizeof(html));
+
+    tree = dom_parse(html);
+    TEST_ASSERT_NOT_NULL(tree);
+    p = dom_find_first_by_tag(tree, "p");
+    TEST_ASSERT_NOT_NULL(p);
+    TEST_ASSERT_EQUAL_STRING("Hello", dom_get_text(p));
+    TEST_ASSERT_NULL(strstr(dom_get_text(p), "cite"));
+    dom_free(tree);
+}
+
 /** <script>/<style> are raw text: '<' inside JS/CSS is not a tag. */
 void test_dom_raw_text_script_style(void)
 {

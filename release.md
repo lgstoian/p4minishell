@@ -182,11 +182,13 @@ rest. Layout:
 | `/<APP>.BAT` (root) | Launcher shims for the reference apps | `apps/push_apps.py` |
 | `/APPS/*.APPINFO` | App metadata for the launcher | `apps/push_apps.py` |
 | `/APPS/*.ASSETS`, generated BMPs | Asset manifests + art | `apps/push_assets.py` |
+| `/WEB/` | Browser showcase (`INDEX.HTML`, `PAGE2.HTML`, `CANVAS.HTML`, `LOGO.BMP`) | `apps/push_apps.py` |
+| `/EMOJI/` | Sample emoji pack (`EMOJI.INI` + BMPs), optional | `apps/push_apps.py` |
 | `/PKGS/<APP>/` | Installable bundles (payload + `.APPINFO` + `.ASSETS`, optional `SIGN=`) | `apps/push_pkgs.py` |
 | `/TEMPLATES/*.MD` | Writerdeck templates | `apps/push_templates.py` |
 | `/DICTS/*.words` | Spellcheck wordlists (base lists; `user.words` is learned on-device, pulled home with `push_dicts.py pull|merge`) | `apps/push_dicts.py` |
 | `/tmp/edit/` | Editor crash files (runtime spill, never shipped) | editor autosave; exempt from `temp clean` |
-| `/FONTS/*` | Bundled TTFs (with licenses in-repo) | `push_fonts.py` |
+| `/FONTS/*` | Bundled TTFs (with licenses in-repo) | `tools/make_sd_archive.py` (or copy `assets/fonts/`) |
 | `/CERTS/` | User CA trust store (optional) | `certs` command |
 | `/esp32c6_hosted_slave.bin` | ESP32-C6 co-processor app image for `c6ota default` (per board) | `apps/push_c6.py` |
 | `/DBS/`, `/ALARMS/` | User data (not shipped) | runtime |
@@ -198,8 +200,29 @@ python tools/make_release.py push <COMx> [--sign NAME.priv.pem]
 ```
 
 `--sign` adds an ECDSA P-256 `SIGN=` line to each bundle manifest
-([`ABI.md`](ABI.md)). The pulldown of the same content can be captured from a
-fully provisioned card for archival; there is no committed golden SD image.
+([`ABI.md`](ABI.md)).
+
+**Complete SD payload archive.** `python tools/make_sd_archive.py` builds
+`release/p4minishell-sd-v1.4.3.zip` from the same `apps/app_manifest.py` list
+plus templates, dictionaries and the DejaVu reading fonts - the exact tree the
+pushers deploy. It is the public "copy to the card root" artifact; every file
+is a repository asset, nothing is invented.
+
+**Fresh-card verification (release ritual).** Before the final sweep, wipe the
+boards and the card so no stale payload can green the run:
+
+```powershell
+config factory                 # board settings back to defaults
+format /FS:FAT32 /Q            # SD card, quick format (asks to confirm)
+python apps/push_apps.py <COMx>
+python apps/push_templates.py <COMx>
+python apps/push_dicts.py <COMx>
+# FONTS/: copy assets/fonts/DejaVu*.ttf to the card (or extract the SD zip)
+```
+
+Then run the full gate on that clean state. The same content can be captured
+from a fully provisioned card for archival; the committed source of truth is
+the archive tool, not a golden image.
 
 ---
 

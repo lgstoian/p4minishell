@@ -272,6 +272,7 @@ extern void test_dom_background_alpha(void);
 extern void test_dom_transparent_skips_fill(void);
 extern void test_dom_opacity_multiplies_fill(void);
 extern void test_dom_render_text_alpha_composited(void);
+extern void test_html_long_attribute_does_not_leak(void);
 extern void test_dom_raw_text_script_style(void);
 extern void test_css_comments_are_skipped(void);
 
@@ -621,6 +622,7 @@ void app_main(void)
     RUN_TEST(test_dom_transparent_skips_fill);
     RUN_TEST(test_dom_opacity_multiplies_fill);
     RUN_TEST(test_dom_render_text_alpha_composited);
+    RUN_TEST(test_html_long_attribute_does_not_leak);
     RUN_TEST(test_dom_raw_text_script_style);
     RUN_TEST(test_css_comments_are_skipped);
 

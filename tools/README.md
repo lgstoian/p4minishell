@@ -190,6 +190,14 @@ holder per port.
 - `make_icon.py` — generate the repo icon and the firmware boot-splash asset
   (`icon/icon-512.png`, `main/assets/icon_splash.c/.h`) from the git-ignored
   `icon/icon.png` master.
+- `make_sd_archive.py` - assemble the complete public SD payload
+  (`release/p4minishell-sd-v1.4.3.zip`) from the same `apps/app_manifest.py`
+  list plus templates, dictionaries and the DejaVu reading fonts. No invented
+  files; it mirrors what the pushers deploy.
+- `size_budget.py` - static DIRAM gate over the built ELF/map (fails above the
+  recorded ceiling + 4 KB headroom); wired into `tools/harness/verify.py` when
+  an ELF exists. Prints the measured bytes and ceiling.
+
 
 ## Focused drivers (recent)
 

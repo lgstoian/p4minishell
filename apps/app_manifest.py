@@ -41,6 +41,8 @@ APP_PAYLOADS = [
     ("website", "WEB.APPINFO", "apps"),
     ("website", "INDEX.HTML", "web"),
     ("website", "PAGE2.HTML", "web"),
+    ("website", "canvas.html", "web"),
+    ("website", "LOGO.BMP", "web"),
 
     ("notes", "NOTES.BAT", "root"),
     ("notes", "NOTES.APPINFO", "apps"),

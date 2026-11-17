@@ -111,7 +111,7 @@ python3 tools/host_unit_run.py --static   # manifest/orphan/case-count gates
 python3 tools/host_gen_runner.py --check  # generated runner is up to date
 ```
 
-- **Coverage today: 284 cases** - the leaf components with no board
+- **Coverage today: 285 cases** - the leaf components with no board
   dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`, plus the
   `strutil`/`p4heap` helpers they use), the hardware-free halves of the shell
   (`shell_core.c`: text helpers, statement scanner, history store, abort/busy,
