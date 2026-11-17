@@ -232,7 +232,7 @@ Five user-facing goals, each behind one implementation.
   per-render leak was fixed), taking static DIRAM from 89% to 71% used.
 
 **Status in v1.4.3:** shipped. Verified on both boards at the unit level
-(681/0/2) and on COM3 for the browser/HTML5 suites, the emoji verb and the
+(682/0/2) and on COM3 for the browser/HTML5 suites, the emoji verb and the
 SD half of the drive-aware path. `s23_apps_usb` needs a USB stick and remains
 to be recorded on a bench that has one.
 
@@ -255,7 +255,7 @@ commitments.
 | Build-tree hygiene | Release-ready tree | Done: `build-tab5/` + `test/build-tab5/` untracked from git (were committed before the ignore rules); `git ls-files` shows no build output. See [`release.md`](release.md) §0 |
 | Single capability-query style | One way to ask | Done: runtime code queries `board_caps_*` (battery ADC/INA226, RTC BSP-I2C, keyboard RGB routing); preprocessor `#if BOARD_CFG` remains only where required (macro definitions, includes, table entries, value defaults). Both boards + `test/` build clean |
 | CI board auto-discovery | Scaling | Done: `build.yml` discovers `boards/*/` for the matrix and completeness lint — adding a profile needs no workflow edit |
-| Hardware-free host unit lane | PR-time logic coverage | Done: `test/host/` on the IDF `linux` target, **283 cases**, CI `host-unit` job; manifest + generator + prelude + guard classification. Hardware sign-off unchanged ([`harness.md`](harness.md) 2.2) |
+| Hardware-free host unit lane | PR-time logic coverage | Done: `test/host/` on the IDF `linux` target, **284 cases**, CI `host-unit` job; manifest + generator + prelude + guard classification. Hardware sign-off unchanged ([`harness.md`](harness.md) 2.2) |
 | Remaining hardware-coupled models | More host coverage | Open: `batch_expr` needs `shell_sd_begin/end` and `svc` needs `storage_ini_file_foreach` (a file-I/O seam); `tui` is NO-GO - the selftest needs real `lv_font_t` metrics and `tui_font_cell_t` embeds an LVGL pointer. LVGL-on-host is rejected (esp_lcd/esp_vfs_fat) |
 | Per-board release artifacts | Shippable images | Done: `make_release.py bins` verified for both boards (`p4minishell-<board>.bin` merge; `release/` stays ignored) |
 | Two-board stability gate | Exit criterion | Open: `bugs.md` F27 (transient Tab5 crash under long mixed sweeps) must close with three clean full sweeps on both boards + a `dogfood` soak before this chapter is declared complete |
