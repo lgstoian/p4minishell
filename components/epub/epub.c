@@ -406,9 +406,9 @@ static bool epub_parse_opf_file(epub_t *epub)
     XML_SetCharacterDataHandler(xml_parser, epub_xml_text);
 
     if (!XML_Parse(xml_parser, xml, read, 1)) {
-        ESP_LOGE(EPUB_LOG_TAG, "OPF parse error: %s at line %lu",
+        ESP_LOGE(EPUB_LOG_TAG, "OPF parse error: %s at line %llu",
                  XML_ErrorString(XML_GetErrorCode(xml_parser)),
-                 XML_GetCurrentLineNumber(xml_parser));
+                 (unsigned long long)XML_GetCurrentLineNumber64(xml_parser));
         free(xml);
         XML_ParserFree(xml_parser);
         return false;

@@ -1,4 +1,8 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 /* MCU SPI (full-duplex) bus driver. */
 
 #include "eh_host_port_master_config.h"
@@ -13,6 +17,7 @@
 #include "esp_event.h"
 #include "eh_host_event.h"
 #include "eh_host_mcu_transport_priv.h"
+#include "eh_host_mcu_transport_state.h"
 #include "eh_frame.h"
 #include "eh_host_mcu_hci_internal.h"
 #include "eh_common_header.h"
@@ -21,18 +26,19 @@
 
 #include "eh_host_port.h"
 #include "eh_host_port_power.h"
+#include "eh_host_transport_config.h"
 #include "driver/spi_master.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_memory_utils.h"
+#include "eh_host_port_dma.h"
 
 static inline void *eh_spi_dma_alloc_zero(size_t n)
 {
-    /* 64-byte aligned + size rounded to 64: SPI_TRANS_DMA_BUFFER_ALIGN_MANUAL
-     * promises the driver aligned buffers, and P4 cache-DMA writes back whole
-     * cache lines — an under-aligned/short buffer corrupts adjacent memory. */
-    size_t aligned = (n + 63u) & ~(size_t)63u;
-    void *p = eh_host_port_dma_alloc_aligned(aligned, 64);
+    /* ALIGN_MANUAL means the driver trusts us: addr and len must be whole lines. */
+    size_t aligned = (n + HOSTED_MEM_ALIGNMENT - 1u) & ~(size_t)(HOSTED_MEM_ALIGNMENT - 1u);
+    void *p = eh_host_port_dma_alloc_aligned(aligned, HOSTED_MEM_ALIGNMENT);
     if (p) memset(p, 0, aligned);
     return p;
 }
@@ -45,7 +51,12 @@ static inline void *eh_spi_dma_alloc_zero(size_t n)
 
 #define EH_SPI_TASK_STACK   4096
 #define EH_SPI_TASK_PRIO    22   /* above app tasks; below timer task */
-#define EH_SPI_MAX_BUF      ESP_TRANSPORT_SPI_MAX_BUF_SIZE
+
+#define EH_SPI_MAX_BUF      ESP_TRANSPORT_HOST_MAX_BUF_SIZE
+
+/* The driver checks the transaction length, not the allocation. */
+_Static_assert(EH_SPI_MAX_BUF % HOSTED_MEM_ALIGNMENT == 0,
+               "SPI transfer size must be a whole number of cache lines");
 
 /* HS/DR pull + interrupt edge follow the configured active level. The
  * master_config *_INTR_EDGE macros resolve to EH_GPIO_INTR_* which are not
@@ -67,16 +78,17 @@ static inline void *eh_spi_dma_alloc_zero(size_t n)
 
 static const char *TAG = "eh_bus_spi";
 
+static struct eh_host_spi_config s_cfg;   /* transport config, snapshotted at bus init */
+
 static void show_config(void)
 {
 	ESP_LOGI(TAG, "transport[host]: SPI mode=%d %u MHz "
 		"MOSI=%d MISO=%d CLK=%d CS=%d HANDSHAKE=%d DATA_READY=%d RESET=%d",
-		(int)EH_HOST_PORT_SPI_MODE,
-		(unsigned)EH_HOST_PORT_SPI_FD_CLK_MHZ,
-		EH_HOST_PORT_SPI_GPIO_MOSI_Pin,      EH_HOST_PORT_SPI_GPIO_MISO_Pin,
-		EH_HOST_PORT_SPI_GPIO_SCLK_Pin,      EH_HOST_PORT_SPI_GPIO_CS_Pin,
-		EH_HOST_PORT_SPI_GPIO_HANDSHAKE_Pin, EH_HOST_PORT_SPI_GPIO_DATA_READY_Pin,
-		EH_HOST_PORT_GPIO_PIN_RESET);
+		(int)s_cfg.mode, (unsigned int)s_cfg.clk_mhz,
+		s_cfg.pin_mosi.pin,      s_cfg.pin_miso.pin,
+		s_cfg.pin_sclk.pin,      s_cfg.pin_cs.pin,
+		s_cfg.pin_handshake.pin, s_cfg.pin_data_ready.pin,
+		s_cfg.pin_reset.pin);
 }
 
 #endif /* ESP_PLATFORM */
@@ -87,11 +99,33 @@ static eh_host_port_task_t      *s_rx_task;
 static uint8_t                  *s_rx_buf;   /* RX DMA buf: alloc'd in init before the task, freed in deinit */
 static eh_host_port_sem_t       *s_trans_ready_sem;  /* posted from ISR on HS/DR */
 static eh_host_port_mutex_t     *s_bus_lock;
-static eh_host_port_queue_t     *s_tx_q;  /* queued DMA frame bufs; worker owns the bus */
+/* Queued DMA frame bufs per priority; the worker takes PRIO_Q_SERIAL first, so
+ * a data flood cannot starve RPC. */
+static eh_host_port_queue_t     *s_tx_q[MAX_PRIORITY_QUEUES];
+/* Wi-Fi RX copies, delivered by s_wifi_rx_task: the worker must not block in the
+ * network stack, which may hold its core lock while waiting for s_tx_q room. */
+static eh_host_port_queue_t     *s_wifi_rx_q;
+static eh_host_port_task_t      *s_wifi_rx_task;
+static uint32_t                  s_wifi_rx_drops;
 static uint8_t             *s_tx_dummy;    /* preallocated zero TX for RX-only xfers */
 static volatile uint8_t     s_running;
 static volatile uint8_t     s_isr_installed;
 static volatile uint8_t     s_dr_pending;  /* DR edge latched in ISR, consumed by worker */
+
+typedef struct {
+    uint8_t  *copy;   /* NULL stops s_wifi_rx_task */
+    uint16_t  len;
+    uint8_t   if_type;
+    uint8_t   flags;
+} eh_spi_wifi_rx_t;
+
+static uint8_t eh_spi_tx_prio(uint8_t if_type)
+{
+    /* PRIV is control too: host caps, which also start and stop raw TP. */
+    if (if_type == ESP_SERIAL_IF || if_type == ESP_PRIV_IF) return PRIO_Q_SERIAL;
+    if (if_type == ESP_HCI_IF)                              return PRIO_Q_BT;
+    return PRIO_Q_OTHERS;
+}
 #endif
 
 #ifdef ESP_PLATFORM
@@ -101,7 +135,7 @@ static void eh_spi_gpio_isr_cb(const eh_host_port_gpio_desc_t *gpio, void *ctx)
     /* Latch a DR edge so a short pulse between worker polls is not lost to
      * binary-semaphore coalescing; the worker clears it once it services an
      * HS-gated transaction. */
-    if (gpio && gpio->pin == EH_HOST_PORT_SPI_GPIO_DATA_READY_Pin) {
+    if (gpio && gpio->pin == s_cfg.pin_data_ready.pin) {
         s_dr_pending = 1;
     }
     if (s_trans_ready_sem) eh_host_port_sem_post_from_isr(s_trans_ready_sem);
@@ -128,6 +162,8 @@ static int eh_spi_xfer_once(uint8_t *tx_buf, uint8_t *rx_buf)
         .rx_buffer = rx_buf,
         .flags     = SPI_TRANS_DMA_BUFFER_ALIGN_MANUAL,
     };
+    if (esp_ptr_dma_ext_capable(tx_buf) || esp_ptr_dma_ext_capable(rx_buf))
+        t.flags |= SPI_TRANS_DMA_USE_PSRAM;
 
     esp_err_t ret = spi_device_transmit(s_spi_dev, &t);
     if (ret != ESP_OK) {
@@ -140,9 +176,9 @@ static int eh_spi_xfer_once(uint8_t *tx_buf, uint8_t *rx_buf)
 /* TX never clocks the bus directly (upstream spi_drv.c model): copy the framed
  * bytes into a padded DMA buffer, enqueue, and wake the worker. The worker
  * combines the queued buffer with its HS-gated full-duplex transaction. */
-static int eh_spi_enqueue_tx(const uint8_t *frame, size_t len)
+static int eh_spi_enqueue_tx(const uint8_t *frame, size_t len, uint8_t prio)
 {
-    if (!s_tx_q) {
+    if (!s_tx_q[prio]) {
         return -1;
     }
     uint8_t *tx_buf = (uint8_t *)eh_spi_dma_alloc_zero(EH_SPI_MAX_BUF);
@@ -154,7 +190,7 @@ static int eh_spi_enqueue_tx(const uint8_t *frame, size_t len)
      * stops asserting HS the worker stops draining and producers block here —
      * intentional; recovering a dead CP is a higher-layer (heartbeat/reset)
      * concern, not a per-frame drop. */
-    if (eh_host_port_queue_send(s_tx_q, &tx_buf, EH_HOST_PORT_WAIT_FOREVER)
+    if (eh_host_port_queue_send(s_tx_q[prio], &tx_buf, EH_HOST_PORT_WAIT_FOREVER)
             != EH_HOST_PORT_OK) {
         eh_host_port_dma_free(tx_buf);
         return -1;
@@ -182,12 +218,16 @@ static void eh_spi_rx_task(void *arg)
         if (!s_running) {
             break;
         }
+        /* Don't clock before connect has reset or resumed the CP. */
+        if (!eh_host_mcu_transport_state_is_rx_ready()) {
+            continue;
+        }
 
         /* Transact only when the slave asserts handshake (== ready to be
          * clocked). DR alone is not sufficient: clocking with HS inactive
          * drives the bus while the slave is unprepared and loses the frame.
          * (upstream spi_drv.c:472 gates the whole transaction on HS active). */
-        const eh_host_port_gpio_desc_t hs_pin = { .port = 0, .pin = EH_HOST_PORT_SPI_GPIO_HANDSHAKE_Pin };
+        const eh_host_port_gpio_desc_t hs_pin = { .port = 0, .pin = s_cfg.pin_handshake.pin };
         if (eh_host_port_gpio_get(&hs_pin) != EH_HOST_PORT_HS_VAL_ACTIVE) {
             /* HS not asserted: nothing to clock. A latched DR (s_dr_pending)
              * is deliberately left set — it is serviced by an HS-gated
@@ -200,7 +240,10 @@ static void eh_spi_rx_task(void *arg)
         s_dr_pending = 0;
 
         uint8_t *tx_buf = NULL;
-        if (eh_host_port_queue_receive(s_tx_q, &tx_buf, 0) != EH_HOST_PORT_OK) {
+        for (int q = 0; q < MAX_PRIORITY_QUEUES; q++) {
+            if (eh_host_port_queue_receive(s_tx_q[q], &tx_buf, 0) == EH_HOST_PORT_OK) {
+                break;
+            }
             tx_buf = NULL;
         }
 
@@ -231,6 +274,24 @@ static void eh_spi_rx_task(void *arg)
             }
             continue;
         }
+        if (h.payload && h.payload_len &&
+            (h.if_type == ESP_STA_IF || h.if_type == ESP_AP_IF)) {
+            eh_spi_wifi_rx_t w = { .copy = malloc(h.payload_len), .len = h.payload_len,
+                                   .if_type = h.if_type, .flags = h.flags };
+            if (w.copy) {
+                memcpy(w.copy, h.payload, h.payload_len);
+                /* Never wait: a full queue means the stack is stuck, and waiting
+                 * here would also stop TX. Drop like a full lwIP mbox does. */
+                if (eh_host_port_queue_send(s_wifi_rx_q, &w, 0) != EH_HOST_PORT_OK) {
+                    free(w.copy);
+                    if ((s_wifi_rx_drops++ & 0xff) == 0) {
+                        ESP_LOGW(TAG, "wifi rx queue full: %lu frames dropped",
+                                 (unsigned long)s_wifi_rx_drops);
+                    }
+                }
+            }
+            continue;
+        }
         if (h.payload && h.payload_len) {
             if (h.if_type == ESP_HCI_IF) {
                 eh_host_mcu_hci_rx_deliver(h.payload, h.payload_len);
@@ -242,6 +303,21 @@ static void eh_spi_rx_task(void *arg)
 
     ESP_LOGI(TAG, "SPI RX task exiting");
 }
+
+static void eh_spi_wifi_rx_task(void *arg)
+{
+    (void)arg;
+    eh_spi_wifi_rx_t w;
+    for (;;) {
+        if (eh_host_port_queue_receive(s_wifi_rx_q, &w, EH_HOST_PORT_WAIT_FOREVER) != EH_HOST_PORT_OK) {
+            continue;
+        }
+        if (!w.copy) {
+            break;
+        }
+        eh_host_mcu_transport_channel_rx(w.if_type, w.flags, w.copy, w.len);
+    }
+}
 #endif
 
 #ifdef ESP_PLATFORM
@@ -250,9 +326,9 @@ static int eh_spi_peripheral_init(void)
     esp_err_t ret;
 
     spi_bus_config_t buscfg = {
-        .mosi_io_num   = EH_HOST_PORT_SPI_GPIO_MOSI_Pin,
-        .miso_io_num   = EH_HOST_PORT_SPI_GPIO_MISO_Pin,
-        .sclk_io_num   = EH_HOST_PORT_SPI_GPIO_SCLK_Pin,
+        .mosi_io_num   = s_cfg.pin_mosi.pin,
+        .miso_io_num   = s_cfg.pin_miso.pin,
+        .sclk_io_num   = s_cfg.pin_sclk.pin,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
         .max_transfer_sz = EH_SPI_MAX_BUF,
@@ -262,10 +338,10 @@ static int eh_spi_peripheral_init(void)
         .command_bits       = 0,
         .address_bits       = 0,
         .dummy_bits         = 0,
-        .clock_speed_hz     = EH_HOST_PORT_SPI_FD_CLK_MHZ * 1000 * 1000,
+        .clock_speed_hz     = (int)s_cfg.clk_mhz * 1000 * 1000,
         .duty_cycle_pos     = 128,
-        .mode               = EH_HOST_PORT_SPI_MODE,
-        .spics_io_num       = EH_HOST_PORT_SPI_GPIO_CS_Pin,
+        .mode               = s_cfg.mode,
+        .spics_io_num       = s_cfg.pin_cs.pin,
         .cs_ena_posttrans   = 3,
         .queue_size         = 3,
     };
@@ -285,10 +361,13 @@ static int eh_spi_peripheral_init(void)
         spi_bus_free(EH_SPI_HOST_ID);
         return -1;
     }
+    int khz = 0;
+    spi_device_get_actual_freq(s_spi_dev, &khz);
+    ESP_LOGI(TAG, "bus applied: clk_khz=%d", khz);
 
     /* Strong drive on CLK/CS to stay clean at 10+ MHz. */
-    const eh_host_port_gpio_desc_t cs_pin  = { .port = 0, .pin = EH_HOST_PORT_SPI_GPIO_CS_Pin };
-    const eh_host_port_gpio_desc_t clk_pin = { .port = 0, .pin = EH_HOST_PORT_SPI_GPIO_SCLK_Pin };
+    const eh_host_port_gpio_desc_t cs_pin  = { .port = 0, .pin = s_cfg.pin_cs.pin };
+    const eh_host_port_gpio_desc_t clk_pin = { .port = 0, .pin = s_cfg.pin_sclk.pin };
     eh_host_port_gpio_set_drive(&cs_pin,  EH_HOST_PORT_GPIO_DRIVE_STRONG);
     eh_host_port_gpio_set_drive(&clk_pin, EH_HOST_PORT_GPIO_DRIVE_STRONG);
     return 0;
@@ -296,8 +375,8 @@ static int eh_spi_peripheral_init(void)
 
 static int eh_spi_gpio_isr_install(void)
 {
-    const eh_host_port_gpio_desc_t hs_pin = { .port = 0, .pin = EH_HOST_PORT_SPI_GPIO_HANDSHAKE_Pin };
-    const eh_host_port_gpio_desc_t dr_pin = { .port = 0, .pin = EH_HOST_PORT_SPI_GPIO_DATA_READY_Pin };
+    const eh_host_port_gpio_desc_t hs_pin = { .port = 0, .pin = s_cfg.pin_handshake.pin };
+    const eh_host_port_gpio_desc_t dr_pin = { .port = 0, .pin = s_cfg.pin_data_ready.pin };
 
     eh_host_port_gpio_config_cfg_t in_cfg = { .dir = EH_HOST_PORT_GPIO_DIR_INPUT };
     in_cfg.gpio = hs_pin;
@@ -333,8 +412,8 @@ static int eh_spi_gpio_isr_install(void)
 static void eh_spi_gpio_isr_uninstall(void)
 {
     if (!s_isr_installed) return;
-    const eh_host_port_gpio_desc_t hs_pin = { .port = 0, .pin = EH_HOST_PORT_SPI_GPIO_HANDSHAKE_Pin };
-    const eh_host_port_gpio_desc_t dr_pin = { .port = 0, .pin = EH_HOST_PORT_SPI_GPIO_DATA_READY_Pin };
+    const eh_host_port_gpio_desc_t hs_pin = { .port = 0, .pin = s_cfg.pin_handshake.pin };
+    const eh_host_port_gpio_desc_t dr_pin = { .port = 0, .pin = s_cfg.pin_data_ready.pin };
     eh_host_port_gpio_intr_disable(&hs_pin);
     eh_host_port_gpio_intr_disable(&dr_pin);
     s_isr_installed = 0;
@@ -350,6 +429,44 @@ static void eh_spi_transport_failed(void)
 
 #endif /* ESP_PLATFORM */
 
+#ifdef ESP_PLATFORM
+/* Called after the worker has stopped: nothing produces into s_wifi_rx_q any more. */
+static void eh_spi_wifi_rx_stop(void)
+{
+    if (!s_wifi_rx_task) {
+        return;
+    }
+    eh_spi_wifi_rx_t stop = { .copy = NULL };
+    eh_host_port_queue_send(s_wifi_rx_q, &stop, EH_HOST_PORT_WAIT_FOREVER);
+    eh_host_port_task_join(s_wifi_rx_task);
+    eh_host_port_task_destroy(s_wifi_rx_task);
+    s_wifi_rx_task = NULL;
+}
+
+static void eh_spi_tx_queues_destroy(void)
+{
+    for (int q = 0; q < MAX_PRIORITY_QUEUES; q++) {
+        if (!s_tx_q[q]) {
+            continue;
+        }
+        uint8_t *tx_buf = NULL;
+        while (eh_host_port_queue_receive(s_tx_q[q], &tx_buf, 0) == EH_HOST_PORT_OK) {
+            eh_host_port_dma_free(tx_buf);
+        }
+        eh_host_port_queue_destroy(s_tx_q[q]);
+        s_tx_q[q] = NULL;
+    }
+    if (s_wifi_rx_q) {
+        eh_spi_wifi_rx_t w;
+        while (eh_host_port_queue_receive(s_wifi_rx_q, &w, 0) == EH_HOST_PORT_OK) {
+            free(w.copy);
+        }
+        eh_host_port_queue_destroy(s_wifi_rx_q);
+        s_wifi_rx_q = NULL;
+    }
+}
+#endif
+
 int eh_host_bus_init(void)
 {
     eh_frame_cfg_t cfg = EH_FRAME_CFG_HOST_MCU_SPI_DEFAULT;
@@ -359,6 +476,19 @@ int eh_host_bus_init(void)
     }
 
 #ifdef ESP_PLATFORM
+    struct eh_host_spi_config *bus_cfg = NULL;
+    if (eh_host_spi_get_config(&bus_cfg) != EH_HOST_TRANSPORT_RC_OK || !bus_cfg) {
+        eh_frame_deinit();
+        return -1;
+    }
+    s_cfg = *bus_cfg;
+    if (!s_cfg.rx_queue_size) {
+        s_cfg.rx_queue_size = EH_HOST_PORT_SPI_RX_Q;
+    }
+    if (!s_cfg.tx_queue_size) {
+        s_cfg.tx_queue_size = EH_HOST_PORT_SPI_TX_Q;
+        ESP_LOGW(TAG, "spi tx queue size 0: using %u", (unsigned)s_cfg.tx_queue_size);
+    }
     show_config();
 
     /* Declared up front so the failure gotos below never jump over an
@@ -367,6 +497,11 @@ int eh_host_bus_init(void)
         .fn = eh_spi_rx_task, .arg = NULL,
         .stack_bytes = EH_SPI_TASK_STACK, .priority = EH_SPI_TASK_PRIO,
         .name = "eh_spi_rx",
+    };
+    eh_host_port_task_create_cfg_t wcfg = {
+        .fn = eh_spi_wifi_rx_task, .arg = NULL,
+        .stack_bytes = EH_SPI_TASK_STACK, .priority = EH_SPI_TASK_PRIO,
+        .name = "eh_spi_wifi_rx",
     };
 
     /* Acquire in order; any failure jumps to the matching rung of the
@@ -377,8 +512,12 @@ int eh_host_bus_init(void)
     s_bus_lock = eh_host_port_mutex_create();
     if (!s_bus_lock)                      goto fail_sem;
 
-    s_tx_q = eh_host_port_queue_create(EH_HOST_PORT_SPI_TX_Q, sizeof(uint8_t *));
-    if (!s_tx_q)                          goto fail_lock;
+    for (int q = 0; q < MAX_PRIORITY_QUEUES; q++) {
+        s_tx_q[q] = eh_host_port_queue_create(s_cfg.tx_queue_size, sizeof(uint8_t *));
+        if (!s_tx_q[q])                   goto fail_q;
+    }
+    s_wifi_rx_q = eh_host_port_queue_create(s_cfg.rx_queue_size, sizeof(eh_spi_wifi_rx_t));
+    if (!s_wifi_rx_q)                     goto fail_q;
 
     /* Preallocated zeroed dummy TX reused for every RX-only transaction. */
     s_tx_dummy = (uint8_t *)eh_spi_dma_alloc_zero(EH_SPI_MAX_BUF);
@@ -393,20 +532,24 @@ int eh_host_bus_init(void)
     if (eh_spi_peripheral_init() != 0)  { eh_spi_transport_failed(); goto fail_rx_buf; }
     if (eh_spi_gpio_isr_install() != 0) { eh_spi_transport_failed(); goto fail_peripheral; }
 
+    if (eh_host_port_task_create(&wcfg, &s_wifi_rx_task) != EH_HOST_PORT_OK) {
+        goto fail_isr;
+    }
     s_running = 1;
     if (eh_host_port_task_create(&tcfg, &s_rx_task) != EH_HOST_PORT_OK) {
         s_running = 0;
-        goto fail_isr;
+        goto fail_wifi_rx;
     }
     return 0;
 
     /* ── reverse-order teardown ──────────────────────────────────────────── */
+fail_wifi_rx:    eh_spi_wifi_rx_stop();
 fail_isr:        eh_spi_gpio_isr_uninstall();
 fail_peripheral: spi_bus_remove_device(s_spi_dev); spi_bus_free(EH_SPI_HOST_ID);
 fail_rx_buf:     eh_host_port_dma_free(s_rx_buf);              s_rx_buf = NULL;
 fail_tx_dummy:   eh_host_port_dma_free(s_tx_dummy);            s_tx_dummy = NULL;
-fail_q:          eh_host_port_queue_destroy(s_tx_q);           s_tx_q = NULL;
-fail_lock:       eh_host_port_mutex_destroy(s_bus_lock);       s_bus_lock = NULL;
+fail_q:          eh_spi_tx_queues_destroy();
+                 eh_host_port_mutex_destroy(s_bus_lock);       s_bus_lock = NULL;
 fail_sem:        eh_host_port_sem_destroy(s_trans_ready_sem);  s_trans_ready_sem = NULL;
     return -1;
 #else
@@ -416,6 +559,17 @@ fail_sem:        eh_host_port_sem_destroy(s_trans_ready_sem);  s_trans_ready_sem
 
 int eh_host_bus_connect_to_slave(void)
 {
+#if EH_HOST_FEAT_POWER_SAVE_READY
+    if (eh_host_port_wakeup_reason_get() != EH_HOST_PORT_WAKEUP_UNKNOWN) {
+        ESP_LOGI(TAG, "Host woke up from power save");
+        eh_host_mcu_transport_state_set(EH_HOST_MCU_TRANSPORT_RX_ACTIVE);
+        if (eh_host_bus_inform_slave_ps_exit() == 0) {
+            return 0;
+        }
+        ESP_LOGW(TAG, "could not inform slave of wake; resetting instead");
+        eh_host_mcu_transport_state_set(EH_HOST_MCU_TRANSPORT_INACTIVE);  /* not across the reset */
+    }
+#endif
     eh_host_port_err_t rst = eh_host_port_reset_slave();
     if (rst == EH_HOST_PORT_OK) {
         ESP_LOGI(TAG, "Slave reset issued; bringing up SPI");
@@ -423,6 +577,9 @@ int eh_host_bus_connect_to_slave(void)
         ESP_LOGW(TAG, "RST pin not configured; SPI bring-up without reset");
     } else {
         ESP_LOGW(TAG, "Slave reset failed (rc=%d); continuing", (int)rst);
+    }
+    if (!eh_host_mcu_transport_state_is_rx_ready()) {
+        eh_host_mcu_transport_state_set(EH_HOST_MCU_TRANSPORT_RX_ACTIVE);
     }
     return 0;
 }
@@ -440,6 +597,7 @@ int eh_host_bus_deinit(void)
         eh_host_port_task_destroy(s_rx_task);
         s_rx_task = NULL;
     }
+    eh_spi_wifi_rx_stop();
     if (s_rx_buf) {
         eh_host_port_dma_free(s_rx_buf);
         s_rx_buf = NULL;
@@ -452,14 +610,7 @@ int eh_host_bus_deinit(void)
         s_spi_dev = NULL;
         spi_bus_free(EH_SPI_HOST_ID);
     }
-    if (s_tx_q) {
-        uint8_t *tx_buf = NULL;
-        while (eh_host_port_queue_receive(s_tx_q, &tx_buf, 0) == EH_HOST_PORT_OK) {
-            eh_host_port_dma_free(tx_buf);
-        }
-        eh_host_port_queue_destroy(s_tx_q);
-        s_tx_q = NULL;
-    }
+    eh_spi_tx_queues_destroy();
     if (s_tx_dummy) {
         eh_host_port_dma_free(s_tx_dummy);
         s_tx_dummy = NULL;
@@ -500,7 +651,7 @@ int eh_host_bus_tx(interface_buffer_handle_t *bh)
         len = (size_t)eh_frame_hdr_size() + hb.payload_len;
     }
     if (len > EH_SPI_MAX_BUF) {
-        ESP_LOGE(TAG, "tx len %u > max %u", (unsigned)len, EH_SPI_MAX_BUF);
+        ESP_LOGE(TAG, "tx len %u > max %u", (unsigned int)len, EH_SPI_MAX_BUF);
         if (bh->free_buf_handle) bh->free_buf_handle(bh->priv_buffer_handle);
         return -1;
     }
@@ -509,7 +660,7 @@ int eh_host_bus_tx(interface_buffer_handle_t *bh)
         return -1;
     }
     /* Caller hands pre-framed buf; enqueue for the HS-gated worker. */
-    int rc = eh_spi_enqueue_tx(buf, len);
+    int rc = eh_spi_enqueue_tx(buf, len, eh_spi_tx_prio(bh->if_type));
     if (bh->free_buf_handle) bh->free_buf_handle(bh->priv_buffer_handle);
     return rc;
 #else
@@ -527,7 +678,7 @@ static int eh_spi_send_ps_flag(uint8_t flag, const char *what)
     struct esp_payload_header h;
     interface_buffer_handle_t bh = { .if_type = ESP_SERIAL_IF, .flags = flag };
     eh_frame_encode((uint8_t *)&h, &bh, 0);
-    int rc = eh_spi_enqueue_tx((const uint8_t *)&h, sizeof(h));
+    int rc = eh_spi_enqueue_tx((const uint8_t *)&h, sizeof(h), PRIO_Q_SERIAL);
     if (rc) {
         ESP_LOGE(TAG, "%s: rc=%d", what, rc);
     } else {
@@ -553,7 +704,7 @@ int eh_host_bus_is_tx_ready(void)
 #ifdef ESP_PLATFORM
     const eh_host_port_gpio_desc_t hs_pin = {
         .port = 0,
-        .pin  = EH_HOST_PORT_SPI_GPIO_HANDSHAKE_Pin,
+        .pin  = s_cfg.pin_handshake.pin,
     };
     int level = eh_host_port_gpio_get(&hs_pin);
     return (level == EH_HOST_PORT_HS_VAL_ACTIVE) ? 1 : 0;

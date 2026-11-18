@@ -1,4 +1,8 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 /* PUBLIC types for the MCU V1 Rpc extension (ctrl_cmd + payloads). */
 
 #ifndef EH_HOST_FEAT_RPC_EXT_V2_TYPES_H_
@@ -20,9 +24,9 @@ extern "C" {
 #define EH_RPC_PASSWORD_LEN             64u
 #define EH_RPC_COUNTRY_CC_LEN           3u
 #define EH_RPC_IP4_LEN                  4u
-#define EH_RPC_OTA_CHUNK_MAX            1536u
 #define EH_RPC_IDF_TARGET_LEN           32u   /* e.g. "esp32c6" */
 #define EH_RPC_SAE_H2E_IDENTIFIER_LEN   32u
+#define EH_RPC_ITWT_MAX_FLOWS           8u    /* wifi_event_sta_itwt_suspend_t */
 
 typedef struct {
     uint8_t mac[EH_RPC_MAC_LEN];
@@ -89,6 +93,7 @@ typedef struct {
     uint32_t dtim_period;
     uint32_t transition_disable;
     uint32_t sae_ext;
+    uint32_t wpa3_compatible_mode;
     uint32_t bss_max_idle_period;
     bool     bss_max_idle_protected_keep_alive;
     uint32_t gtk_rekey_interval;
@@ -120,11 +125,33 @@ typedef struct {
     int32_t  rx_mgmt_buf_num;
     int32_t  tx_hetb_queue_num;
     int32_t  dump_hesigb_enable;
+    uint32_t ext_present_bitmask;             /* EH_HOST_WIFI_INIT_CONFIG_EXT_* */
+    bool     privacy_enhancements;
+    int32_t  rmac_auto_reset_int;
+    int32_t  wifi_task_stack_size;
 } eh_rpc_wifi_init_cfg_t;
 
+/* Req_WifiScanStart:
+ * - SSID/BSSID are copied from caller data.
+ * - Fields are valid only when cfg_set is true.
+ */
 typedef struct {
     bool     block;
     bool     cfg_set;
+    bool     ssid_set;                        /* cfg->ssid was non-NULL  */
+    bool     bssid_set;                       /* cfg->bssid was non-NULL */
+    uint8_t  ssid[EH_RPC_SSID_LEN + 1];       /* NUL-terminated copy     */
+    uint8_t  bssid[EH_RPC_MAC_LEN];
+    uint32_t channel;
+    bool     show_hidden;
+    int32_t  scan_type;                       /* wifi_scan_type_t        */
+    uint32_t passive;                         /* scan_time.passive       */
+    uint32_t active_min;                      /* scan_time.active.min    */
+    uint32_t active_max;                      /* scan_time.active.max    */
+    uint32_t home_chan_dwell_time;
+    uint32_t ghz_2_channels;                  /* channel_bitmap.*        */
+    uint32_t ghz_5_channels;
+    bool     coex_background_scan;
 } eh_rpc_wifi_scan_cfg_t;
 
 /* Req/Resp_WifiScanParams — mirrors wifi_scan_default_params_t. */
@@ -134,6 +161,7 @@ typedef struct {
     uint32_t active_min;
     uint32_t active_max;
     uint32_t home_chan_dwell_time;
+    uint32_t max_offchan_duration_ms;
 } eh_rpc_wifi_scan_params_t;
 
 typedef struct {
@@ -207,6 +235,7 @@ typedef struct {
     uint32_t nchan;
     int32_t  max_tx_power;
     int32_t  policy;
+    uint32_t wifi_5g_channel_mask;
 } eh_rpc_wifi_country_full_t;
 
 /* wifi_protocols mirror; ghz_2g/5g widened to uint32 for wire. */
@@ -237,6 +266,8 @@ typedef struct {
     bool     phy_11g;
     bool     phy_11n;
     bool     phy_lr;
+    bool     phy_11a;
+    bool     phy_11ac;
     bool     phy_11ax;
     bool     is_mesh_child;
     uint32_t reserved;
@@ -270,6 +301,7 @@ typedef struct {
     bool     wps;
     bool     ftm_responder;
     bool     ftm_initiator;
+    bool     akm_dpp;
     uint32_t reserved;
     eh_rpc_wifi_country_full_t country;
     uint32_t bss_color;             /* 6 bits semantically */
@@ -280,6 +312,13 @@ typedef struct {
     uint32_t vht_ch_freq1;
     uint32_t vht_ch_freq2;
 } eh_rpc_wifi_ap_record_t;
+
+/* Scalar STA queries, one field each. rssi stays signed end to end. */
+typedef struct {
+    int32_t  rssi;
+    uint32_t aid;
+    uint32_t phymode;
+} eh_rpc_wifi_sta_query_t;
 
 /* Resp_WifiScanGetApRecords: heap-owned array (Resp only). */
 typedef struct {
@@ -328,6 +367,65 @@ typedef struct {
 typedef struct {
     int32_t  gpio_num;
 } eh_rpc_gpio_num_t;
+
+/* ---- RF certification test (PHY cert test) mirrors ---- */
+typedef struct {
+    uint32_t chan;          /* 1..14 */
+    uint32_t rate;          /* esp_phy_wifi_rate_t */
+    int32_t  backoff;       /* TX power attenuation, unit 0.25 dB */
+    uint32_t length_byte;   /* PSDU length */
+    uint32_t packet_delay;  /* us */
+    uint32_t packet_num;    /* 0 = continuous */
+} eh_rpc_phy_wifi_tx_t;
+
+typedef struct {
+    uint32_t chan;
+    uint32_t rate;
+} eh_rpc_phy_wifi_rx_t;
+
+typedef struct {
+    uint32_t start;         /* 1 = transmit, 0 = stop */
+    uint32_t chan;
+    uint32_t backoff;
+} eh_rpc_phy_tone_t;
+
+typedef struct {
+    uint32_t rx_correct_count;
+    int32_t  rx_rssi;
+    uint32_t rx_total_count;
+    uint32_t rx_result_flag;
+} eh_rpc_phy_rx_result_t;
+
+typedef struct {
+    bool en;
+} eh_rpc_phy_flag_t;
+
+typedef struct {
+    uint32_t value;     /* 3 before a test, 0 to end it */
+} eh_rpc_phy_cmd_stop_t;
+
+typedef struct {
+    uint32_t he_format;
+    uint32_t pe;
+    uint32_t giltf_num;
+    uint32_t ru_index;
+} eh_rpc_phy_11ax_t;
+
+typedef struct {
+    uint32_t txpwr;
+    uint32_t chan;      /* 0..39 */
+    uint32_t len;       /* 0..255 */
+    uint32_t data_type;
+    uint32_t syncw;
+    uint32_t rate;
+    uint32_t tx_num;    /* 0 = continuous */
+} eh_rpc_phy_ble_tx_t;
+
+typedef struct {
+    uint32_t chan;
+    uint32_t syncw;
+    uint32_t rate;
+} eh_rpc_phy_ble_rx_t;
 
 /* RpcReqExtCoex mirror; `cmd` selects which fields are used. */
 typedef struct {
@@ -416,6 +514,15 @@ typedef struct {
     int32_t        resp;             /* event-only */
 } eh_rpc_dhcp_dns_t;
 
+/* Req_SetContext / Resp_SetContext / Event_Context: type + packed struct
+ * (eh_common_ctx.h). data holds the largest context type. */
+#define EH_RPC_CTX_DATA_MAX 32
+typedef struct {
+    uint32_t type;
+    uint16_t len;
+    uint8_t  data[EH_RPC_CTX_DATA_MAX];
+} eh_rpc_ctx_t;
+
 /* iTWT_Setup event: status/reason + flattened WifiItwtSetupConfig. */
 typedef struct {
     int32_t   status;
@@ -434,9 +541,12 @@ typedef struct {
     uint32_t  status;
 } eh_rpc_itwt_teardown_evt_t;
 
+/* actual_suspend_time_ms is indexed by flow id. */
 typedef struct {
     int32_t   status;
     uint32_t  flow_id_bitmap;
+    uint32_t  actual_suspend_time_ms[EH_RPC_ITWT_MAX_FLOWS];
+    uint32_t  n_actual_suspend_time_ms;
 } eh_rpc_itwt_suspend_evt_t;
 
 typedef struct {
@@ -541,12 +651,23 @@ typedef struct eh_rpc_ctrl_cmd_s {
         eh_rpc_wifi_twt_config_t   wifi_twt_config;
         eh_rpc_sta_list_t          sta_list;
         eh_rpc_ap_records_t        ap_records;
+        eh_rpc_wifi_ap_record_t    ap_record;
+        eh_rpc_wifi_sta_query_t    sta_query;
         eh_rpc_mem_monitor_t       mem_monitor;
         eh_rpc_gpio_cfg_t          gpio_cfg;
         eh_rpc_gpio_level_t        gpio_level;
         eh_rpc_gpio_direction_t    gpio_direction;
         eh_rpc_gpio_pull_t         gpio_pull;
         eh_rpc_gpio_num_t          gpio_num;
+        eh_rpc_phy_wifi_tx_t       phy_wifi_tx;
+        eh_rpc_phy_wifi_rx_t       phy_wifi_rx;
+        eh_rpc_phy_tone_t          phy_tone;
+        eh_rpc_phy_rx_result_t     phy_rx_result;
+        eh_rpc_phy_flag_t          phy_flag;
+        eh_rpc_phy_cmd_stop_t      phy_cmd_stop;
+        eh_rpc_phy_11ax_t          phy_11ax;
+        eh_rpc_phy_ble_tx_t        phy_ble_tx;
+        eh_rpc_phy_ble_rx_t        phy_ble_rx;
         eh_rpc_ext_coex_cfg_t      ext_coex;
         eh_rpc_feature_ctrl_t      feat_ctrl;
         eh_rpc_peer_data_blob_t    peer_data;
@@ -565,6 +686,7 @@ typedef struct eh_rpc_ctrl_cmd_s {
         eh_rpc_dpp_init_t          dpp_init;
         eh_rpc_dpp_bootstrap_t     dpp_bootstrap;
         eh_rpc_dhcp_dns_t          dhcp_dns;
+        eh_rpc_ctx_t               ctx;
 
         eh_rpc_esp_init_t          e_init;
         eh_rpc_heartbeat_evt_t     e_heartbeat;

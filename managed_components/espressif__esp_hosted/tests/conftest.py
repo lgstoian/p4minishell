@@ -23,6 +23,7 @@ isolated — green ↻ if it recovers, a genuine both-times fail is a real ✗):
     ota_littlefs (slowest)             S      R      R      R
     wifi_connected                     R     sc      R      S     spi_fd load-flake (retry recovers)
     spi_hd_transport (HD-specific)     .      .      S      .
+    sdio_buffers (prealloc, mempool)   S      .      .      .     two sanity cells, both sdio-only
     api_exerciser (control_plane dup)  .      S      .      .     other wires @retired
     power_save (wake path)             S      .      .      R
     example_boots (every example ×4)   R      R      R      R
@@ -55,12 +56,64 @@ flaky under full-load oversubscription — e.g. power_save_wake_mem[sdio] bring-
 """
 import os
 import sys
+import time
 
 _tests_dir = os.path.dirname(__file__)
 if _tests_dir not in sys.path:
     sys.path.insert(0, _tests_dir)
 
 import pytest  # noqa: E402
+
+# ── per-worker liveness heartbeat ──────────────────────────────────────────
+# Each worker (or 'master' when -n0) stamps its current state to
+# EH_RUN_DIR/workers/<wid> at every test start/finish. eh.py's controller-side
+# watchdog reads these: a worker stuck 'running' one nodeid past the stall budget
+# is wedged (a live-but-hung worker keeps xdist's controller blocked forever — the
+# per-test pytest-timeout runs INSIDE that worker and dies with it). The controller
+# then kills the whole run group so the completeness gate + recovery retry can run.
+_HB = {"wid": "master", "dir": None}
+
+
+def _hb_write(state, nodeid=""):
+    d = _HB["dir"]
+    if not d:
+        return
+    try:
+        with open(os.path.join(d, _HB["wid"]), "w") as fh:
+            fh.write(f"{state}\t{nodeid}\t{time.time()}\t{os.getpid()}\n")
+    except OSError:
+        pass
+
+
+_WIFI = {"ap": None, "err": None}
+
+
+def pytest_configure(config):
+    _HB["wid"] = getattr(config, "workerinput", {}).get("workerid", "master")
+    # Real benches pick their AP from the Wi-Fi profiles (infra/wifi_aps.py);
+    # EH_TP_* stay overridable, and suites that read them need no change.
+    if os.environ.get("EH_SUBSTRATE", "emu") in ("hw", "rpi"):
+        from infra import wifi_aps
+        try:
+            _WIFI["ap"] = wifi_aps.apply_env()
+        except wifi_aps.WifiApError as e:
+            _WIFI["err"] = str(e)
+    rd = os.environ.get("EH_RUN_DIR")
+    if rd:
+        try:
+            d = os.path.join(rd, "workers")
+            os.makedirs(d, exist_ok=True)
+            _HB["dir"] = d
+        except OSError:
+            pass
+
+
+def pytest_runtest_logstart(nodeid, location):
+    _hb_write("running", nodeid)
+
+
+def pytest_runtest_logfinish(nodeid, location):
+    _hb_write("idle")
 
 # The engine emits a typed event stream; the reporter consumes it (JSONL + trace).
 # eh_logcap archives each test's CP/host logs next to the run's live.log.
@@ -78,6 +131,9 @@ def pytest_addoption(parser):
         help="run the full matrix MINUS the @sanity representatives (only the extra "
              "regression coverage). Pair with a prior default (sanity) run to split "
              "the full matrix into two non-overlapping passes.")
+    parser.addoption(
+        "--sanity", action="store_true", default=False,
+        help="run only the @sanity set (eh.py's default when the run names nothing).")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -88,10 +144,10 @@ def pytest_collection_modifyitems(config, items):
       pass/fail stats. For a case fully covered elsewhere, kept as a record.
     - @pytest.mark.maintenance(reason="...") — SKIPPED: shown as skipped
       'maintenance: <reason>'. Temporarily parked while its support is fixed.
-    - @pytest.mark.sanity — the DEFAULT set. Without --regression, only sanity
-      items run (one representative (test, transport) per scenario, distributed
-      so the set exercises every transport once); the rest are deselected. With
-      --regression the full matrix runs.
+    - @pytest.mark.sanity — one representative (test, transport) per scenario,
+      spread so the set exercises every transport once. --sanity runs only these;
+      no set flag runs every test. -k (pytest's own) narrows whichever set results.
+      eh.py adds --sanity when the run names nothing (no path, -k or set flag).
     - @pytest.mark.allow_fail(reason="...") — RUNS normally, but a FAILURE is
       NON-blocking: eh.py keeps the pipeline exit 0 and reports it truthfully in
       its own 'allow_fail (non-blocking, fix later)' summary group + a red ⊗ matrix
@@ -110,7 +166,7 @@ def pytest_collection_modifyitems(config, items):
     A cell may carry BOTH (second_chance decides the FINAL outcome, THEN allow_fail
     decides whether it blocks) — but spi_fd now carries second_chance ONLY, so a
     genuine spi_fd failure blocks like every other wire."""
-    regression = config.getoption("regression", default=False)
+    sanity_only = config.getoption("sanity", default=False)
     excl_sanity = config.getoption("regression_exclude_sanity", default=False)
     retired, keep = [], []
     for item in items:
@@ -140,14 +196,41 @@ def pytest_collection_modifyitems(config, items):
         sanity = [it for it in keep if it.get_closest_marker("sanity")]
         deselected += sanity
         keep = [it for it in keep if not it.get_closest_marker("sanity")]
-    elif not regression:
-        # Default run: keep only the sanity representatives.
+    elif sanity_only:
         non_sanity = [it for it in keep if not it.get_closest_marker("sanity")]
         deselected += non_sanity
         keep = [it for it in keep if it.get_closest_marker("sanity")]
     if deselected:
         config.hook.pytest_deselected(items=deselected)
     items[:] = keep
+
+
+def pytest_collection_finish(session):
+    """Record the expected-to-run set so the reporter can tally which tests actually
+    completed vs silently vanished (aborted worker / xdist INTERNALERROR). Here, not in
+    modifyitems: only the final items reflect -k / -m deselection. Written atomically;
+    xdist workers all see the same items, so last-writer-wins is fine."""
+    _rd = os.environ.get("EH_RUN_DIR")
+    if _rd and session.items:
+        try:
+            os.makedirs(_rd, exist_ok=True)
+            _tmp = os.path.join(_rd, f".collected.{os.getpid()}.tmp")
+            with open(_tmp, "w") as _fh:
+                _fh.write("".join(it.nodeid + "\n" for it in session.items))
+            os.replace(_tmp, os.path.join(_rd, "collected.txt"))
+        except OSError:
+            pass
+
+
+@pytest.fixture(autouse=True)
+def _reap_spawned():
+    """Infra owns the lifecycle of every spawned component: after each test, reap
+    any subprocess (emu DUT, linux shim, Bumble, …) that a fixture launched but
+    left running because it raised before registering its own teardown. Only kills
+    survivors, so it's harmless alongside the normal bench/peer teardowns."""
+    yield
+    from infra import lab
+    lab.reap_spawned()
 
 
 @pytest.fixture
@@ -178,21 +261,53 @@ def wifi_ap(substrate):
     """AP credentials for STA-connect tests — substrate-appropriate. On the emu the
     AP is the emulator's fixed modeled SoftAP (EMU_SOFTAP), NOT the physical AP: the
     emu can only associate to what its wifi model advertises. On real benches
-    (hw/rpi) it's lab.local.json 'wifi_ap' (machine-local) else tests/env.json.
-    None if no AP is configured."""
+    (hw/rpi) it's the Wi-Fi profile infra/wifi_aps.py resolves (EH_TP_SSID,
+    EH_WIFI=<query>, or location), else the legacy 'wifi_ap'. None if no AP."""
     if substrate == "emu":
         from targets.emu import EMU_SOFTAP
         return EMU_SOFTAP
+    if _WIFI["err"]:
+        pytest.fail(_WIFI["err"])
+    return _WIFI["ap"]
+
+
+@pytest.fixture
+def bench_gpio(substrate):
+    """GPIO pins the bench lets a test touch: 'pin' is free for the expander
+    round-trip, 'reserved' is one the transport owns and the CP must refuse.
+    Per-board facts — GPIO 14 is free on a P4-C6 but is SDIO D2 on a C5. With
+    no 'pin' declared the test skips rather than drive unknown hardware."""
+    if substrate == "emu":
+        return {"pin": 14}
     import json
     from infra import lab
     for f in ("lab.local.json", "env.json"):
         try:
-            ap = json.loads((lab._REPO / "tests" / f).read_text()).get("wifi_ap")
+            g = json.loads((lab._REPO / "tests" / f).read_text()).get("gpio")
+        except (OSError, ValueError):
+            g = None
+        if g:
+            return g
+    return {}
+
+
+@pytest.fixture
+def sta_ap(substrate, wifi_ap):
+    """The AP a STA should associate to. 'wifi_ap_5g' wins over 'wifi_ap' where
+    declared, for a coprocessor that cannot reach the 2.4 GHz AP. The emu
+    always uses its own modeled SoftAP."""
+    if substrate == "emu" or (wifi_ap and not wifi_ap.get("_source", "").startswith("legacy")):
+        return wifi_ap
+    import json
+    from infra import lab
+    for f in ("lab.local.json", "env.json"):
+        try:
+            ap = json.loads((lab._REPO / "tests" / f).read_text()).get("wifi_ap_5g")
         except (OSError, ValueError):
             ap = None
         if ap and ap.get("ssid"):
             return ap
-    return None
+    return wifi_ap
 
 
 @pytest.fixture(scope="session")
@@ -266,7 +381,8 @@ def bench(substrate, lab_tmp, worker_id):
 
     def _make(example, host_role="mcu_host", transport="sdio", timeout="60s",
               wake=False, overlay=None, cp_overlay=None, cp_ota_overlay=None,
-              hostfwd=(), cp_app_to_host=None, pre_launch=None):
+              hostfwd=(), cp_app_to_host=None, pre_launch=None,
+              cp_inject=None, host_inject=None, cp_role="cp"):
         if transport not in target.transports:
             pytest.skip(f"{substrate} bench provides no transport={transport}")
         # pre_launch: a callback run AFTER firmware is built but BEFORE the DUTs
@@ -277,8 +393,9 @@ def bench(substrate, lab_tmp, worker_id):
         extra = {"pre_launch": pre_launch} if pre_launch is not None else {}
         b = target.make(
             BenchSpec(example=example, host_role=host_role, transport=transport,
-                      wake=wake, timeout=timeout, extra_ovl=tuple(overlay or ()),
+                      cp_role=cp_role, wake=wake, timeout=timeout, extra_ovl=tuple(overlay or ()),
                       cp_extra_ovl=tuple(cp_overlay or ()),
+                      cp_inject=cp_inject, host_inject=host_inject,
                       cp_ota_ovl=tuple(cp_ota_overlay or ()),
                       hostfwd=tuple(hostfwd), cp_app_to_host=cp_app_to_host),
             worker_id=worker_id, lab_tmp=lab_tmp, **extra)
@@ -289,5 +406,14 @@ def bench(substrate, lab_tmp, worker_id):
         return out
 
     yield _make
+    # Per-item isolation: one bench's down() (settle_check may RAISE, or a stop() fault)
+    # must not skip the rest — each would else leak fds + its emu-pair slot. Collect and
+    # re-raise the first so a late-crash signal still fails the test.
+    errors = []
     for b in made:
-        b.down()
+        try:
+            b.down()
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+    if errors:
+        raise errors[0]

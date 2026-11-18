@@ -1,10 +1,11 @@
 /*
- * SPDX-FileCopyrightText: 2021-2021-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #include "eh_cp_feat_host_ps_internal.h"
+#include "eh_cp_feat_host_ps.h"
 #include "eh_caps.h"
 #include "eh_interface.h"
 //#include "eh_cp_extension.h"
@@ -16,19 +17,17 @@
 #include <string.h>
 #include "esp_timer.h"
 #include "eh_transport_cp.h"
+#include "eh_cp_host_ps_state.h"
 /* host_power_save.c — no ops registry dependency */
 #if EH_CP_FEAT_WIFI_READY
 #include "eh_cp_feat_wifi.h"
-#endif
-#if EH_CP_FEAT_NW_SPLIT_READY
-#include "eh_cp_feat_nw_split.h"
 #endif
 
 static char *TAG = "ehcp_host_ps";
 
 #if EH_CP_FEAT_HOST_PS_READY
 
-  static uint8_t power_save_on;
+  #define power_save_on (!eh_cp_host_ps_reachable())
 
   /* Serialises PS_ON transport teardown against the wakeup re-init path. */
   static SemaphoreHandle_t s_ps_transition_mtx;
@@ -57,6 +56,10 @@ int is_host_power_saving(void)
 
 	#define GPIO_HOST_WAKEUP (EH_CP_FEAT_HOST_PS_WAKEUP_GPIO)
 	#define GPIO_HOST_WAKEUP_LEVEL (EH_CP_FEAT_HOST_PS_WAKEUP_GPIO_LEVEL)
+
+	#if EH_CP_FEAT_HOST_PS_WAKEUP_GPIO < 0
+	#error "Host power-save deep sleep needs a valid host-wakeup GPIO. Set CONFIG_ESP_HOSTED_CP_FEAT_HOST_PS_HOST_WAKEUP_GPIO for your board - it is the only line that wakes a sleeping host, so a default here would silently pick a wrong pin."
+	#endif
 
 	#define set_host_wakeup_gpio() gpio_set_level(GPIO_HOST_WAKEUP, GPIO_HOST_WAKEUP_LEVEL)
 	#define reset_host_wakeup_gpio() gpio_set_level(GPIO_HOST_WAKEUP, !GPIO_HOST_WAKEUP_LEVEL)
@@ -148,6 +151,34 @@ int is_host_wakeup_needed(interface_buffer_handle_t *buf_handle)
 
 		case ESP_STA_IF:
 
+#if EH_CP_FEAT_HOST_PS_IGNORE_NON_UNICAST
+			  /* Test the IP address, not the MAC: the destination MAC is
+			   * rewritten to the host's own address before forwarding, so the
+			   * L2 multicast bit is always clear here. */
+			  {
+				  const uint16_t ethertype =
+					  (buf_handle->payload_len >= 14)
+					  ? (uint16_t)((buf_start[12] << 8) | buf_start[13]) : 0;
+				  bool non_unicast = false;
+
+				  if (ethertype == 0x0800 && buf_handle->payload_len >= 34) {
+					  const uint8_t *dst = buf_start + 14 + 16;
+					  non_unicast = ((dst[0] & 0xf0) == 0xe0) ||
+					                (dst[0] == 255 && dst[1] == 255 &&
+					                 dst[2] == 255 && dst[3] == 255);
+				  } else if (ethertype == 0x86dd && buf_handle->payload_len >= 54) {
+					  /* ff00::/8. IPv6 has no broadcast. */
+					  non_unicast = buf_start[14 + 24] == 0xff;
+				  }
+
+				  if (non_unicast) {
+					  strlcpy(reason, "sta non-unicast", sizeof(reason));
+					  wakup_needed = 0;
+					  goto end;
+				  }
+			  }
+#endif
+
 			  /* TODO(host-ps): when lwip split is disabled, inspect the
 			   * packet and decide whether host wake-up is required. */
 			  strlcpy(reason, "sta tx msg", sizeof(reason));
@@ -157,6 +188,12 @@ int is_host_wakeup_needed(interface_buffer_handle_t *buf_handle)
 
 		case ESP_AP_IF:
 			  strlcpy(reason, "ap tx msg", sizeof(reason));
+			  wakup_needed = 1;
+			  goto end;
+			  break;
+
+		case ESP_AUX_IF:
+			  strlcpy(reason, "aux tx msg", sizeof(reason));
 			  wakup_needed = 1;
 			  goto end;
 			  break;
@@ -180,6 +217,42 @@ end:
 }
 
 
+#define EH_CP_HOST_PS_BOOT_WAKE_PULSE_MS   1
+
+/* Once, at boot: a CP restart during host sleep otherwise deadlocks - the host
+ * wakes only on this line, and we drive it only on traffic it must first cause. */
+static void pulse_host_wakeup_on_boot(void)
+{
+#if EH_CP_FEAT_HOST_PS_WAKE_HOST_ON_CP_BOOT
+	static bool done;
+
+	if (done || GPIO_HOST_WAKEUP == -1) {
+		return;
+	}
+	done = true;
+
+	set_host_wakeup_gpio();
+	vTaskDelay(pdMS_TO_TICKS(EH_CP_HOST_PS_BOOT_WAKE_PULSE_MS));
+	reset_host_wakeup_gpio();
+	ESP_LOGI(TAG, "Host wakeup: pulsed IO%u once at our boot", GPIO_HOST_WAKEUP);
+#endif
+}
+
+/* Wake/reset the host before starting CP communication.
+ * This prevents the system from remaining in a boot deadlock if the CP crashes. */
+void eh_cp_feat_host_ps_cp__boot_wake_host_early(void)
+{
+#if EH_CP_FEAT_HOST_PS_READY && EH_CP_FEAT_HOST_PS_DEEP_SLEEP
+	if (GPIO_HOST_WAKEUP == -1) {
+		return;
+	}
+	configure_host_wakeup_gpio(GPIO_HOST_WAKEUP, GPIO_HOST_WAKEUP_LEVEL);
+	reset_host_wakeup_gpio();          /* park inactive before the pulse */
+	pulse_host_wakeup_on_boot();       /* no-op unless WAKE_HOST_ON_CP_BOOT */
+#endif
+}
+
+
 int host_power_save_init(const host_power_save_callbacks_t *cbs)
 {
 #if EH_CP_FEAT_HOST_PS_READY
@@ -195,12 +268,25 @@ int host_power_save_init(const host_power_save_callbacks_t *cbs)
 	         GPIO_HOST_WAKEUP, gpio_get_level(GPIO_HOST_WAKEUP),
 	         GPIO_HOST_WAKEUP_LEVEL ? "HIGH" : "LOW");
 
+	pulse_host_wakeup_on_boot();
+
 	assert(wakeup_sem = xSemaphoreCreateBinary());
 	xSemaphoreGive(wakeup_sem);
 #endif
 
 	if (!s_ps_transition_mtx) {
 		assert(s_ps_transition_mtx = xSemaphoreCreateMutex());
+	}
+
+	/* Start worker before publishing ops to avoid the core-feature dependency cycle. */
+	eh_cp_feat_host_ps_worker_start();
+	{
+		static const eh_cp_host_ps_ops_t ops = {
+			.wakeup_needed = eh_cp_feat_host_ps_is_host_wakeup_needed,
+			.wakeup        = eh_cp_feat_host_ps_wakeup_host,
+			.on_ps_event   = eh_cp_feat_host_ps_post_alert,
+		};
+		eh_cp_host_ps_register_ops(&ops);
 	}
 
 	if (cbs) {
@@ -230,6 +316,7 @@ int host_power_save_set_callbacks(const host_power_save_callbacks_t *cbs)
 int host_power_save_deinit(void)
 {
 #if EH_CP_FEAT_HOST_PS_READY
+	eh_cp_feat_host_ps_worker_stop();
 #if EH_CP_FEAT_HOST_PS_DEEP_SLEEP
 	if (wakeup_sem) {
 		xSemaphoreTake(wakeup_sem, portMAX_DELAY);
@@ -248,6 +335,13 @@ int host_power_save_deinit(void)
 }
 
 #define GET_CURR_TIME_IN_MS() (esp_timer_get_time()/1000)
+
+#if EH_CP_FEAT_HOST_PS_READY
+/* Cap on how long a wake caller waits for the host to come up before giving up
+ * (a stuck wake becomes a counted drop at the caller, never a hang). Covers
+ * portMAX_DELAY too. */
+#define EH_CP_HOST_PS_WAKE_WAIT_MAX_MS 8000u
+#endif
 
 /* Add new callback function for ESP Timer */
 #if EH_CP_FEAT_HOST_PS_READY && EH_CP_FEAT_HOST_PS_DEEP_SLEEP
@@ -285,7 +379,9 @@ int wakeup_host_mandate(uint32_t timeout_ms)
 
 	do {
 		if (!power_save_on) {
+			/* Awake by another path (data path opened first): the held frame goes. */
 			ESP_LOGI(TAG, "Host awake (power_save_on=0), stop wakeup loop");
+			wakeup_success = 1;
 			break;
 		}
 		ESP_LOGW(TAG, "wakeup_toggle: set gpio=%u level(before)=%u",
@@ -327,8 +423,9 @@ int wakeup_host_mandate(uint32_t timeout_ms)
 
 		if (GET_CURR_TIME_IN_MS() - start_time > timeout_ms) {
 			/* timeout */
-			ESP_LOGI(TAG, "%s:%u timeout Curr:%llu start:%llu timeout:%lu",
-					__func__,__LINE__, GET_CURR_TIME_IN_MS(), start_time, timeout_ms);
+			ESP_LOGI(TAG, "%s:%u timeout Curr:%lu start:%lu timeout:%lu",
+					__func__,__LINE__, (unsigned long)GET_CURR_TIME_IN_MS(),
+					(unsigned long)start_time, timeout_ms);
 			break;
 		}
 
@@ -351,41 +448,50 @@ int wakeup_host(uint32_t timeout_ms)
 {
 #if EH_CP_FEAT_HOST_PS_READY
 
-	int wakeup_success = 0;
-
 	if (!if_handle || !if_context) {
 		ESP_LOGE(TAG, "Failed to wakeup, if_handle or if_context is NULL");
 		return 0;
 	}
 
-	/* Lock spans the state check + re-init only; released before the GPIO loop. */
-	ps_transition_lock();
-	if (!power_save_on) {
-		ps_transition_unlock();
-		return 1;
-	}
+	uint64_t start = GET_CURR_TIME_IN_MS();
+	uint32_t cap = (timeout_ms > EH_CP_HOST_PS_WAKE_WAIT_MAX_MS)
+	                   ? EH_CP_HOST_PS_WAKE_WAIT_MAX_MS : timeout_ms;
 
-	ESP_LOGI(TAG, "if_handle->state: %u", if_handle->state);
-	if (if_handle->state < DEACTIVE) {
-		ESP_LOGI(TAG, "%s:%u Re-Initializing driver\n", __func__, __LINE__);
+	for (;;) {
+		ps_transition_lock();
 
-		/* host wakeup mandated in sdio init */
-		wakeup_success = 1;
-		if_handle = if_context->if_ops->init();
-		if (!if_handle) {
+		/* AWAKE: nothing to do (idempotent). */
+		if (eh_cp_host_ps_get() == EH_HOST_PS_AWAKE) {
 			ps_transition_unlock();
-			ESP_LOGE(TAG, "%s:%u Failed to initialize driver\n", __func__, __LINE__);
-			return ESP_FAIL;
+			return 1;
 		}
-	}
-	ps_transition_unlock();
 
-	if (power_save_on) {
-		wakeup_success = wakeup_host_mandate(timeout_ms);
-		ESP_LOGI(TAG, "host %s woke up", power_save_on ? "not" : "");
-	}
+		/* ASLEEP -> WAKING: this caller wins the wake. Re-init a FRESH transport
+		 * to match the host, which rebuilt its side on its own wake, then pulse. */
+		if (eh_cp_host_ps_input(EH_HOST_PS_EV_WAKE)) {
+			if (hps_cbs.host_power_save_off_prepare_cb)
+				hps_cbs.host_power_save_off_prepare_cb();
+			if (!if_handle || if_handle->state < DEACTIVE) {
+				if_handle = if_context->if_ops->init();
+				if (!if_handle) {
+					(void)eh_cp_host_ps_input(EH_HOST_PS_EV_DOWN);  /* still asleep: the next wake retries */
+					ps_transition_unlock();
+					ESP_LOGE(TAG, "%s:%u Failed to initialize driver", __func__, __LINE__);
+					return 0;                       /* not awake: the caller drops */
+				}
+				eh_cp_recv_kick();
+			}
+			ps_transition_unlock();
+			return wakeup_host_mandate(timeout_ms);   /* pulse until the host acks */
+		}
 
-	return wakeup_success;
+		/* ANNOUNCED (host still going to sleep) or WAKING (another caller owns
+		 * the pulse): do not wake now - converge. Wait briefly and re-check. */
+		ps_transition_unlock();
+		if (GET_CURR_TIME_IN_MS() - start > cap)
+			return 0;                     /* caller drops (counted) */
+		vTaskDelay(pdMS_TO_TICKS(20));
+	}
 #else
 	return 1;
 #endif
@@ -409,43 +515,38 @@ int host_power_save_alert(uint32_t ps_evt)
 			xSemaphoreTake(wakeup_sem, 0);
 		}
   #endif
-		/* Flag + deinit atomic w.r.t. wakeup_host's state check + re-init. */
 		ps_transition_lock();
-		power_save_on = 1;
 
-		if (!if_handle || !if_context || if_handle->state < DEACTIVE) {
+		/* Tear down only from ANNOUNCED. If the phase already left ANNOUNCED a
+		 * wake is in flight - do nothing (the wake path owns the transport). */
+		if (eh_cp_host_ps_get() != EH_HOST_PS_ANNOUNCED) {
+			ESP_LOGI(TAG, "wake already in flight, not sleeping");
+		} else if (!if_handle || !if_context || if_handle->state < DEACTIVE) {
 			ESP_LOGE(TAG, "%s:%u Failed to bring down transport", __func__, __LINE__);
-		}
-
-		if (if_handle->state >= DEACTIVE) {
-			if (!if_context->if_ops || !if_context->if_ops->deinit) {
-				ESP_LOGI(TAG, "%s:%u if_context->if_ops->deinit not available", __func__, __LINE__);
-			} else {
-				ESP_LOGI(TAG, "%s:%u Deinitializing driver", __func__, __LINE__);
-				if_context->if_ops->deinit(if_handle);
-				/* if_handle->state would be changed to DEINIT */
+		} else if (!if_context->if_ops || !if_context->if_ops->deinit) {
+			ESP_LOGI(TAG, "%s:%u if_context->if_ops->deinit not available", __func__, __LINE__);
+		} else {
+			ESP_LOGI(TAG, "%s:%u Deinitializing driver", __func__, __LINE__);
+			if_context->if_ops->deinit(if_handle);
+			/* if_handle->state would be changed to DEINIT */
+			if (hps_cbs.host_power_save_on_ready_cb) {
+				hps_cbs.host_power_save_on_ready_cb();
 			}
+			(void)eh_cp_host_ps_input(EH_HOST_PS_EV_DOWN);
 		}
 		ps_transition_unlock();
-
-		/* USER CALLBACK: Power save active, device ready */
-		if (hps_cbs.host_power_save_on_ready_cb) {
-			hps_cbs.host_power_save_on_ready_cb();
-		}
 	} else if ((ESP_POWER_SAVE_OFF == ps_evt) || (ESP_OPEN_DATA_PATH == ps_evt)) {
-		ESP_LOGI(TAG, "Host Awake, transport state: %u", if_handle->state);
+		ESP_LOGI(TAG, "Host Awake, transport state: %u", if_handle ? if_handle->state : 0);
 
 		/* USER CALLBACK: Prepare to exit power save */
 		if (hps_cbs.host_power_save_off_prepare_cb) {
 			hps_cbs.host_power_save_off_prepare_cb();
 		}
 
-		power_save_on = 0;
+		/* Wake recv_task after clearing the power-save gate. */
+		eh_cp_recv_kick();
 #if EH_CP_FEAT_WIFI_READY
-		eh_cp_feat_wifi_replay_connected_event_if_needed();
-#endif
-#if EH_CP_FEAT_NW_SPLIT_READY
-		eh_cp_feat_nw_split_replay_status_if_needed();
+		eh_cp_feat_wifi_resync_host();      /* the link, then network split's lease */
 #endif
   #if EH_CP_FEAT_HOST_PS_DEEP_SLEEP
 		if (wakeup_sem) {

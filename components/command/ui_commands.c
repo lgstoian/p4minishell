@@ -206,7 +206,7 @@ static void ui_collect_targets(lv_obj_t *parent)
         int w;
         int h;
 
-        if (child == NULL || lv_obj_has_flag(child, LV_OBJ_FLAG_HIDDEN)) {
+        if (child == NULL || lv_obj_is_hidden(child)) {
             continue;
         }
         w = (int)lv_obj_get_width(child);
@@ -234,7 +234,7 @@ static void ui_collect_targets(lv_obj_t *parent)
                 snprintf(name, sizeof(name), "kbd:%.32s", (text != NULL) ? text : "?");
                 ui_target_add(child, b, &area, name);
             }
-        } else if (w > 0 && h > 0 && lv_obj_has_flag(child, LV_OBJ_FLAG_CLICKABLE)) {
+        } else if (w > 0 && h > 0 && lv_obj_is_clickable(child)) {
             lv_area_t area;
             char name[48];
 
@@ -399,7 +399,7 @@ static int ui_cmd_state(bool bare, const char *var)
     }
     {
         lv_obj_t *gl = windows_get_input_ghost();
-        if (gl != NULL && !lv_obj_has_flag(gl, LV_OBJ_FLAG_HIDDEN)) {
+        if (gl != NULL && !lv_obj_is_hidden(gl)) {
             const char *gtext = lv_label_get_text(gl);
             if (gtext != NULL) {
                 snprintf(ghost, sizeof(ghost), "%.32s", gtext);
@@ -408,7 +408,7 @@ static int ui_cmd_state(bool bare, const char *var)
     }
     {
         lv_obj_t *sl = windows_get_search_label();
-        if (sl != NULL && !lv_obj_has_flag(sl, LV_OBJ_FLAG_HIDDEN)) {
+        if (sl != NULL && !lv_obj_is_hidden(sl)) {
             const char *stext = lv_label_get_text(sl);
             if (stext != NULL) {
                 snprintf(search, sizeof(search), "%.64s", stext);

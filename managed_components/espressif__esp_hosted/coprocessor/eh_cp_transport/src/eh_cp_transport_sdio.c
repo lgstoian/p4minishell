@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include "freertos/event_groups.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
@@ -17,14 +18,15 @@
 #include "eh_transport_cp.h"
 #include "sdio_slave_api.h"
 #include "driver/sdio_slave.h"
-#include "hal/sdio_slave_ll.h"
 #include "endian.h"
 #include "eh_mempool.h"
 #include "eh_header.h"
 #include "eh_transport.h"
 #include "eh_cp_master_config.h"
+#include "eh_cp_host_ps_state.h"
 #include "eh_caps.h"
 #include "eh_tlv.h"
+#include "eh_tlv_tags.h"
 #include "eh_tlv_defs.h"
 #include "eh_tlv_v1.h"
 #include "eh_tlv_v2.h"
@@ -109,25 +111,12 @@ static const uint16_t to_host_q_depth[MAX_PRIORITY_QUEUES] = {
 #define SDIO_HDR_SIZE             (sizeof(struct esp_payload_header))
 
 #if TX_MODE == TX_MODE_STREAM
-#define SDIO_STREAM_QUEUE_SIZE    14    /* HW send-queue depth for STREAM (per-packet) */
+#define SDIO_STREAM_QUEUE_SIZE    14    /* STREAM in-flight frames; advertised to the host */
 #define SDIO_DRIVER_TX_QUEUE_SIZE SDIO_STREAM_QUEUE_SIZE
 #define SDIO_TX_BUFFER_SIZE       1536  /* one MTU frame + header (fits 1460 raw-TP too) */
 #define SDIO_TX_MEMPOOL_MARGIN    4     /* pool slack over in-flight depth */
-#define SDIO_TX_MEMPOOL_BLOCKS    (SDIO_STREAM_QUEUE_SIZE + SDIO_TX_MEMPOOL_MARGIN)
 #else
 #define SDIO_DRIVER_TX_QUEUE_SIZE 8     /* IDF sdio_slave driver send-queue depth */
-#endif
-
-#if CONFIG_EH_TRANSPORT_CP_SDIO_PSEND_PSAMPLE
-  #define SDIO_SLAVE_TIMING SDIO_SLAVE_TIMING_PSEND_PSAMPLE
-#elif CONFIG_EH_TRANSPORT_CP_SDIO_NSEND_PSAMPLE
-  #define SDIO_SLAVE_TIMING SDIO_SLAVE_TIMING_NSEND_PSAMPLE
-#elif CONFIG_EH_TRANSPORT_CP_SDIO_PSEND_NSAMPLE
-  #define SDIO_SLAVE_TIMING SDIO_SLAVE_TIMING_PSEND_NSAMPLE
-#elif CONFIG_EH_TRANSPORT_CP_SDIO_NSEND_NSAMPLE
-  #define SDIO_SLAVE_TIMING SDIO_SLAVE_TIMING_NSEND_NSAMPLE
-#else
-  #error No SDIO Slave Timing configured
 #endif
 
 /* ===================== state ===================== */
@@ -135,17 +124,47 @@ static const char *TAG = "SDIO_SLAVE";
 interface_context_t context;
 interface_handle_t if_handle_g;
 extern volatile uint8_t datapath;        /* set when the host opens the data path */
-uint8_t power_save_started;
 
-#define IS_HOST_POWER_SAVING() (power_save_started)
+/* Host power-save state is managed by eh_cp_host_ps_state.h */
+#define IS_HOST_POWER_SAVING() (!eh_cp_host_ps_reachable())
 
 static uint32_t sdio_rx_buf_size = MAX_TRANSPORT_BUF_SIZE;
 static uint8_t *sdio_slave_rx_buffer[SDIO_RX_BUFFER_NUM];
+
+/* Current position in the aggregate buffer. */
+static uint8_t *blk_base;
+static sdio_slave_buf_handle_t blk_handle;
+static uint16_t blk_total;
+static uint16_t blk_pos;
+#ifdef CONFIG_EH_TRANSPORT_CP_SDIO_AGGR_TRACE
+static uint16_t nsub;
+#endif
 
 static QueueHandle_t to_host_queue[MAX_PRIORITY_QUEUES]; /* per-priority to-host queues
 	 * (PRIO_Q_SERIAL/BT/OTHERS) - serial/control gets its own lane, drained ahead
 	 * of bulk data so RPC responses aren't batched behind a data aggregate. */
 static TaskHandle_t send_task_handle;
+static SemaphoreHandle_t s_sdio_tx_mtx;
+
+/* Reader/stop handshake. sdio_slave_recv() has no wake API, so stop aborts the
+ * reader's blocking take and waits for RX_READER_LEFT before the driver goes.
+ * The reader then holds until RX_STOP_DONE, so it cannot exit and free its TCB
+ * while stop may still abort it. */
+#define RX_READER_LEFT BIT0
+#define RX_STOP_DONE   BIT1
+static portMUX_TYPE rx_lock = portMUX_INITIALIZER_UNLOCKED;
+static TaskHandle_t rx_reader;           /* set while inside sdio_slave_recv() */
+static bool rx_stopping;                 /* cleared only by sdio_init */
+static EventGroupHandle_t rx_eg;
+
+static inline esp_err_t sdio_tx_locked(uint8_t *buf, size_t len)
+{
+	esp_err_t r;
+	if (s_sdio_tx_mtx) xSemaphoreTake(s_sdio_tx_mtx, portMAX_DELAY);
+	r = sdio_slave_transmit(buf, len);
+	if (s_sdio_tx_mtx) xSemaphoreGive(s_sdio_tx_mtx);
+	return r;
+}
 
 #if TX_MODE == TX_MODE_SW_AGGR
 static uint8_t *tx_aggr_buf;             /* one persistent DMA aggregate buffer */
@@ -169,6 +188,7 @@ static int32_t sdio_write(interface_handle_t *handle, interface_buffer_handle_t 
 static int sdio_read(interface_handle_t *if_handle, interface_buffer_handle_t *buf_handle);
 static esp_err_t sdio_reset(interface_handle_t *handle);
 static void sdio_deinit(interface_handle_t *handle);
+static void sdio_stop(interface_handle_t *handle);
 
 if_ops_t if_ops = {
 	.init   = sdio_init,
@@ -176,7 +196,11 @@ if_ops_t if_ops = {
 	.read   = sdio_read,
 	.reset  = sdio_reset,
 	.deinit = sdio_deinit,
+	.stop   = sdio_stop,
 };
+
+#if TX_MODE != TX_MODE_PACKET
+#include "hal/sdio_slave_ll.h"
 
 static uint32_t sdio_hw_max_rx_buf_size(void)
 {
@@ -184,6 +208,7 @@ static uint32_t sdio_hw_max_rx_buf_size(void)
 	memset(&dummy, 0xFF, sizeof(dummy));
 	return (dummy.size / 512) * 512;
 }
+#endif
 
 static void sdio_read_done(void *handle)
 {
@@ -211,6 +236,7 @@ static inline uint16_t build_frame(uint8_t *dst, interface_buffer_handle_t *b)
 	h->offset  = htole16(SDIO_HDR_SIZE);
 	h->seq_num = htole16(b->seq_num);
 	h->flags   = b->flags;
+	h->priv_pkt_type = b->pkt_type;
 	UPDATE_HEADER_TX_PKT_NO(h);
 
 	memcpy(dst + SDIO_HDR_SIZE, b->payload, b->payload_len);
@@ -224,6 +250,19 @@ static inline uint16_t build_frame(uint8_t *dst, interface_buffer_handle_t *b)
 	h->checksum = htole16(compute_checksum(dst, frame_len));
 #endif
 	return aligned;
+}
+
+/* Wake send_task when work is available. */
+static inline void send_task_notify(void)
+{
+	if (send_task_handle)
+		xTaskNotifyGive(send_task_handle);
+}
+
+/* Wait for work or timeout. */
+static inline void send_task_wait_work(TickType_t ticks)
+{
+	ulTaskNotifyTake(pdTRUE, ticks);
 }
 
 /* ===================== single send_task ===================== */
@@ -316,7 +355,7 @@ static void process_tx_queue(QueueHandle_t q, uint16_t queued, uint8_t *aggr_buf
 		ESP_LOGI(TAG, "sdio aggr tx: packed %u frames (%u B)", nframes, aggr_len);
 #endif
 
-	if (aggr_len && sdio_slave_transmit(aggr_buf, aggr_len) != ESP_OK)
+	if (aggr_len && sdio_tx_locked(aggr_buf, aggr_len) != ESP_OK)
 		ESP_LOGE(TAG, "aggregate transmit failed");
 }
 
@@ -335,28 +374,66 @@ static void send_task(void *arg)
 			}
 		}
 
+		/* All lanes empty: sleep until sdio_write enqueues. Blocking here*/
 		if (!worked)
-			vTaskDelay(1);
+			send_task_wait_work(portMAX_DELAY);
 	}
 }
 
 #elif TX_MODE == TX_MODE_PACKET
-#error "Not the current run"
-static void send_task(void *arg)
+/* PACKET: one frame per transfer. Drained per-priority (SERIAL -> BT -> OTHERS),
+ * matching the SW_AGGR and STREAM paths. One persistent DMA buffer is reused;
+ * sdio_slave_transmit blocks until the host takes the frame. */
+static void process_tx_packet(QueueHandle_t q, uint16_t queued)
 {
-	interface_buffer_handle_t buf;
+	interface_buffer_handle_t buf = {0};
 
-	for (;;) {
+	if (!queued)
+		return;
+
+	if (!tx_pkt_buf) {
+		if (xQueueReceive(q, &buf, 0) == pdTRUE)
+			free_tx_buf(&buf);
+		return;
+	}
+
+	while (queued--) {
 		uint16_t total;
 
-		if (xQueueReceive(to_host_queue, &buf, portMAX_DELAY) != pdTRUE)
+		if (xQueueReceive(q, &buf, 0) != pdTRUE)
+			break;
+		if (!datapath || !buf.payload || !buf.payload_len ||
+		    buf.payload_len + SDIO_HDR_SIZE > sdio_rx_buf_size) {
+			free_tx_buf(&buf);
 			continue;
-		if (!datapath || !buf.payload || !buf.payload_len) { free_tx_buf(&buf); continue; }
+		}
+
 		total = SDIO_HDR_SIZE + buf.payload_len;
 		build_frame(tx_pkt_buf, &buf);
-		if (sdio_slave_transmit(tx_pkt_buf, total) != ESP_OK)
-			ESP_LOGE(TAG, "packet transmit failed");
 		free_tx_buf(&buf);
+		if (sdio_tx_locked(tx_pkt_buf, total) != ESP_OK)
+			ESP_LOGE(TAG, "packet transmit failed");
+	}
+}
+
+static void send_task(void *arg)
+{
+	for (;;) {
+		bool worked = false;
+
+		/* highest priority first: PRIO_Q_SERIAL(0) -> BT(1) -> OTHERS(2) */
+		for (int p = 0; p < MAX_PRIORITY_QUEUES; p++) {
+			uint16_t waiting = uxQueueMessagesWaiting(to_host_queue[p]);
+
+			if (waiting) {
+				process_tx_packet(to_host_queue[p], waiting);
+				worked = true;
+			}
+		}
+
+		/* All lanes empty: sleep until sdio_write enqueues. */
+		if (!worked)
+			send_task_wait_work(portMAX_DELAY);
 	}
 }
 
@@ -374,6 +451,12 @@ static void reclaim_finished(void)
 		hosted_mempool_free(buf_mp_tx_g, done);
 		xSemaphoreGive(tx_stream_sem);
 	}
+}
+
+/* True when TX buffers are still owned by the HW queue. */
+static inline bool stream_tx_in_flight(void)
+{
+	return uxSemaphoreGetCount(tx_stream_sem) < SDIO_STREAM_QUEUE_SIZE;
 }
 
 static void process_tx_stream(QueueHandle_t q, uint16_t queued)
@@ -441,7 +524,8 @@ static void send_task(void *arg)
 
 		reclaim_finished();
 		if (!worked) {
-			vTaskDelay(1);
+			/* Keep reclaiming in-flight buffers; otherwise wait for new work. */
+			send_task_wait_work(stream_tx_in_flight() ? 1 : portMAX_DELAY);
 		} else if (stream_tx_acc >= STREAM_YIELD_BYTES) {
 			/* Sustained load: send_task (prio>idle) would otherwise never block
 			 * (HW queue drained as fast as filled) -> idle starves -> 5s task WDT.
@@ -498,20 +582,47 @@ static int32_t sdio_write(interface_handle_t *handle, interface_buffer_handle_t 
 		free_tx_buf(&q);
 		return ESP_FAIL;
 	}
+	send_task_notify();
 	return buf_handle->payload_len;
 }
 
 /* ===================== H2E receive (de-aggregating) ===================== */
+static bool rx_reader_enter(void)
+{
+	bool ok;
+
+	taskENTER_CRITICAL(&rx_lock);
+	ok = !rx_stopping;
+	if (ok)
+		rx_reader = xTaskGetCurrentTaskHandle();
+	taskEXIT_CRITICAL(&rx_lock);
+	return ok;
+}
+
+/* false: a stop arrived while inside, and that stopper waits for RX_READER_LEFT. */
+static bool rx_reader_leave(void)
+{
+	bool stopping;
+
+	taskENTER_CRITICAL(&rx_lock);
+	rx_reader = NULL;
+	stopping = rx_stopping;
+	taskEXIT_CRITICAL(&rx_lock);
+	return !stopping;
+}
+
+static bool rx_reader_inside(void)
+{
+	bool inside;
+
+	taskENTER_CRITICAL(&rx_lock);
+	inside = rx_reader != NULL;
+	taskEXIT_CRITICAL(&rx_lock);
+	return inside;
+}
+
 static int sdio_read(interface_handle_t *if_handle, interface_buffer_handle_t *buf_handle)
 {
-	static uint8_t *blk_base = NULL;
-	static sdio_slave_buf_handle_t blk_handle = NULL;
-	static uint16_t blk_total = 0;
-	static uint16_t blk_pos = 0;
-#ifdef CONFIG_EH_TRANSPORT_CP_SDIO_AGGR_TRACE
-	static uint16_t nsub = 0;
-#endif
-
 	esp_err_t ret;
 	size_t sdio_read_len = 0;
 	uint16_t hdrsz = eh_frame_hdr_size();
@@ -524,12 +635,21 @@ static int sdio_read(interface_handle_t *if_handle, interface_buffer_handle_t *b
 		return ESP_FAIL;
 
 	if (!blk_base) {
-		/* bounded only when the bus unloads on host-PS, so recv survives the deinit/reinit */
-		TickType_t recv_wait = portMAX_DELAY;
-#if EH_CP_FEAT_HOST_PS_UNLOAD_BUS_WHILE_SLEEPING
-		recv_wait = pdMS_TO_TICKS(10);
-#endif
-		ret = sdio_slave_recv(&blk_handle, &blk_base, &sdio_read_len, recv_wait);
+		if (!rx_reader_enter())
+			return ESP_FAIL;
+		ret = sdio_slave_recv(&blk_handle, &blk_base, &sdio_read_len, portMAX_DELAY);
+		if (!rx_reader_leave()) {
+			/* Stopping: the driver goes next, so hand the buffer back now. */
+			if (ret == ESP_OK)
+				sdio_read_done(blk_handle);
+			blk_base = NULL;
+			blk_handle = NULL;
+			xEventGroupSetBits(rx_eg, RX_READER_LEFT);
+			while (!(xEventGroupWaitBits(rx_eg, RX_STOP_DONE, pdFALSE, pdTRUE,
+						     portMAX_DELAY) & RX_STOP_DONE))
+				;   /* a late abort cuts this wait short */
+			return ESP_FAIL;
+		}
 		if (ret) {
 			blk_base = NULL;
 			return ESP_FAIL;
@@ -587,6 +707,27 @@ static int sdio_read(interface_handle_t *if_handle, interface_buffer_handle_t *b
 }
 
 /* ===================== startup handshake ===================== */
+
+#if EH_TLV_V2
+/* EH_PRIV_TX_Q_SIZE is one byte. Outside software aggregation the MCU host
+ * sizes an RX staging slot as MAX_TRANSPORT_BUF_SIZE times this count.
+ * STREAM: one host read drains up to SDIO_STREAM_QUEUE_SIZE queued frames.
+ * Other modes: frames that fit in the RX buffer. */
+static uint8_t sdio_advertised_tx_q(void)
+{
+#if TX_MODE == TX_MODE_STREAM
+	return SDIO_STREAM_QUEUE_SIZE;          /* host slot = 14 × 1536 = 21504 B */
+#else
+	uint32_t q = (sdio_rx_buf_size + MAX_TRANSPORT_BUF_SIZE - 1u) / MAX_TRANSPORT_BUF_SIZE;
+
+	if (q < 1)
+		q = 1;
+	if (q > 255)
+		q = 255;
+	return (uint8_t)q;
+#endif
+}
+#endif
 
 void generate_startup_event(uint8_t cap, uint32_t ext_cap, uint8_t raw_tp_cap,
 			    const uint32_t feat_caps[8])
@@ -660,7 +801,7 @@ void generate_startup_event(uint8_t cap, uint32_t ext_cap, uint8_t raw_tp_cap,
 
 		rc = eh_tlv_pack_v2(&tlv, CONFIG_IDF_FIRMWARE_CHIP_ID, cap, raw_tp_cap,
 				    ext_cap, fw_version, EH_CP_SDIO_RX_QUEUE_SIZE,
-				    EH_CP_SDIO_TX_QUEUE_SIZE, EH_CP_RPC_WIRE_VERSION);
+				    sdio_advertised_tx_q(), EH_CP_RPC_WIRE_VERSION);
 		if (rc) {
 			ESP_LOGE(TAG, "TLV v2 overflow");
 			heap_caps_free(buf_handle.payload);
@@ -687,6 +828,11 @@ void generate_startup_event(uint8_t cap, uint32_t ext_cap, uint8_t raw_tp_cap,
 	}
 #endif
 
+	if (eh_tlv_add_u32_le(&tlv, EH_PRIV_TRANSFER_SIZE, (uint32_t)MAX_TRANSPORT_BUF_SIZE))
+		ESP_LOGW(TAG, "no room for transfer-size TLV");
+	else
+		ESP_LOGI(TAG, "advertising transfer size %u", (unsigned)MAX_TRANSPORT_BUF_SIZE);
+
 	len = eh_tlv_builder_len(&tlv);
 	event->event_len = len;
 	len += 2;
@@ -701,7 +847,7 @@ void generate_startup_event(uint8_t cap, uint32_t ext_cap, uint8_t raw_tp_cap,
 	}
 
 	buf_handle.payload_len = len + eh_frame_hdr_size();
-	if (sdio_slave_transmit(buf_handle.payload, buf_handle.payload_len) != ESP_OK)
+	if (sdio_tx_locked(buf_handle.payload, buf_handle.payload_len) != ESP_OK)
 		ESP_LOGE(TAG, "startup event transmit failed");
 	heap_caps_free(buf_handle.payload);
 }
@@ -750,7 +896,19 @@ static interface_handle_t *sdio_init(void)
 	esp_err_t ret;
 	sdio_slave_buf_handle_t handle;
 
+	if (!s_sdio_tx_mtx)
+		s_sdio_tx_mtx = xSemaphoreCreateMutex();
+	if (!rx_eg)
+		rx_eg = xEventGroupCreate();
+	assert(rx_eg);
+
+#if TX_MODE == TX_MODE_PACKET
+	/* One frame per transfer, capped at the transport MTU (1536, 3x512).
+	 * The HW descriptor max is for SW_AGGR/STREAM aggregates. */
+	sdio_rx_buf_size = MAX_TRANSPORT_BUF_SIZE;
+#else
 	sdio_rx_buf_size = sdio_hw_max_rx_buf_size();
+#endif
 	ESP_LOGI(TAG, "rx_buf_size=%"PRIu32, sdio_rx_buf_size);
 
 #if TX_MODE == TX_MODE_SW_AGGR
@@ -789,7 +947,12 @@ static interface_handle_t *sdio_init(void)
 		.send_queue_size  = SDIO_DRIVER_TX_QUEUE_SIZE,
 		.recv_buffer_size = sdio_rx_buf_size,
 		.event_cb         = event_cb,
-		/* .flags and .timing left at default (0) on C5 */
+#if EH_CP_SDIO_HIGH_SPEED
+		.flags            = SDIO_SLAVE_FLAG_HIGH_SPEED,
+#else
+		.flags            = SDIO_SLAVE_FLAG_DEFAULT_SPEED,
+#endif
+		.timing           = EH_CP_SDIO_TIMING,
 	};
 
 	ret = sdio_slave_initialize(&config);
@@ -825,21 +988,30 @@ static interface_handle_t *sdio_init(void)
 		tx_aggr_buf = heap_caps_malloc(sdio_rx_buf_size, MALLOC_CAP_DMA);
 	assert(tx_aggr_buf);
 #elif TX_MODE == TX_MODE_PACKET
-	tx_pkt_buf = heap_caps_malloc(sdio_rx_buf_size, MALLOC_CAP_DMA);
+	if (!tx_pkt_buf)
+		tx_pkt_buf = heap_caps_malloc(sdio_rx_buf_size, MALLOC_CAP_DMA);
 	assert(tx_pkt_buf);
 #elif TX_MODE == TX_MODE_STREAM
-	tx_stream_sem = xSemaphoreCreateCounting(SDIO_STREAM_QUEUE_SIZE, SDIO_STREAM_QUEUE_SIZE);
+	if (!tx_stream_sem) {
+		tx_stream_sem = xSemaphoreCreateCounting(SDIO_STREAM_QUEUE_SIZE, SDIO_STREAM_QUEUE_SIZE);
+	}
 	assert(tx_stream_sem);
 	/* Pre-allocated DMA TX pool (needs CONFIG_ESP_CACHE_MALLOC=y to actually pool;
 	 * otherwise hosted_mempool falls back to per-call malloc and STREAM WDT-hangs
 	 * under load). Sized > in-flight depth so alloc never fails once the sem is held. */
-	buf_mp_tx_g = hosted_mempool_create(NULL, 0, SDIO_TX_MEMPOOL_BLOCKS, SDIO_TX_BUFFER_SIZE);
+	buf_mp_tx_g = hosted_mempool_create(NULL, 0,
+			SDIO_STREAM_QUEUE_SIZE + SDIO_TX_MEMPOOL_MARGIN, SDIO_TX_BUFFER_SIZE);
 	assert(buf_mp_tx_g);
 #endif
 	if (!send_task_handle)
 		assert(xTaskCreate(send_task, "sdio_send",
 				CONFIG_ESP_HOSTED_DEFAULT_TASK_STACK_SIZE, NULL,
 				CONFIG_ESP_HOSTED_TASK_PRIORITY_DEFAULT, &send_task_handle) == pdTRUE);
+
+	xEventGroupClearBits(rx_eg, RX_READER_LEFT | RX_STOP_DONE);
+	taskENTER_CRITICAL(&rx_lock);
+	rx_stopping = false;
+	taskEXIT_CRITICAL(&rx_lock);
 
 	memset(&if_handle_g, 0, sizeof(if_handle_g));
 	if_handle_g.state = ACTIVE;
@@ -893,15 +1065,44 @@ static esp_err_t sdio_reset(interface_handle_t *handle)
 	return ESP_OK;
 }
 
+/* Idempotent. Returns once no reader is inside sdio_slave_recv(); later reads
+ * fail fast until sdio_init. Leaves handle->state to deinit. */
+static void sdio_stop(interface_handle_t *handle)
+{
+	TaskHandle_t reader;
+
+	(void)handle;
+	taskENTER_CRITICAL(&rx_lock);
+	rx_stopping = true;
+	reader = rx_reader;
+	taskEXIT_CRITICAL(&rx_lock);
+	if (!reader)
+		return;
+
+	/* The abort misses a reader that entered but has not blocked yet, so
+	 * repeat until it blocks (abort lands) or leaves on a packet. */
+	while (rx_reader_inside() && xTaskAbortDelay(reader) != pdPASS)
+		vTaskDelay(1);
+	xEventGroupWaitBits(rx_eg, RX_READER_LEFT, pdFALSE, pdTRUE, portMAX_DELAY);
+	xEventGroupSetBits(rx_eg, RX_STOP_DONE);
+}
+
 static void sdio_deinit(interface_handle_t *handle)
 {
+	/* Already unloaded for host power-save. */
+	if (if_handle_g.state == DEINIT)
+		return;
 	if_handle_g.state = DEINIT;
+	sdio_stop(handle);
 
 	/* let send_task finish its current iteration before deleting it. */
 	vTaskDelay(pdMS_TO_TICKS(20));
 	if (send_task_handle) {
-		vTaskDelete(send_task_handle);
+		/* Clear the handle before deleting the task to avoid late notifications. */
+		TaskHandle_t h = send_task_handle;
+
 		send_task_handle = NULL;
+		vTaskDelete(h);
 	}
 
 	/* reset + drain the send list so no stale completion breaks the next bring-up's first tx */
@@ -924,20 +1125,41 @@ static void sdio_deinit(interface_handle_t *handle)
 
 	for (int p = 0; p < MAX_PRIORITY_QUEUES; p++) {
 		if (to_host_queue[p]) {
+			/* Queue owns the buffers; free any queued buffers before deletion. */
+			interface_buffer_handle_t q;
+			while (xQueueReceive(to_host_queue[p], &q, 0) == pdTRUE)
+				free_tx_buf(&q);
 			vQueueDelete(to_host_queue[p]);
 			to_host_queue[p] = NULL;
 		}
 	}
 
+	/* Drop the aggregate before freeing its backing buffers. */
+	blk_base = NULL;
+	blk_handle = NULL;
+	blk_total = 0;
+	blk_pos = 0;
+#ifdef CONFIG_EH_TRANSPORT_CP_SDIO_AGGR_TRACE
+	nsub = 0;
+#endif
+
 	for (int i = 0; i < SDIO_RX_BUFFER_NUM; i++) {
 		heap_caps_free(sdio_slave_rx_buffer[i]);
 		sdio_slave_rx_buffer[i] = NULL;
 	}
+	vEventGroupDelete(rx_eg);
+	rx_eg = NULL;
 #if TX_MODE == TX_MODE_SW_AGGR
 	heap_caps_free(tx_aggr_buf); tx_aggr_buf = NULL;
 #elif TX_MODE == TX_MODE_PACKET
 	heap_caps_free(tx_pkt_buf); tx_pkt_buf = NULL;
 #elif TX_MODE == TX_MODE_STREAM
 	hosted_mempool_destroy(buf_mp_tx_g); buf_mp_tx_g = NULL;
+	if (s_sdio_tx_mtx) { vSemaphoreDelete(s_sdio_tx_mtx); s_sdio_tx_mtx = NULL; }
+	/* Preserve the semaphore and restore all buffer tokens. */
+	if (tx_stream_sem) {
+		while (uxSemaphoreGetCount(tx_stream_sem) < SDIO_STREAM_QUEUE_SIZE)
+			xSemaphoreGive(tx_stream_sem);
+	}
 #endif
 }

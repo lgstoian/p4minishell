@@ -1254,10 +1254,10 @@ static void editor_preview_show(void)
 
     /* Preview owns the surface: hide source chrome. */
     if (s_editor_view.cursor != NULL) {
-        lv_obj_add_flag(s_editor_view.cursor, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_editor_view.cursor, true);
     }
     if (s_editor_view.current_line != NULL) {
-        lv_obj_add_flag(s_editor_view.current_line, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_editor_view.current_line, true);
     }
     editor_doc_selection_clear(doc);
     editor_build_selection();
@@ -1345,9 +1345,9 @@ static void editor_cursor_blink_cb(lv_timer_t *timer)
     s_editor_view.cursor_visible = !s_editor_view.cursor_visible;
     if (s_editor_view.cursor != NULL) {
         if (s_editor_view.cursor_visible) {
-            lv_obj_remove_flag(s_editor_view.cursor, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_editor_view.cursor, false);
         } else {
-            lv_obj_add_flag(s_editor_view.cursor, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_editor_view.cursor, true);
         }
     }
 }
@@ -1388,7 +1388,7 @@ static void editor_update_cursor(void)
     if (s_editor_view.cursor_timer != NULL) {
         lv_timer_reset(s_editor_view.cursor_timer);
     }
-    lv_obj_remove_flag(s_editor_view.cursor, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_editor_view.cursor, false);
 }
 
 /** Live-update the cursor blink period of an open editor (0 = steady:
@@ -1413,7 +1413,7 @@ void editor_view_set_blink_ms(uint32_t blink_ms)
         }
         s_editor_view.cursor_visible = true;
         if (s_editor_view.cursor != NULL) {
-            lv_obj_remove_flag(s_editor_view.cursor, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_editor_view.cursor, false);
         }
     } else {
         if (s_editor_view.cursor_timer == NULL) {
@@ -1438,7 +1438,7 @@ static void editor_update_current_line(void)
         return;
     }
     /* Preview hides this bar; every rebuild restores it. */
-    lv_obj_remove_flag(s_editor_view.current_line, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_editor_view.current_line, false);
     if (s_editor_view.wrap && editor_wrap_px() > 0) {
         /* Single visual line under the caret (not the whole doc row). */
         lv_obj_set_y(s_editor_view.current_line,
@@ -1472,10 +1472,10 @@ static void editor_build_selection(void)
     }
 
     if (doc == NULL || !editor_doc_has_selection(doc)) {
-        lv_obj_add_flag(s_editor_view.sel_layer, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_editor_view.sel_layer, true);
         return;
     }
-    lv_obj_remove_flag(s_editor_view.sel_layer, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_editor_view.sel_layer, false);
 
     editor_doc_selection_bounds(doc, &s_row, &s_col, &e_row, &e_col);
     if (s_editor_view.wrap && editor_wrap_px() > 0) {
@@ -1514,9 +1514,9 @@ static void editor_build_selection(void)
                          editor_measure_prefix(doc, row, b) -
                          editor_measure_prefix(doc, row, cs);
                     rect = lv_obj_create(s_editor_view.sel_layer);
-                    lv_obj_remove_flag(rect, LV_OBJ_FLAG_SCROLLABLE |
-                                             LV_OBJ_FLAG_CLICKABLE |
-                                             LV_OBJ_FLAG_CLICK_FOCUSABLE);
+                    lv_obj_set_scrollable(rect, false);
+                    lv_obj_set_clickable(rect, false);
+                    lv_obj_set_click_focusable(rect, false);
                     lv_obj_set_style_bg_color(rect,
                         lv_color_hex(P4_CONFIG_EDITOR_SELECTION_COLOR), 0);
                     lv_obj_set_style_bg_opa(rect, LV_OPA_COVER, 0);
@@ -1552,9 +1552,9 @@ static void editor_build_selection(void)
 
         {
             lv_obj_t *rect = lv_obj_create(s_editor_view.sel_layer);
-            lv_obj_remove_flag(rect, LV_OBJ_FLAG_SCROLLABLE |
-                                     LV_OBJ_FLAG_CLICKABLE |
-                                     LV_OBJ_FLAG_CLICK_FOCUSABLE);
+            lv_obj_set_scrollable(rect, false);
+            lv_obj_set_clickable(rect, false);
+            lv_obj_set_click_focusable(rect, false);
             lv_obj_set_style_bg_color(rect,
                 lv_color_hex(P4_CONFIG_EDITOR_SELECTION_COLOR), 0);
             lv_obj_set_style_bg_opa(rect, LV_OPA_COVER, 0);
@@ -2778,10 +2778,9 @@ bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
     lv_obj_set_pos(s_editor_view.spacer, 0, 0);
     lv_obj_set_width(s_editor_view.spacer, LV_PCT(100));
     lv_obj_set_height(s_editor_view.spacer, 0);
-    lv_obj_remove_flag(s_editor_view.spacer,
-                       LV_OBJ_FLAG_SCROLLABLE |
-                       LV_OBJ_FLAG_CLICKABLE |
-                       LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_obj_set_scrollable(s_editor_view.spacer, false);
+    lv_obj_set_clickable(s_editor_view.spacer, false);
+    lv_obj_set_click_focusable(s_editor_view.spacer, false);
     lv_obj_set_style_bg_opa(s_editor_view.spacer, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_editor_view.spacer, 0, 0);
     lv_obj_set_style_pad_all(s_editor_view.spacer, 0, 0);
@@ -2794,7 +2793,7 @@ bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
     }
     lv_obj_set_width(s_editor_view.spans, LV_PCT(100));
     lv_obj_set_height(s_editor_view.spans, 0);
-    lv_obj_clear_flag(s_editor_view.spans, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(s_editor_view.spans, false);
     lv_obj_set_style_bg_opa(s_editor_view.spans, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_editor_view.spans, 0, 0);
     lv_obj_set_style_pad_all(s_editor_view.spans, 0, 0);
@@ -2822,13 +2821,12 @@ bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
     }
     lv_obj_set_pos(s_editor_view.sel_layer, 0, 0);
     lv_obj_set_size(s_editor_view.sel_layer, lv_obj_get_width(surface), 0);
-    lv_obj_remove_flag(s_editor_view.sel_layer,
-                       LV_OBJ_FLAG_SCROLLABLE |
-                       LV_OBJ_FLAG_CLICKABLE |
-                       LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_obj_set_scrollable(s_editor_view.sel_layer, false);
+    lv_obj_set_clickable(s_editor_view.sel_layer, false);
+    lv_obj_set_click_focusable(s_editor_view.sel_layer, false);
     lv_obj_set_style_bg_opa(s_editor_view.sel_layer, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_editor_view.sel_layer, 0, 0);
-    lv_obj_add_flag(s_editor_view.sel_layer, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_editor_view.sel_layer, true);
 
     /* Block cursor. */
     s_editor_view.cursor = lv_obj_create(surface);
@@ -2836,10 +2834,9 @@ bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
         editor_view_close();
         return false;
     }
-    lv_obj_remove_flag(s_editor_view.cursor,
-                       LV_OBJ_FLAG_SCROLLABLE |
-                       LV_OBJ_FLAG_CLICKABLE |
-                       LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_obj_set_scrollable(s_editor_view.cursor, false);
+    lv_obj_set_clickable(s_editor_view.cursor, false);
+    lv_obj_set_click_focusable(s_editor_view.cursor, false);
     lv_obj_set_style_bg_color(s_editor_view.cursor,
                               windows_get_color(WINDOWS_COLOR_TEXT), 0);
     lv_obj_set_style_bg_opa(s_editor_view.cursor, LV_OPA_COVER, 0);
@@ -2876,10 +2873,9 @@ bool editor_view_open(editor_doc_t *doc, editor_control_t *control)
         editor_view_close();
         return false;
     }
-    lv_obj_remove_flag(s_editor_view.current_line,
-                       LV_OBJ_FLAG_SCROLLABLE |
-                       LV_OBJ_FLAG_CLICKABLE |
-                       LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_obj_set_scrollable(s_editor_view.current_line, false);
+    lv_obj_set_clickable(s_editor_view.current_line, false);
+    lv_obj_set_click_focusable(s_editor_view.current_line, false);
     lv_obj_set_style_bg_color(s_editor_view.current_line,
         lv_color_hex(P4_CONFIG_EDITOR_CURRENT_LINE_COLOR), 0);
     lv_obj_set_style_bg_opa(s_editor_view.current_line, LV_OPA_COVER, 0);

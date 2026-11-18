@@ -2996,8 +2996,14 @@
 /** Block size for HTTP downloads during OTA. */
 #define P4_CONFIG_C6OTA_HTTP_BLOCK_BYTES     2048
 
-/** Transfer chunk size for ESP-Hosted SDIO OTA. */
-#define P4_CONFIG_C6OTA_TRANSFER_CHUNK       1500
+/** Transfer chunk size for ESP-Hosted SDIO OTA. Kept below the ESP-Hosted
+ *  vserial frame budget on purpose: esp_hosted 3.1.0 sizes its OTA chunk limit
+ *  from EH_HOST_RPC_SERIAL_MAX_PAYLOAD_BYTES (1504 on our 1536-byte SDIO
+ *  frame), but the packed OTAWrite RPC request is larger than that, so a
+ *  1500-byte chunk is split into two vserial fragments and the co-processor
+ *  never answers it (the host reports ESP_FAIL with no transport error). 1200
+ *  keeps the whole request in one frame and the transfer completes. */
+#define P4_CONFIG_C6OTA_TRANSFER_CHUNK       1200
 
 /** Progress reporting interval in percent. */
 #define P4_CONFIG_C6OTA_PROGRESS_STEP        5

@@ -125,6 +125,7 @@ for /R P4BREC %%v in (*.TXT) do echo P4BATCH: forr %%v
 write P4BTF1.TMP one
 write P4BTF2.TMP two
 for %%f in (P4BTF?.TMP) do echo P4BATCH: for-file %%f
+for %%f in ("P4BTF?.TMP") do echo P4BATCH: for-qfile %%f
 write P4BTF.DAT alpha:1
 append P4BTF.DAT beta:2
 for /f "tokens=1,2 delims=:" %%a in (P4BTF.DAT) do echo P4BATCH: forf-tok %%a=%%b
@@ -132,6 +133,9 @@ for /f "skip=1" %%l in (P4BTF.DAT) do echo P4BATCH: forf-skip %%l
 write P4BTEOL.DAT ;skipme
 append P4BTEOL.DAT P4EOLKEEP
 for /f "eol=;" %%l in (P4BTEOL.DAT) do echo P4BATCH: forf-eol %%l
+write P4BTQ.DAT ;kept
+append P4BTQ.DAT P4QKEEP
+for /f "eol= skip=" %%l in (P4BTQ.DAT) do echo P4BATCH: forf-empty %%l
 for /f "tokens=*" %%v in ('echo P4BATCHCMD') do echo P4BATCH: forf-cmd %%v
 type P4BTF.DAT | for /f "tokens=1 delims=:" %%k in () do echo P4BATCH: forf-pipe %%k
 goto P4SKIP
@@ -450,6 +454,8 @@ def run(dev, ctx):
     # ---- for literal + wildcard --------------------------------------
     c.expect("for literal token", "P4BATCH: for-lit beta", out)
     c.expect("for wildcard file", "P4BATCH: for-file P4BTF1.TMP", out)
+    c.expect("quoted wildcard set expands", "P4BATCH: for-qfile P4BTF1.TMP", out)
+    c.expect("quoted wildcard set expands (second)", "P4BATCH: for-qfile P4BTF2.TMP", out)
 
     # ---- for /L + while --------------------------------------------
     c.expect("for /L counts up", "P4BATCH: forl 2", out)
@@ -480,8 +486,16 @@ def run(dev, ctx):
     c.expect("for /f delims+tokens", "P4BATCH: forf-tok alpha=1", out)
     c.expect("for /f skip", "P4BATCH: forf-skip beta:2", out)
     c.expect("for /f eol", "P4BATCH: forf-eol P4EOLKEEP", out)
+    c.expect("for /f accepts empty eol= skip=", "P4BATCH: forf-empty ;kept", out)
+    c.expect("for /f empty skip= skips nothing", "P4BATCH: forf-empty P4QKEEP", out)
     c.expect("for /f command source", "P4BATCH: forf-cmd P4BATCHCMD", out)
     c.expect("for /f pipe source", "P4BATCH: forf-pipe alpha", out)
+
+    # ---- interactive for (single % at the prompt) --------------------
+    iout = dev.run("for %v in (alpha beta) do echo P4BATCH: forint %v",
+                   timeout=30)
+    c.expect("interactive for binds %v", "P4BATCH: forint alpha", iout)
+    c.expect("interactive for runs every value", "P4BATCH: forint beta", iout)
 
     # ---- goto --------------------------------------------------------
     c.expect("goto lands on label", "P4BATCH: goto OK", out)

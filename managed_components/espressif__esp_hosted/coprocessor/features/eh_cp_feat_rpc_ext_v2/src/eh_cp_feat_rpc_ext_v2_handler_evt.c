@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -107,7 +107,7 @@ esp_err_t copy_wifi_sta_cfg_to_rpc_struct(void *payload, rpc_payload_type_t type
 	p_c_sta->sort_method = p_a_sta->sort_method;
 	p_c_sta->threshold->rssi = p_a_sta->threshold.rssi;
 	p_c_sta->threshold->authmode = p_a_sta->threshold.authmode;
-#if EH_CP_IDF_GE_5_4
+#if EH_CP_WIFI_GOT_RSSI_5G_ADJ
 	p_c_sta->threshold->rssi_5g_adjustment = p_a_sta->threshold.rssi_5g_adjustment;
 #endif
 	p_c_sta->pmf_cfg->capable = p_a_sta->pmf_cfg.capable;
@@ -130,6 +130,10 @@ esp_err_t copy_wifi_sta_cfg_to_rpc_struct(void *payload, rpc_payload_type_t type
 
 	if (p_a_sta->transition_disable)
 		EH_CP_SET_BIT(WIFI_STA_CONFIG_1_transition_disable, p_c_sta->bitmask);
+#if EH_CP_WIFI_GOT_WPA3_COMPATIBLE_MODE
+	if (p_a_sta->disable_wpa3_compatible_mode)
+		EH_CP_SET_BIT(WIFI_STA_CONFIG_1_disable_wpa3_compat, p_c_sta->bitmask);
+#endif
 
 #if EH_CP_DECODE_WIFI_RESERVED_FIELD
 #if EH_CP_WIFI_NEW_RESERVED_FIELDS
@@ -171,7 +175,7 @@ esp_err_t copy_wifi_sta_cfg_to_rpc_struct(void *payload, rpc_payload_type_t type
 	if (p_a_sta->he_trig_cqi_feedback_disabled)
 		EH_CP_SET_BIT(WIFI_STA_CONFIG_2_he_trig_cqi_feedback_disabled_BIT, p_c_sta->he_bitmask);
 
-#if EH_CP_IDF_GE_5_5
+#if EH_CP_WIFI_GOT_STA_VHT_CFG
 	if (p_a_sta->vht_su_beamformee_disabled)
 		EH_CP_SET_BIT(WIFI_STA_CONFIG_2_vht_su_beamformee_disabled, p_c_sta->he_bitmask);
 
@@ -180,6 +184,13 @@ esp_err_t copy_wifi_sta_cfg_to_rpc_struct(void *payload, rpc_payload_type_t type
 
 	if (p_a_sta->vht_mcs8_enabled)
 		EH_CP_SET_BIT(WIFI_STA_CONFIG_2_vht_mcs8_enabled, p_c_sta->he_bitmask);
+#endif
+#if EH_CP_WIFI_GOT_STA_MAX_BW_NEG
+	if (p_a_sta->max_bandwidth_negotiation_enabled_2g)
+		EH_CP_SET_BIT(WIFI_STA_CONFIG_2_max_bandwidth_negotiation_enabled_2g_BIT, p_c_sta->he_bitmask);
+
+	if (p_a_sta->max_bandwidth_negotiation_enabled_5g)
+		EH_CP_SET_BIT(WIFI_STA_CONFIG_2_max_bandwidth_negotiation_enabled_5g_BIT, p_c_sta->he_bitmask);
 #endif
 
 #if EH_CP_DECODE_WIFI_RESERVED_FIELD
@@ -453,6 +464,35 @@ esp_err_t rpc_evt_Event_WifiEventNoArgs(Rpc *ntfy,
     return ESP_OK;
 }
 
+/* data: [type (4 bytes LE)][that type's struct]. */
+esp_err_t rpc_evt_context(Rpc *ntfy, const uint8_t *data, size_t len)
+{
+    uint32_t type;
+
+    if (!data || len < sizeof(type)) {
+        ESP_LOGE(TAG, "Context event: invalid data (len=%u)", (unsigned int)len);
+        return ESP_FAIL;
+    }
+    memcpy(&type, data, sizeof(type));
+
+    NTFY_TEMPLATE(RPC_ID__Event_Context,
+            RpcEventContext, event_context,
+            rpc__event__context__init);
+
+    ntfy_payload->type = type;
+    len -= sizeof(type);
+    if (len) {
+        ntfy_payload->data.data = (uint8_t *)malloc(len);
+        if (!ntfy_payload->data.data) {
+            ntfy_payload->resp = FAILURE;
+            return ESP_OK;
+        }
+        memcpy(ntfy_payload->data.data, data + sizeof(type), len);
+        ntfy_payload->data.len = len;
+    }
+    return ESP_OK;
+}
+
 esp_err_t rpc_evt_Event_DhcpDnsStatus(Rpc *ntfy,
         const uint8_t *data, ssize_t len)
 {
@@ -561,7 +601,7 @@ esp_err_t rpc_evt_custom_rpc(Rpc *ntfy, const uint8_t *data, size_t len)
      * len is the total byte count of that buffer.
      */
     if (!data || len < sizeof(uint32_t)) {
-        ESP_LOGE(TAG, "Custom RPC event: invalid data (len=%zu)", len);
+        ESP_LOGE(TAG, "Custom RPC event: invalid data (len=%u)", (unsigned int)len);
         return ESP_FAIL;
     }
 
@@ -579,7 +619,7 @@ esp_err_t rpc_evt_custom_rpc(Rpc *ntfy, const uint8_t *data, size_t len)
     if (payload_len > 0) {
         ntfy_payload->data.data = (uint8_t *)malloc(payload_len);
         if (!ntfy_payload->data.data) {
-            ESP_LOGE(TAG, "Failed to allocate %zu bytes for custom RPC event", payload_len);
+            ESP_LOGE(TAG, "Failed to allocate %u bytes for custom RPC event", (unsigned int)payload_len);
             ntfy_payload->resp = FAILURE;
             return ESP_OK;
         }

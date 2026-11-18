@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -117,12 +117,32 @@ struct eh_host_uart_config eh_host_get_default_uart_config(void)
 }
 #endif
 
+#ifdef CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_OTG_HOST
+struct eh_host_usb_otg_config eh_host_get_default_usb_otg_config(void)
+{
+    return (struct eh_host_usb_otg_config) {
+        .pin_reset = {.port = EH_HOST_PORT_GPIO_PORT_RESET, .pin = EH_HOST_PORT_GPIO_PIN_RESET},
+        .connection_timeout_ms = EH_HOST_PORT_USB_CONNECTION_TIMEOUT_MS,
+        .vid = EH_HOST_PORT_USB_VID,
+        .pid = EH_HOST_PORT_USB_PID,
+        .tx_queue_size = 0,
+        .rx_queue_size = EH_HOST_PORT_USB_RX_QUEUE_SIZE,
+        .out_buffer_size = EH_HOST_PORT_USB_OUT_BUF_SIZE,
+        .in_buffer_size = EH_HOST_PORT_USB_IN_BUF_SIZE,
+    };
+}
+#endif
+
 
 
 #if EH_HOST_TRANSPORT_BUS_SPI && defined(ESP_PLATFORM)
 void eh_host_port_transport_check_max_freq(uint8_t chip_id)
 {
-    unsigned mhz = (unsigned)EH_HOST_PORT_SPI_FD_CLK_MHZ;
+    unsigned mhz = (unsigned int)EH_HOST_PORT_SPI_FD_CLK_MHZ;
+    struct eh_host_spi_config *cfg;
+    if (EH_HOST_TRANSPORT_RC_OK == eh_host_spi_get_config(&cfg) && cfg->clk_mhz) {
+        mhz = (unsigned int)cfg->clk_mhz;
+    }
     unsigned max_mhz = (chip_id == EH_PRIV_FIRMWARE_CHIP_ESP32) ? 10u : 40u;
     if (mhz < max_mhz) {
         ESP_LOGW(TAG, "SPI FD clock in-use: [%u]MHz. Can optimize in 1MHz steps till Max[%u]MHz",
@@ -133,7 +153,11 @@ void eh_host_port_transport_check_max_freq(uint8_t chip_id)
 void eh_host_port_transport_check_max_freq(uint8_t chip_id)
 {
     (void)chip_id;
-    unsigned mhz = (unsigned)EH_HOST_PORT_SPI_HD_CLK_MHZ;
+    unsigned mhz = (unsigned int)EH_HOST_PORT_SPI_HD_CLK_MHZ;
+    struct eh_host_spi_hd_config *cfg;
+    if (EH_HOST_TRANSPORT_RC_OK == eh_host_spi_hd_get_config(&cfg) && cfg->clk_mhz) {
+        mhz = (unsigned int)cfg->clk_mhz;
+    }
     if (mhz < 40u) {
         ESP_LOGW(TAG, "SPI HD clock in-use: [%u]MHz. Can optimize in 1MHz steps till Max[%u]MHz",
                  mhz, 40u);
@@ -143,11 +167,13 @@ void eh_host_port_transport_check_max_freq(uint8_t chip_id)
 void eh_host_port_transport_check_max_freq(uint8_t chip_id)
 {
     (void)chip_id;
-    /* Read Kconfig freq, not SDMMC_FREQ_DEFAULT (would always alarm at 40MHz) */
-    if ((unsigned)EH_HOST_PORT_SDIO_CLOCK_FREQ_KHZ < 40000u) {
-        /* A lower negotiated clock is a supported board-specific fallback, not a fault. */
-        ESP_LOGD(TAG, "SDIO clock freq set to [%u]KHz, Max possible (on PCB) is 40000KHz",
-                 (unsigned)EH_HOST_PORT_SDIO_CLOCK_FREQ_KHZ);
+    unsigned khz = (unsigned int)EH_HOST_PORT_SDIO_CLOCK_FREQ_KHZ;
+    struct eh_host_sdio_config *cfg;
+    if (EH_HOST_TRANSPORT_RC_OK == eh_host_sdio_get_config(&cfg) && cfg->clock_freq_khz) {
+        khz = (unsigned int)cfg->clock_freq_khz;
+    }
+    if (khz < 40000u) {
+        ESP_LOGW(TAG, "SDIO clock freq set to [%u]KHz, Max possible (on PCB) is 40000KHz", khz);
     }
 }
 #elif EH_HOST_TRANSPORT_BUS_UART && defined(ESP_PLATFORM)
@@ -155,7 +181,11 @@ void eh_host_port_transport_check_max_freq(uint8_t chip_id)
 {
     (void)chip_id;
     /* 921600 is the practical stable ceiling (docs/design/uart.md, performance.md). */
-    unsigned baud = (unsigned)EH_HOST_PORT_UART_BAUD_RATE;
+    unsigned baud = (unsigned int)EH_HOST_PORT_UART_BAUD_RATE;
+    struct eh_host_uart_config *cfg;
+    if (EH_HOST_TRANSPORT_RC_OK == eh_host_uart_get_config(&cfg) && cfg->baud_rate) {
+        baud = (unsigned int)cfg->baud_rate;
+    }
     if (baud < 921600u) {
         ESP_LOGW(TAG, "UART baud [%u] is below 921600, the reliable rate for this link "
                       "(software flow control only). The UART peripheral itself can reach "
@@ -164,5 +194,5 @@ void eh_host_port_transport_check_max_freq(uint8_t chip_id)
 }
 #else
 /* non-IDF / no-transport stub */
-void eh_host_port_transport_check_max_freq(uint8_t chip_id) { (void)chip_id; }
+void eh_host_port_transport_check_max_freq(uint8_t chip_id) { (void)chip_id; (void)TAG; }
 #endif

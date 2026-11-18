@@ -7,10 +7,8 @@
  *      INCLUDES
  *********************/
 
-#include "lv_async.h"
+#include "../lvgl_public.h"
 #include "lv_timer_private.h"
-#include "../osal/lv_os.h"
-#include "../stdlib/lv_mem.h"
 
 #if defined(ESP_PLATFORM)
 #include "esp_heap_caps.h"
@@ -54,13 +52,15 @@ static void async_info_free(lv_async_info_t * info);
 
 lv_result_t lv_async_call(lv_async_cb_t async_xcb, void * user_data)
 {
+    LV_CHECK_ARG(async_xcb != NULL, return LV_RESULT_INVALID);
+
     lv_result_t result = LV_RESULT_OK;
     lv_async_info_t * info;
     lv_timer_t * timer;
 
-    /*Allocate an info structure. On ESP32-P4 with esp_hosted 2.12.1 the Wi-Fi
-     * bring-up path corrupts internal-RAM heap metadata; keeping these small
-     * async descriptors in PSRAM isolates them from that corruption.*/
+    /*Allocate an info structure. On ESP32-P4 the Wi-Fi bring-up path corrupts
+     * internal-RAM heap metadata; keeping these small async descriptors in
+     * PSRAM isolates them from that corruption.*/
 
     /* lv_async_call may be invoked from any task (Wi-Fi events, worker,
      * USB). Creating/deleting timers mutates the global timer list, which the
@@ -104,6 +104,8 @@ done:
 
 lv_result_t lv_async_call_cancel(lv_async_cb_t async_xcb, void * user_data)
 {
+    LV_CHECK_ARG(async_xcb != NULL, return LV_RESULT_INVALID);
+
     lv_timer_t * timer;
     lv_result_t res = LV_RESULT_INVALID;
 
@@ -161,10 +163,10 @@ static void lv_async_timer_cb(lv_timer_t * timer)
 static lv_async_info_t * async_info_alloc(void)
 {
     lv_async_info_t * info = (lv_async_info_t *)heap_caps_malloc(sizeof(lv_async_info_t),
-                                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                                                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if(info == NULL) {
         info = (lv_async_info_t *)heap_caps_malloc(sizeof(lv_async_info_t),
-                                                     MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+                                                   MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     }
     return info;
 }

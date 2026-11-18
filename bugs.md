@@ -211,6 +211,35 @@ title, red event status, cyan table header).
 
 ## Fixed findings (2026-11-16 host lane, second round)
 
+### F61. Hosted-SDIO card init failed under load, then asserted in `xQueueSemaphoreTake` - **FIXED by esp_hosted 3.1.0 (2026-11-18)**
+
+- **Severity:** HIGH (the board rebooted: a card-init error left a queue
+  uncreated, and the next take asserted)
+- **Component:** `managed_components/espressif__esp_hosted` (host driver and
+  the ESP32-C6 coprocessor), `components/c6ota`
+- **Board:** `jc1060p470c` (COM3), `m5stack_tab5` (COM6)
+- **Found on:** 2026-11-17, during the v1.4.3 release matrix.
+- **Symptom:** `sdmmc_host_init_slot ... returned 0x107` followed by
+  `assert failed: xQueueSemaphoreTake queue.c:1709 (( pxQueue ))` and a
+  reboot. The trigger was link pressure (Wi-Fi traffic plus SD writes), so it
+  looked like a card or wiring problem.
+- **Fix:** upstream first: `esp_hosted` 3.0.6 -> 3.1.0 on both the host and
+  the C6 (the 3.0.10/3.1.0 line adds card-init retry, stream depth and RX
+  staging, mempool and task-stack sizing). No local SDIO patch is carried; the
+  one remaining project hunk is the log rate-limit on the credit probe, which
+  is re-authored against 3.1.0 in `tools/managed_patches.patch`. Two
+  integration fixes came with it: the Tab5 must select the upstream
+  `CONFIG_ESP32P4_TAB5_C6_BOARD` personality (3.1.0 range-locks the SDIO pins
+  per board), and `P4_CONFIG_C6OTA_TRANSFER_CHUNK` is 1200, because a
+  1500-byte chunk no longer fits one vserial frame with the packed `OTAWrite`
+  request (the coprocessor never answers it).
+- **Verification:** 20/20 cold boots with no assert, no watchdog, no SDIO
+  error and `C6 hosted firmware version: 3.1.0`; three Wi-Fi
+  connect/HTTPS/SD cycles clean; `c6ota default` transferred 1,361,856 bytes
+  at 1200-byte chunks and the C6 rebooted into 3.1.0.
+
+---
+
 ### F60. `shell_fs_resolve_path()` read past an empty cwd - **FIXED (2026-11-16)**
 
 - **Severity:** LOW (latent; only reachable before `storage_init()`)

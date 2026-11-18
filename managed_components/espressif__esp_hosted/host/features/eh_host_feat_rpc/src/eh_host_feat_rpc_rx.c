@@ -1,4 +1,8 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 /* RX upcall + queue + worker; decode via proto_ops->decode_frame. */
 
 #include <inttypes.h>
@@ -44,6 +48,22 @@ void eh_rpc_rx_deinit(void)
     }
 }
 
+static void rx_worker_join(void)
+{
+    g_rx_stop_requested = true;
+    /* Wake rx_worker from its blocking receive. If the queue is full the send
+     * fails, but then the worker is not blocked and sees the flag after the
+     * item it takes. */
+    if (g_rx_q) {
+        rx_item_t wake = { 0 };
+        (void)eh_host_port_queue_send(g_rx_q, &wake, 0);
+    }
+    eh_host_port_task_join(g_rx_thread);
+    eh_host_port_task_destroy(g_rx_thread);
+    g_rx_thread = NULL;
+    g_rx_thread_running = false;
+}
+
 int eh_rpc_rx_start(void)
 {
     if (g_rx_thread_running) {
@@ -64,11 +84,7 @@ int eh_rpc_rx_start(void)
     if (c->io_ops && c->io_ops->register_rx_cb) {
         if (c->io_ops->register_rx_cb(rx_upcall, NULL, c->io_ops->ctx) != 0) {
             ESP_LOGD("eh_host_feat_rpc", "rx_start: io_ops.register_rx_cb failed");
-            g_rx_stop_requested = true;
-            eh_host_port_task_join(g_rx_thread);
-            eh_host_port_task_destroy(g_rx_thread);
-            g_rx_thread = NULL;
-            g_rx_thread_running = false;
+            rx_worker_join();
             return -1;
         }
     }
@@ -87,11 +103,7 @@ int eh_rpc_rx_stop(void)
         (void)c->io_ops->register_rx_cb(NULL, NULL, c->io_ops->ctx);
     }
 
-    g_rx_stop_requested = true;
-    eh_host_port_task_join(g_rx_thread);
-    eh_host_port_task_destroy(g_rx_thread);
-    g_rx_thread = NULL;
-    g_rx_thread_running = false;
+    rx_worker_join();
 
     if (g_rx_q) {
         rx_item_t item;
@@ -109,11 +121,11 @@ static int rx_upcall(const uint8_t *buf, size_t len, void *ctx)
         return 0;
     }
     if (!eh_rpc_is_ready()) {
-        ESP_LOGW("eh_rpc_ll", "rx_upcall: drop %zu bytes (rpc not ready)", len);
+        ESP_LOGW("eh_rpc_ll", "rx_upcall: drop %lu bytes (rpc not ready)", (unsigned long)len);
         return 0;
     }
     if (!g_rx_q) {
-        ESP_LOGW("eh_rpc_ll", "rx_upcall: drop %zu bytes (rx queue null)", len);
+        ESP_LOGW("eh_rpc_ll", "rx_upcall: drop %lu bytes (rx queue null)", (unsigned long)len);
         return -1;
     }
 
@@ -128,7 +140,7 @@ static int rx_upcall(const uint8_t *buf, size_t len, void *ctx)
         free(copy);
         /* RX queue overflow drops a frame — if it was a response, the waiting
          * sync request times out. Visible so the loss is attributable. */
-        ESP_LOGW("eh_host_feat_rpc", "rx_upcall: queue full, dropping %zu bytes", len);
+        ESP_LOGW("eh_host_feat_rpc", "rx_upcall: queue full, dropping %lu bytes", (unsigned long)len);
         return -1;
     }
     return 0;
@@ -185,8 +197,9 @@ static void rx_worker(void *arg)
 
     while (!g_rx_stop_requested) {
         rx_item_t item;
-        eh_host_port_err_t r = eh_host_port_queue_receive(g_rx_q, &item, 100);
-        if (r != EH_HOST_PORT_OK) {
+        eh_host_port_err_t r = eh_host_port_queue_receive(g_rx_q, &item, EH_HOST_PORT_WAIT_FOREVER);
+        /* NULL buf is the stop wake-up; rx_upcall never queues one */
+        if (r != EH_HOST_PORT_OK || !item.buf) {
             continue;
         }
 
@@ -201,7 +214,7 @@ static void rx_worker(void *arg)
         } else {
             /* An undecodable frame is silently lost otherwise — if it was a
              * response, its sync request times out with no other trace. */
-            ESP_LOGW("eh_host_feat_rpc", "decode_frame failed rc=%d (%zu bytes)", rc, item.len);
+            ESP_LOGW("eh_host_feat_rpc", "decode_frame failed rc=%d (%lu bytes)", rc, (unsigned long)item.len);
             if (rx.ctrl_cmd && ctx->proto_ops->free_ctrl_cmd) {
                 ctx->proto_ops->free_ctrl_cmd(rx.ctrl_cmd);
             }

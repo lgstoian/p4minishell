@@ -11,12 +11,14 @@ counterpart of `bluetooth/nimble_uart/bleprph_host_only_uart` (NimBLE / BLE).
 
 ### Supported Coprocessors (BT controller, UART-H4 mode)
 
-Classic BR/EDR requires an ESP32 controller — the BLE-only chips cannot serve
+Classic BR/EDR requires an ESP32 or ESP32-S31 controller — the BLE-only chips cannot serve
 the classic profile this demo discovers.
 
-| Coprocessor | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C6 | ESP32-H2 | ESP32-S3 |
-| :---------- | :---: | :------: | :------: | :------: | :------: | :------: |
-| BR/EDR (classic) | Yes | No (BLE only) | No (BLE only) | No (BLE only) | No (BLE only) | No (BLE only) |
+| Coprocessor | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C6 | ESP32-H2 | ESP32-S3 | ESP32-S31 |
+| :---------- | :---: | :------: | :------: | :------: | :------: | :------: | :-------: |
+| BR/EDR (classic) | Yes | No (BLE only) | No (BLE only) | No (BLE only) | No (BLE only) | No (BLE only) | Yes ¹ |
+
+¹ ESP32-S31 needs ESP-IDF with commit `64018e19824` (v6.2 or later). With ESP-IDF v6.1, the ESP32-S31 controller drops host commands when Bluedroid sends them quickly.
 
 ### Supported Host Devices
 
@@ -28,21 +30,24 @@ the classic profile this demo discovers.
 
 | HCI link           | Dedicated UART (H4) |
 | :----------------- | :-----------------: |
-| Host ↔ controller  | Yes — RTS/CTS flow control **mandatory** |
+| Host ↔ controller  | Yes — RTS/CTS flow control recommended; both ends must match |
 
 Bluetooth HCI here runs over its own UART, independent of the ESP-Hosted bus a
 host may separately use for Wi-Fi.
 
 The co-processor runs the BT controller with HCI exposed on a physical UART (H4),
-not on the ESP-Hosted bus. Because this example discovers **classic BR/EDR**
-devices, build the co-processor on an **ESP32** (the only Espressif controller
-with the classic profile) and keep BR/EDR enabled in the controller:
+not on the ESP-Hosted bus. This example discovers **classic BR/EDR** devices.
+Build the co-processor on an **ESP32** or **ESP32-S31**. These are the only
+Espressif controllers with the classic profile. Keep BR/EDR enabled in the
+controller:
 
 ```bash
 cd examples/bluetooth/bluedroid_uart/bluedroid_host_only_uart/cp
-idf.py set-target esp32
+idf.py set-target esp32              # or: idf.py --preview set-target esp32s31
 idf.py menuconfig
 ```
+
+ESP32 co-processor:
 
 ```text
 Component config
@@ -55,8 +60,26 @@ Component config
                └── (X) UART                    <── HCI over a dedicated UART (H4)
                     ├── HCI UART Tx pin        ← wire to host UART Rx
                     ├── HCI UART Rx pin        ← wire to host UART Tx
-                    └── [*] HCI UART flow control (RTS/CTS)
+                    └── [*] HCI UART flow control (RTS/CTS)   <── default on
 ```
+
+ESP32-S31 co-processor:
+
+```text
+Component config
+└── Bluetooth
+     └── Bluetooth controller HCI
+          ├── HCI mode
+          │    └── (X) UART(H4)                <── set by sdkconfig.defaults.esp32s31
+          ├── HCI uart Tx gpio / Rx gpio       ← set the pins for your board
+          └── [ ] HCI uart Hardware Flow ctrl  <── default off (CONFIG_BT_CTRL_HCI_UART_FLOWCTRL)
+```
+
+> [!IMPORTANT]
+> The host turns flow control on by default. The ESP32-S31 controller turns it
+> off by default. Make the two ends match. Either set
+> `CONFIG_BT_CTRL_HCI_UART_FLOWCTRL=y` on the co-processor and set its RTS and
+> CTS pins, or clear **UART hardware flow control (RTS/CTS)** on the host.
 
 The CP dependency config is pre-set in `sdkconfig.defaults` (do not remove):
 

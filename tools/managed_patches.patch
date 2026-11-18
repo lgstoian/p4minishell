@@ -1,20 +1,18 @@
 diff --git a/managed_components/lvgl__lvgl/src/misc/lv_async.c b/managed_components/lvgl__lvgl/src/misc/lv_async.c
 --- a/managed_components/lvgl__lvgl/src/misc/lv_async.c
 +++ b/managed_components/lvgl__lvgl/src/misc/lv_async.c
-@@ -9,7 +9,12 @@
- 
- #include "lv_async.h"
+@@ -10,6 +10,10 @@
+ #include "../lvgl_public.h"
  #include "lv_timer_private.h"
-+#include "../osal/lv_os.h"
- #include "../stdlib/lv_mem.h"
-+
+ 
 +#if defined(ESP_PLATFORM)
 +#include "esp_heap_caps.h"
 +#endif
- 
++
  /*********************
   *      DEFINES
-@@ -30,6 +35,11 @@
+  *********************/
+@@ -29,6 +33,11 @@ typedef struct _lv_async_info_t {
  
  static void lv_async_timer_cb(lv_timer_t * timer);
  
@@ -26,21 +24,22 @@ diff --git a/managed_components/lvgl__lvgl/src/misc/lv_async.c b/managed_compone
  /**********************
   *  STATIC VARIABLES
   **********************/
-@@ -44,32 +54,63 @@
- 
- lv_result_t lv_async_call(lv_async_cb_t async_xcb, void * user_data)
+@@ -45,34 +54,65 @@ lv_result_t lv_async_call(lv_async_cb_t async_xcb, void * user_data)
  {
+     LV_CHECK_ARG(async_xcb != NULL, return LV_RESULT_INVALID);
+ 
 -    /*Allocate an info structure*/
 -    lv_async_info_t * info = lv_malloc(sizeof(lv_async_info_t));
+-
+-    if(info == NULL)
+-        return LV_RESULT_INVALID;
 +    lv_result_t result = LV_RESULT_OK;
 +    lv_async_info_t * info;
 +    lv_timer_t * timer;
- 
--    if(info == NULL)
--        return LV_RESULT_INVALID;
-+    /*Allocate an info structure. On ESP32-P4 with esp_hosted 2.12.1 the Wi-Fi
-+     * bring-up path corrupts internal-RAM heap metadata; keeping these small
-+     * async descriptors in PSRAM isolates them from that corruption.*/
++
++    /*Allocate an info structure. On ESP32-P4 the Wi-Fi bring-up path corrupts
++     * internal-RAM heap metadata; keeping these small async descriptors in
++     * PSRAM isolates them from that corruption.*/
 +
 +    /* lv_async_call may be invoked from any task (Wi-Fi events, worker,
 +     * USB). Creating/deleting timers mutates the global timer list, which the
@@ -87,6 +86,8 @@ diff --git a/managed_components/lvgl__lvgl/src/misc/lv_async.c b/managed_compone
  
  lv_result_t lv_async_call_cancel(lv_async_cb_t async_xcb, void * user_data)
  {
+     LV_CHECK_ARG(async_xcb != NULL, return LV_RESULT_INVALID);
+ 
 -    lv_timer_t * timer = lv_timer_get_next(NULL);
 +    lv_timer_t * timer;
      lv_result_t res = LV_RESULT_INVALID;
@@ -98,7 +99,7 @@ diff --git a/managed_components/lvgl__lvgl/src/misc/lv_async.c b/managed_compone
      while(timer != NULL) {
          /*Find the next timer node*/
          lv_timer_t * timer_next = lv_timer_get_next(timer);
-@@ -81,7 +122,11 @@
+@@ -84,7 +124,11 @@ lv_result_t lv_async_call_cancel(lv_async_cb_t async_xcb, void * user_data)
              /*Match user function callback and user data*/
              if(info->cb == async_xcb && info->user_data == user_data) {
                  lv_timer_delete(timer);
@@ -110,7 +111,7 @@ diff --git a/managed_components/lvgl__lvgl/src/misc/lv_async.c b/managed_compone
                  res = LV_RESULT_OK;
              }
          }
-@@ -89,6 +134,7 @@
+@@ -92,6 +136,7 @@ lv_result_t lv_async_call_cancel(lv_async_cb_t async_xcb, void * user_data)
          timer = timer_next;
      }
  
@@ -118,7 +119,7 @@ diff --git a/managed_components/lvgl__lvgl/src/misc/lv_async.c b/managed_compone
      return res;
  }
  
-@@ -102,7 +148,29 @@
+@@ -105,7 +150,29 @@ static void lv_async_timer_cb(lv_timer_t * timer)
      lv_async_info_t * info = (lv_async_info_t *)timer->user_data;
      lv_async_info_t info_save = *info;
      lv_timer_delete(timer);
@@ -135,10 +136,10 @@ diff --git a/managed_components/lvgl__lvgl/src/misc/lv_async.c b/managed_compone
 +static lv_async_info_t * async_info_alloc(void)
 +{
 +    lv_async_info_t * info = (lv_async_info_t *)heap_caps_malloc(sizeof(lv_async_info_t),
-+                                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
++                                                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 +    if(info == NULL) {
 +        info = (lv_async_info_t *)heap_caps_malloc(sizeof(lv_async_info_t),
-+                                                     MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
++                                                   MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 +    }
 +    return info;
 +}
@@ -905,10 +906,9 @@ diff --git a/managed_components/espressif__esp32_p4_function_ev_board/include/bs
  /**
   * @brief BSP display configuration structure
 diff --git a/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.c b/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.c
-index 27befa3..da10da6 100644
 --- a/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.c
 +++ b/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.c
-@@ -280,6 +280,24 @@ const char * lv_buttonmatrix_get_button_text(const lv_obj_t * obj, uint32_t btn_
+@@ -301,6 +301,24 @@ const char * lv_buttonmatrix_get_button_text(const lv_obj_t * obj, uint32_t btn_
      return btnm->map_p[txt_i];
  }
  
@@ -919,7 +919,7 @@ index 27befa3..da10da6 100644
 +                                     lv_area_t * area_out)
 +{
 +    if(area_out == NULL) return false;
-+    LV_ASSERT_OBJ(obj, MY_CLASS);
++    LV_CHECK_OBJ(obj, MY_CLASS, return false);
 +
 +    const lv_buttonmatrix_t * btnm = (const lv_buttonmatrix_t *)obj;
 +    if(btn_id == LV_BUTTONMATRIX_BUTTON_NONE) return false;
@@ -932,12 +932,11 @@ index 27befa3..da10da6 100644
 +
  bool lv_buttonmatrix_has_button_ctrl(lv_obj_t * obj, uint32_t btn_id, lv_buttonmatrix_ctrl_t ctrl)
  {
-     LV_ASSERT_OBJ(obj, MY_CLASS);
-diff --git a/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.h b/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.h
-index 771be50..0ed77af 100644
---- a/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.h
-+++ b/managed_components/lvgl__lvgl/src/widgets/buttonmatrix/lv_buttonmatrix.h
-@@ -198,6 +198,16 @@ uint32_t lv_buttonmatrix_get_selected_button(const lv_obj_t * obj);
+     LV_CHECK_OBJ(obj, MY_CLASS, return false);
+diff --git a/managed_components/lvgl__lvgl/include/lvgl/widgets/lv_buttonmatrix.h b/managed_components/lvgl__lvgl/include/lvgl/widgets/lv_buttonmatrix.h
+--- a/managed_components/lvgl__lvgl/include/lvgl/widgets/lv_buttonmatrix.h
++++ b/managed_components/lvgl__lvgl/include/lvgl/widgets/lv_buttonmatrix.h
+@@ -199,6 +199,16 @@ uint32_t lv_buttonmatrix_get_selected_button(const lv_obj_t * obj);
   */
  const char * lv_buttonmatrix_get_button_text(const lv_obj_t * obj, uint32_t btn_id);
  
@@ -954,12 +953,10 @@ index 771be50..0ed77af 100644
  /**
   * Get the whether a control value is enabled or disabled for button of a button matrix
   * @param obj       pointer to a button matrix object
-
 diff --git a/managed_components/espressif__esp_hosted/host/mcu/eh_host_mcu_transport/src/eh_host_bus_sdio.c b/managed_components/espressif__esp_hosted/host/mcu/eh_host_mcu_transport/src/eh_host_bus_sdio.c
-index f2e84fb..8c44d36 100644
 --- a/managed_components/espressif__esp_hosted/host/mcu/eh_host_mcu_transport/src/eh_host_bus_sdio.c
 +++ b/managed_components/espressif__esp_hosted/host/mcu/eh_host_mcu_transport/src/eh_host_bus_sdio.c
-@@ -512,7 +512,16 @@ static int sdio_get_tx_buffer_num(uint32_t *tx_num, bool is_lock_needed)
+@@ -530,7 +530,16 @@ static int sdio_get_tx_buffer_num(uint32_t *tx_num, bool is_lock_needed)
  		sizeof(len), is_lock_needed);
  
  	if (ret) {
@@ -977,19 +974,6 @@ index f2e84fb..8c44d36 100644
  		return ret;
  	}
  
-@@ -866,7 +875,11 @@ static void sdio_tx_aggregate_iter(void)
- 				got = BUFFER_AVAILABLE;
- 				break;
- 			}
--			eh_host_port_task_delay_us(20);
-+			/* Yield a full tick, not a sub-tick busy-wait: esp_rom_delay_us
-+			 * does not schedule, so a stalled slave kept this task spinning on
-+			 * the core and starved the idle task into the task watchdog. A tick
-+			 * still gives 12/200 chances inside the bulk/ctrl wait window. */
-+			eh_host_port_task_delay_ms(1);
- 		}
- 		if (got != BUFFER_AVAILABLE) {
- 			sdio_aggr_credit_timeouts++;
 diff --git a/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c b/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c
 --- a/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c
 +++ b/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c

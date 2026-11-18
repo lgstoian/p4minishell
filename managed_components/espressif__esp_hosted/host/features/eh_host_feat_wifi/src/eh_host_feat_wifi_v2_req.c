@@ -90,6 +90,10 @@ static int compose_req_wifi_init(Rpc *rpc, const eh_rpc_ctrl_cmd_t *c,
     cfg->rx_mgmt_buf_num       = src->rx_mgmt_buf_num;
     cfg->tx_hetb_queue_num     = src->tx_hetb_queue_num;
     cfg->dump_hesigb_enable    = src->dump_hesigb_enable;
+    cfg->ext_present_bitmask   = src->ext_present_bitmask;
+    cfg->privacy_enhancements  = src->privacy_enhancements ? 1 : 0;
+    cfg->rmac_auto_reset_int   = src->rmac_auto_reset_int;
+    cfg->wifi_task_stack_size  = src->wifi_task_stack_size;
 
     p->cfg = cfg;
     return 0;
@@ -170,7 +174,7 @@ static int compose_req_wifi_set_config(Rpc *rpc, const eh_rpc_ctrl_cmd_t *c,
         wifi_scan_threshold__init(thr);
         thr->rssi     = cfg->threshold_rssi;
         thr->authmode = cfg->authmode;
-#if EH_HOST_PRESENT_IN_ESP_IDF_5_4_0
+#if EH_HOST_WIFI_GOT_RSSI_5G_ADJ
         thr->rssi_5g_adjustment = cfg->threshold_rssi_5g_adjustment;
 #endif
         sta->threshold = thr;
@@ -226,8 +230,9 @@ static int compose_req_wifi_set_config(Rpc *rpc, const eh_rpc_ctrl_cmd_t *c,
 #if EH_HOST_GOT_AP_CONFIG_PARAM_TRANSITION_DISABLE
         ap->transition_disable = cfg->transition_disable;
 #endif
-#if EH_HOST_PRESENT_IN_ESP_IDF_5_5_0
+#if EH_HOST_WIFI_GOT_AP_SAE_EXT
         ap->sae_ext = cfg->sae_ext;
+        ap->wpa3_compatible_mode = cfg->wpa3_compatible_mode;
         /* nested wifi_bss_max_idle_config */
         WifiBssMaxIdleConfig *bmi = (WifiBssMaxIdleConfig *)
             rpc_ext_v2_tracked_calloc(trk, sizeof(*bmi));
@@ -249,8 +254,92 @@ static int compose_req_wifi_scan_start(Rpc *rpc, const eh_rpc_ctrl_cmd_t *c,
 {
     ALLOC_PAYLOAD(RpcReqWifiScanStart, req_wifi_scan_start,
                   rpc__req__wifi_scan_start__init);
-    p->block      = c->u.wifi_scan_cfg.block;
-    p->config_set = c->u.wifi_scan_cfg.cfg_set ? 1 : 0;
+    const eh_rpc_wifi_scan_cfg_t *sc = &c->u.wifi_scan_cfg;
+
+    /* block forwarded verbatim: the CP must run IDF's real blocking path. */
+    p->block      = sc->block;
+    p->config_set = sc->cfg_set ? 1 : 0;
+    if (!sc->cfg_set) {
+        /* NULL scan config is legal ("scan with defaults"): leave
+         * p->config NULL, CP maps that to esp_wifi_scan_start(NULL, ...). */
+        return 0;
+    }
+
+    WifiScanConfig *cfg = (WifiScanConfig *)
+        rpc_ext_v2_tracked_calloc(trk, sizeof(*cfg));
+    if (!cfg) return -1;
+    wifi_scan_config__init(cfg);
+
+    /* scan_time + nested active are MANDATORY once config_set: the CP fails
+     * the request on either being absent. */
+    WifiScanTime *st = (WifiScanTime *)rpc_ext_v2_tracked_calloc(trk, sizeof(*st));
+    if (!st) return -1;
+    wifi_scan_time__init(st);
+    WifiActiveScanTime *act = (WifiActiveScanTime *)
+        rpc_ext_v2_tracked_calloc(trk, sizeof(*act));
+    if (!act) return -1;
+    wifi_active_scan_time__init(act);
+    act->min    = sc->active_min;
+    act->max    = sc->active_max;
+    st->active  = act;
+    st->passive = sc->passive;
+    cfg->scan_time = st;
+
+    WifiScanChannelBitmap *bm = (WifiScanChannelBitmap *)
+        rpc_ext_v2_tracked_calloc(trk, sizeof(*bm));
+    if (!bm) return -1;
+    wifi_scan_channel_bitmap__init(bm);
+    bm->ghz_2_channels = sc->ghz_2_channels;
+    bm->ghz_5_channels = sc->ghz_5_channels;
+    cfg->channel_bitmap = bm;
+
+    /* ssid/bssid point into the ctrl_cmd, which outlives the pack. Absent
+     * (len 0) is what tells the CP to pass NULL to IDF — an empty non-NULL
+     * SSID would mean "scan for SSID \"\"" and match nothing. The SSID
+     * length INCLUDES the NUL: the CP hands the unpacked buffer straight to
+     * IDF, which reads it as a C string (matches 2.x strlen()+1). */
+    if (sc->ssid_set) {
+        cfg->ssid.data = (uint8_t *)(uintptr_t)sc->ssid;
+        cfg->ssid.len  = strnlen((const char *)sc->ssid, EH_RPC_SSID_LEN) + 1u;
+    }
+    if (sc->bssid_set) {
+        cfg->bssid.data = (uint8_t *)(uintptr_t)sc->bssid;
+        cfg->bssid.len  = EH_RPC_MAC_LEN;
+    }
+
+    cfg->channel              = sc->channel;
+    cfg->show_hidden          = sc->show_hidden;
+    cfg->coex_background_scan = sc->coex_background_scan;
+    cfg->scan_type            = sc->scan_type;
+    cfg->home_chan_dwell_time = sc->home_chan_dwell_time;
+
+    p->config = cfg;
+    return 0;
+}
+
+COMPOSE_REQ_EMPTY(compose_req_sta_get_rssi, RpcReqWifiStaGetRssi,
+                  req_wifi_sta_get_rssi,
+                  rpc__req__wifi_sta_get_rssi__init)
+
+COMPOSE_REQ_EMPTY(compose_req_sta_get_aid, RpcReqWifiStaGetAid,
+                  req_wifi_sta_get_aid,
+                  rpc__req__wifi_sta_get_aid__init)
+
+COMPOSE_REQ_EMPTY(compose_req_sta_get_negotiated_phymode,
+                  RpcReqWifiStaGetNegotiatedPhymode,
+                  req_wifi_sta_get_negotiated_phymode,
+                  rpc__req__wifi_sta_get_negotiated_phymode__init)
+
+COMPOSE_REQ_EMPTY(compose_req_wifi_clear_fast_connect,
+                  RpcReqWifiClearFastConnect, req_wifi_clear_fast_connect,
+                  rpc__req__wifi_clear_fast_connect__init)
+
+static int compose_req_wifi_set_okc_support(Rpc *rpc, const eh_rpc_ctrl_cmd_t *c,
+                                            alloc_track_t *trk)
+{
+    ALLOC_PAYLOAD(RpcReqWifiSetOkcSupport, req_wifi_set_okc_support,
+                  rpc__req__wifi_set_okc_support__init);
+    p->enable = c->u.eap_bool.enable;
     return 0;
 }
 
@@ -288,6 +377,7 @@ static int compose_req_set_country(Rpc *rpc, const eh_rpc_ctrl_cmd_t *c,
     cc->nchan         = c->u.wifi_country.nchan;
     cc->max_tx_power  = c->u.wifi_country.max_tx_power;
     cc->policy        = c->u.wifi_country.policy;
+    cc->wifi_5g_channel_mask = c->u.wifi_country.wifi_5g_channel_mask;
     p->country = cc;
     return 0;
 }
@@ -401,6 +491,7 @@ static int compose_req_wifi_scan_params(Rpc *rpc, const eh_rpc_ctrl_cmd_t *c,
 
         cfg->scan_time            = st;
         cfg->home_chan_dwell_time = c->u.wifi_scan_params.home_chan_dwell_time;
+        cfg->max_offchan_duration_ms = c->u.wifi_scan_params.max_offchan_duration_ms;
         p->config         = cfg;
         p->is_config_null = 0;
     } else {
@@ -580,6 +671,14 @@ compose_fn rpc_ext_v2_pick_req_wifi(int32_t msg_id)
     case RPC_ID__Req_WifiClearApList:  return compose_req_wifi_clear_ap_list;
     case RPC_ID__Req_WifiRestore:      return compose_req_wifi_restore;
     case RPC_ID__Req_WifiStaGetApInfo: return compose_req_sta_get_ap_info;
+    case RPC_ID__Req_WifiStaGetRssi:   return compose_req_sta_get_rssi;
+    case RPC_ID__Req_WifiStaGetAid:    return compose_req_sta_get_aid;
+    case RPC_ID__Req_WifiStaGetNegotiatedPhymode:
+        return compose_req_sta_get_negotiated_phymode;
+    case RPC_ID__Req_WifiClearFastConnect:
+        return compose_req_wifi_clear_fast_connect;
+    case RPC_ID__Req_WifiSetOkcSupport:
+        return compose_req_wifi_set_okc_support;
 
     case RPC_ID__Req_WifiSetCountryCode:return compose_req_set_country_code;
     case RPC_ID__Req_WifiGetCountryCode:return compose_req_get_country_code;

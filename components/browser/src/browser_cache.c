@@ -217,26 +217,46 @@ typedef struct {
     char url[P4_CONFIG_BROWSER_URL_BYTES];
 } browser_bad_entry_t;
 
-static browser_bad_entry_t s_bad[BROWSER_IMAGE_BAD_MAX];
+/* 48 x 512 bytes of URL text is 24 KB of DIRAM, which the size-budget gate
+ * charges to the firmware on every boot even on pages with no broken image.
+ * It follows the other cache tables into PSRAM; a failed allocation simply
+ * disables the negative cache (one refetch per reference, not a fault). */
+static browser_bad_entry_t *s_bad;
 static int s_bad_count;
+
+/** The bad-URL table, allocated on first use. Caller holds the cache lock. */
+static browser_bad_entry_t *bad_table_locked(void)
+{
+    if (s_bad == NULL) {
+        s_bad = p4heap_calloc_psram(BROWSER_IMAGE_BAD_MAX, sizeof(*s_bad));
+    }
+    return s_bad;
+}
 
 void browser_image_cache_mark_bad(const char *url)
 {
-    if (url == NULL || url[0] == '\0' || strlen(url) >= sizeof(s_bad[0].url)) {
+    browser_bad_entry_t *bad;
+
+    if (url == NULL || url[0] == '\0' ||
+        strlen(url) >= P4_CONFIG_BROWSER_URL_BYTES) {
         return;
     }
     if (browser_image_cache_is_bad(url)) {
         return;
     }
     cache_lock();
-    if (s_bad_count >= BROWSER_IMAGE_BAD_MAX) {
-        /* Oldest first: a page re-renders in the same order, so dropping the
-         * oldest entry costs at most one extra fetch. */
-        memmove(&s_bad[0], &s_bad[1], sizeof(s_bad[0]) * (BROWSER_IMAGE_BAD_MAX - 1));
-        s_bad_count = BROWSER_IMAGE_BAD_MAX - 1;
+    bad = bad_table_locked();
+    if (bad != NULL) {
+        if (s_bad_count >= BROWSER_IMAGE_BAD_MAX) {
+            /* Oldest first: a page re-renders in the same order, so dropping
+             * the oldest entry costs at most one extra fetch. */
+            memmove(&bad[0], &bad[1],
+                    sizeof(bad[0]) * (BROWSER_IMAGE_BAD_MAX - 1));
+            s_bad_count = BROWSER_IMAGE_BAD_MAX - 1;
+        }
+        snprintf(bad[s_bad_count].url, sizeof(bad[0].url), "%s", url);
+        s_bad_count++;
     }
-    snprintf(s_bad[s_bad_count].url, sizeof(s_bad[0].url), "%s", url);
-    s_bad_count++;
     cache_unlock();
 }
 
@@ -248,7 +268,7 @@ bool browser_image_cache_is_bad(const char *url)
         return false;
     }
     cache_lock();
-    for (int i = 0; i < s_bad_count; i++) {
+    for (int i = 0; s_bad != NULL && i < s_bad_count; i++) {
         if (strcmp(s_bad[i].url, url) == 0) {
             found = true;
             break;

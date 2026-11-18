@@ -106,9 +106,9 @@ static lv_obj_t *surf_create_container(lv_obj_t *parent)
             lv_obj_remove_style_all(scrim);
             lv_obj_set_size(scrim, surface_w, surface_h);
             lv_obj_set_pos(scrim, 0, 0);
-            lv_obj_add_flag(scrim, LV_OBJ_FLAG_IGNORE_LAYOUT);
-            lv_obj_clear_flag(scrim, LV_OBJ_FLAG_SCROLLABLE |
-                                      LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_ignore_layout(scrim, true);
+            lv_obj_set_scrollable(scrim, false);
+            lv_obj_set_clickable(scrim, false);
             lv_obj_set_style_bg_color(scrim, lv_color_black(), 0);
             lv_obj_set_style_bg_opa(scrim, (lv_opa_t)s_scrim_alpha, 0);
             lv_obj_set_style_radius(scrim, 0, 0);
@@ -458,10 +458,10 @@ static void surf_text_sel_event_cb(lv_event_t *event)
          * hand the drag to an ancestor's scroll (the transcript container
          * behind the modal panel). */
         if (s_text_sel.ta != NULL) {
-            lv_obj_clear_flag(s_text_sel.ta, LV_OBJ_FLAG_SCROLLABLE);
-            lv_obj_clear_flag(s_text_sel.ta, LV_OBJ_FLAG_SCROLL_CHAIN_HOR |
-                                           LV_OBJ_FLAG_SCROLL_CHAIN_VER);
-            lv_obj_add_flag(s_text_sel.ta, LV_OBJ_FLAG_PRESS_LOCK);
+            lv_obj_set_scrollable(s_text_sel.ta, false);
+            lv_obj_set_scroll_chain_hor(s_text_sel.ta, false);
+            lv_obj_set_scroll_chain_ver(s_text_sel.ta, false);
+            lv_obj_set_press_lock(s_text_sel.ta, true);
         }
         surf_text_sel_paint();
         break;
@@ -483,10 +483,10 @@ static void surf_text_sel_event_cb(lv_event_t *event)
             s_text_sel.suppress_click = true;
         }
         if (s_text_sel.ta != NULL) {
-            lv_obj_add_flag(s_text_sel.ta, LV_OBJ_FLAG_SCROLLABLE);
-            lv_obj_add_flag(s_text_sel.ta, LV_OBJ_FLAG_SCROLL_CHAIN_HOR |
-                                          LV_OBJ_FLAG_SCROLL_CHAIN_VER);
-            lv_obj_remove_flag(s_text_sel.ta, LV_OBJ_FLAG_PRESS_LOCK);
+            lv_obj_set_scrollable(s_text_sel.ta, true);
+            lv_obj_set_scroll_chain_hor(s_text_sel.ta, true);
+            lv_obj_set_scroll_chain_ver(s_text_sel.ta, true);
+            lv_obj_set_press_lock(s_text_sel.ta, false);
         }
         break;
     case LV_EVENT_CLICKED:
@@ -646,7 +646,7 @@ static bool dialog_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_color(msg, lv_color_hex(theme_current()->modal_message), 0);
     lv_obj_t *row = lv_obj_create(ctx->panel);
-    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(row, false);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -811,7 +811,7 @@ static bool list_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     }
     list_apply_selection(ctx);
     lv_obj_t *row = lv_obj_create(ctx->panel);
-    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(row, false);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -939,7 +939,7 @@ static bool ask_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     if (ctx->def) lv_textarea_set_text(ctx->ta, ctx->def);
     keyboard_bind_textarea(ctx->ta);
     lv_obj_t *row = lv_obj_create(ctx->panel);
-    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(row, false);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1224,7 +1224,7 @@ static bool fb_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     lv_obj_set_style_pad_gap(ctx->list, 2, 0);
     surf_style_list_container(ctx->list);
     lv_obj_t *row = lv_obj_create(ctx->panel);
-    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(row, false);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1475,7 +1475,7 @@ static bool viewer_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
      * TUI page and the transcript). */
     surf_text_sel_attach(ctx->ta);
     lv_obj_t *row = lv_obj_create(ctx->panel);
-    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(row, false);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1756,14 +1756,14 @@ static bool image_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     lv_obj_set_style_bg_opa(holder, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(holder, 0, 0);
     lv_obj_set_style_pad_all(holder, 0, 0);
-    lv_obj_clear_flag(holder, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(holder, false);
     canvas = lv_canvas_create(holder);
     lv_canvas_set_buffer(canvas, ctx->surface.px, ctx->surface.w, ctx->surface.h,
                          LV_COLOR_FORMAT_RGB565);
     lv_obj_center(canvas);
 
     row = lv_obj_create(ctx->panel);
-    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(row, false);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1989,7 +1989,7 @@ static bool hex_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
      * text pager, on the same shared core. */
     surf_text_sel_attach(ctx->ta);
     lv_obj_t *row = lv_obj_create(ctx->panel);
-    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(row, false);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -2229,7 +2229,7 @@ static bool form_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     }
 
     lv_obj_t *row = lv_obj_create(ctx->panel);
-    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(row, false);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);

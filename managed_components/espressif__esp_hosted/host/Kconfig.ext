@@ -22,11 +22,15 @@ menu "Configure host"
 	# SLAVE_IDF_TARGET choice; matches upstream esp-hosted-mcu.
 	config ESP_HOSTED_CP_TARGET_FROM_WIFI_REMOTE
 		bool
-		default y if SLAVE_IDF_TARGET_ESP32 || SLAVE_IDF_TARGET_ESP32S2 || SLAVE_IDF_TARGET_ESP32S3 || SLAVE_IDF_TARGET_ESP32C2 || SLAVE_IDF_TARGET_ESP32C3 || SLAVE_IDF_TARGET_ESP32C5 || SLAVE_IDF_TARGET_ESP32C6 || SLAVE_IDF_TARGET_ESP32C61
+		default y if SLAVE_IDF_TARGET_ESP32 || SLAVE_IDF_TARGET_ESP32S2 || SLAVE_IDF_TARGET_ESP32S3 || SLAVE_IDF_TARGET_ESP32C2 || SLAVE_IDF_TARGET_ESP32C3 || SLAVE_IDF_TARGET_ESP32C5 || SLAVE_IDF_TARGET_ESP32C6 || SLAVE_IDF_TARGET_ESP32C61 || SLAVE_IDF_TARGET_ESP32S31
 		default n
 
 	choice ESP_HOSTED_CP_TARGET
 		bool "Paired coprocessor (other side of bus)"
+		help
+			The Wi-Fi co-processor (ESP32, ESP32-S and ESP32-C series) is set by Wi-Fi Remote
+			and consumed here. You can change it, go to
+			Component config -> Wi-Fi Remote -> choose slave target (SLAVE_IDF_TARGET_ESP32XX)
 
 		default ESP_HOSTED_CP_TARGET_ESP32   if SLAVE_IDF_TARGET_ESP32
 		default ESP_HOSTED_CP_TARGET_ESP32S2 if SLAVE_IDF_TARGET_ESP32S2
@@ -36,6 +40,7 @@ menu "Configure host"
 		default ESP_HOSTED_CP_TARGET_ESP32C5 if SLAVE_IDF_TARGET_ESP32C5
 		default ESP_HOSTED_CP_TARGET_ESP32C6 if SLAVE_IDF_TARGET_ESP32C6
 		default ESP_HOSTED_CP_TARGET_ESP32C61 if SLAVE_IDF_TARGET_ESP32C61
+		default ESP_HOSTED_CP_TARGET_ESP32S31 if SLAVE_IDF_TARGET_ESP32S31
 		default ESP_HOSTED_CP_TARGET_ESP32C6 if !ESP_HOSTED_CP_TARGET_FROM_WIFI_REMOTE
 
 		config ESP_HOSTED_CP_TARGET_ESP32
@@ -62,6 +67,14 @@ menu "Configure host"
 		config ESP_HOSTED_CP_TARGET_ESP32C61
 			depends on SLAVE_IDF_TARGET_ESP32C61 || !ESP_HOSTED_CP_TARGET_FROM_WIFI_REMOTE
 			bool "ESP32-C61"
+		config ESP_HOSTED_CP_TARGET_ESP32S31
+			depends on SLAVE_IDF_TARGET_ESP32S31 || !ESP_HOSTED_CP_TARGET_FROM_WIFI_REMOTE
+			bool "ESP32-S31"
+
+		comment "<<< Hint: To change to different Wi-Fi co-processor -"
+			depends on ESP_HOSTED_CP_TARGET_FROM_WIFI_REMOTE
+		comment "          'Component config -> Wi-Fi Remote' => 'choose slave target' >>>"
+			depends on ESP_HOSTED_CP_TARGET_FROM_WIFI_REMOTE
 
 		# BT-only — no Wi-Fi Remote dep.
 		config ESP_HOSTED_CP_TARGET_ESP32H2
@@ -70,8 +83,11 @@ menu "Configure host"
 			bool "ESP32-H4"
 	endchoice
 
-	# Show warning only when Wi-Fi Remote target symbols exist and mismatch
-	# the ESP-Hosted CP target selection.
+	comment "<<< Suggestion: ESP32-H2/H4 have no Wi-Fi: Disable Wi-Fi Remote using -"
+		depends on ESP_HOSTED_CP_TARGET_FROM_WIFI_REMOTE && (ESP_HOSTED_CP_TARGET_ESP32H2 || ESP_HOSTED_CP_TARGET_ESP32H4)
+	comment "            Component config -> Wi-Fi Remote -> Enable Wi-Fi Remote component >>>"
+		depends on ESP_HOSTED_CP_TARGET_FROM_WIFI_REMOTE && (ESP_HOSTED_CP_TARGET_ESP32H2 || ESP_HOSTED_CP_TARGET_ESP32H4)
+
 	comment "Conflict: Wi-Fi Remote SLAVE_IDF_TARGET differs from ESP-Hosted CP target"
 		depends on ESP_HOSTED_CP_TARGET_FROM_WIFI_REMOTE && ( \
 			(ESP_HOSTED_CP_TARGET_ESP32   && !SLAVE_IDF_TARGET_ESP32)   || \
@@ -82,8 +98,7 @@ menu "Configure host"
 			(ESP_HOSTED_CP_TARGET_ESP32C5 && !SLAVE_IDF_TARGET_ESP32C5) || \
 			(ESP_HOSTED_CP_TARGET_ESP32C6 && !SLAVE_IDF_TARGET_ESP32C6) || \
 			(ESP_HOSTED_CP_TARGET_ESP32C61 && !SLAVE_IDF_TARGET_ESP32C61) || \
-			(ESP_HOSTED_CP_TARGET_ESP32H2) || \
-			(ESP_HOSTED_CP_TARGET_ESP32H4) )
+			(ESP_HOSTED_CP_TARGET_ESP32S31 && !SLAVE_IDF_TARGET_ESP32S31) )
 
 	config ESP_HOSTED_IDF_SLAVE_TARGET
 		string
@@ -95,9 +110,17 @@ menu "Configure host"
 		default "esp32c5" if ESP_HOSTED_CP_TARGET_ESP32C5
 		default "esp32c6" if ESP_HOSTED_CP_TARGET_ESP32C6
 		default "esp32c61" if ESP_HOSTED_CP_TARGET_ESP32C61
+		default "esp32s31" if ESP_HOSTED_CP_TARGET_ESP32S31
 		default "esp32h2" if ESP_HOSTED_CP_TARGET_ESP32H2
 		default "esp32h4" if ESP_HOSTED_CP_TARGET_ESP32H4
 		default "invalid"
+
+	# Classic BT (BR/EDR) needs SOC_BT_CLASSIC_SUPPORTED on the CP. IDF cannot
+	# check it on the host: BT_CLASSIC_ENABLED is open when BT_CONTROLLER_DISABLED.
+	config ESP_HOSTED_CP_HAS_BT_CLASSIC
+		bool
+		default y if ESP_HOSTED_CP_TARGET_ESP32 || ESP_HOSTED_CP_TARGET_ESP32S31
+		default n
 
 	# H2 / H4 have no Wi-Fi; gate wifi knobs on this symbol.
 	config ESP_HOSTED_PRIV_ENABLE_WIFI_OPTIONS
@@ -107,6 +130,10 @@ menu "Configure host"
 
 	choice ESP_HOSTED_DEV_BOARD  # ignore: multiple-definition
 		prompt "Select PCB Board (Optional)"
+		# Current MP boards for P4 hosts; examples inherit them.
+		default ESP_HOSTED_P4_DEV_BOARD_FUNC_BOARD if IDF_TARGET_ESP32P4 && ESP_HOSTED_HOST_TYPE_MCU && ESP_HOSTED_CP_TARGET_ESP32C6
+		default ESP_HOSTED_P4X_C5_DEV_BOARD_FUNC_BOARD if IDF_TARGET_ESP32P4 && ESP_HOSTED_HOST_TYPE_MCU && ESP_HOSTED_CP_TARGET_ESP32C5
+		default ESP_HOSTED_S31_DEV_BOARD if ESP_HOSTED_HOST_TYPE_MCU && ESP_HOSTED_CP_TARGET_ESP32S31
 		default ESP_HOSTED_P4_DEV_BOARD_NONE
 
 		config ESP_ESP32C5_SPI_RASPI_MATING_BOARD  # ignore: multiple-definition
@@ -147,7 +174,21 @@ menu "Configure host"
 		config ESP_HOSTED_C2_C5_MODULE_SUB_BOARD  # ignore: multiple-definition
 			bool "ESP32-P4 EV Sub-Board for C2 & C5"
 			depends on ESP_HOSTED_HOST_TYPE_MCU && (ESP_HOSTED_CP_TARGET_ESP32C2 || ESP_HOSTED_CP_TARGET_ESP32C5)
+
+		config ESP_HOSTED_S31_DEV_BOARD  # ignore: multiple-definition
+			bool "ESP32-S31 module or DevKit (S31 SPI on IO_MUX pins 20-25)"
+			depends on ESP_HOSTED_HOST_TYPE_MCU && ESP_HOSTED_CP_TARGET_ESP32S31
+
+		config ESP_HOSTED_S31_KORVO_BOARD  # ignore: multiple-definition
+			bool "ESP32-S31-Korvo-1, jumpered to ESP32-P4-Function-EV-Board"
+			depends on ESP_HOSTED_HOST_TYPE_MCU && IDF_TARGET_ESP32P4 && ESP_HOSTED_CP_TARGET_ESP32S31
 	endchoice
+
+	# Both S31 boards wire to the P4-Function-EV J1 header; the dev board overrides
+	# SPI CLK, host-to-CP data, data-ready and reset (6/2/5/3) above these defaults.
+	config ESP_HOSTED_S31_ON_P4_EV_HEADER
+		bool
+		default y if IDF_TARGET_ESP32P4 && (ESP_HOSTED_S31_DEV_BOARD || ESP_HOSTED_S31_KORVO_BOARD)
 
 	menu "Host core"
 		orsource "eh_host_core/Kconfig.ext"
@@ -189,6 +230,7 @@ menu "Configure host"
 		orsource "features/eh_host_feat_mem_monitor/Kconfig.ext"
 		orsource "features/eh_host_feat_power_save/Kconfig.ext"
 		orsource "features/eh_host_feat_cli/Kconfig.ext"
+		orsource "features/eh_host_feat_rf_cert/Kconfig.ext"
 	endmenu
 
 	menu "Port"

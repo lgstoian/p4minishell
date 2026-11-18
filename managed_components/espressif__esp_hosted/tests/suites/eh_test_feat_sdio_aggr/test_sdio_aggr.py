@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 """SDIO software-aggregation (SW_AGGR) — smoke + host-first OTA migration drill.
 
 SW_AGGR is negotiated at boot via the 0x1B buf-config TLV (mode==SW_AGGR both
@@ -23,6 +25,7 @@ FAIL = FATAL_PATTERNS + ['bring-up timed out', 'malformed SDIO buf-config',
 
 SW_AGGR_CP_OVL = ['CONFIG_EH_TRANSPORT_CP_SDIO_MODE_SW_AGGR=y']  # == default (explicit)
 STREAM_CP_OVL = ['CONFIG_EH_TRANSPORT_CP_SDIO_MODE_STREAM=y']    # the rel-2-like wire
+PACKET_CP_OVL = ['CONFIG_EH_TRANSPORT_CP_SDIO_MODE_PACKET=y']    # one frame per transfer
 # multi-frame trace markers are compiled OUT in production — tests opt in
 AGGR_TRACE_CP_OVL = SW_AGGR_CP_OVL + ['CONFIG_EH_TRANSPORT_CP_SDIO_AGGR_TRACE=y']
 AGGR_TRACE_HOST_OVL = ['CONFIG_ESP_HOSTED_HOST_SDIO_AGGR_TRACE=y']
@@ -63,6 +66,26 @@ def test_sdio_stream_back_compat_warns(bench):
     assert r.ok, f'RPC round-trip on the stream fallback: {r.matched}'
 
 
+@pytest.mark.system
+@pytest.mark.sanity
+def test_sdio_packet_mode(bench):
+    """Packet CP (one frame per transfer) keeps the host on the non-aggregating
+    path and still completes an RPC round-trip."""
+    b = bench('system/get_cp_fw_version', 'mcu_host', 'sdio',
+              cp_overlay=PACKET_CP_OVL)
+    host, cp = b['host'], b['cp']
+
+    r = eh_test_expect(cp, r'SDIO datapath mode: PACKET', fail=FATAL_PATTERNS, timeout=45)
+    assert r.ok, f'CP booted the PACKET datapath: {r.matched}'
+
+    r = eh_test_expect(host, r'CP without SDIO SW_AGGR',
+                       fail=FAIL + ['SDIO mode mismatch'], timeout=45)
+    assert r.ok, f'host stayed on the non-aggregating path: {r.matched}'
+
+    r = eh_test_expect(host, r'CP firmware: \d+\.\d+\.\d+', fail=FAIL, timeout=30)
+    assert r.ok, f'RPC round-trip over packet mode: {r.matched}'
+
+
 @pytest.mark.ota
 @pytest.mark.second_chance
 def test_sdio_sw_aggr_ota_migration(bench):
@@ -74,7 +97,11 @@ def test_sdio_sw_aggr_ota_migration(bench):
     test_sdio_sw_aggr_bulk_really_aggregates (small frames here would ride
     the single-frame fast path / latency bypass and prove nothing)."""
     b = bench('ota/coprocessor_ota', 'mcu_host', 'sdio', timeout='300s',
-              overlay=['CONFIG_OTA_METHOD_LITTLEFS=y'],
+              # Host and staged CP image share one version, so the example's
+              # version gates would skip the OTA under test (phase 2 never runs).
+              overlay=['CONFIG_OTA_METHOD_LITTLEFS=y',
+                       'CONFIG_OTA_VERSION_CHECK_HOST_SLAVE=n',
+                       'CONFIG_OTA_VERSION_CHECK_SLAVEFW_SLAVE=n'],
               cp_overlay=STREAM_CP_OVL,        # boot CP = rel-2-like stream wire
               cp_ota_overlay=SW_AGGR_CP_OVL,   # staged image = the new default
               cp_app_to_host='components/ota_littlefs/slave_fw_bin/cp_app.bin')

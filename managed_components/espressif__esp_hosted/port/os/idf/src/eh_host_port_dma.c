@@ -11,11 +11,6 @@
 
 void *eh_host_port_dma_alloc(size_t n)
 {
-#if CONFIG_EH_HOST_PORT_DMA_PREFER_SPIRAM
-    /* P4-class: prefer DMA-capable SPIRAM to preserve internal RAM */
-    void *ptr = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
-    if (ptr) return ptr;
-#endif
     return heap_caps_malloc(n, MALLOC_CAP_DMA);
 }
 

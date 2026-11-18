@@ -1,52 +1,22 @@
-// SPDX-License-Identifier: Apache-2.0
-// Copyright 2015-2021 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 //
 //
 #ifndef EH_CP_FEAT_BT_CORE_H
 #define EH_CP_FEAT_BT_CORE_H
 
 #include "esp_err.h"
-#include "esp_idf_version.h"
+#include "eh_cp_idf_compat.h"
 #include "priv/eh_cp_feat_bt_cfg.h"
 
 #if defined(CONFIG_BT_ENABLED) && !defined(CONFIG_SOC_BT_SUPPORTED)
 #error "Bluetooth is enabled but this chip has no Bluetooth (CONFIG_SOC_BT_SUPPORTED is unset). Disable Bluetooth for this target."
 #endif
 
-#if defined(CONFIG_BT_ENABLED) && !defined(CONFIG_BT_CONTROLLER_ONLY) && !EH_CP_BT_STACK_ENABLED
-#error "BT Host is enabled. This consumes memory and is not needed by ESP-Hosted. Only BT Controller is sufficient."
-#error "============================================================================="
-#error "Option 1) Disable the BT Host stack (keep only the controller) — idf.py menuconfig:"
-#error "         Component config"
-#error "          └─ Bluetooth"
-#error "             └─ Host  ->  Disabled"
-#error "============================================================================="
-#error "Option 2) Handle Bluetooth yourself on the co-processor — enable"
-#error "         CONFIG_ESP_HOSTED_CP_BT_STACK_ENABLED via idf.py menuconfig:"
-#error "         Component config"
-#error "          └─ ESP-Hosted"
-#error "             └─ Configure coprocessor"
-#error "                └─ CP core"
-#error "                   └─ Core: Debug & Misc"
-#error "                      └─ Enable BT stack: Advanced option: Handle bluetooth on your own at coprocessor"
-#error "============================================================================="
-#endif
-
-
 #if EH_CP_FEAT_BT_READY
-
 
 #include "esp_bt.h"
 #ifdef CONFIG_BT_HCI_UART_NO
@@ -55,8 +25,9 @@
 
 // include only if BT component enabled and soc supports BT
 #include "esp_bt.h"
+#include "soc/soc_caps.h"
 
-#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0)
+#if !EH_CP_IDF_V5_API
   #include "driver/periph_ctrl.h"
   #define DISABLE_INTR_ON_GPIO GPIO_PIN_INTR_DISABLE
 #else
@@ -81,10 +52,8 @@
 
   #if defined(CONFIG_BTDM_CONTROLLER_HCI_MODE_VHCI)
     #define EH_CP_BT_HCI    4
-  #elif CONFIG_BT_HCI_UART_NO
-    #define EH_CP_BT_UART   CONFIG_BT_HCI_UART_NO
-  #elif CONFIG_BTDM_CTRL_HCI_UART_NO
-    #define EH_CP_BT_UART   CONFIG_BTDM_CTRL_HCI_UART_NO
+  #elif EH_CP_BT_UART_PORT_ESP32
+    #define EH_CP_BT_UART   EH_CP_BT_UART_PORT_ESP32
   #endif
 
 #elif EH_CP_BT_OVER_C3_S3
@@ -97,6 +66,23 @@
     #define EH_CP_BT_UART   EH_CP_BT_UART_PORT_C3_S3
   #endif
 
+#elif CONFIG_BT_DUAL_MODE_ARCH
+  /* porting_btdm controller (ESP32-S31): mode comes from BTDM_CTRL_MODE_* */
+
+  #if defined(CONFIG_BTDM_CTRL_MODE_BLE_ONLY)
+    #define EH_CP_BT_MODE_BLE    1
+  #elif defined(CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY)
+    #define EH_CP_BT_MODE_BT     2
+  #elif defined(CONFIG_BTDM_CTRL_MODE_BTDM)
+    #define EH_CP_BT_MODE_DUAL   3
+  #endif
+
+  #if defined(CONFIG_BT_CTRL_HCI_INTERFACE_USE_RAM)
+    #define EH_CP_BT_HCI    4
+  #elif defined(CONFIG_BT_CTRL_HCI_INTERFACE_USE_UART)
+    #define EH_CP_BT_UART   EH_CP_BT_UART_PORT_DM_ARCH
+  #endif
+
 #else
   /* only BLE for chipsets other than ESP32 */
 
@@ -105,9 +91,14 @@
   #if defined(CONFIG_BT_LE_HCI_INTERFACE_USE_RAM)
     #define EH_CP_BT_HCI    4
   #elif defined(CONFIG_BT_LE_HCI_INTERFACE_USE_UART)
-    #define EH_CP_BT_UART   CONFIG_BT_LE_HCI_UART_PORT
+    #define EH_CP_BT_UART   EH_CP_BT_UART_PORT_LE
   #endif
 
+#endif
+
+/* IDF VHCI driver has no send-available callback: send without the semaphore. */
+#if SOC_ESP_NIMBLE_CONTROLLER
+  #define EH_CP_BT_VHCI_SEND_UNGATED 1
 #endif
 
 #ifdef EH_CP_BT_UART
@@ -166,7 +157,7 @@
 
     #define UART_RX_THRS       (120)
 
-    #if defined(EH_CP_BT_UART_FLOWCTRL_ENABLED)
+    #if EH_CP_BT_UART_FLOWCTRL_ENABLED
     #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<BT_TX_PIN) | (1ULL<<BT_RTS_PIN))
     #define GPIO_INPUT_PIN_SEL   ((1ULL<<BT_RX_PIN) | (1ULL<<BT_CTS_PIN))
     #else
@@ -174,14 +165,27 @@
     #define GPIO_INPUT_PIN_SEL   (1ULL<<BT_RX_PIN)
     #endif
 
+  #elif CONFIG_BT_DUAL_MODE_ARCH
+
+    #define BT_TX_PIN         EH_CP_BT_UART_TX_PIN_DM_ARCH
+    #define BT_RX_PIN         EH_CP_BT_UART_RX_PIN_DM_ARCH
+
+    #if defined(CONFIG_BT_CTRL_HCI_UART_FLOWCTRL)
+    #define BT_RTS_PIN        EH_CP_BT_UART_RTS_PIN_DM_ARCH
+    #define BT_CTS_PIN        EH_CP_BT_UART_CTS_PIN_DM_ARCH
+    #else
+    #define BT_RTS_PIN        -1
+    #define BT_CTS_PIN        -1
+    #endif
+
   #else
 
-    #define BT_TX_PIN         CONFIG_BT_LE_HCI_UART_TX_PIN
-    #define BT_RX_PIN         CONFIG_BT_LE_HCI_UART_RX_PIN
+    #define BT_TX_PIN         EH_CP_BT_UART_TX_PIN_LE
+    #define BT_RX_PIN         EH_CP_BT_UART_RX_PIN_LE
 
     #if defined(CONFIG_BT_LE_HCI_UART_FLOWCTRL)
-    #define BT_RTS_PIN        CONFIG_BT_LE_HCI_UART_RTS_PIN
-    #define BT_CTS_PIN        CONFIG_BT_LE_HCI_UART_CTS_PIN
+    #define BT_RTS_PIN        EH_CP_BT_UART_RTS_PIN_LE
+    #define BT_CTS_PIN        EH_CP_BT_UART_CTS_PIN_LE
     #else
     #define BT_RTS_PIN        -1
     #define BT_CTS_PIN        -1

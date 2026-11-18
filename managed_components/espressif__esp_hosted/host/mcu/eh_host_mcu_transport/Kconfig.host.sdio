@@ -54,7 +54,7 @@ if ESP_HOSTED_HOST_TRANSPORT_BUS_SDIO
 		help
 		  Number of SDIO data lines wired to the slave.  Match your
 		  PCB layout — 4 lines (D0..D3) gives 4× throughput at the
-		  same clock; 1 line (D0 only) is the upstream-MCU minimum.
+		  same clock; 1 line uses D0 for data and D1 for the interrupt.
 
 		config ESP_HOSTED_HOST_SDIO_BUS_WIDTH_1
 			bool "1-bit"
@@ -248,24 +248,6 @@ if ESP_HOSTED_HOST_TRANSPORT_BUS_SDIO
 		default 5
 		range ESP_HOSTED_SDIO_RESET_SLAVE_GPIO_MIN ESP_HOSTED_SDIO_RESET_SLAVE_GPIO_MAX
 
-	choice ESP_HOSTED_SDIO_RESET_GPIO_CONFIG
-		prompt "Slave reset active level"
-		# ESP modules' EN / RST pin is active-low by convention (pull
-		# LOW to assert reset, HIGH to run).  Default reflects that.
-		# Boards with a transistor-buffered EN that inverts polarity
-		# need the explicit "Active high" override here.
-		default ESP_HOSTED_SDIO_RESET_ACTIVE_LOW
-		config ESP_HOSTED_SDIO_RESET_ACTIVE_HIGH
-			bool "Active high"
-		config ESP_HOSTED_SDIO_RESET_ACTIVE_LOW
-			bool "Active low"
-	endchoice
-
-	config ESP_HOSTED_HOST_RESET_ACTIVE_LOW
-		bool
-		default y if ESP_HOSTED_SDIO_RESET_ACTIVE_LOW
-		default n
-
 	# ── SDIO bus pins ───────────────────────────────────────────────────
 
 	# Slot 0: IOMUX-fixed pins (P4: CMD=44, CLK=43, D0=39, D1=40, D2=41, D3=42)
@@ -288,25 +270,25 @@ if ESP_HOSTED_HOST_TRANSPORT_BUS_SDIO
 				range 39 39 if IDF_TARGET_ESP32P4
 				range 2 2 if IDF_TARGET_ESP32
 
-			if ESP_HOSTED_HOST_SDIO_BUS_WIDTH_4
-				config ESP_HOSTED_HOST_SDIO_PIN_D1  # ignore: multiple-definition
-					int "D1 GPIO number"
-					default 35 if IDF_TARGET_ESP32S3
-					range 40 40 if IDF_TARGET_ESP32P4
-					range 4 4 if IDF_TARGET_ESP32
+			config ESP_HOSTED_HOST_SDIO_PIN_D1  # ignore: multiple-definition
+				int "D1 GPIO number"
+				default 35 if IDF_TARGET_ESP32S3
+				range 40 40 if IDF_TARGET_ESP32P4
+				range 4 4 if IDF_TARGET_ESP32
 
-				config ESP_HOSTED_HOST_SDIO_PIN_D2  # ignore: multiple-definition
-					int "D2 GPIO number"
-					default 20 if IDF_TARGET_ESP32S3
-					range 41 41 if IDF_TARGET_ESP32P4
-					range 12 12 if IDF_TARGET_ESP32
+			config ESP_HOSTED_HOST_SDIO_PIN_D2  # ignore: multiple-definition
+				int "D2 GPIO number"
+				depends on ESP_HOSTED_HOST_SDIO_BUS_WIDTH_4
+				default 20 if IDF_TARGET_ESP32S3
+				range 41 41 if IDF_TARGET_ESP32P4
+				range 12 12 if IDF_TARGET_ESP32
 
-				config ESP_HOSTED_HOST_SDIO_PIN_D3  # ignore: multiple-definition
-					int "D3 GPIO number"
-					default 9 if IDF_TARGET_ESP32S3
-					range 42 42 if IDF_TARGET_ESP32P4
-					range 13 13 if IDF_TARGET_ESP32
-			endif
+			config ESP_HOSTED_HOST_SDIO_PIN_D3  # ignore: multiple-definition
+				int "D3 GPIO number"
+				depends on ESP_HOSTED_HOST_SDIO_BUS_WIDTH_4
+				default 9 if IDF_TARGET_ESP32S3
+				range 42 42 if IDF_TARGET_ESP32P4
+				range 13 13 if IDF_TARGET_ESP32
 		endif
 
 		# Slot 1: configurable pins with per-board range locks
@@ -350,46 +332,46 @@ if ESP_HOSTED_HOST_TRANSPORT_BUS_SDIO
 				default 2
 				range ESP_HOSTED_SDIO_D0_GPIO_RANGE_MIN ESP_HOSTED_SDIO_D0_GPIO_RANGE_MAX
 
-			if ESP_HOSTED_HOST_SDIO_BUS_WIDTH_4
-				config ESP_HOSTED_HOST_SDIO_PIN_D1  # ignore: multiple-definition
-					int "D1 GPIO number"
-					default 48 if ESP_HOSTED_P4_C5_CORE_BOARD
-					default 10 if ESP32P4_TAB5_C6_BOARD
-					default 15 if ESP_HOSTED_P4X_C5_DEV_BOARD_FUNC_BOARD
-					default 49 if ESP_HOSTED_P4_C6_CORE_BOARD || ESP_HOSTED_P4_C61_CORE_BOARD
-					default 30 if ESP32P4_EYE_C6_BOARD
-					default 35 if IDF_TARGET_ESP32S3
-					default 15 if IDF_TARGET_ESP32P4
-					default 4  if IDF_TARGET_ESP32
-					default 4
-					range ESP_HOSTED_SDIO_D1_GPIO_RANGE_MIN ESP_HOSTED_SDIO_D1_GPIO_RANGE_MAX
+			config ESP_HOSTED_HOST_SDIO_PIN_D1  # ignore: multiple-definition
+				int "D1 GPIO number"
+				default 48 if ESP_HOSTED_P4_C5_CORE_BOARD
+				default 10 if ESP32P4_TAB5_C6_BOARD
+				default 15 if ESP_HOSTED_P4X_C5_DEV_BOARD_FUNC_BOARD
+				default 49 if ESP_HOSTED_P4_C6_CORE_BOARD || ESP_HOSTED_P4_C61_CORE_BOARD
+				default 30 if ESP32P4_EYE_C6_BOARD
+				default 35 if IDF_TARGET_ESP32S3
+				default 15 if IDF_TARGET_ESP32P4
+				default 4  if IDF_TARGET_ESP32
+				default 4
+				range ESP_HOSTED_SDIO_D1_GPIO_RANGE_MIN ESP_HOSTED_SDIO_D1_GPIO_RANGE_MAX
 
-				config ESP_HOSTED_HOST_SDIO_PIN_D2  # ignore: multiple-definition
-					int "D2 GPIO number"
-					default 53 if ESP_HOSTED_P4_C5_CORE_BOARD
-					default 9 if ESP32P4_TAB5_C6_BOARD
-					default 16 if ESP_HOSTED_P4X_C5_DEV_BOARD_FUNC_BOARD
-					default 48 if ESP_HOSTED_P4_C6_CORE_BOARD || ESP_HOSTED_P4_C61_CORE_BOARD
-					default 31 if ESP32P4_EYE_C6_BOARD
-					default 20 if IDF_TARGET_ESP32S3
-					default 16 if IDF_TARGET_ESP32P4
-					default 12 if IDF_TARGET_ESP32
-					default 12
-					range ESP_HOSTED_SDIO_D2_GPIO_RANGE_MIN ESP_HOSTED_SDIO_D2_GPIO_RANGE_MAX
+			config ESP_HOSTED_HOST_SDIO_PIN_D2  # ignore: multiple-definition
+				int "D2 GPIO number"
+				depends on ESP_HOSTED_HOST_SDIO_BUS_WIDTH_4
+				default 53 if ESP_HOSTED_P4_C5_CORE_BOARD
+				default 9 if ESP32P4_TAB5_C6_BOARD
+				default 16 if ESP_HOSTED_P4X_C5_DEV_BOARD_FUNC_BOARD
+				default 48 if ESP_HOSTED_P4_C6_CORE_BOARD || ESP_HOSTED_P4_C61_CORE_BOARD
+				default 31 if ESP32P4_EYE_C6_BOARD
+				default 20 if IDF_TARGET_ESP32S3
+				default 16 if IDF_TARGET_ESP32P4
+				default 12 if IDF_TARGET_ESP32
+				default 12
+				range ESP_HOSTED_SDIO_D2_GPIO_RANGE_MIN ESP_HOSTED_SDIO_D2_GPIO_RANGE_MAX
 
-				config ESP_HOSTED_HOST_SDIO_PIN_D3  # ignore: multiple-definition
-					int "D3 GPIO number"
-					default 52 if ESP_HOSTED_P4_C5_CORE_BOARD
-					default 8 if ESP32P4_TAB5_C6_BOARD
-					default 17 if ESP_HOSTED_P4X_C5_DEV_BOARD_FUNC_BOARD
-					default 47 if ESP_HOSTED_P4_C6_CORE_BOARD || ESP_HOSTED_P4_C61_CORE_BOARD
-					default 32 if ESP32P4_EYE_C6_BOARD
-					default 9  if IDF_TARGET_ESP32S3
-					default 17 if IDF_TARGET_ESP32P4
-					default 13 if IDF_TARGET_ESP32
-					default 13
-					range ESP_HOSTED_SDIO_D3_GPIO_RANGE_MIN ESP_HOSTED_SDIO_D3_GPIO_RANGE_MAX
-			endif
+			config ESP_HOSTED_HOST_SDIO_PIN_D3  # ignore: multiple-definition
+				int "D3 GPIO number"
+				depends on ESP_HOSTED_HOST_SDIO_BUS_WIDTH_4
+				default 52 if ESP_HOSTED_P4_C5_CORE_BOARD
+				default 8 if ESP32P4_TAB5_C6_BOARD
+				default 17 if ESP_HOSTED_P4X_C5_DEV_BOARD_FUNC_BOARD
+				default 47 if ESP_HOSTED_P4_C6_CORE_BOARD || ESP_HOSTED_P4_C61_CORE_BOARD
+				default 32 if ESP32P4_EYE_C6_BOARD
+				default 9  if IDF_TARGET_ESP32S3
+				default 17 if IDF_TARGET_ESP32P4
+				default 13 if IDF_TARGET_ESP32
+				default 13
+				range ESP_HOSTED_SDIO_D3_GPIO_RANGE_MIN ESP_HOSTED_SDIO_D3_GPIO_RANGE_MAX
 		endif
 	endmenu # "GPIO Configuration"
 
@@ -431,17 +413,42 @@ if ESP_HOSTED_HOST_TRANSPORT_BUS_SDIO
 
 	config ESP_HOSTED_HOST_SDIO_RX_STAGING_SLOTS
 		int "Host SDIO RX staging slots"
-		range 2 8
+		range 1 8
 		default 2
 		help
 			DMA staging buffers between the SDIO read task and the
-			de-aggregation task. One slot is always the in-progress read
-			buffer, so the effective queue depth is (slots - 1): the
-			default 2 gives depth 1 (one aggregate staged while the next
-			is read) — identical to the original double-buffer. Raising it
-			(e.g. 4, to match a co-processor advertising 4 receive credits)
-			lets the host absorb RX bursts without stalling the slave, at
-			the cost of slots x max-aggregate DMA RAM. Tune on hardware.
+			de-aggregation task. 1 uses a single buffer: the read task
+			waits until that buffer has been copied out before the next
+			read. That lowers peak RX rate and uses half the staging RAM
+			of the default.
+
+			With 2 or more, one slot is always the in-progress read, so
+			the queue depth is (slots - 1). The default 2 gives depth 1
+			(one aggregate staged while the next is read), the same as
+			the original double-buffer. Raising it (e.g. 4, to match a
+			co-processor advertising 4 receive credits) lets the host
+			absorb RX bursts without stalling the slave, at the cost of
+			slots x max-aggregate DMA RAM. Tune on hardware.
+
+	config ESP_HOSTED_HOST_SDIO_USE_MEMPOOL
+		bool "Use a mempool for SDIO packet buffers"
+		default n
+		help
+			Preallocate a fixed DMA mempool for host SDIO packet buffers.
+			TX packets and each de-aggregated RX frame are taken from this
+			pool. Its length is the host SDIO RX queue size plus 11 blocks
+			(3 Bluetooth, 3 serial, and 5 network), and each block is one
+			maximum SDIO frame (1536 bytes).
+
+			With the option left off, each of those packets is allocated
+			and freed on the DMA heap. Turn it on when that heap is
+			fragmented and a single frame allocation fails while the total
+			free DMA memory would still cover the frame. The pool is
+			reserved when the transport starts, so startup fails if one
+			contiguous DMA region of that size is not available.
+
+			The pool is separate from the RX staging slots. Staging still
+			holds one whole SDIO aggregate before it is split into frames.
 
 	endmenu
 

@@ -44,8 +44,10 @@ Header: `eh_host_transport_config.h` · compat `esp_hosted_transport_config.h`
 | `eh_host_transport_is_config_valid()` | `esp_hosted_is_config_valid()` | Validate the current config |
 | `eh_host_{sdio,spi,spi_hd,uart}_get_config` / `_set_config` | `esp_hosted_*_get/set_config` | Per-bus get/set |
 | `eh_host_get_default_{sdio,spi,spi_hd,uart}_config()` | `esp_hosted_get_default_*_config()` | Per-bus defaults (also `INIT_DEFAULT_HOST_SDIO_CONFIG()`) |
+| `eh_host_usb_otg_get_config` / `_set_config` | — | Experimental `usb_otg` get/set |
+| `eh_host_get_default_usb_otg_config()` | — | Experimental `usb_otg` defaults (`INIT_DEFAULT_HOST_USB_OTG_CONFIG()`) |
 
-Transport IDs: `EH_HOST_TRANSPORT_{NONE,SDIO,SPI_HD,SPI,UART}`.
+Transport IDs: `EH_HOST_TRANSPORT_{NONE,SDIO,SPI_HD,SPI,UART,USB_OTG}`. `EH_HOST_TRANSPORT_USB_OTG` is experimental.
 
 ## Core init & lifecycle
 Header: `eh_host_core.h` · compat `esp_hosted.h`
@@ -142,6 +144,28 @@ Header: `eh_host_cp_gpio.h` · compat `esp_hosted_cp_gpio.h`
 `eh_host_cp_gpio_config()`, `_set_level`/`_get_level`, `_set_direction`,
 `_input_enable`, `_set_pull_mode`, `_reset_pin` — each aliased `esp_hosted_cp_gpio_*`.
 
+## RF certification test
+Header: `eh_host_phy_cert.h` · ESP-IDF-shaped `esp_phy_remote.h`
+
+Every call mirrors an `esp_phy_cert_test.h` API — `esp_phy_X` becomes
+`eh_host_phy_cert_X` — and takes that header's argument types. Each returns
+`esp_err_t`, where ESP-IDF returns `void`: an RPC can fail where a local call
+cannot.
+
+Lifecycle: `eh_host_phy_cert_init()`, `_deinit()`, `_query()`.
+Shared: `_test_start_stop()`, `_get_rx_result()`.
+Wi-Fi: `_wifi_tx()`, `_wifi_rx()`, `_wifi_tx_tone()`, `_tx_contin_en()`,
+`_cbw40m_en()`, `_11ax_tx_set()`.
+BLE: `_ble_tx()`, `_ble_rx()`, `_bt_tx_tone()` — PHY-direct, not HCI DTM.
+
+`esp_phy_remote.h` aliases each one as `esp_phy_remote_X`, the way
+`esp_wifi_remote_*` aliases `esp_wifi_*`.
+
+The ESP-IDF `phy/cert_test` console commands come with `CONFIG_ESP_HOSTED_HOST_FEAT_CLI`.
+
+Off by default and never for shipped firmware — see
+[RF Certification Test](features/rf-cert-test.md).
+
 ## External coexistence
 Header: `eh_host_cp_ext_coex.h` · compat `esp_hosted_cp_ext_coex.h`
 
@@ -154,11 +178,12 @@ Header: `eh_host_power_save.h` · compat `esp_hosted_power_save.h`
 `eh_host_power_save_start()`/`_stop()`, `_timer_start()`/`_timer_stop()`,
 `_enabled()`, `_power_saving()`, `_woke_from_power_save()` — aliased `esp_hosted_power_save_*`.
 
-## OpenThread (RCP control)
+## Hosted OpenThread (spinel over `ESP_AUX_IF`)
 Header: `eh_host_openthread.h` · compat `esp_hosted_openthread.h`
 
 `eh_host_openthread_rcp_init/deinit/start/stop()`, `_rcp_query()`,
-`eh_host_port_openthread_get_radio_config()` — aliased `esp_hosted_openthread_*`.
+`EH_HOST_PORT_OPENTHREAD_RADIO_CONFIG()` — aliased `esp_hosted_openthread_*` / `ESP_HOSTED_OPENTHREAD_RADIO_CONFIG()`.
+Standard OpenThread on a dedicated UART does not use this API ([OpenThread](features/openthread.md)).
 
 ## Heartbeat
 Header: `eh_host_heartbeat.h` · compat `esp_hosted_misc.h`

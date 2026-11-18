@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 """
 ESP-Hosted Emulator Test Infrastructure — conftest.py
 
@@ -6,7 +8,7 @@ the SAME `dut` handle surface pytest-embedded gives HW tests, so an emu test
 reads identically to its HW twin:
 
     host, cp = dut[0], dut[1]
-    r = eh_test_expect(host, r'iperf>', timeout=40)
+    r = eh_test_expect(host, r'host>', timeout=40)
 
 Convention (identical to HW): dut[0] = Host (ESP32-P4), dut[1] = CP/Slave (C6).
 The launch logic lives in EmuTarget; these fixtures only choose a BenchSpec and
@@ -24,23 +26,9 @@ if _tests_dir not in sys.path:
 
 from targets.base import BenchSpec   # noqa: E402
 from targets.emu import EmuTarget    # noqa: E402
+from infra import ps_wake            # noqa: E402
 
 _PS_EXAMPLE = 'power_save/host+cp/network_split__host_deep_sleep_cp_light_sleep'
-
-
-@pytest.fixture(scope='session', autouse=True)
-def _prebuild_ahead():
-    """Speculative: warm the build cache concurrently before tests fan out, so a
-    first run overlaps builds instead of building serially per test. Lock-guarded
-    (safe under --jobs); best-effort (lazy build in the bench is the fallback)."""
-    from infra import build_fw
-    ex = 'system/get_cp_fw_version'
-    build_fw.prebuild([
-        (ex, 'cp', 'esp32c6', []),
-        (ex, 'mcu_host', 'esp32p4', []),
-        (ex, 'cp', 'esp32c6', ['CONFIG_EH_TRANSPORT_CP_UART=y']),
-        (ex, 'mcu_host', 'esp32p4', ['CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_UART=y']),
-    ])
 
 
 @pytest.fixture
@@ -55,9 +43,11 @@ def _bench(lab_tmp, worker_id):
     fixtures — one specific BenchSpec of the emu Target."""
     b = EmuTarget().make(
         BenchSpec(example=_PS_EXAMPLE, host_role='esp_host', transport='sdio',
-                  wake=True, timeout='200s'),
+                  wake=True, timeout='200s', cp_extra_ovl=ps_wake.CP_OVL,
+                  extra_ovl=ps_wake.HOST_OVL),
         worker_id=worker_id, lab_tmp=lab_tmp)
-    yield {'host': b.host, 'cp': b.cp, 'net': b.net}
+    yield {'host': b.host, 'cp': b.cp, 'net': b.net,
+           'artifacts': b.artifacts}
     b.down()
 
 
@@ -80,13 +70,15 @@ def emu_bench(lab_tmp, worker_id):
     target = EmuTarget()
     benches = []
 
-    def _make(example, host_role, transport, wake=False, timeout='60s'):
+    def _make(example, host_role, transport, wake=False, timeout='60s',
+              cp_extra_ovl=(), extra_ovl=(), cp_inject=None):
         b = target.make(
             BenchSpec(example=example, host_role=host_role, transport=transport,
-                      wake=wake, timeout=timeout),
+                      wake=wake, timeout=timeout, cp_inject=cp_inject,
+                      cp_extra_ovl=tuple(cp_extra_ovl), extra_ovl=tuple(extra_ovl)),
             worker_id=worker_id, lab_tmp=lab_tmp)
         benches.append(b)
-        out = {'host': b.host, 'cp': b.cp}
+        out = {'host': b.host, 'cp': b.cp, 'artifacts': b.artifacts}
         if b.net is not None:
             out['net'] = b.net
         return out

@@ -15,7 +15,9 @@
 #include "eh_host_transport_config.h"
 #include "eh_host_feat_rpc.h"
 #include "eh_host_feat_system.h"
+#if EH_HOST_AUTO_FEAT_INIT
 #include "eh_host_auto_init.h"
+#endif
 #include "esp_event.h"
 #include "eh_host_event.h"
 #include "eh_host_port_sync.h"
@@ -248,6 +250,7 @@ int eh_host_init(const eh_host_init_cfg_t *cfg)
     }
 
     s_init_state = INIT_RUNNING;
+    eh_host_core_lifecycle_locks_init();   /* bring-up lock exists before INIT_DONE */
 
     /* MCU-only: Linux user-space kmod owns the bus, no shadow to seed. */
     int rc;
@@ -263,6 +266,7 @@ int eh_host_init(const eh_host_init_cfg_t *cfg)
             goto fail;
         }
     }
+    eh_host_transport_config_set_in_use(true);
 #endif
 
     {
@@ -323,6 +327,9 @@ rollback:
     if (rpc_inited)      eh_host_feat_rpc_deinit();
     if (vserial_up_done) vserial_down(s_role);
 fail:
+#if EH_HOST_TYPE_MCU
+    eh_host_transport_config_set_in_use(false);
+#endif
     s_init_failed_rc = rc;
     s_init_state     = INIT_FAILED;
     eh_host_port_mutex_unlock(s_init_lock);
@@ -366,11 +373,16 @@ int eh_host_deinit(void)
     /* Block re-entry while teardown runs. */
     s_init_state = INIT_RUNNING;
 
+#if EH_HOST_AUTO_FEAT_INIT
     eh_host_auto_deinit_features();
+#endif
     eh_host_feat_system_deinit();
     eh_host_feat_rpc_stop();
     eh_host_feat_rpc_deinit();
     vserial_down(s_role);
+#if EH_HOST_TYPE_MCU
+    eh_host_transport_config_set_in_use(false);
+#endif
     esp_event_post(EH_HOST_EVENT, (int32_t)EH_HOST_EVENT_TRANSPORT_DOWN, NULL, 0, 0);
     /* No event-loop teardown: default loop is shared with other components. */
 
@@ -384,6 +396,20 @@ int eh_host_deinit(void)
 
     s_init_state = INIT_IDLE;
     eh_host_port_mutex_unlock(s_init_lock);
+    return 0;
+}
+
+/* Features create what an app looks up right after connect (nw_split's WIFI_STA_DEF):
+ * connect returns once they are up. */
+static int features_up(void)
+{
+#if EH_HOST_AUTO_FEAT_INIT
+    if (eh_host_auto_init_wait(EH_HOST_FEAT_INIT_WAIT_MS) != 0) {
+        ESP_LOGE("eh_host_core", "feature init not done after %u ms",
+                 (unsigned int)EH_HOST_FEAT_INIT_WAIT_MS);
+        return -ETIMEDOUT;
+    }
+#endif
     return 0;
 }
 
@@ -412,7 +438,7 @@ int eh_host_connect_to_slave(void)
 
     if (s_bringup_state == BRINGUP_DONE) {
         eh_host_port_mutex_unlock(s_bringup_lock);
-        return 0;
+        return features_up();
     }
     if (s_bringup_state == BRINGUP_FAILED) {
         eh_host_port_mutex_unlock(s_bringup_lock);
@@ -426,5 +452,5 @@ int eh_host_connect_to_slave(void)
         esp_event_post(EH_HOST_EVENT, (int32_t)EH_HOST_EVENT_TRANSPORT_UP, NULL, 0, 0);
     }
     eh_host_port_mutex_unlock(s_bringup_lock);
-    return rc;
+    return rc == 0 ? features_up() : rc;
 }

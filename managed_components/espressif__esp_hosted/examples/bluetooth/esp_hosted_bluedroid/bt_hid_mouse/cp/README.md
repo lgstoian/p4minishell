@@ -9,16 +9,17 @@ to the hosted HCI. Bluedroid
 on the **host**; the BR/EDR **controller** runs on the ESP-Hosted **co-processor**,
 reached over the hosted transport (SDIO / SPI / SPI-HD / UART) via VHCI.
 
-**Classic Bluetooth (BR/EDR) is supported only on an ESP32 co-processor.** The
-C/S/H-series chips are BLE-only and will fail at controller init.
+**Classic Bluetooth (BR/EDR) needs an ESP32 or ESP32-S31 co-processor.** The
+other chips are BLE-only. The host build stops with an error if the selected
+co-processor has no Classic BT.
 
 ## Supported Platforms and Transports
 
 ### Supported Coprocessors (BR/EDR controller)
 
-| Coprocessor       | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-S3 | ESP32-S2 |
-| :---------------- | :---: | :------: | :------: | :------: | :------: | :-------: | :------: | :------: | :------: |
-| Classic BT (BR/EDR) | Yes | No       | No       | No       | No       | No        | No       | No       | No       |
+| Coprocessor       | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-S3 | ESP32-S31 | ESP32-S2 |
+| :---------------- | :---: | :------: | :------: | :------: | :------: | :-------: | :------: | :------: | :-------: | :------: |
+| Classic BT (BR/EDR) | Yes | No       | No       | No       | No       | No        | No       | No       | Yes | No       |
 
 ### Supported Host Devices
 
@@ -32,14 +33,14 @@ C/S/H-series chips are BLE-only and will fail at controller init.
 | :------------------------- | :--: | :-------------: | :-------------: | :--: |
 | MCU host                   | Yes  | Yes             | Yes             | Yes  |
 
-The co-processor is the BR/EDR (Classic Bluetooth) controller — Classic BT is
-supported only on an ESP32 CP. `sdkconfig.defaults` already enables the
+The co-processor is the BR/EDR (Classic Bluetooth) controller. Use an ESP32 or
+ESP32-S31 CP. `sdkconfig.defaults` already enables the
 controller-only profile with BT HCI carried over the host bus (VHCI); you only
 select the transport (must match the host):
 
 ```bash
 cd examples/bluetooth/esp_hosted_bluedroid/bt_hid_mouse/cp
-idf.py set-target esp32
+idf.py set-target esp32              # or: idf.py --preview set-target esp32s31
 idf.py menuconfig
 ```
 
@@ -56,7 +57,7 @@ Component config
                └── SDIO Configuration               ← clock, GPIOs, checksum (defaults OK)
 ```
 
-The Bluetooth profile is pre-selected by `sdkconfig.defaults`; confirm it under
+The Bluetooth profile is preselected by `sdkconfig.defaults`; confirm it under
 **Features**:
 
 ```text
@@ -82,8 +83,8 @@ CONFIG_BT_CONTROLLER_ONLY=y               # controller-only profile
 CONFIG_ESP_HOSTED_CP_FEAT_WIFI=n          # Wi-Fi off — BT controller-only CP
 ```
 
-Classic BT (BR/EDR) additionally requires an ESP32 CP (`idf.py set-target esp32`)
-— the controller-only profile above provides BR/EDR only on ESP32.
+Classic BT (BR/EDR) also needs an ESP32 or ESP32-S31 CP. On other chips, the
+controller-only profile above gives BLE only.
 
 Then flash and monitor:
 

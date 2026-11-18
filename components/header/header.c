@@ -461,10 +461,10 @@ static void header_render_icon(header_status_kind_t type, header_level_t level)
     header_status_text(type, level, buffer, sizeof(buffer));
     if (buffer[0] == '\0') {
         /* Conditional indicator (activity) with nothing to show. */
-        lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(label, true);
         return;
     }
-    lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(label, false);
     lv_label_set_text(label, buffer);
     lv_obj_set_style_text_color(label, header_tone_color(header_status_tone_for(type)), 0);
 }
@@ -572,7 +572,7 @@ static void header_bind_status_action(lv_obj_t *obj, header_status_kind_t kind)
     if (obj == NULL || !P4_CONFIG_HEADER_DETAIL_ON_TAP) {
         return;
     }
-    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(obj, true);
     lv_obj_set_ext_click_area(obj, 6);
     lv_obj_set_user_data(obj, (void *)(intptr_t)kind);
     lv_obj_add_event_cb(obj, header_status_click_cb, LV_EVENT_CLICKED, NULL);
@@ -857,42 +857,42 @@ static void header_apply_levels(const header_layout_t *lay)
 
     /* Separators */
     if (s_sep1 != NULL) {
-        if (!glyph && lay->show_sep) lv_obj_clear_flag(s_sep1, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(s_sep1, LV_OBJ_FLAG_HIDDEN);
+        if (!glyph && lay->show_sep) lv_obj_set_hidden(s_sep1, false);
+        else lv_obj_set_hidden(s_sep1, true);
     }
     if (s_sep2 != NULL) {
-        if (!glyph && lay->show_sep) lv_obj_clear_flag(s_sep2, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(s_sep2, LV_OBJ_FLAG_HIDDEN);
+        if (!glyph && lay->show_sep) lv_obj_set_hidden(s_sep2, false);
+        else lv_obj_set_hidden(s_sep2, true);
     }
 
     /* CPU indicator: graph (FULL) / bar (SHORT) / none (MIN or glyph). */
     if (s_cpu_graph != NULL) {
-        if (!glyph && lay->show_cpu_graph) lv_obj_clear_flag(s_cpu_graph, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(s_cpu_graph, LV_OBJ_FLAG_HIDDEN);
+        if (!glyph && lay->show_cpu_graph) lv_obj_set_hidden(s_cpu_graph, false);
+        else lv_obj_set_hidden(s_cpu_graph, true);
     }
     if (s_cpu_bar != NULL) {
         bool show_bar = (!glyph && lay->sys_level == HEADER_LEVEL_SHORT);
-        if (show_bar) lv_obj_clear_flag(s_cpu_bar, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(s_cpu_bar, LV_OBJ_FLAG_HIDDEN);
+        if (show_bar) lv_obj_set_hidden(s_cpu_bar, false);
+        else lv_obj_set_hidden(s_cpu_bar, true);
     }
 
     /* Battery icon (glyph always; words at FULL/SHORT) + bar (words FULL only). */
     if (s_battery_icon_label != NULL) {
         if (glyph || lay->sys_level <= HEADER_LEVEL_SHORT) {
-            lv_obj_clear_flag(s_battery_icon_label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_battery_icon_label, false);
         } else {
-            lv_obj_add_flag(s_battery_icon_label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_battery_icon_label, true);
         }
     }
     if (s_battery_bar != NULL) {
-        if (!glyph && lay->show_battery_bar) lv_obj_clear_flag(s_battery_bar, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(s_battery_bar, LV_OBJ_FLAG_HIDDEN);
+        if (!glyph && lay->show_battery_bar) lv_obj_set_hidden(s_battery_bar, false);
+        else lv_obj_set_hidden(s_battery_bar, true);
     }
 
     /* Uptime: words FULL level only (the first thing to yield; never in glyph). */
     if (s_uptime_label != NULL) {
-        if (!glyph && lay->sys_level == HEADER_LEVEL_FULL) lv_obj_clear_flag(s_uptime_label, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(s_uptime_label, LV_OBJ_FLAG_HIDDEN);
+        if (!glyph && lay->sys_level == HEADER_LEVEL_FULL) lv_obj_set_hidden(s_uptime_label, false);
+        else lv_obj_set_hidden(s_uptime_label, true);
     }
 }
 
@@ -903,12 +903,12 @@ static void header_apply_widths(const header_layout_t *lay, int gap, int avail_w
 
     if (s_status_panel != NULL) {
         if (lay->show_status) {
-            lv_obj_clear_flag(s_status_panel, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_status_panel, false);
             lv_obj_set_width(s_status_panel, lay->left_w);
             lv_obj_set_pos(s_status_panel, x, 0);
             x += lay->left_w + gap;
         } else {
-            lv_obj_add_flag(s_status_panel, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_status_panel, true);
         }
     }
     if (s_notif_container != NULL) {
@@ -916,7 +916,7 @@ static void header_apply_widths(const header_layout_t *lay, int gap, int avail_w
             int icon_w = header_text_width("!", header_font_for_step(s_header_font_step));
             int label_w;
 
-            lv_obj_clear_flag(s_notif_container, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_notif_container, false);
             lv_obj_set_width(s_notif_container, lay->center_w);
             lv_obj_set_pos(s_notif_container, x, 0);
             label_w = lay->center_w - icon_w - gap;
@@ -925,7 +925,7 @@ static void header_apply_widths(const header_layout_t *lay, int gap, int avail_w
                 lv_obj_set_width(s_notification_label, label_w);
             }
         } else {
-            lv_obj_add_flag(s_notif_container, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_notif_container, true);
         }
     }
     if (s_sys_panel != NULL) {
@@ -934,11 +934,11 @@ static void header_apply_widths(const header_layout_t *lay, int gap, int avail_w
             int right_x = avail_w - lay->right_w;
 
             if (right_x < x) right_x = x; /* never overlap the center */
-            lv_obj_clear_flag(s_sys_panel, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_sys_panel, false);
             lv_obj_set_width(s_sys_panel, lay->right_w);
             lv_obj_set_pos(s_sys_panel, right_x, 0);
         } else {
-            lv_obj_add_flag(s_sys_panel, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_sys_panel, true);
         }
     }
 }
@@ -1022,14 +1022,14 @@ static void header_apply_layout(void)
 static void header_record_actual(void)
 {
     s_last_actual_left = (s_status_panel != NULL &&
-                          !lv_obj_has_flag(s_status_panel, LV_OBJ_FLAG_HIDDEN))
+                          !lv_obj_is_hidden(s_status_panel))
                              ? (int)lv_obj_get_width(s_status_panel) : 0;
     s_last_actual_center = (s_notif_container != NULL &&
-                            !lv_obj_has_flag(s_notif_container, LV_OBJ_FLAG_HIDDEN) &&
+                            !lv_obj_is_hidden(s_notif_container) &&
                             s_last_layout.show_center)
                                ? (int)lv_obj_get_width(s_notif_container) : 0;
     s_last_actual_right = (s_sys_panel != NULL &&
-                           !lv_obj_has_flag(s_sys_panel, LV_OBJ_FLAG_HIDDEN))
+                           !lv_obj_is_hidden(s_sys_panel))
                               ? (int)lv_obj_get_width(s_sys_panel) : 0;
 }
 
@@ -1075,15 +1075,15 @@ static void header_render(void)
         lv_obj_set_style_text_color(
             s_notification_icon,
             header_notify_color(s_header_state.notification_level), 0);
-        lv_obj_clear_flag(s_notification_icon, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_notification_icon, false);
     } else if (P4_CONFIG_HEADER_CLOCK && s_header_state.clock_text[0] != '\0') {
         lv_label_set_text(s_notification_label, s_header_state.clock_text);
         lv_obj_set_style_text_color(s_notification_label,
                                     lv_color_hex(HEADER_MUTED_COLOR), 0);
-        lv_obj_add_flag(s_notification_icon, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_notification_icon, true);
     } else {
         lv_label_set_text(s_notification_label, "");
-        lv_obj_add_flag(s_notification_icon, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_notification_icon, true);
     }
 
     /* Battery (always present; N/C when the ADC is unavailable). The color
@@ -1219,7 +1219,7 @@ static void header_enable_event_bubble(lv_obj_t *obj)
     count = lv_obj_get_child_count(obj);
     for (i = 0; i < count; i++) {
         lv_obj_t *child = lv_obj_get_child(obj, i);
-        lv_obj_add_flag(child, LV_OBJ_FLAG_EVENT_BUBBLE);
+        lv_obj_set_event_bubble(child, true);
         header_enable_event_bubble(child);
     }
 }
@@ -1290,13 +1290,13 @@ void header_init(void)
     lv_obj_set_style_bg_opa(s_header_root, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_header_root, 0, 0);
     lv_obj_set_scrollbar_mode(s_header_root, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_clear_flag(s_header_root, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(s_header_root, false);
     if (!s_header_visible) {
-        lv_obj_add_flag(s_header_root, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_header_root, true);
     }
 
     /* Long-press the status bar to show the build identity banner. */
-    lv_obj_add_flag(s_header_root, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(s_header_root, true);
     lv_obj_add_event_cb(s_header_root, header_touch_event_cb, LV_EVENT_LONG_PRESSED, NULL);
 
     /* ====================================================================
@@ -1319,7 +1319,7 @@ void header_init(void)
     lv_obj_set_flex_align(s_status_panel, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scrollbar_mode(s_status_panel, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_clear_flag(s_status_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(s_status_panel, false);
     lv_obj_set_style_flex_grow(s_status_panel, 0, 0);
     /* Width is set explicitly each render by the responsive layout pass
      * (header_apply_layout); no fixed min-width to clip against. */
@@ -1329,7 +1329,7 @@ void header_init(void)
         s_status_icons[i] = lv_label_create(s_status_panel);
         lv_obj_set_style_text_font(s_status_icons[i], status_font, 0);
         lv_obj_set_style_text_letter_space(s_status_icons[i], -1, 0);
-        lv_obj_clear_flag(s_status_icons[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scrollable(s_status_icons[i], false);
         header_bind_status_action(s_status_icons[i], (header_status_kind_t)i);
     }
 
@@ -1350,14 +1350,14 @@ void header_init(void)
     lv_obj_set_flex_align(s_notif_container, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scrollbar_mode(s_notif_container, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_clear_flag(s_notif_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(s_notif_container, false);
 
     /* Notification icon (bell text, hidden when no notification) */
     s_notification_icon = lv_label_create(s_notif_container);
     lv_label_set_text(s_notification_icon, "!");
     lv_obj_set_style_text_color(s_notification_icon, lv_color_hex(HEADER_WARN_COLOR), 0);
     lv_obj_set_style_text_font(s_notification_icon, status_font, 0);
-    lv_obj_add_flag(s_notification_icon, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_notification_icon, true);
 
     /* Notification text — width is bounded by the layout pass each render. */
     s_notification_label = lv_label_create(s_notif_container);
@@ -1369,7 +1369,7 @@ void header_init(void)
     /* Recolor markup for the **bold** notification subset (see below). */
     lv_label_set_recolor(s_notification_label, true);
     lv_obj_set_scrollbar_mode(s_notification_label, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_clear_flag(s_notification_label, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(s_notification_label, false);
     lv_label_set_text(s_notification_label, "");
 
     /* ====================================================================
@@ -1392,7 +1392,7 @@ void header_init(void)
     lv_obj_set_flex_align(s_sys_panel, LV_FLEX_ALIGN_END,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scrollbar_mode(s_sys_panel, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_clear_flag(s_sys_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(s_sys_panel, false);
     lv_obj_set_style_flex_grow(s_sys_panel, 0, 0);
     /* Width is set explicitly each render by the responsive layout pass. */
 
@@ -1794,9 +1794,9 @@ void header_set_visible(bool visible)
     }
     if (s_header_root != NULL) {
         if (visible) {
-            lv_obj_clear_flag(s_header_root, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_header_root, false);
         } else {
-            lv_obj_add_flag(s_header_root, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_header_root, true);
         }
     }
     lvgl_port_unlock();

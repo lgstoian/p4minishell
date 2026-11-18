@@ -88,12 +88,31 @@ Regenerate the committed manifests after changing tags or components:
 | Type | Embedded shell + application framework (palmtop / PDA / writerdeck) |
 | Target | ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO) |
 | Framework | ESP-IDF v5.5.5 |
-| UI | LVGL 9.5.0 / esp_lvgl_port 2.9.0; reference: JD9165 1024x600 + GT911; Tab5: ILI9881C/ST7123 720x1280 + integrated touch |
+| UI | LVGL 9.6.0~1 / esp_lvgl_port 2.9.0; reference: JD9165 1024x600 + GT911; Tab5: ILI9881C/ST7123 720x1280 + integrated touch |
 | License | MIT (Copyright (c) 2026 Stoian Alexandru); vendored Tab5 BSP and `tools/font_subset.py` are Apache-2.0 (see `licence.md`) |
 | Boards | `boards/jc1060p470c/` (reference, ESP32-P4 Function EV Board) and `boards/m5stack_tab5/` (M5Stack Tab5); serial port `<COM_PORT>` (e.g. `COM3`/`COM6` during development) |
 
 Recent changes are recorded in [`changelog.md`](changelog.md). Known quirks and
 the bug-campaign log live in [`bugs.md`](bugs.md).
+
+- **LVGL 9.6.0~1 upgrade (2026-11-18, builds green, NOT yet HW-verified):**
+  - Pin bumped in `main/idf_component.yml` (esp_lvgl_port 2.9.0 unchanged; it
+    accepts `lvgl >=8,<10`). Because the four patched components are vendored
+    via `EXTRA_COMPONENT_DIRS`, the component manager treats them as *local*
+    components and will not fetch a new LVGL: the vendored
+    `managed_components/lvgl__lvgl` tree is replaced by the 9.6.0~1 registry
+    archive by hand, then the patches are re-applied.
+  - 9.6 moved the public headers to `include/lvgl/` (root `lvgl.h` still
+    works), deprecated the generic flag API, and made Kconfig the single
+    config source. A stale 9.5 `sdkconfig.<board>` keeps
+    `LV_ASSERT_HANDLER_INCLUDE="assert.h"` and emits one `#warning` per
+    translation unit - delete the generated sdkconfig once.
+  - Measured (jc1060p470c): flash +21,658 B, static DIRAM +152 B, LVGL
+    archive +19,893 B. The extended `unscii_16` font was rebuilt for 9.6 and
+    lost a duplicated 12,288-byte bitmap copy, which is why `.rodata` fell.
+  - No `lv_draw_buf`/image-decoder change was needed: LodePNG still returns an
+    `lv_draw_buf_t` from `lodepng_decode32`, so `components/imgdec` is
+    untouched.
 
 - **Browser dashboard + MCP round (2026-11-01, HW-verified on COM3/COM6):**
   - The browser now uses ONE DOM renderer (`components/markdown/dom_render.c`)

@@ -47,7 +47,10 @@ menu "SDIO Configuration"
 		int "Slave GPIO pin to reset itself"
 		default -1
 		help
-			Host uses this pin to reset the slave ESP. To re-use ESP 'RST' or 'EN' GPIO, set value to -1
+			-1 (default) means the host resets the co-processor with its EN pin.
+			Set a pin only if the module does not expose EN. The host drives it
+			like EN: parked HIGH, pulsed LOW. A LOW pulse of 2 ms or more does a
+			software restart, which cannot recover a hung co-processor.
 
 
 	choice EH_TRANSPORT_CP_SDIO_SPEED
@@ -172,7 +175,10 @@ menu "SDIO Configuration"
 		default 10 if IDF_TARGET_ESP32C61
 		default 20
 		help
-			Very small TX queue will lower ESP --> SDIO -- Host data rate
+			Unused by the SDIO datapath. The init event advertises the
+			co-processor RX buffer, in units of a 1536-byte frame, and that
+			size is what the host uses for ESP-to-host staging. Kept so
+			existing sdkconfigs still parse.
 
 	config EH_TRANSPORT_CP_SDIO_RX_Q_SIZE
 		int "SDIO RX queue size"

@@ -3,7 +3,7 @@
 dependencies:
   # Reconfigure after managed component version changes: idf.py reconfigure
   lvgl/lvgl:
-    version: "9.5.0"
+    version: "9.6.0~1"
     rules:
       - if: "target in [esp32p4]"
   espressif/esp_lvgl_port:
@@ -11,7 +11,7 @@ dependencies:
     rules:
       - if: "target in [esp32p4]"
   espressif/esp_hosted:
-    version: "3.0.6"
+    version: "3.1.0"
     rules:
       - if: "target in [esp32p4]"
   espressif/esp_codec_dev:

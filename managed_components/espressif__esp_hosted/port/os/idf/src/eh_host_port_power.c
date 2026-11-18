@@ -11,7 +11,7 @@
 #ifdef ESP_PLATFORM
 #include "esp_system.h"
 #include "esp_sleep.h"
-#include "esp_idf_version.h"
+#include "eh_host_port_idf_ver.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
@@ -53,13 +53,12 @@ eh_host_port_err_t eh_host_port_reset_slave(void)
 
     const gpio_num_t pin = (gpio_num_t)rst.pin;
 
-    ESP_LOGV(EH_HOST_PORT_RESET_TAG, "Resetting slave on pin %d (active=%d)",
-             (int)pin, EH_HOST_PORT_RESET_VAL_ACTIVE);
+    ESP_LOGV(EH_HOST_PORT_RESET_TAG, "Resetting slave on pin %d", (int)pin);
 
     /* push-pull output before level-set so first edge is observable */
     gpio_config_t io = {
         .pin_bit_mask = (1ULL << pin),
-        .mode         = GPIO_MODE_OUTPUT,
+        .mode         = GPIO_MODE_INPUT_OUTPUT,
         .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_DISABLE,
@@ -70,24 +69,26 @@ eh_host_port_err_t eh_host_port_reset_slave(void)
         return EH_HOST_PORT_ERR;
     }
 
-    gpio_set_level(pin, EH_HOST_PORT_RESET_VAL_INACTIVE);
+    /* CP reset is its EN pin: LOW asserts reset, HIGH runs it. */
+    gpio_set_level(pin, EH_GPIO_HIGH);
     vTaskDelay(pdMS_TO_TICKS(EH_HOST_PORT_RESET_BASELINE_MS));
-    gpio_set_level(pin, EH_HOST_PORT_RESET_VAL_ACTIVE);
+    gpio_set_level(pin, EH_GPIO_LOW);
     vTaskDelay(pdMS_TO_TICKS(EH_HOST_PORT_RESET_PULSE_MS));
-    gpio_set_level(pin, EH_HOST_PORT_RESET_VAL_INACTIVE);
+    gpio_set_level(pin, EH_GPIO_HIGH);
     vTaskDelay(pdMS_TO_TICKS(EH_HOST_PORT_RESET_POST_DELAY_MS));
 
-    ESP_LOGD(EH_HOST_PORT_RESET_TAG,
-             "reset done pin=%d parked=%d (active=%d inactive=%d)",
-             (int)pin, gpio_get_level(pin),
-             EH_HOST_PORT_RESET_VAL_ACTIVE, EH_HOST_PORT_RESET_VAL_INACTIVE);
+    ESP_LOGI(EH_HOST_PORT_RESET_TAG, "reset done pin=%d parked=%d",
+             (int)pin, gpio_get_level(pin));
     return EH_HOST_PORT_OK;
 }
 
 eh_host_port_err_t eh_host_port_restart_host(void)
 {
-    ESP_EARLY_LOGW("eh_host_xport", "TRANSPORT_FAILURE: restarting host");
-    esp_restart();
+    ESP_EARLY_LOGW("eh_host_xport", "TRANSPORT_FAILURE: forcing host reset");
+
+	/* Force an immediate reset when transport recovery is not possible.
+     * Avoid esp_restart(), which may wait on the failed transport. */
+    abort();
     return EH_HOST_PORT_OK; /* unreachable */
 }
 
@@ -192,7 +193,7 @@ eh_host_port_wakeup_reason_t eh_host_port_wakeup_reason_get(void)
     if (esp_reset_reason() != ESP_RST_DEEPSLEEP) {
         return EH_HOST_PORT_WAKEUP_UNKNOWN;
     }
-#if defined(ESP_IDF_VERSION) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0))
+#if EH_HOST_GOT_WAKEUP_CAUSES_BITMAP
     /* IDF >=6.0 bitmap API: bit-position is BIT(enum_val), not the enum
      * value itself — see esp_hw_support/sleep_modes.c uses of BIT(...). */
     uint32_t causes = (uint32_t)esp_sleep_get_wakeup_causes();

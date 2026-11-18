@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,6 +10,9 @@
 #include "esp_log.h"
 #include "eh_log.h"
 #include "eh_cp_feat_rpc_ext_v2.h"
+#if EH_CP_FEAT_WIFI_READY
+#include "eh_cp_feat_wifi.h"
+#endif
 #include <string.h>
 #if EH_CP_FEAT_RPC_EXT_V2_READY
 
@@ -211,7 +214,7 @@ esp_err_t eh_cp_feat_rpc_ext_v2_rpc_req_dispatcher(Rpc *req, Rpc *resp, void *pr
             ret = req_wifi_sta_get_negotiated_phymode(req, resp, priv_data);
             break;
 
-#if EH_CP_IDF_GE_5_4
+#if EH_CP_WIFI_DUALBAND
         case RPC_ID__Req_WifiSetProtocols:
             ret = req_wifi_set_protocols(req, resp, priv_data);
             break;
@@ -266,7 +269,12 @@ esp_err_t eh_cp_feat_rpc_ext_v2_rpc_req_dispatcher(Rpc *req, Rpc *resp, void *pr
         case RPC_ID__Req_GetDhcpDnsStatus:
             ret = req_get_dhcp_dns_status(req, resp, priv_data);
             break;
+
 #endif // EH_CP_FEAT_NW_SPLIT_READY
+
+        case RPC_ID__Req_SetContext:
+            ret = req_set_context(req, resp, priv_data);
+            break;
 
 #if EH_CP_FEAT_WIFI_READY
 #if EH_CP_FEAT_WIFI_EXT_ITWT_READY
@@ -481,6 +489,48 @@ esp_err_t eh_cp_feat_rpc_ext_v2_rpc_req_dispatcher(Rpc *req, Rpc *resp, void *pr
             break;
 #endif
 
+#if EH_CP_FEAT_RF_CERT_READY
+        case RPC_ID__Req_PhyGetRxResult:
+            ret = req_phy_get_rx_result(req, resp, priv_data);
+            break;
+        case RPC_ID__Req_PhyCmdStop:
+            ret = req_phy_cmd_stop(req, resp, priv_data);
+            break;
+#if EH_CP_FEAT_RF_CERT_WIFI
+        case RPC_ID__Req_PhyWifiTx:
+            ret = req_phy_wifi_tx(req, resp, priv_data);
+            break;
+        case RPC_ID__Req_PhyWifiRx:
+            ret = req_phy_wifi_rx(req, resp, priv_data);
+            break;
+        case RPC_ID__Req_PhyWifiTxTone:
+            ret = req_phy_wifi_tx_tone(req, resp, priv_data);
+            break;
+        case RPC_ID__Req_PhyTxContinEn:
+            ret = req_phy_tx_contin_en(req, resp, priv_data);
+            break;
+        case RPC_ID__Req_PhyCbw40mEn:
+            ret = req_phy_cbw40m_en(req, resp, priv_data);
+            break;
+#if EH_CP_FEAT_RF_CERT_HE
+        case RPC_ID__Req_PhyWifi11axTxSet:
+            ret = req_phy_wifi_11ax_tx_set(req, resp, priv_data);
+            break;
+#endif // EH_CP_FEAT_RF_CERT_HE
+#endif // EH_CP_FEAT_RF_CERT_WIFI
+#if EH_CP_FEAT_RF_CERT_BLE
+        case RPC_ID__Req_PhyBleTx:
+            ret = req_phy_ble_tx(req, resp, priv_data);
+            break;
+        case RPC_ID__Req_PhyBleRx:
+            ret = req_phy_ble_rx(req, resp, priv_data);
+            break;
+        case RPC_ID__Req_PhyBtTxTone:
+            ret = req_phy_bt_tx_tone(req, resp, priv_data);
+            break;
+#endif // EH_CP_FEAT_RF_CERT_BLE
+#endif // EH_CP_FEAT_RF_CERT_READY
+
 #if EH_CP_FEAT_GPIO_EXP_READY
         case RPC_ID__Req_GpioConfig:
             ret = req_gpio_config(req, resp, priv_data);
@@ -514,6 +564,12 @@ esp_err_t eh_cp_feat_rpc_ext_v2_rpc_req_dispatcher(Rpc *req, Rpc *resp, void *pr
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error executing command handler for [0x%x]", req->msg_id);
     }
+#if EH_CP_FEAT_WIFI_READY
+    /* A re-init stops the CP's own station: that stop reaches the host first. */
+    if (req->msg_id == RPC_ID__Req_WifiInit) {
+        eh_cp_feat_wifi_reports_flush();
+    }
+#endif
 
     return ret;
 }

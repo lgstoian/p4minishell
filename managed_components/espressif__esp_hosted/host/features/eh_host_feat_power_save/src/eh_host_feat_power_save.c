@@ -1,4 +1,8 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 /* Host-side power-save lifecycle. */
 
 #include <errno.h>
@@ -28,7 +32,6 @@ static volatile int s_active    = 0;
 
 #if EH_HOST_TYPE_MCU
 static esp_timer_handle_t           s_auto_enter_timer = NULL;
-static eh_host_power_save_type_t  s_auto_enter_type  = EH_HOST_POWER_SAVE_TYPE_LIGHT_SLEEP;
 
 /* ISR state; 500ms grace filters sleep/wake glitches. */
 static volatile uint32_t s_last_wakeup_time_ms = 0;
@@ -180,7 +183,7 @@ int eh_host_hold_slave_reset_gpio_pre_power_save(void)
     if (rc > 0) return 0;               /* integrator opted out */
     eh_host_port_err_t prc = eh_host_port_gpio_hold(&desc, true);
     if (prc != EH_HOST_PORT_OK) {
-        ESP_LOGE(TAG, "gpio_hold(en, pin=%u): %d", (unsigned)desc.pin, (int)prc);
+        ESP_LOGE(TAG, "gpio_hold(en, pin=%u): %d", (unsigned int)desc.pin, (int)prc);
         return -EIO;
     }
     return 0;
@@ -198,7 +201,7 @@ int eh_host_release_slave_reset_gpio_post_wakeup(void)
     if (rc > 0) return 0;
     eh_host_port_err_t prc = eh_host_port_gpio_hold(&desc, false);
     if (prc != EH_HOST_PORT_OK) {
-        ESP_LOGE(TAG, "gpio_hold(dis, pin=%u): %d", (unsigned)desc.pin, (int)prc);
+        ESP_LOGE(TAG, "gpio_hold(dis, pin=%u): %d", (unsigned int)desc.pin, (int)prc);
         return -EIO;
     }
     return 0;
@@ -301,7 +304,7 @@ static void auto_enter_cb(void *ctx)
 {
     (void)ctx;
     if (s_init_done && !s_active) {
-        eh_host_power_save_start(s_auto_enter_type);
+        eh_host_power_save_start(EH_HOST_POWER_SAVE_TYPE_DEEP_SLEEP);
     }
 }
 #endif
@@ -337,7 +340,7 @@ int eh_host_power_save_timer_stop(void)
 #endif
 }
 
-#if EH_HOST_TYPE_MCU && CONFIG_ESP_HOSTED_HOST_FEAT_POWER_SAVE_AUTO_INIT
+#if EH_HOST_AUTO_FEAT_INIT && EH_HOST_TYPE_MCU && EH_HOST_FEAT_POWER_SAVE_AUTO_INIT
 /* Priority 100: runs early so other features can rely on s_init_done. */
 #include "eh_host_auto_init.h"
 EH_HOST_FEAT_REGISTER(eh_host_power_save_init,

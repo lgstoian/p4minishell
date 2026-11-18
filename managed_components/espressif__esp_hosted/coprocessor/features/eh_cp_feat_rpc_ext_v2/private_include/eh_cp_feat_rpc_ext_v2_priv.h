@@ -15,7 +15,7 @@
 #include "esp_err.h"
 #include "esp_wifi_types.h"
 #include "esp_event.h"
-#include "esp_idf_version.h"
+#include "eh_cp_idf_compat.h"
 #include "eh_cp_master_config.h"
 
 /* Component headers */
@@ -45,7 +45,6 @@ extern "C" {
 #define BSSID_BYTES_SIZE       6
 
 /* MCU component internal state variables - WiFi related */
-extern wifi_event_sta_connected_t mcu_lkg_sta_connected_event;
 
 /* MCU component internal state variables - System/OTA related */
 extern TimerHandle_t handle_heartbeat_task;
@@ -166,15 +165,23 @@ extern int g_private_key_passwd_len;
 
 #define RPC_REQ_COPY_STR RPC_REQ_COPY_BYTES
 
-#define RPC_RESP_COPY_STR(dest, src, max_len)                                   \
-  if (src) {                                                                    \
-    dest.data = (uint8_t*)strndup((const char*)src, max_len);                         \
-    if (!dest.data) {                                                           \
-      ESP_LOGE(TAG, "%s:%u Failed to duplicate bytes\n",__func__,__LINE__);     \
+/* IDF arrays like wifi_sta_config_t.ssid[32] are unterminated when full, so
+ * the length needs bounding too. */
+static inline bool eh_cp_dup_str_bounded(ProtobufCBinaryData *dest,
+                                        const void *src, size_t max_len)
+{
+    if (!src) return true;
+    dest->data = (uint8_t *)strndup((const char *)src, max_len);
+    if (!dest->data) return false;
+    dest->len = min(max_len, strnlen((const char *)src, max_len) + 1);
+    return true;
+}
+
+#define RPC_RESP_COPY_STR(dest, src, max_len)                                        \
+  if (!eh_cp_dup_str_bounded(&(dest), (src), (max_len))) {                       \
+    ESP_LOGE(TAG, "%s:%u Failed to duplicate bytes\n",__func__,__LINE__);        \
       resp_payload->resp = FAILURE;                                             \
-      return ESP_OK;                                                            \
-    }                                                                           \
-    dest.len = min(max_len,strlen((const char*)src)+1);                                 \
+      return ESP_OK;                                                                          \
   }
 
 #define RPC_RESP_COPY_BYTES_SRC_UNCHECKED(dest, src, num)                       \
@@ -197,13 +204,9 @@ extern int g_private_key_passwd_len;
   }
 
 #define RPC_COPY_STR(dest, src, max_len)                                        \
-  if (src) {                                                                    \
-    dest.data = (uint8_t*)strndup((const char*)src, max_len);                         \
-    if (!dest.data) {                                                           \
-      ESP_LOGE(TAG, "%s:%u Failed to duplicate bytes\n",__func__,__LINE__);     \
-      return FAILURE;                                                           \
-    }                                                                           \
-    dest.len = min(max_len,strlen((const char*)src)+1);                                 \
+  if (!eh_cp_dup_str_bounded(&(dest), (src), (max_len))) {                       \
+    ESP_LOGE(TAG, "%s:%u Failed to duplicate bytes\n",__func__,__LINE__);        \
+      return FAILURE;                                                                          \
   }
 
 #define RPC_COPY_BYTES(dest, src, num)                                          \
@@ -268,15 +271,11 @@ extern int g_private_key_passwd_len;
     }                                                                           \
   } while(0)
 
-  #define NTFY_COPY_STR(dest, src, max_len)                                       \
-    if (src) {                                                                    \
-      dest.data = (uint8_t*)strndup((const char*)src, max_len);                         \
-      if (!dest.data) {                                                           \
-        ESP_LOGE(TAG, "%s:%u Failed to duplicate bytes\n",__func__,__LINE__);     \
-        ntfy_payload->resp = FAILURE;                                             \
-        return ESP_OK;                                                            \
-      }                                                                           \
-      dest.len = min(max_len,strlen((const char*)src)+1);                               \
+  #define NTFY_COPY_STR(dest, src, max_len)                                     \
+    if (!eh_cp_dup_str_bounded(&(dest), (src), (max_len))) {                     \
+      ESP_LOGE(TAG, "%s:%u Failed to duplicate bytes\n",__func__,__LINE__);      \
+      ntfy_payload->resp = FAILURE;                                              \
+      return ESP_OK;                                                             \
     }
 
 /* Protocomm callbacks for protobuf processing - these exist in eh_cp_feat_rpc_ext_v2_rpc_core.c */
@@ -426,8 +425,32 @@ esp_err_t req_gpio_input_enable(Rpc *req, Rpc *resp, void *priv_data);
 esp_err_t req_gpio_set_pull_mode(Rpc *req, Rpc *resp, void *priv_data);
 #endif
 
+/* RF Certification Test RPC Request Handlers */
+#if EH_CP_FEAT_RF_CERT_READY
+/* Radio-agnostic */
+esp_err_t req_phy_get_rx_result(Rpc *req, Rpc *resp, void *priv_data);
+esp_err_t req_phy_cmd_stop(Rpc *req, Rpc *resp, void *priv_data);
+#if EH_CP_FEAT_RF_CERT_WIFI
+esp_err_t req_phy_wifi_tx(Rpc *req, Rpc *resp, void *priv_data);
+esp_err_t req_phy_wifi_rx(Rpc *req, Rpc *resp, void *priv_data);
+esp_err_t req_phy_wifi_tx_tone(Rpc *req, Rpc *resp, void *priv_data);
+esp_err_t req_phy_tx_contin_en(Rpc *req, Rpc *resp, void *priv_data);
+esp_err_t req_phy_cbw40m_en(Rpc *req, Rpc *resp, void *priv_data);
+#if EH_CP_FEAT_RF_CERT_HE
+esp_err_t req_phy_wifi_11ax_tx_set(Rpc *req, Rpc *resp, void *priv_data);
+#endif
+#endif
+#if EH_CP_FEAT_RF_CERT_BLE
+esp_err_t req_phy_ble_tx(Rpc *req, Rpc *resp, void *priv_data);
+esp_err_t req_phy_ble_rx(Rpc *req, Rpc *resp, void *priv_data);
+esp_err_t req_phy_bt_tx_tone(Rpc *req, Rpc *resp, void *priv_data);
+#endif
+esp_err_t req_feature_control_rf_cert(RpcReqFeatureControl *req_payload,
+                                      RpcRespFeatureControl *resp_payload);
+#endif
+
 /* Conditional WiFi RPC Request Handlers */
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)
+#if EH_CP_WIFI_DUALBAND
 esp_err_t req_wifi_set_protocols(Rpc *req, Rpc *resp, void *priv_data);
 esp_err_t req_wifi_get_protocols(Rpc *req, Rpc *resp, void *priv_data);
 esp_err_t req_wifi_set_bandwidths(Rpc *req, Rpc *resp, void *priv_data);
@@ -478,12 +501,16 @@ esp_err_t eh_cp_feat_rpc_ext_v2_unregister_system_evt_handlers(void);
 
 
 esp_err_t rpc_evt_Event_DhcpDnsStatus(Rpc *ntfy, const uint8_t *data, ssize_t len);
+esp_err_t rpc_evt_context(Rpc *ntfy, const uint8_t *data, size_t len);
+esp_err_t req_set_context(Rpc *req, Rpc *resp, void *priv_data);
 esp_err_t rpc_evt_custom_rpc(Rpc *ntfy, const uint8_t *data, size_t len);
 esp_err_t rpc_evt_mem_monitor(Rpc *ntfy, const uint8_t *inbuf, size_t inlen);
 
 #if EH_CP_FEAT_NW_SPLIT_READY
 esp_err_t req_get_dhcp_dns_status(Rpc *req, Rpc *resp, void *priv_data);
 esp_err_t req_set_dhcp_dns_status(Rpc *req, Rpc *resp, void *priv_data);
+/* EH_CTX_NW_SPLIT_IP_OWNER: in is the request struct, out gets the answer; returns resp. */
+int32_t ctx_nw_split_ip_owner(const ProtobufCBinaryData *in, ProtobufCBinaryData *out);
 #endif
 
 

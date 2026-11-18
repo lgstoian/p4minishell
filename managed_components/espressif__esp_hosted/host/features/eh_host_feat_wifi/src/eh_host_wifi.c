@@ -23,12 +23,15 @@
 #include "eh_host_port.h"
 #include "esp_event.h"
 #include "eh_host_port_wifi.h"
+#include "eh_host_port_master_config.h"
 
 #include "esp_event.h"
 #include "esp_wifi_types.h"
+#include "esp_wifi.h"
 
 #include "eh_host_wifi.h"
 #include "eh_host_wifi_priv.h"
+#include "eh_host_sta_fsm.h"
 
 #include "eh_host_feat_rpc_ext_v2_api_common.h"
 
@@ -38,6 +41,13 @@
 
 esp_err_t eh_host_wifi_init(const wifi_init_config_t *cfg)
 {
+    /* The station FSM keeps the app's own init state, as IDF does. The CP's Wi-Fi
+     * state cannot stand in: CP code may run Wi-Fi the app never inited. */
+    if (!eh_host_sta_fsm_claim_init()) {
+        ESP_LOGE(EH_HOST_WIFI_TAG, "Failed to init, WiFi is initialized by esp_wifi_init");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     /* CP validates magic == WIFI_INIT_CONFIG_MAGIC. NULL cfg => DEFAULT(). */
     wifi_init_config_t fallback;
     if (!cfg) {
@@ -47,7 +57,10 @@ esp_err_t eh_host_wifi_init(const wifi_init_config_t *cfg)
     }
 
     eh_rpc_ctrl_cmd_t *req = eh_rpc_ctrl_cmd_alloc();
-    if (!req) return ESP_FAIL;
+    if (!req) {
+        eh_host_sta_fsm_request(EH_STA_EV_INIT_FAIL);
+        return ESP_FAIL;
+    }
 
     eh_rpc_wifi_init_cfg_t *p = &req->u.wifi_init_cfg;
     p->static_rx_buf_num     = cfg->static_rx_buf_num;
@@ -74,19 +87,62 @@ esp_err_t eh_host_wifi_init(const wifi_init_config_t *cfg)
     p->rx_mgmt_buf_num       = cfg->rx_mgmt_buf_num;
     p->tx_hetb_queue_num     = cfg->tx_hetb_queue_num;
     p->dump_hesigb_enable    = cfg->dump_hesigb_enable;
+    /* Each companion macro is defined exactly when its field exists. */
+#ifdef WIFI_PRIVACY_ENHANCEMENTS_ENABLED
+    p->privacy_enhancements  = cfg->privacy_enhancements;
+    EH_HOST_RPC_SET_BIT(EH_HOST_WIFI_INIT_CONFIG_EXT_privacy_enhancements_BIT, p->ext_present_bitmask);
+#endif
+#ifdef WIFI_RMAC_AUTO_RESET_INTERVAL
+    p->rmac_auto_reset_int   = cfg->rmac_auto_reset_int;
+    EH_HOST_RPC_SET_BIT(EH_HOST_WIFI_INIT_CONFIG_EXT_rmac_auto_reset_int_BIT, p->ext_present_bitmask);
+#endif
+#ifdef WIFI_TASK_STACK_SIZE
+    p->wifi_task_stack_size  = cfg->wifi_task_stack_size;
+    EH_HOST_RPC_SET_BIT(EH_HOST_WIFI_INIT_CONFIG_EXT_wifi_task_stack_size_BIT, p->ext_present_bitmask);
+#endif
 
     eh_rpc_ctrl_cmd_t *r = NULL;
     if (eh_host_feat_rpc_request_sync(RPC_ID__Req_WifiInit, req,
                                           (void **)&r) != 0) {
+        eh_host_sta_fsm_request(EH_STA_EV_INIT_FAIL);
         return ESP_FAIL;
     }
     int status = r->resp_event_status;
     eh_rpc_ctrl_cmd_free(r);
+    eh_host_sta_fsm_request(status == ESP_OK ? EH_STA_EV_INIT_REQ : EH_STA_EV_INIT_FAIL);
     return (esp_err_t)status;
 }
-esp_err_t eh_host_wifi_deinit(void)  { return eh_rpc_do_empty_request(RPC_ID__Req_WifiDeinit); }
-esp_err_t eh_host_wifi_start(void)   { return eh_rpc_do_empty_request(RPC_ID__Req_WifiStart); }
-esp_err_t eh_host_wifi_stop(void)    { return eh_rpc_do_empty_request(RPC_ID__Req_WifiStop); }
+/* The app's calls reach the station FSM only once the CP accepted them. */
+static esp_err_t app_request(int32_t rpc_id, eh_host_sta_ev_t ev)
+{
+    esp_err_t rc = eh_rpc_do_empty_request(rpc_id);
+
+    if (rc == ESP_OK) {
+        eh_host_sta_fsm_request(ev);
+    }
+    return rc;
+}
+
+/* Stop goes to the FSM before the RPC, as disconnect: its CP reports can land
+ * before the answer, and IDF posts the events before esp_wifi_stop returns. */
+static esp_err_t app_request_first(int32_t rpc_id, eh_host_sta_ev_t ev)
+{
+    if (eh_host_sta_fsm_app_rc() != ESP_ERR_WIFI_NOT_INIT) {
+        eh_host_sta_fsm_request(ev);
+    }
+    return eh_rpc_do_empty_request(rpc_id);
+}
+
+esp_err_t eh_host_wifi_deinit(void)
+{
+    if (!eh_host_sta_fsm_inited()) {
+        return ESP_ERR_WIFI_NOT_INIT;
+    }
+    return app_request(RPC_ID__Req_WifiDeinit, EH_STA_EV_DEINIT_REQ);
+}
+
+esp_err_t eh_host_wifi_start(void)   { return app_request(RPC_ID__Req_WifiStart, EH_STA_EV_START_REQ); }
+esp_err_t eh_host_wifi_stop(void)    { return app_request_first(RPC_ID__Req_WifiStop, EH_STA_EV_STOP_REQ); }
 esp_err_t eh_host_wifi_restore(void) { return eh_rpc_do_empty_request(RPC_ID__Req_WifiRestore); }
 
 esp_err_t eh_host_wifi_set_mode(wifi_mode_t mode)
@@ -94,10 +150,21 @@ esp_err_t eh_host_wifi_set_mode(wifi_mode_t mode)
     eh_rpc_ctrl_cmd_t *req = eh_rpc_ctrl_cmd_alloc();
     if (!req) return ESP_FAIL;
     req->u.wifi_mode.mode = (int32_t)mode;
+    bool sta_gone = (mode == WIFI_MODE_AP || mode == WIFI_MODE_NULL) && eh_host_sta_fsm_take_sta();
     eh_rpc_ctrl_cmd_t *r = NULL;
-    if (eh_host_feat_rpc_request_sync(RPC_ID__Req_SetWifiMode, req, (void **)&r) != 0) return ESP_FAIL;
+    if (eh_host_feat_rpc_request_sync(RPC_ID__Req_SetWifiMode, req, (void **)&r) != 0) {
+        if (sta_gone) eh_host_sta_fsm_give_sta_back();
+        return ESP_FAIL;
+    }
     int rc = r->resp_event_status;
     eh_rpc_ctrl_cmd_free(r);
+    if (rc != ESP_OK && sta_gone) {
+        eh_host_sta_fsm_give_sta_back();
+    }
+    if (rc == ESP_OK) {
+        eh_host_sta_fsm_set_mode(mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA,
+                                 mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA);
+    }
     return (esp_err_t)rc;
 }
 
@@ -119,9 +186,9 @@ static inline void log_ssid_for_user(wifi_interface_t iface, wifi_config_t *cfg)
 	const unsigned char *ss = (iface == WIFI_IF_AP) ? cfg->ap.ssid : cfg->sta.ssid;
 	/* ap.ssid and sta.ssid are both 32 bytes, so the bound is the same either way. */
 	size_t                sl = strnlen((const char *)ss, sizeof(cfg->sta.ssid));
-	ESP_LOGI(EH_HOST_WIFI_TAG, "set_config iface=%s ssid=\"%.*s\" (%u bytes)",
+	ESP_LOGI(EH_HOST_WIFI_TAG, "set_config iface=%s ssid=\"%.*s\" (%lu bytes)",
 			(iface == WIFI_IF_AP) ? "AP" : "STA",
-			(int)sl, (const char *)ss, (unsigned)sl);
+			(int)sl, (const char *)ss, (unsigned long)sl);
 }
 
 esp_err_t eh_host_wifi_set_config(wifi_interface_t iface, wifi_config_t *cfg)
@@ -137,7 +204,11 @@ esp_err_t eh_host_wifi_set_config(wifi_interface_t iface, wifi_config_t *cfg)
 
     /* wifi_config_t is a union; pick fields per iface. Wire is flat. */
     if (iface == WIFI_IF_AP) {
-        size_t slen = strnlen((const char *)cfg->ap.ssid, sizeof(cfg->ap.ssid));
+        /* IDF: ssid_len 0 means NUL-terminated, else it is the length. */
+        size_t slen = cfg->ap.ssid_len
+                      ? cfg->ap.ssid_len
+                      : strnlen((const char *)cfg->ap.ssid, sizeof(cfg->ap.ssid));
+        if (slen > sizeof(cfg->ap.ssid)) slen = sizeof(cfg->ap.ssid);
         memcpy(req->u.wifi_cfg.ssid, cfg->ap.ssid, slen);
         req->u.wifi_cfg.ssid[slen] = '\0';
         req->u.wifi_cfg.ssid_len = (uint32_t)slen;
@@ -161,8 +232,11 @@ esp_err_t eh_host_wifi_set_config(wifi_interface_t iface, wifi_config_t *cfg)
 #if EH_HOST_GOT_AP_CONFIG_PARAM_TRANSITION_DISABLE
         req->u.wifi_cfg.transition_disable = cfg->ap.transition_disable;
 #endif
-#if EH_HOST_PRESENT_IN_ESP_IDF_5_5_0
+#if EH_HOST_WIFI_GOT_AP_SAE_EXT
         req->u.wifi_cfg.sae_ext                            = cfg->ap.sae_ext;
+#if EH_HOST_GOT_AP_WPA3_COMPATIBLE_MODE
+        req->u.wifi_cfg.wpa3_compatible_mode               = cfg->ap.wpa3_compatible_mode;
+#endif
         req->u.wifi_cfg.bss_max_idle_period                = cfg->ap.bss_max_idle_cfg.period;
         req->u.wifi_cfg.bss_max_idle_protected_keep_alive  = cfg->ap.bss_max_idle_cfg.protected_keep_alive;
         req->u.wifi_cfg.gtk_rekey_interval                 = cfg->ap.gtk_rekey_interval;
@@ -186,7 +260,7 @@ esp_err_t eh_host_wifi_set_config(wifi_interface_t iface, wifi_config_t *cfg)
         req->u.wifi_cfg.listen_interval   = cfg->sta.listen_interval;
         req->u.wifi_cfg.sort_method       = cfg->sta.sort_method;
         req->u.wifi_cfg.threshold_rssi    = cfg->sta.threshold.rssi;
-#if EH_HOST_PRESENT_IN_ESP_IDF_5_4_0
+#if EH_HOST_WIFI_GOT_RSSI_5G_ADJ
         req->u.wifi_cfg.threshold_rssi_5g_adjustment =
             cfg->sta.threshold.rssi_5g_adjustment;
 #endif
@@ -215,6 +289,10 @@ esp_err_t eh_host_wifi_set_config(wifi_interface_t iface, wifi_config_t *cfg)
             EH_HOST_RPC_SET_BIT(EH_HOST_WIFI_STA_CONFIG_1_owe_enabled, bm);
         if (cfg->sta.transition_disable)
             EH_HOST_RPC_SET_BIT(EH_HOST_WIFI_STA_CONFIG_1_transition_disable, bm);
+#if EH_HOST_GOT_WPA3_COMPATIBLE_MODE
+        if (cfg->sta.disable_wpa3_compatible_mode)
+            EH_HOST_RPC_SET_BIT(EH_HOST_WIFI_STA_CONFIG_1_disable_wpa3_compat, bm);
+#endif
         req->u.wifi_cfg.bitmask = bm;
 
         uint32_t hbm = 0;
@@ -236,13 +314,19 @@ esp_err_t eh_host_wifi_set_config(wifi_interface_t iface, wifi_config_t *cfg)
             EH_HOST_RPC_SET_BIT(EH_HOST_WIFI_STA_CONFIG_2_he_trig_mu_bmforming_partial_feedback_disabled_BIT, hbm);
         if (cfg->sta.he_trig_cqi_feedback_disabled)
             EH_HOST_RPC_SET_BIT(EH_HOST_WIFI_STA_CONFIG_2_he_trig_cqi_feedback_disabled_BIT, hbm);
-#if EH_HOST_PRESENT_IN_ESP_IDF_5_5_0
+#if EH_HOST_WIFI_GOT_STA_VHT_CFG
         if (cfg->sta.vht_su_beamformee_disabled)
             EH_HOST_RPC_SET_BIT(EH_HOST_WIFI_STA_CONFIG_2_vht_su_beamformee_disabled, hbm);
         if (cfg->sta.vht_mu_beamformee_disabled)
             EH_HOST_RPC_SET_BIT(EH_HOST_WIFI_STA_CONFIG_2_vht_mu_beamformee_disabled, hbm);
         if (cfg->sta.vht_mcs8_enabled)
             EH_HOST_RPC_SET_BIT(EH_HOST_WIFI_STA_CONFIG_2_vht_mcs8_enabled, hbm);
+#endif
+#if EH_HOST_WIFI_GOT_STA_MAX_BW_NEG
+        if (cfg->sta.max_bandwidth_negotiation_enabled_2g)
+            EH_HOST_RPC_SET_BIT(EH_HOST_WIFI_STA_CONFIG_2_max_bandwidth_negotiation_enabled_2g_BIT, hbm);
+        if (cfg->sta.max_bandwidth_negotiation_enabled_5g)
+            EH_HOST_RPC_SET_BIT(EH_HOST_WIFI_STA_CONFIG_2_max_bandwidth_negotiation_enabled_5g_BIT, hbm);
 #endif
 #if EH_HOST_DECODE_WIFI_RESERVED_FIELD
 #  if EH_HOST_WIFI_NEW_RESERVED_FIELD_NAMES
@@ -291,8 +375,11 @@ esp_err_t eh_host_wifi_get_config(wifi_interface_t iface, wifi_config_t *out)
 #if EH_HOST_GOT_AP_CONFIG_PARAM_TRANSITION_DISABLE
             out->ap.transition_disable = (r->u.wifi_cfg.transition_disable) & 1u;
 #endif
-#if EH_HOST_PRESENT_IN_ESP_IDF_5_5_0
+#if EH_HOST_WIFI_GOT_AP_SAE_EXT
             out->ap.sae_ext = (r->u.wifi_cfg.sae_ext);
+#if EH_HOST_GOT_AP_WPA3_COMPATIBLE_MODE
+            out->ap.wpa3_compatible_mode = (r->u.wifi_cfg.wpa3_compatible_mode) & 1u;
+#endif
             EH_ASSIGN_NARROW(out->ap.bss_max_idle_cfg.period, r->u.wifi_cfg.bss_max_idle_period);
             out->ap.bss_max_idle_cfg.protected_keep_alive = r->u.wifi_cfg.bss_max_idle_protected_keep_alive;
             EH_ASSIGN_NARROW(out->ap.gtk_rekey_interval, r->u.wifi_cfg.gtk_rekey_interval);
@@ -308,7 +395,7 @@ esp_err_t eh_host_wifi_get_config(wifi_interface_t iface, wifi_config_t *out)
             out->sta.listen_interval    = (uint16_t)r->u.wifi_cfg.listen_interval;
             out->sta.sort_method        = (wifi_sort_method_t)r->u.wifi_cfg.sort_method;
             out->sta.threshold.rssi     = (int8_t)r->u.wifi_cfg.threshold_rssi;
-#if EH_HOST_PRESENT_IN_ESP_IDF_5_4_0
+#if EH_HOST_WIFI_GOT_RSSI_5G_ADJ
             EH_ASSIGN_NARROW(out->sta.threshold.rssi_5g_adjustment, r->u.wifi_cfg.threshold_rssi_5g_adjustment);
 #endif
             out->sta.pmf_cfg.capable    = r->u.wifi_cfg.pmf_capable;
@@ -330,6 +417,10 @@ esp_err_t eh_host_wifi_get_config(wifi_interface_t iface, wifi_config_t *out)
             out->sta.ft_enabled         = EH_HOST_RPC_GET_BIT(EH_HOST_WIFI_STA_CONFIG_1_ft_enabled, bm);
             out->sta.owe_enabled        = EH_HOST_RPC_GET_BIT(EH_HOST_WIFI_STA_CONFIG_1_owe_enabled, bm);
             out->sta.transition_disable = EH_HOST_RPC_GET_BIT(EH_HOST_WIFI_STA_CONFIG_1_transition_disable, bm);
+#if EH_HOST_GOT_WPA3_COMPATIBLE_MODE
+            out->sta.disable_wpa3_compatible_mode =
+                EH_HOST_RPC_GET_BIT(EH_HOST_WIFI_STA_CONFIG_1_disable_wpa3_compat, bm);
+#endif
 #if EH_HOST_DECODE_WIFI_RESERVED_FIELD
 #  if EH_HOST_WIFI_NEW_RESERVED_FIELD_NAMES
             out->sta.reserved1 = EH_HOST_WIFI_STA_CONFIG_1_GET_RESERVED_VAL(bm);
@@ -352,13 +443,19 @@ esp_err_t eh_host_wifi_get_config(wifi_interface_t iface, wifi_config_t *out)
                 EH_HOST_RPC_GET_BIT(EH_HOST_WIFI_STA_CONFIG_2_he_trig_mu_bmforming_partial_feedback_disabled_BIT, hbm);
             out->sta.he_trig_cqi_feedback_disabled =
                 EH_HOST_RPC_GET_BIT(EH_HOST_WIFI_STA_CONFIG_2_he_trig_cqi_feedback_disabled_BIT, hbm);
-#if EH_HOST_PRESENT_IN_ESP_IDF_5_5_0
+#if EH_HOST_WIFI_GOT_STA_VHT_CFG
             out->sta.vht_su_beamformee_disabled =
                 EH_HOST_RPC_GET_BIT(EH_HOST_WIFI_STA_CONFIG_2_vht_su_beamformee_disabled, hbm);
             out->sta.vht_mu_beamformee_disabled =
                 EH_HOST_RPC_GET_BIT(EH_HOST_WIFI_STA_CONFIG_2_vht_mu_beamformee_disabled, hbm);
             out->sta.vht_mcs8_enabled =
                 EH_HOST_RPC_GET_BIT(EH_HOST_WIFI_STA_CONFIG_2_vht_mcs8_enabled, hbm);
+#endif
+#if EH_HOST_WIFI_GOT_STA_MAX_BW_NEG
+            out->sta.max_bandwidth_negotiation_enabled_2g =
+                EH_HOST_RPC_GET_BIT(EH_HOST_WIFI_STA_CONFIG_2_max_bandwidth_negotiation_enabled_2g_BIT, hbm);
+            out->sta.max_bandwidth_negotiation_enabled_5g =
+                EH_HOST_RPC_GET_BIT(EH_HOST_WIFI_STA_CONFIG_2_max_bandwidth_negotiation_enabled_5g_BIT, hbm);
 #endif
 #if EH_HOST_DECODE_WIFI_RESERVED_FIELD
 #  if EH_HOST_WIFI_NEW_RESERVED_FIELD_NAMES
@@ -376,8 +473,93 @@ esp_err_t eh_host_wifi_get_config(wifi_interface_t iface, wifi_config_t *out)
     return (esp_err_t)rc;
 }
 
-esp_err_t eh_host_wifi_connect(void)    { return eh_rpc_do_empty_request(RPC_ID__Req_WifiConnect); }
-esp_err_t eh_host_wifi_disconnect(void) { return eh_rpc_do_empty_request(RPC_ID__Req_WifiDisconnect); }
+/* Before the RPC, as the disconnect: the attempt's report can land before the answer.
+ * An attempt the app did not make (CP, policy) is joined: OK, its outcome is the app's. */
+esp_err_t eh_host_wifi_connect(void)
+{
+    esp_err_t rc = eh_host_sta_fsm_app_rc();
+
+    if (rc == ESP_OK) {
+        rc = eh_host_sta_fsm_connect_begin();
+    }
+    if (rc != ESP_OK) {
+        return rc;
+    }
+    rc = eh_host_wifi_policy_connect();
+    if (rc == ESP_ERR_WIFI_CONN) {
+        return ESP_OK;
+    }
+    if (rc != ESP_OK) {
+        eh_host_sta_fsm_request(EH_STA_EV_CONNECT_FAIL);
+    }
+    return rc;
+}
+
+esp_err_t eh_host_wifi_policy_connect(void)
+{
+    return eh_rpc_do_empty_request(RPC_ID__Req_WifiConnect);
+}
+/* DISCONNECTING before the RPC: the CP's DISCONNECTED can land before its answer. */
+esp_err_t eh_host_wifi_disconnect(void)
+{
+    esp_err_t rc = eh_host_sta_fsm_app_rc();
+
+    if (rc != ESP_OK) {
+        return rc;
+    }
+    eh_host_sta_fsm_request(EH_STA_EV_DISCONNECT_REQ);
+    rc = eh_rpc_do_empty_request(RPC_ID__Req_WifiDisconnect);
+    if (rc != ESP_OK) {
+        eh_host_sta_fsm_request(EH_STA_EV_DISCONNECT_FAIL);
+    }
+    return rc;
+}
+
+/* RPC mirror -> IDF struct; shared by sta_get_ap_info and scan_get_ap_record(s). */
+static void ap_record_to_idf(wifi_ap_record_t *dst,
+                             const eh_rpc_wifi_ap_record_t *src)
+{
+    memset(dst, 0, sizeof(*dst));
+    memcpy(dst->bssid, src->bssid, 6);
+    memcpy(dst->ssid, src->ssid,
+           sizeof(dst->ssid) < sizeof(src->ssid)
+           ? sizeof(dst->ssid) : sizeof(src->ssid));
+    dst->primary  = (uint8_t)src->primary;
+    dst->second   = (wifi_second_chan_t)src->second;
+    dst->rssi     = (int8_t)src->rssi;
+    dst->authmode = (wifi_auth_mode_t)src->authmode;
+    dst->pairwise_cipher = (wifi_cipher_type_t)src->pairwise_cipher;
+    dst->group_cipher    = (wifi_cipher_type_t)src->group_cipher;
+    dst->ant      = (wifi_ant_t)src->ant;
+    dst->phy_11b        = src->phy_11b;
+    dst->phy_11g        = src->phy_11g;
+    dst->phy_11n        = src->phy_11n;
+    dst->phy_lr         = src->phy_lr;
+    dst->phy_11a        = src->phy_11a;
+    dst->phy_11ac       = src->phy_11ac;
+    dst->phy_11ax       = src->phy_11ax;
+    dst->wps            = src->wps;
+    dst->ftm_responder  = src->ftm_responder;
+    dst->ftm_initiator  = src->ftm_initiator;
+#if EH_HOST_WIFI_GOT_AP_REC_AKM_DPP
+    dst->akm_dpp        = src->akm_dpp;
+#endif
+    memcpy(dst->country.cc, src->country.cc, 3);
+    dst->country.schan        = (uint8_t)src->country.schan;
+    dst->country.nchan        = (uint8_t)src->country.nchan;
+    dst->country.max_tx_power = (int8_t)src->country.max_tx_power;
+#if EH_HOST_WIFI_GOT_5G_CHANNEL_MASK
+    dst->country.wifi_5g_channel_mask = src->country.wifi_5g_channel_mask;
+#endif
+    dst->country.policy       = (wifi_country_policy_t)src->country.policy;
+    dst->he_ap.bss_color           = (src->bss_color) & 0x3Fu;
+    dst->he_ap.partial_bss_color   = src->partial_bss_color;
+    dst->he_ap.bss_color_disabled  = src->bss_color_disabled;
+    dst->he_ap.bssid_index         = (uint8_t)src->he_ap_bssid_index;
+    dst->bandwidth    = (wifi_bandwidth_t)src->bandwidth;
+    dst->vht_ch_freq1 = (uint8_t)src->vht_ch_freq1;
+    dst->vht_ch_freq2 = (uint8_t)src->vht_ch_freq2;
+}
 
 esp_err_t eh_host_wifi_sta_get_ap_info(wifi_ap_record_t *out)
 {
@@ -390,24 +572,85 @@ esp_err_t eh_host_wifi_sta_get_ap_info(wifi_ap_record_t *out)
     if (eh_host_feat_rpc_request_sync(RPC_ID__Req_WifiStaGetApInfo, req, (void **)&r) != 0) return ESP_FAIL;
     int rc = r->resp_event_status;
     if (rc == 0) {
-        memset(out, 0, sizeof(*out));
-        memcpy(out->bssid, r->u.wifi_cfg.bssid, 6);
-        memcpy(out->ssid, r->u.wifi_cfg.ssid, sizeof(out->ssid));
-        out->primary  = (uint8_t)r->u.wifi_cfg.channel;
-        out->authmode = (wifi_auth_mode_t)r->u.wifi_cfg.authmode;
+        ap_record_to_idf(out, &r->u.ap_record);
     }
     eh_rpc_ctrl_cmd_free(r);
     return (esp_err_t)rc;
 }
 
+/* After a CP (re)connection: an association the CP no longer holds (it
+ * rebooted) ends the host's. A CP that kept it (deinit/init) is silent. */
+static void cp_link_answer(void *resp, void *ctx, int status)
+{
+    eh_rpc_ctrl_cmd_t *r = (eh_rpc_ctrl_cmd_t *)resp;
+    esp_err_t rc = r ? (esp_err_t)r->resp_event_status : ESP_FAIL;
+
+    (void)ctx;
+    if (r) {
+        eh_rpc_ctrl_cmd_free(r);
+    }
+    if (status != EH_RPC_STATUS_OK) {
+        return;
+    }
+    if (rc == ESP_ERR_WIFI_NOT_CONNECT) {
+        eh_host_sta_fsm_report(EH_STA_EV_CP_UNLINKED, NULL, 0);
+    } else if (rc == ESP_ERR_WIFI_NOT_INIT || rc == ESP_ERR_WIFI_NOT_STARTED) {
+        eh_host_sta_fsm_report(EH_STA_EV_RADIO_STOPPED, NULL, 0);  /* its STA_START follows */
+    }
+}
+
+esp_err_t eh_host_wifi_check_cp_link(void)
+{
+    eh_rpc_ctrl_cmd_t *req = eh_rpc_ctrl_cmd_alloc();
+
+    if (!req) return ESP_FAIL;
+    req->msg_id         = RPC_ID__Req_WifiStaGetApInfo;
+    req->rpc_rsp_cb     = cp_link_answer;
+    req->rpc_rsp_cb_ctx = NULL;
+    return eh_host_feat_rpc_request(RPC_ID__Req_WifiStaGetApInfo, req, 0, NULL) == 0 ?
+           ESP_OK : ESP_FAIL;
+}
+
 esp_err_t eh_host_wifi_scan_start(const wifi_scan_config_t *cfg, bool block)
 {
-    /* TODO(wifi-rpc): wire scan_config_t fields once proto grows. */
-    (void)cfg;
+    /* cfg == NULL is legal and means "scan with IDF defaults". */
     eh_rpc_ctrl_cmd_t *req = eh_rpc_ctrl_cmd_alloc();
     if (!req) return ESP_FAIL;
-    req->u.wifi_scan_cfg.block   = block;
-    req->u.wifi_scan_cfg.cfg_set = false;
+
+    eh_rpc_wifi_scan_cfg_t *p = &req->u.wifi_scan_cfg;
+    p->block   = block;
+    p->cfg_set = (cfg != NULL);
+
+    if (cfg) {
+        /* ssid/bssid are caller-owned pointers: copy the bytes so nothing
+         * caller-owned has to outlive the call. NULL stays "absent". */
+        if (cfg->ssid) {
+            size_t slen = strnlen((const char *)cfg->ssid, EH_RPC_SSID_LEN);
+            memcpy(p->ssid, cfg->ssid, slen);
+            p->ssid[slen] = '\0';
+            p->ssid_set   = true;
+        }
+        if (cfg->bssid) {
+            memcpy(p->bssid, cfg->bssid, EH_RPC_MAC_LEN);
+            p->bssid_set = true;
+        }
+        p->channel              = cfg->channel;
+        p->show_hidden          = cfg->show_hidden;
+#if EH_HOST_WIFI_GOT_COEX_BG_SCAN
+        p->coex_background_scan = cfg->coex_background_scan;
+#endif
+        p->scan_type            = (int32_t)cfg->scan_type;
+        p->passive              = cfg->scan_time.passive;
+        p->active_min           = cfg->scan_time.active.min;
+        p->active_max           = cfg->scan_time.active.max;
+        p->home_chan_dwell_time = cfg->home_chan_dwell_time;
+        p->ghz_2_channels       = cfg->channel_bitmap.ghz_2_channels;
+        p->ghz_5_channels       = cfg->channel_bitmap.ghz_5_channels;
+    }
+
+    if (block) {
+        req->rsp_timeout_ms = EH_HOST_WIFI_SCAN_BLOCK_TIMEOUT_MS;
+    }
 
     eh_rpc_ctrl_cmd_t *r = NULL;
     if (eh_host_feat_rpc_request_sync(RPC_ID__Req_WifiScanStart, req, (void **)&r) != 0) return ESP_FAIL;
@@ -518,43 +761,19 @@ esp_err_t eh_host_wifi_get_country_code(char *country)
 /* WIFI_EVENT post; log drops since handlers have no caller for rc. */
 static void wifi_event_post_logged(int32_t evt_id, const void *data, size_t size)
 {
-    ESP_LOGD(EH_HOST_WIFI_TAG, "post WIFI_EVENT id=%" PRId32 " size=%zu", evt_id, size);
+    ESP_LOGD(EH_HOST_WIFI_TAG, "post WIFI_EVENT id=%" PRId32 " size=%lu", evt_id, (unsigned long)size);
     esp_err_t rc = esp_event_post(WIFI_EVENT, evt_id, (void *)(uintptr_t)data, size, 0);
     if (rc != ESP_OK)
         ESP_LOGW(EH_HOST_WIFI_TAG, "event_post WIFI_EVENT id=%" PRId32 " failed: %d",
                          evt_id, (int)rc);
 }
 
-/* RX-admission flags [0]=STA [1]=AP, read per-frame by the wifi_remote_glue's
- * channel-RX guard (glue → feat_wifi, the existing link direction — no back-edge).
- * Set below at the definitive lifecycle points so a frame is delivered only while
- * its iface is up and bound, replicating native Wi-Fi's start/stop-scoped RX
- * gating. Default false → post-wake-reboot frames are dropped until reconnect. */
-static volatile bool s_rx_admit[2];
-
-/* Netif-started guard [0]=STA [1]=AP: guarantees STA_START (netif add) is posted
- * before STA_CONNECTED (netif up). On a host-power-save wake the CP replays the
- * connected state before STA_START arrives, so without this the netif is upped
- * before it is added and wlanif_input faults on a NULL netif->input. */
-static bool s_sta_netif_started;
-static bool s_ap_netif_started;
-
+/* Read per frame by the wifi_remote glue's RX guard: the station or AP FSM is on.
+ * A frame before either is dropped. */
 bool eh_host_wifi_rx_admitted(bool is_ap)
 {
-    return s_rx_admit[is_ap ? 1 : 0];
+    return is_ap ? eh_host_ap_fsm_on() : eh_host_sta_fsm_connected();
 }
-
-void eh_host_wifi_admit_rx(bool is_ap, bool admit)
-{
-    s_rx_admit[is_ap ? 1 : 0] = admit;
-}
-
-/* Shelved with the nw_split latch alternative (see eh_host_feat_nw_split.c):
- * bool eh_host_wifi_sta_netif_started(void)
- * {
- *     return s_sta_netif_started;
- * }
- */
 
 static void wifi_sta_connected_handler(const void *ctrl_cmd, void *ctx)
 {
@@ -564,30 +783,19 @@ static void wifi_sta_connected_handler(const void *ctrl_cmd, void *ctx)
 
     wifi_event_sta_connected_t evt;
     memset(&evt, 0, sizeof(evt));
-    size_t n = sizeof(c->u.e_sta_connected.ssid);
+    /* ssid_len wins: a 32-byte SSID fills the field, unterminated. */
+    size_t n = c->u.e_sta_connected.ssid_len;
     if (n > sizeof(evt.ssid)) n = sizeof(evt.ssid);
-    memcpy(evt.ssid, c->u.e_sta_connected.ssid, n - 1);
-    evt.ssid[sizeof(evt.ssid) - 1] = '\0';
-    evt.ssid_len = (uint8_t)strnlen((const char *)evt.ssid, sizeof(evt.ssid));
+    memcpy(evt.ssid, c->u.e_sta_connected.ssid, n);
+    evt.ssid_len = (uint8_t)n;
     memcpy(evt.bssid, c->u.e_sta_connected.bssid, 6);
     EH_ASSIGN_NARROW(evt.channel, c->u.e_sta_connected.channel);
     evt.authmode = c->u.e_sta_connected.authmode;
     EH_ASSIGN_NARROW(evt.aid, c->u.e_sta_connected.aid);
     ESP_LOGD(EH_HOST_WIFI_TAG,
-             "rx RPC StaConnected ssid=\"%s\" aid=%u ch=%u auth=%u",
+             "rx RPC StaConnected ssid=\"%.32s\" aid=%u ch=%u auth=%u",
              (const char *)evt.ssid, evt.aid, evt.channel, evt.authmode);
-    /* On a host-power-save wake the CP replays the connected state before it
-     * relays STA_START, so the netif would be upped (by STA_CONNECTED) before it
-     * is added (by STA_START) → wlanif_input faults on a NULL netif->input. Post
-     * STA_START first if not yet started so esp_netif adds the netif before this
-     * ups it. The latch dedups the real STA_START that follows. */
-    if (!s_sta_netif_started) {
-        s_sta_netif_started = true;
-        wifi_event_post_logged(WIFI_EVENT_STA_START, NULL, 0);
-    }
-    /* Associated → the STA netif is up and bound; admit DATA RX. */
-    s_rx_admit[0] = true;
-    wifi_event_post_logged(WIFI_EVENT_STA_CONNECTED, &evt, sizeof(evt));
+    eh_host_sta_fsm_report(EH_STA_EV_ASSOCIATED, &evt, sizeof(evt));
 }
 
 static void wifi_sta_disconnected_handler(const void *ctrl_cmd, void *ctx)
@@ -598,20 +806,18 @@ static void wifi_sta_disconnected_handler(const void *ctrl_cmd, void *ctx)
 
     wifi_event_sta_disconnected_t evt;
     memset(&evt, 0, sizeof(evt));
-    size_t n = sizeof(c->u.e_sta_disconnected.ssid);
+    /* ssid_len wins: a 32-byte SSID fills the field, unterminated. */
+    size_t n = c->u.e_sta_disconnected.ssid_len;
     if (n > sizeof(evt.ssid)) n = sizeof(evt.ssid);
-    memcpy(evt.ssid, c->u.e_sta_disconnected.ssid, n - 1);
-    evt.ssid[sizeof(evt.ssid) - 1] = '\0';
-    evt.ssid_len = (uint8_t)strnlen((const char *)evt.ssid, sizeof(evt.ssid));
+    memcpy(evt.ssid, c->u.e_sta_disconnected.ssid, n);
+    evt.ssid_len = (uint8_t)n;
     memcpy(evt.bssid, c->u.e_sta_disconnected.bssid, 6);
     EH_ASSIGN_NARROW(evt.reason, c->u.e_sta_disconnected.reason);
     EH_ASSIGN_NARROW(evt.rssi, c->u.e_sta_disconnected.rssi);
     ESP_LOGI(EH_HOST_WIFI_TAG,
-             "rx RPC StaDisconnected ssid=\"%s\" reason=%u rssi=%d",
+             "rx RPC StaDisconnected ssid=\"%.32s\" reason=%u rssi=%d",
              (const char *)evt.ssid, evt.reason, evt.rssi);
-    /* Link down → stop admitting DATA RX before any netif teardown. */
-    s_rx_admit[0] = false;
-    wifi_event_post_logged(WIFI_EVENT_STA_DISCONNECTED, &evt, sizeof(evt));
+    eh_host_sta_fsm_report(EH_STA_EV_DISASSOCIATED, &evt, sizeof(evt));
 }
 
 static void wifi_scan_done_handler(const void *ctrl_cmd, void *ctx)
@@ -696,9 +902,11 @@ static void wifi_dpp_cfg_recvd_handler(const void *ctrl_cmd, void *ctx)
     if (n > sizeof(evt.wifi_cfg.sta.ssid))
         n = sizeof(evt.wifi_cfg.sta.ssid);
     memcpy(evt.wifi_cfg.sta.ssid, c->u.e_wifi_dpp_cfg_recvd.ssid, n);
+    /* password[64] carries no length; a 64-byte PSK leaves no terminator. */
+    size_t plen = strnlen((const char *)c->u.e_wifi_dpp_cfg_recvd.password,
+                          sizeof(evt.wifi_cfg.sta.password));
     memcpy(evt.wifi_cfg.sta.password,
-           c->u.e_wifi_dpp_cfg_recvd.password,
-           sizeof(evt.wifi_cfg.sta.password) - 1);
+           c->u.e_wifi_dpp_cfg_recvd.password, plen);
     if (c->u.e_wifi_dpp_cfg_recvd.bssid_set) {
         memcpy(evt.wifi_cfg.sta.bssid,
                c->u.e_wifi_dpp_cfg_recvd.bssid,
@@ -731,32 +939,19 @@ static void wifi_event_no_args_handler(const void *ctrl_cmd, void *ctx)
 
     switch (evt_id) {
     case WIFI_EVENT_STA_START:
-        if (!s_sta_netif_started) {
-            s_sta_netif_started = true;
-            wifi_event_post_logged(evt_id, NULL, 0);
-        }
+        eh_host_sta_fsm_report(EH_STA_EV_RADIO_STARTED, NULL, 0);
         break;
     case WIFI_EVENT_STA_STOP:
-        s_rx_admit[0] = false;  /* deny before netif teardown */
-        s_sta_netif_started = false;
-        wifi_event_post_logged(evt_id, NULL, 0);
+        eh_host_sta_fsm_report(EH_STA_EV_RADIO_STOPPED, NULL, 0);
         break;
     case WIFI_EVENT_AP_START:
-        if (!s_ap_netif_started) {
-            s_ap_netif_started = true;
-            s_rx_admit[1] = true;   /* AP netif up → admit DATA RX */
-            wifi_event_post_logged(evt_id, NULL, 0);
-        }
+        eh_host_ap_fsm_report(EH_AP_EV_STARTED);
         break;
     case WIFI_EVENT_AP_STOP:
-        s_rx_admit[1] = false;   /* deny before netif teardown */
-        s_ap_netif_started = false;
-        wifi_event_post_logged(evt_id, NULL, 0);
+        eh_host_ap_fsm_report(EH_AP_EV_STOPPED);
         break;
 
     case WIFI_EVENT_WIFI_READY:
-    case WIFI_EVENT_STA_AUTHMODE_CHANGE:
-    case WIFI_EVENT_HOME_CHANNEL_CHANGE:
         wifi_event_post_logged(evt_id, NULL, 0);
         break;
     default:
@@ -766,7 +961,7 @@ static void wifi_event_no_args_handler(const void *ctrl_cmd, void *ctx)
 
 int eh_host_feat_rpc_ext_v2_register_wifi_event_handlers(void)
 {
-    int rc = 0;
+    int rc = eh_host_sta_fsm_init();
     rc |= eh_host_feat_rpc_register_event(
         RPC_ID__Event_StaConnected,    wifi_sta_connected_handler,    NULL);
     rc |= eh_host_feat_rpc_register_event(
@@ -795,13 +990,9 @@ int eh_host_feat_rpc_ext_v2_register_wifi_event_handlers(void)
 
 int eh_host_feat_rpc_ext_v2_unregister_wifi_event_handlers(void)
 {
-    /* Reset start-latches so a hosted reinit re-delivers STA_START/AP_START to
-     * the app. Without this the post-recovery STA_START is dropped here and the
-     * app never (re)connects (no STA_STOP arrives when the slave just reboots). */
-    s_sta_netif_started = false;
-    s_ap_netif_started = false;
-    s_rx_admit[0] = false;  /* teardown → deny RX until the iface re-associates */
-    s_rx_admit[1] = false;
+    /* A hosted reinit re-delivers STA_START/AP_START to the app: no STA_STOP
+     * arrives when the CP just reboots. */
+    eh_host_sta_fsm_deinit();
 
     eh_host_feat_rpc_unregister_event(
         RPC_ID__Event_StaConnected,    wifi_sta_connected_handler,    NULL);
@@ -884,6 +1075,8 @@ esp_err_t eh_host_wifi_ap_get_sta_list(wifi_sta_list_t *sta)
             sta->sta[i].phy_11g       = src->phy_11g;
             sta->sta[i].phy_11n       = src->phy_11n;
             sta->sta[i].phy_lr        = src->phy_lr;
+            sta->sta[i].phy_11a       = src->phy_11a;
+            sta->sta[i].phy_11ac      = src->phy_11ac;
             sta->sta[i].phy_11ax      = src->phy_11ax;
             sta->sta[i].is_mesh_child = src->is_mesh_child;
         }
@@ -902,7 +1095,7 @@ esp_err_t eh_host_wifi_sta_get_aid(uint16_t *aid)
     if (eh_host_feat_rpc_request_sync(RPC_ID__Req_WifiStaGetAid, req,
                                          (void **)&r) != 0) return ESP_FAIL;
     int rc = r->resp_event_status;
-    if (rc == 0) *aid = (uint16_t)r->u.wifi_mode.mode;
+    if (rc == 0) *aid = (uint16_t)r->u.sta_query.aid;
     eh_rpc_ctrl_cmd_free(r);
     return (esp_err_t)rc;
 }
@@ -916,7 +1109,7 @@ esp_err_t eh_host_wifi_sta_get_rssi(int *rssi)
     if (eh_host_feat_rpc_request_sync(RPC_ID__Req_WifiStaGetRssi, req,
                                          (void **)&r) != 0) return ESP_FAIL;
     int rc = r->resp_event_status;
-    if (rc == 0) *rssi = (int)r->u.wifi_mode.mode;
+    if (rc == 0) *rssi = (int)r->u.sta_query.rssi;
     eh_rpc_ctrl_cmd_free(r);
     return (esp_err_t)rc;
 }
@@ -930,7 +1123,7 @@ esp_err_t eh_host_wifi_sta_get_negotiated_phymode(wifi_phy_mode_t *phymode)
     if (eh_host_feat_rpc_request_sync(RPC_ID__Req_WifiStaGetNegotiatedPhymode, req,
                                          (void **)&r) != 0) return ESP_FAIL;
     int rc = r->resp_event_status;
-    if (rc == 0) *phymode = (wifi_phy_mode_t)r->u.wifi_mode.mode;
+    if (rc == 0) *phymode = (wifi_phy_mode_t)r->u.sta_query.phymode;
     eh_rpc_ctrl_cmd_free(r);
     return (esp_err_t)rc;
 }
@@ -1090,6 +1283,9 @@ esp_err_t eh_host_wifi_set_country(const wifi_country_t *country)
     req->u.wifi_country.schan        = country->schan;
     req->u.wifi_country.nchan        = country->nchan;
     req->u.wifi_country.max_tx_power = country->max_tx_power;
+#if EH_HOST_WIFI_GOT_5G_CHANNEL_MASK
+    req->u.wifi_country.wifi_5g_channel_mask = country->wifi_5g_channel_mask;
+#endif
     req->u.wifi_country.policy       = (int32_t)country->policy;
     eh_rpc_ctrl_cmd_t *r = NULL;
     if (eh_host_feat_rpc_request_sync(RPC_ID__Req_WifiSetCountry, req,
@@ -1116,6 +1312,9 @@ esp_err_t eh_host_wifi_get_country(wifi_country_t *country)
         country->schan        = (uint8_t)r->u.wifi_country.schan;
         country->nchan        = (uint8_t)r->u.wifi_country.nchan;
         country->max_tx_power = (int8_t)r->u.wifi_country.max_tx_power;
+#if EH_HOST_WIFI_GOT_5G_CHANNEL_MASK
+        country->wifi_5g_channel_mask = r->u.wifi_country.wifi_5g_channel_mask;
+#endif
         country->policy       = (wifi_country_policy_t)r->u.wifi_country.policy;
     }
     eh_rpc_ctrl_cmd_free(r);
@@ -1136,38 +1335,7 @@ esp_err_t eh_host_wifi_scan_get_ap_record(wifi_ap_record_t *ap_record)
         eh_rpc_ctrl_cmd_free(r);
         return rc != 0 ? (esp_err_t)rc : ESP_FAIL;
     }
-    const eh_rpc_wifi_ap_record_t *src = &r->u.ap_records.records[0];
-    memset(ap_record, 0, sizeof(*ap_record));
-    memcpy(ap_record->bssid, src->bssid, 6);
-    memcpy(ap_record->ssid,  src->ssid,
-           sizeof(ap_record->ssid) < sizeof(src->ssid)
-           ? sizeof(ap_record->ssid) : sizeof(src->ssid));
-    ap_record->primary         = (uint8_t)src->primary;
-    ap_record->second          = (wifi_second_chan_t)src->second;
-    ap_record->rssi            = (int8_t)src->rssi;
-    ap_record->authmode        = (wifi_auth_mode_t)src->authmode;
-    ap_record->pairwise_cipher = (wifi_cipher_type_t)src->pairwise_cipher;
-    ap_record->group_cipher    = (wifi_cipher_type_t)src->group_cipher;
-    ap_record->ant             = (wifi_ant_t)src->ant;
-    ap_record->phy_11b        = src->phy_11b;
-    ap_record->phy_11g        = src->phy_11g;
-    ap_record->phy_11n        = src->phy_11n;
-    ap_record->phy_lr         = src->phy_lr;
-    ap_record->wps            = src->wps;
-    ap_record->ftm_responder  = src->ftm_responder;
-    ap_record->ftm_initiator  = src->ftm_initiator;
-    memcpy(ap_record->country.cc, src->country.cc, 3);
-    ap_record->country.schan        = (uint8_t)src->country.schan;
-    ap_record->country.nchan        = (uint8_t)src->country.nchan;
-    ap_record->country.max_tx_power = (int8_t)src->country.max_tx_power;
-    ap_record->country.policy       = (wifi_country_policy_t)src->country.policy;
-    ap_record->he_ap.bss_color = (src->bss_color) & 0x3Fu;
-    ap_record->he_ap.partial_bss_color  = src->partial_bss_color;
-    ap_record->he_ap.bss_color_disabled = src->bss_color_disabled;
-    ap_record->he_ap.bssid_index        = (uint8_t)src->he_ap_bssid_index;
-    ap_record->bandwidth    = (wifi_bandwidth_t)src->bandwidth;
-    ap_record->vht_ch_freq1 = (uint8_t)src->vht_ch_freq1;
-    ap_record->vht_ch_freq2 = (uint8_t)src->vht_ch_freq2;
+    ap_record_to_idf(ap_record, &r->u.ap_records.records[0]);
     eh_rpc_ctrl_cmd_free(r);
     return ESP_OK;
 }
@@ -1192,38 +1360,7 @@ esp_err_t eh_host_wifi_scan_get_ap_records(uint16_t *number,
         uint32_t n = r->u.ap_records.number;
         if (n > cap) n = cap;
         for (uint32_t i = 0; i < n && r->u.ap_records.records; ++i) {
-            const eh_rpc_wifi_ap_record_t *src = &r->u.ap_records.records[i];
-            wifi_ap_record_t *dst = &ap_records[i];
-            memcpy(dst->bssid, src->bssid, 6);
-            memcpy(dst->ssid,  src->ssid,
-                   sizeof(dst->ssid) < sizeof(src->ssid)
-                   ? sizeof(dst->ssid) : sizeof(src->ssid));
-            dst->primary  = (uint8_t)src->primary;
-            dst->second   = (wifi_second_chan_t)src->second;
-            dst->rssi     = (int8_t)src->rssi;
-            dst->authmode = (wifi_auth_mode_t)src->authmode;
-            dst->pairwise_cipher = (wifi_cipher_type_t)src->pairwise_cipher;
-            dst->group_cipher    = (wifi_cipher_type_t)src->group_cipher;
-            dst->ant      = (wifi_ant_t)src->ant;
-            dst->phy_11b        = src->phy_11b;
-            dst->phy_11g        = src->phy_11g;
-            dst->phy_11n        = src->phy_11n;
-            dst->phy_lr         = src->phy_lr;
-            dst->wps            = src->wps;
-            dst->ftm_responder  = src->ftm_responder;
-            dst->ftm_initiator  = src->ftm_initiator;
-            memcpy(dst->country.cc, src->country.cc, 3);
-            dst->country.schan        = (uint8_t)src->country.schan;
-            dst->country.nchan        = (uint8_t)src->country.nchan;
-            dst->country.max_tx_power = (int8_t)src->country.max_tx_power;
-            dst->country.policy       = (wifi_country_policy_t)src->country.policy;
-            dst->he_ap.bss_color = (src->bss_color) & 0x3Fu;
-            dst->he_ap.partial_bss_color   = src->partial_bss_color;
-            dst->he_ap.bss_color_disabled  = src->bss_color_disabled;
-            dst->he_ap.bssid_index         = (uint8_t)src->he_ap_bssid_index;
-            dst->bandwidth    = (wifi_bandwidth_t)src->bandwidth;
-            dst->vht_ch_freq1 = (uint8_t)src->vht_ch_freq1;
-            dst->vht_ch_freq2 = (uint8_t)src->vht_ch_freq2;
+            ap_record_to_idf(&ap_records[i], &r->u.ap_records.records[i]);
         }
         *number = (uint16_t)n;
     }
@@ -1242,6 +1379,9 @@ esp_err_t eh_host_wifi_set_scan_parameters(const wifi_scan_default_params_t *con
     req->u.wifi_scan_params.active_min            = config->scan_time.active.min;
     req->u.wifi_scan_params.active_max            = config->scan_time.active.max;
     req->u.wifi_scan_params.home_chan_dwell_time  = config->home_chan_dwell_time;
+#if EH_HOST_WIFI_GOT_SCAN_MAX_OFFCHAN
+    req->u.wifi_scan_params.max_offchan_duration_ms = config->max_offchan_duration_ms;
+#endif
     eh_rpc_ctrl_cmd_t *r = NULL;
     if (eh_host_feat_rpc_request_sync(RPC_ID__Req_WifiScanParams, req,
                                          (void **)&r) != 0) return ESP_FAIL;
@@ -1266,6 +1406,10 @@ esp_err_t eh_host_wifi_get_scan_parameters(wifi_scan_default_params_t *config)
         config->scan_time.active.max = r->u.wifi_scan_params.active_max;
         config->home_chan_dwell_time =
             (uint8_t)r->u.wifi_scan_params.home_chan_dwell_time;
+#if EH_HOST_WIFI_GOT_SCAN_MAX_OFFCHAN
+        config->max_offchan_duration_ms =
+            (uint16_t)r->u.wifi_scan_params.max_offchan_duration_ms;
+#endif
     }
     eh_rpc_ctrl_cmd_free(r);
     return (esp_err_t)rc;

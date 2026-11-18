@@ -154,14 +154,22 @@ holder per port.
   stub forwarding to `deep_test.py`; the pre-TUI triggers it asserted can no
   longer occur).
 - `managed_patches.patch` — backup of the hand-authored `managed_components/`
-  deltas (currently: LVGL `lv_async` PSRAM/lock hardening, the port
+  deltas (currently: LVGL `lv_async` PSRAM/lock hardening, the LVGL
+  button-matrix button-area getter used by the `ui` touch verbs (declaration in
+  `include/lvgl/widgets/lv_buttonmatrix.h` since 9.6 moved the public headers),
+  the port
   JD9165 `swap_xy` guard, the `esp_codec_dev` duplex TX park/unpark fix, and the BSP 4.x board wiring: `boards/<name>/`
   `board_config.h` pin/timing defines (incl. the uSD `BOARD_CFG_SD_*` pin
   redirect), JD9165 panel select, audio fail-soft init, backlight
   config, touch tolerance + remap, SD slot-0 deinit + explicit-V LDO power).
   The generated 384-glyph `unscii_16` font is
   tracked in git; the reapply script restores it from HEAD when the vendored
-  LVGL minor version matches.
+  LVGL minor version matches (9.6 moved `LVGL_VERSION_MINOR` into
+  `include/lvgl/lv_version.h`; the component-root header is now an include
+  shim, and the script reads either). The 9.6 rebuild of that font emits each
+  extra glyph once — the previous regeneration passed the extra ranges twice,
+  so its descriptor table indexed a byte-identical second copy of all 384
+  bitmaps (12 KB of redundant `.rodata`).
   Re-apply after `idf.py update-dependencies` with
   `powershell -File tools/reapply_managed_patches.ps1`
   (`-Check` for a dry run). See `changelog.md` 0.35.1/0.35.2.

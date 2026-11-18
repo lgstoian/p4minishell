@@ -11,12 +11,14 @@ counterpart of `bluetooth/nimble_uart/bleprph_host_only_uart` (NimBLE / BLE).
 
 ### Supported Coprocessors (BT controller, UART-H4 mode)
 
-Classic BR/EDR requires an ESP32 controller — the BLE-only chips cannot serve
+Classic BR/EDR requires an ESP32 or ESP32-S31 controller — the BLE-only chips cannot serve
 the classic profile this demo discovers.
 
-| Coprocessor | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C6 | ESP32-H2 | ESP32-S3 |
-| :---------- | :---: | :------: | :------: | :------: | :------: | :------: |
-| BR/EDR (classic) | Yes | No (BLE only) | No (BLE only) | No (BLE only) | No (BLE only) | No (BLE only) |
+| Coprocessor | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C6 | ESP32-H2 | ESP32-S3 | ESP32-S31 |
+| :---------- | :---: | :------: | :------: | :------: | :------: | :------: | :-------: |
+| BR/EDR (classic) | Yes | No (BLE only) | No (BLE only) | No (BLE only) | No (BLE only) | No (BLE only) | Yes ¹ |
+
+¹ ESP32-S31 needs ESP-IDF with commit `64018e19824` (v6.2 or later). With ESP-IDF v6.1, the ESP32-S31 controller drops host commands when Bluedroid sends them quickly.
 
 ### Supported Host Devices
 
@@ -28,7 +30,7 @@ the classic profile this demo discovers.
 
 | HCI link           | Dedicated UART (H4) |
 | :----------------- | :-----------------: |
-| Host ↔ controller  | Yes — RTS/CTS flow control **mandatory** |
+| Host ↔ controller  | Yes — RTS/CTS flow control recommended; both ends must match |
 
 Bluetooth HCI here runs over its own UART, independent of the ESP-Hosted bus a
 host may separately use for Wi-Fi.
@@ -42,11 +44,16 @@ idf.py set-target esp32p4
 idf.py menuconfig
 ```
 
-This example adds one option under **Example Configuration**:
+This example adds these options under **Example Configuration**:
 
 ```text
 Example Configuration
-└── (921600) UART Baudrate for HCI          ← range 115200–921600; must match the controller
+├── (921600) UART Baudrate for HCI          ← range 115200–921600; must match the controller
+├── (5) UART Tx Pin
+├── (18) UART Rx Pin
+├── [*] UART hardware flow control (RTS/CTS) ← must match the controller
+├── (19) UART Rts Pin                        ← only when flow control is on
+└── (23) UART Cts Pin                        ← only when flow control is on
 ```
 
 The host dependency config is pre-set in `sdkconfig.defaults` (do not remove):
@@ -78,8 +85,9 @@ idf.py -p <host_usb_serial_port> flash monitor
 
 ### Wiring
 
-- Host UART **TX → controller UART RX**, host UART **RX → controller UART TX**,
-  and **RTS/CTS cross-wired** — hardware flow control is mandatory for HCI UART.
+- Host UART **TX → controller UART RX**, host UART **RX → controller UART TX**.
+- If flow control is on, cross-wire **RTS → CTS** and **CTS → RTS**. Flow control
+  is recommended at 921600 baud. Set it the same on both ends.
 - Common ground between the two boards.
 - The HCI baudrate (host `Example Configuration`) must match the controller's
   HCI UART baudrate.
@@ -89,7 +97,8 @@ idf.py -p <host_usb_serial_port> flash monitor
 - On boot the host opens the HCI UART, attaches it to Bluedroid, then starts a
   classic **inquiry**; discovered devices (address, class, RSSI, name) are logged,
   followed by SDP **service discovery** on a found device.
-- If nothing is discovered, confirm the UART wiring (including RTS/CTS), matching
-  baudrates, and that the co-processor was built on an ESP32 with BR/EDR enabled.
+- If nothing is discovered, examine the UART wiring (including RTS/CTS), the
+  baudrates, and the flow control setting on both ends. Make sure that the
+  co-processor is an ESP32 or ESP32-S31 with BR/EDR enabled.
 
 <!-- generated from ../README.md — edit that file, not this one -->

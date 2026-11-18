@@ -78,7 +78,7 @@ dependencies:
     source:
       path: D:\Code\new\p4minishell\managed_components\espressif__esp_hosted
       type: local
-    version: 3.0.6
+    version: 3.1.0
   espressif/esp_io_expander:
     component_hash: 7b7f91270172e46ca4597e3874f48d8412e280e8c295559f5922ec38656e3e5f
     dependencies:
@@ -397,7 +397,7 @@ dependencies:
     source:
       path: D:\Code\new\p4minishell\managed_components\lvgl__lvgl
       type: local
-    version: 9.5.0
+    version: 9.6.0~1
 direct_dependencies:
 - espressif/cmake_utilities
 - espressif/esp_codec_dev
@@ -423,6 +423,6 @@ direct_dependencies:
 - espressif/wifi_remote_over_eppp
 - idf
 - lvgl/lvgl
-manifest_hash: 72bea1856bfdad81018613318793f241a25ed8b1ee6382a244562bd6a035d8ad
+manifest_hash: 16406aa4e8e1a804ea2a95aa8966ccb66abfc3e1033dbae7c6b90f6e4ba14545
 target: esp32p4
 version: 2.0.0

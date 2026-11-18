@@ -53,7 +53,7 @@ static esp_err_t peer_data_rpc_send(uint32_t msg_id,
     size_t total = sizeof(msg_id) + len;
     uint8_t *buf = malloc(total);
     if (!buf) {
-        ESP_LOGE(TAG, "peer_data_rpc_send: malloc(%zu) failed", total);
+        ESP_LOGE(TAG, "peer_data_rpc_send: malloc(%u) failed", (unsigned int)total);
         return ESP_ERR_NO_MEM;
     }
     memcpy(buf, &msg_id, sizeof(msg_id));
@@ -179,6 +179,8 @@ esp_err_t eh_cp_feat_rpc_ext_v2_init(void)
         ESP_LOGE(TAG, "Failed to register MCU req range: %s", esp_err_to_name(ret));
         return ret;
     }
+
+    EH_CHECK_OK_WARN(eh_cp_rpc_req_register_slow(RPC_ID__Req_WifiScanStart));
 
     ret = eh_cp_rpc_evt_register(MCU_EVT_MSG_ID_MIN, MCU_EVT_MSG_ID_MAX,
                                          mcu_evt_adapter, NULL);

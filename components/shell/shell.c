@@ -3454,7 +3454,7 @@ static void shell_ghost_hide(void)
     lv_obj_t *ghost = windows_get_input_ghost();
 
     if (ghost != NULL) {
-        lv_obj_add_flag(ghost, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(ghost, true);
     }
 }
 
@@ -3558,7 +3558,7 @@ void shell_input_line_ghost_refresh(void)
         lv_label_set_text(ghost, best + word_len);
         lv_obj_set_pos(ghost, size.x, 0);
     }
-    lv_obj_remove_flag(ghost, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(ghost, false);
 
     free(input);
     free(best);
@@ -3588,7 +3588,7 @@ static void shell_history_search_hide_label(void)
     lv_obj_t *lbl = windows_get_search_label();
 
     if (lbl != NULL) {
-        lv_obj_add_flag(lbl, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(lbl, true);
     }
 }
 
@@ -3604,7 +3604,7 @@ static void shell_history_search_show_label(void)
     if (row != NULL) {
         lv_obj_align_to(lbl, row, LV_ALIGN_OUT_TOP_LEFT, 0, 2);
     }
-    lv_obj_remove_flag(lbl, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(lbl, false);
 }
 
 /** Show the s_search.match-th newest history entry containing the query. */

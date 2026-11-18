@@ -12,7 +12,52 @@ repos:
       name: EH Changelog Checker
       entry: tools/check_changelog.py
       language: python
-      files: ^idf_component.yml$
+      files: ^(idf_component\.yml|docs/changelog\.md)$
+    - id: rpc-id-names
+      name: EH RPC id names match rpc_v2.proto
+      entry: common/serializers/eh_proto_v2/src/proto/gen_rpc_id_names.py --check
+      language: python
+      files: ^common/serializers/eh_proto_v2/(src/proto/(rpc_v2\.proto|gen_rpc_id_names\.py)|src/gen_v2_names\.c|include/gen_v2_names\.h)$
+      pass_filenames: false
+    - id: wifi-coverage
+      name: EH Wi-Fi coverage (tracked IDF versions)
+      entry: tools/wifi_coverage/check_wifi_coverage.py --refs-file tools/wifi_coverage/idf_refs.yml
+      language: python
+      additional_dependencies: [pycparser, pyyaml]
+      files: ^(tools/wifi_coverage/|host/wifi_remote_glue/|common/serializers/eh_proto_v2/src/proto/rpc_v2\.proto$|common/eh_common/include/eh_rpc_bitmasks\.h$|coprocessor/features/eh_cp_feat_rpc_ext_v2/include/eh_cp_feat_rpc_ext_v2_bitmasks\.h$)
+      pass_filenames: false
+
+    # Takes filenames: older files still read raw CONFIG_ESP_HOSTED_*, so only
+    # the files in the commit are checked.
+    - id: config-redirect
+      name: EH Kconfig via redirector headers
+      entry: tools/check_config_redirect.py
+      language: python
+      files: ^(coprocessor|host)/.*\.(c|h|cpp|hpp)$
+
+    # The three gates below also run in the premerge_check CI job. They scan the
+    # whole tree themselves, so they take no filenames; the `files:` pattern only
+    # decides when it is worth running them.
+    - id: example-structure
+      name: EH Example Structure
+      entry: tools/check_example_structure.py
+      language: python
+      files: ^examples/
+      pass_filenames: false
+
+    - id: override-path-depth
+      name: EH Override Path Depth
+      entry: tools/check_override_path_depth.sh
+      language: script
+      files: ^examples/.*idf_component\.yml$
+      pass_filenames: false
+
+    - id: nano-printf-specifiers
+      name: EH Nano-printf Specifiers
+      entry: tools/check_nano_printf_specifiers.py
+      language: python
+      files: \.(c|h|cpp|hpp)$
+      pass_filenames: false
 
   # License/copyright headers. Scope is controlled by tools/check_copyright_config.yaml,
   # which ignores vendored/upstream trees and the GPL kmod. pre-commit only checks

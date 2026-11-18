@@ -1,5 +1,8 @@
-// SPDX-License-Identifier: Apache-2.0
-// Copyright 2015-2025 Espressif Systems (Shanghai) PTE LTD
+/*
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #ifndef __TRANSPORT_LAYER_INTERFACE_H
 #define __TRANSPORT_LAYER_INTERFACE_H
@@ -60,10 +63,11 @@ typedef enum {
 } byte_length;
 
 typedef enum {
-	SDIO   = 0,
-	SPI    = 1,
-	SPI_HD = 2,
-	UART   = 3,
+	SDIO           = 0,
+	SPI            = 1,
+	SPI_HD         = 2,
+	UART           = 3,
+	USB_OTG_DEVICE = 4,
 } transport_layer;
 
 typedef enum {
@@ -84,6 +88,8 @@ typedef struct {
 #define MAX_TRANSPORT_BUF_SIZE ESP_TRANSPORT_SPI_HD_MAX_BUF_SIZE
 #elif CONFIG_EH_TRANSPORT_CP_UART
 #define MAX_TRANSPORT_BUF_SIZE ESP_TRANSPORT_UART_MAX_BUF_SIZE
+#elif CONFIG_EH_TRANSPORT_CP_USB_OTG_DEVICE
+#define MAX_TRANSPORT_BUF_SIZE ESP_TRANSPORT_USB_OTG_MAX_BUF_SIZE
 #endif
 
 #define BSSID_BYTES_SIZE       6
@@ -94,6 +100,10 @@ typedef struct {
 	int (*read)(interface_handle_t *handle, interface_buffer_handle_t *buf_handle);
 	esp_err_t (*reset)(interface_handle_t *handle);
 	void (*deinit)(interface_handle_t *handle);
+	/* Optional. Release a reader parked in read() so it returns. deinit does
+	 * this too, but the core needs it BEFORE it waits for recv_task to exit. */
+	void (*stop)(interface_handle_t *handle);
+	esp_err_t (*set_transfer_size)(size_t transfer_size);
 } if_ops_t;
 
 typedef struct {
@@ -112,15 +122,14 @@ typedef struct {
 	uint8_t current_throttling;
 } slave_state_t;
 
+/* Wake recv_task when read() may become ready. Safe from task or ISR context. */
+void eh_cp_recv_kick(void);
+
 interface_context_t * interface_insert_driver(int (*callback)(uint8_t val));
 int interface_remove_driver(void);
 void generate_startup_event(uint8_t cap, uint32_t ext_cap, uint8_t raw_tp_cap,
                             const uint32_t feat_caps[8]);
 int send_to_host_queue(interface_buffer_handle_t *buf_handle, uint8_t queue_type);
-#include "eh_cp_master_config.h"
-#if EH_CP_FEAT_NW_SPLIT_READY
-void send_dhcp_dns_info_to_host(uint8_t network_up, uint8_t send_wifi_connected);
-#endif
 
 #ifndef min
 #define min(a, b) ((a) < (b) ? (a) : (b))

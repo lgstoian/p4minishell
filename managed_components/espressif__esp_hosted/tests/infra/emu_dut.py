@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 """Shared process-backed DUT handle for emulated / userspace benches.
 
 Exposes the pytest-embedded Dut surface the HW helpers use (expect / expect_exact
@@ -30,6 +32,17 @@ def emu_bin():
     b = eh.emu_binary(d)
     if not b.exists():
         pytest.skip(f"esp-emu not built at {b} (cargo build --release)")
+    # Report which emu we are about to run, once per session, and shout if its
+    # binary predates its sources. A stale emu runs old code silently, and the
+    # resulting failure looks like a firmware/test bug rather than a build gap.
+    if not getattr(emu_bin, "_reported", False):
+        emu_bin._reported = True
+        rev = getattr(eh, "emu_revision", lambda _d: "")(d)
+        _log.info("[emu] %s%s", b, f"  rev {rev}" if rev else "")
+        if getattr(eh, "emu_stale", lambda _d: False)(d):
+            _log.warning("[emu] STALE: sources under %s are newer than the "
+                         "binary — run ./install.sh (rebuilds .deps) or "
+                         "cargo build --release there", d)
     return b
 
 
@@ -44,7 +57,59 @@ class _Pexpect:
         return self._dut._unconsumed().encode('utf-8', errors='replace')
 
 
-class EmuDut:
+class ExpectMixin:
+    """expect / expect_exact over `_unconsumed()` + a forward-only `_cursor`.
+    Shared by EmuDut and SerialDut so both substrates match identically.
+
+    Subclass hooks: `_exited()` ends the wait early; `_exit_error(t0, success)`
+    returns the exception to raise instead of TimeoutError (or None)."""
+
+    def _exited(self):
+        return False
+
+    def _exit_error(self, t0, success):
+        return None
+
+    def _expect(self, success, not_matching, timeout, exact):
+        fails = [not_matching] if isinstance(not_matching, str) else list(not_matching or [])
+        wants = [success] if isinstance(success, str) else list(success)
+        t0 = time.time()
+        end = t0 + timeout
+        while time.time() < end:
+            done = self._exited()           # scan once more what it left behind
+            text = self._unconsumed()
+            hit = None                      # (start, end, result) of the first want found
+            for w in wants:
+                idx = text.find(w) if exact else None
+                m = None if exact else re.search(w, text)
+                if (exact and idx >= 0) or m:
+                    hit = (idx, idx + len(w), w) if exact else (m.start(), m.end(), m)
+                    break
+            # As pytest-embedded: only a fail pattern BEFORE the match fails it.
+            before = text[:hit[0]] if hit else text
+            for fp in fails:
+                if (fp in before) if exact else re.search(fp, before):
+                    raise RuntimeError(f'not_matching pattern hit: {fp!r}')
+            if hit:
+                with self._lock:
+                    self._cursor += hit[1]
+                return hit[2]               # like pytest-embedded: the match for a regex
+            if done:
+                break
+            time.sleep(0.05)
+        err = self._exit_error(t0, success)
+        if err:
+            raise err
+        raise TimeoutError(f'[{self.name}] timeout ({timeout}s) waiting for {success!r}')
+
+    def expect(self, success, not_matching=None, timeout=15):
+        return self._expect(success, not_matching, timeout, exact=False)
+
+    def expect_exact(self, success, not_matching=None, timeout=15):
+        return self._expect(success, not_matching, timeout, exact=True)
+
+
+class EmuDut(ExpectMixin):
     """One subprocess behind the pytest-embedded Dut surface (expect / expect_exact
     / pexpect_proc.before / write). A background thread tees stdout untouched to
     `logpath` and into an in-memory buffer; expect() advances a consume cursor so
@@ -63,10 +128,12 @@ class EmuDut:
         self._fh = open(logpath, 'w')
         self.pexpect_proc = _Pexpect(self)
         _log.info("[emu] launch %s", name)
-        self.proc = subprocess.Popen(
+        from infra import lab
+        self.proc = lab.track(subprocess.Popen(
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
-        threading.Thread(target=self._pump, daemon=True).start()
+            stderr=subprocess.STDOUT, text=True, errors="replace", bufsize=1, env=env))
+        self._pump_t = threading.Thread(target=self._pump, daemon=True)
+        self._pump_t.start()
 
     def _pump(self):
         for line in self.proc.stdout:
@@ -86,36 +153,26 @@ class EmuDut:
         self.proc.stdin.write(s if s.endswith('\n') else s + '\n')
         self.proc.stdin.flush()
 
-    def _expect(self, success, not_matching, timeout, exact):
-        fails = [not_matching] if isinstance(not_matching, str) else list(not_matching or [])
-        wants = [success] if isinstance(success, str) else list(success)
-        end = time.time() + timeout
-        while time.time() < end and self.proc.poll() is None:
-            text = self._unconsumed()
-            for fp in fails:
-                if (fp in text) if exact else re.search(fp, text):
-                    raise RuntimeError(f'not_matching pattern hit: {fp!r}')
-            for w in wants:
-                idx = text.find(w) if exact else None
-                m = None if exact else re.search(w, text)
-                if (exact and idx >= 0) or m:
-                    hit_end = (idx + len(w)) if exact else m.end()
-                    with self._lock:
-                        self._cursor += hit_end
-                    return w
-            time.sleep(0.05)
-        raise TimeoutError(f'[{self.name}] timeout ({timeout}s) waiting for {success!r}')
+    def _exited(self):
+        """True once the emu exited and its last output is buffered."""
+        return self.proc.poll() is not None and not self._pump_t.is_alive()
 
-    def expect(self, success, not_matching=None, timeout=15):
-        return self._expect(success, not_matching, timeout, exact=False)
-
-    def expect_exact(self, success, not_matching=None, timeout=15):
-        return self._expect(success, not_matching, timeout, exact=True)
+    def _exit_error(self, t0, success):
+        # A dead emu (crash / OOM-kill / its own --timeout) is not a slow
+        # timeout: report its exit code and the real elapsed time.
+        rc = self.proc.poll()
+        if rc is None:
+            return None
+        return RuntimeError(
+            f'[{self.name}] process exited (code {rc}) after {time.time() - t0:.1f}s '
+            f'while waiting for {success!r} (not a timeout — the emu is gone)')
 
     def fatal(self):
         """First unambiguous crash signature in the full log, or None. Used for
         the post-success settle check (a test can pass its expects, then the
         firmware panics a moment later)."""
+        if getattr(self, 'crash_expected', False):
+            return None             # the test asserted this stop itself
         with self._lock:
             text = self._buf
         for p in _FATAL:
@@ -136,6 +193,15 @@ class EmuDut:
 # Full-buffer late-crash signatures — see infra.signatures for why bare 'panic'
 # is excluded from this (settle) list but present in the expect list.
 from infra.signatures import SETTLE_FATAL as _FATAL
+
+
+def quiet(fn):
+    """Run a teardown step, swallowing any error, so one failing stop() can't skip the
+    next step (or the scarce slot release that must follow)."""
+    try:
+        fn()
+    except Exception:  # noqa: BLE001  teardown must never mask the real failure
+        pass
 
 
 def settle_check(*duts, window=None):

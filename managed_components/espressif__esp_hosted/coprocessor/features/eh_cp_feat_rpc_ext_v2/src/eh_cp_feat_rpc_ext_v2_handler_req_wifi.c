@@ -9,6 +9,7 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_private/wifi.h"
@@ -16,6 +17,7 @@
 #include "eh_cp_feat_rpc_ext_v2.h"
 #include "eh_cp_feat_rpc.h"
 #include "eh_cp_feat_rpc_ext_v2_priv.h"
+#include "eh_common.h"
 #include "eh_cp_linker_tags.h"
 #include "eh_cp_feat_wifi_event.h"
 #include "eh_cp_feat_wifi.h"
@@ -24,8 +26,6 @@
 #endif
 
 static const char* TAG = "ehcp_wifi_rpc";
-
-static bool s_mcu_wifi_initialized = false;
 
 #if EH_CP_FEAT_WIFI_EXT_ITWT_READY
 #include "esp_wifi_he.h"
@@ -156,142 +156,6 @@ esp_err_t req_wifi_get_ps(Rpc *req,
 	return ESP_OK;
 }
 
-/* External declaration of the real esp_wifi_init function */
-extern esp_err_t __real_esp_wifi_init(const wifi_init_config_t *config);
-
-/* Compare only fields set by req_wifi_init() — decides if reinit is needed. */
-static bool wifi_init_config_changed(const wifi_init_config_t *new_cfg, const wifi_init_config_t *cached_cfg)
-{
-	if (!new_cfg || !cached_cfg) {
-		ESP_LOGI(TAG, "WiFi init config comparison: One of the configs is NULL");
-		return true;
-	}
-
-	/* Compare only the fields that are explicitly set in req_wifi_init */
-	bool changed = false;
-
-	if (new_cfg->static_rx_buf_num != cached_cfg->static_rx_buf_num) {
-		ESP_LOGI(TAG, "WiFi init config: static_rx_buf_num changed: %lu -> %lu",
-				(unsigned long)cached_cfg->static_rx_buf_num, (unsigned long)new_cfg->static_rx_buf_num);
-		changed = true;
-	}
-
-	if (new_cfg->dynamic_rx_buf_num != cached_cfg->dynamic_rx_buf_num) {
-		ESP_LOGI(TAG, "WiFi init config: dynamic_rx_buf_num changed: %lu -> %lu",
-				(unsigned long)cached_cfg->dynamic_rx_buf_num, (unsigned long)new_cfg->dynamic_rx_buf_num);
-		changed = true;
-	}
-
-	if (new_cfg->tx_buf_type != cached_cfg->tx_buf_type) {
-		ESP_LOGI(TAG, "WiFi init config: tx_buf_type changed: %lu -> %lu",
-				(unsigned long)cached_cfg->tx_buf_type, (unsigned long)new_cfg->tx_buf_type);
-		changed = true;
-	}
-
-	if (new_cfg->static_tx_buf_num != cached_cfg->static_tx_buf_num) {
-		ESP_LOGI(TAG, "WiFi init config: static_tx_buf_num changed: %lu -> %lu",
-				(unsigned long)cached_cfg->static_tx_buf_num, (unsigned long)new_cfg->static_tx_buf_num);
-		changed = true;
-	}
-
-	if (new_cfg->dynamic_tx_buf_num != cached_cfg->dynamic_tx_buf_num) {
-		ESP_LOGI(TAG, "WiFi init config: dynamic_tx_buf_num changed: %lu -> %lu",
-				(unsigned long)cached_cfg->dynamic_tx_buf_num, (unsigned long)new_cfg->dynamic_tx_buf_num);
-		changed = true;
-	}
-
-	if (new_cfg->cache_tx_buf_num != cached_cfg->cache_tx_buf_num) {
-		ESP_LOGI(TAG, "WiFi init config: cache_tx_buf_num changed: %lu -> %lu",
-				(unsigned long)cached_cfg->cache_tx_buf_num, (unsigned long)new_cfg->cache_tx_buf_num);
-		changed = true;
-	}
-
-	if (new_cfg->csi_enable != cached_cfg->csi_enable) {
-		ESP_LOGI(TAG, "WiFi init config: csi_enable changed: %lu -> %lu",
-				(unsigned long)cached_cfg->csi_enable, (unsigned long)new_cfg->csi_enable);
-		changed = true;
-	}
-
-	if (new_cfg->ampdu_rx_enable != cached_cfg->ampdu_rx_enable) {
-		ESP_LOGI(TAG, "WiFi init config: ampdu_rx_enable changed: %lu -> %lu",
-				(unsigned long)cached_cfg->ampdu_rx_enable, (unsigned long)new_cfg->ampdu_rx_enable);
-		changed = true;
-	}
-
-	if (new_cfg->ampdu_tx_enable != cached_cfg->ampdu_tx_enable) {
-		ESP_LOGI(TAG, "WiFi init config: ampdu_tx_enable changed: %lu -> %lu",
-				(unsigned long)cached_cfg->ampdu_tx_enable, (unsigned long)new_cfg->ampdu_tx_enable);
-		changed = true;
-	}
-
-	if (new_cfg->amsdu_tx_enable != cached_cfg->amsdu_tx_enable) {
-		ESP_LOGI(TAG, "WiFi init config: amsdu_tx_enable changed: %lu -> %lu",
-				(unsigned long)cached_cfg->amsdu_tx_enable, (unsigned long)new_cfg->amsdu_tx_enable);
-		changed = true;
-	}
-
-	if (new_cfg->nvs_enable != cached_cfg->nvs_enable) {
-		ESP_LOGI(TAG, "WiFi init config: nvs_enable changed: %lu -> %lu",
-				(unsigned long)cached_cfg->nvs_enable, (unsigned long)new_cfg->nvs_enable);
-		changed = true;
-	}
-
-	if (new_cfg->nano_enable != cached_cfg->nano_enable) {
-		ESP_LOGI(TAG, "WiFi init config: nano_enable changed: %lu -> %lu",
-				(unsigned long)cached_cfg->nano_enable, (unsigned long)new_cfg->nano_enable);
-		changed = true;
-	}
-
-	if (new_cfg->rx_ba_win != cached_cfg->rx_ba_win) {
-		ESP_LOGI(TAG, "WiFi init config: rx_ba_win changed: %lu -> %lu",
-				(unsigned long)cached_cfg->rx_ba_win, (unsigned long)new_cfg->rx_ba_win);
-		changed = true;
-	}
-
-	if (new_cfg->wifi_task_core_id != cached_cfg->wifi_task_core_id) {
-		ESP_LOGI(TAG, "WiFi init config: wifi_task_core_id changed: %lu -> %lu",
-				(unsigned long)cached_cfg->wifi_task_core_id, (unsigned long)new_cfg->wifi_task_core_id);
-		changed = true;
-	}
-
-	if (new_cfg->beacon_max_len != cached_cfg->beacon_max_len) {
-		ESP_LOGI(TAG, "WiFi init config: beacon_max_len changed: %lu -> %lu",
-				(unsigned long)cached_cfg->beacon_max_len, (unsigned long)new_cfg->beacon_max_len);
-		changed = true;
-	}
-
-	if (new_cfg->mgmt_sbuf_num != cached_cfg->mgmt_sbuf_num) {
-		ESP_LOGI(TAG, "WiFi init config: mgmt_sbuf_num changed: %lu -> %lu",
-				(unsigned long)cached_cfg->mgmt_sbuf_num, (unsigned long)new_cfg->mgmt_sbuf_num);
-		changed = true;
-	}
-
-	if (new_cfg->feature_caps != cached_cfg->feature_caps) {
-		ESP_LOGI(TAG, "WiFi init config: feature_caps changed: %lu -> %lu",
-				(unsigned long)cached_cfg->feature_caps, (unsigned long)new_cfg->feature_caps);
-		changed = true;
-	}
-
-	if (new_cfg->sta_disconnected_pm != cached_cfg->sta_disconnected_pm) {
-		ESP_LOGI(TAG, "WiFi init config: sta_disconnected_pm changed: %lu -> %lu",
-				(unsigned long)cached_cfg->sta_disconnected_pm, (unsigned long)new_cfg->sta_disconnected_pm);
-		changed = true;
-	}
-
-	if (new_cfg->espnow_max_encrypt_num != cached_cfg->espnow_max_encrypt_num) {
-		ESP_LOGI(TAG, "WiFi init config: espnow_max_encrypt_num changed: %lu -> %lu",
-				(unsigned long)cached_cfg->espnow_max_encrypt_num, (unsigned long)new_cfg->espnow_max_encrypt_num);
-		changed = true;
-	}
-
-	if (new_cfg->magic != cached_cfg->magic) {
-		ESP_LOGI(TAG, "WiFi init config: magic changed: %lu -> %lu",
-				(unsigned long)cached_cfg->magic, (unsigned long)new_cfg->magic);
-		changed = true;
-	}
-
-	return changed;
-}
 
 
 // macros to format output
@@ -311,9 +175,11 @@ static bool wifi_init_config_changed(const wifi_init_config_t *new_cfg, const wi
 	ESP_LOGI(TAG, "%20s | %7"PRIu16" | %7"PRIi16" | %7"PRIi16, param_str, default, host, final);
 
 #define PRINT_HEX64_USE_HOST_VALUE(param_str, default, host, final)		\
-	ESP_LOGD(TAG, "%20s | 0x%5"PRIx16" | 0x%5"PRIx64" | 0x%5"PRIx64, param_str, default, host, final);
+	ESP_LOGD(TAG, "%20s | 0x%5"PRIx16" | 0x%08lx%08lx | 0x%08lx%08lx", param_str, default, \
+			EH_HI32(host), EH_LO32(host), EH_HI32(final), EH_LO32(final));
 #define PRINT_HEX64_USE_DEFAULT_VALUE(param_str, default, host, final) \
-	ESP_LOGW(TAG, "%20s | %7"PRIx16" | %7"PRIx64" | %7"PRIx64, param_str, default, host, final);
+	ESP_LOGW(TAG, "%20s | %7"PRIx16" | %08lx%08lx | %08lx%08lx", param_str, default, \
+			EH_HI32(host), EH_LO32(host), EH_HI32(final), EH_LO32(final));
 
 // macros to copy host or default value
 #define USE_HOST_VALUE(PARAM_STR, DEFAULT, PARAM) \
@@ -406,6 +272,20 @@ static wifi_init_config_t * get_merged_init_config(wifi_init_config_t *dst_confi
 	USE_HOST_VALUE("espnow_max_encrypt",CONFIG_ESP_WIFI_ESPNOW_MAX_ENCRYPT_NUM, espnow_max_encrypt_num);
 	USE_HOST_VALUE("tx_hetb_queue", WIFI_TX_HETB_QUEUE_NUM, tx_hetb_queue_num);
 	USE_HOST_VALUE("dump_hesigb_enable", WIFI_DUMP_HESIGB_ENABLED, dump_hesigb_enable);
+	/* Each companion macro is defined exactly when its field exists. A host
+	 * without the field leaves its bit clear, and the CP default stays. */
+#ifdef WIFI_PRIVACY_ENHANCEMENTS_ENABLED
+	if (EH_CP_GET_BIT(WIFI_INIT_CONFIG_EXT_privacy_enhancements_BIT, src_config->ext_present_bitmask))
+		USE_HOST_VALUE_BOOL("privacy_enhance", WIFI_PRIVACY_ENHANCEMENTS_ENABLED, privacy_enhancements);
+#endif
+#ifdef WIFI_RMAC_AUTO_RESET_INTERVAL
+	if (EH_CP_GET_BIT(WIFI_INIT_CONFIG_EXT_rmac_auto_reset_int_BIT, src_config->ext_present_bitmask))
+		USE_HOST_VALUE("rmac_auto_reset_int", WIFI_RMAC_AUTO_RESET_INTERVAL, rmac_auto_reset_int);
+#endif
+#ifdef WIFI_TASK_STACK_SIZE
+	if (EH_CP_GET_BIT(WIFI_INIT_CONFIG_EXT_wifi_task_stack_size_BIT, src_config->ext_present_bitmask))
+		USE_HOST_VALUE("wifi_task_stack", WIFI_TASK_STACK_SIZE, wifi_task_stack_size);
+#endif
 	PRINT_FOOTER();
 
 	dst_config->magic = src_config->magic;
@@ -414,52 +294,6 @@ static wifi_init_config_t * get_merged_init_config(wifi_init_config_t *dst_confi
 }
 
 
-/* Caches config; if changed and Wi-Fi up, stops/deinits before re-init. */
-esp_err_t __wrap_esp_wifi_init(const wifi_init_config_t *config);
-esp_err_t __wrap_esp_wifi_init(const wifi_init_config_t *config)
-{
-	esp_err_t ret;
-
-	EH_CP_BSS_STORE static wifi_init_config_t cached_wifi_init_config = {0};
-	EH_CP_BSS_STORE static bool has_cached_config = false;
-
-	ESP_LOGI(TAG, "=== __wrap_esp_wifi_init called ===");
-
-	if (s_mcu_wifi_initialized) {
-		/* Compare with cached config */
-		if (has_cached_config && wifi_init_config_changed(config, &cached_wifi_init_config)) {
-			ESP_LOGI(TAG, "WiFi init config changed, reinitializing");
-#if EH_CP_FEAT_NW_SPLIT_READY
-			eh_cp_feat_nw_split_reset_rx_override();
-#endif
-			esp_wifi_stop();
-			esp_wifi_deinit();
-			s_mcu_wifi_initialized = false;
-		} else {
-			ESP_LOGW(TAG, "WiFi already initialized with same parameters");
-			return ESP_OK;
-		}
-	} else {
-		ESP_LOGI(TAG, "First-time WiFi initialization");
-	}
-
-	/* Cache the config for future comparisons */
-	if (config) {
-		memcpy(&cached_wifi_init_config, config, sizeof(wifi_init_config_t));
-		has_cached_config = true;
-	}
-
-	/* Call the real init function */
-	ESP_LOGI(TAG, "Calling __real_esp_wifi_init...");
-	ret = __real_esp_wifi_init(config);
-	ESP_LOGI(TAG, "__real_esp_wifi_init returned: %d", ret);
-
-	if (ret == ESP_OK) {
-		s_mcu_wifi_initialized = true;
-	}
-
-	return ret;
-}
 
 esp_err_t req_wifi_init(Rpc *req, Rpc *resp, void *priv_data)
 {
@@ -541,31 +375,7 @@ esp_err_t req_wifi_start(Rpc *req, Rpc *resp, void *priv_data)
 			RpcReqWifiStart, req_wifi_start,
 			rpc__resp__wifi_start__init);
 
-	if (!eh_cp_feat_wifi_is_started()) {
-		RPC_RET_FAIL_IF(esp_wifi_start());
-	}
-
-	/* Replay STA/AP start events for hosts waking from deep sleep. */
-	wifi_mode_t mode;
-	int event_id;
-	esp_err_t res = esp_wifi_get_mode(&mode);
-	if (res == ESP_OK) {
-		if ((mode == WIFI_MODE_STA) || (mode == WIFI_MODE_APSTA)) {
-			ESP_LOGI(TAG, "send WIFI_EVENT_STA_START");
-			event_id = WIFI_EVENT_STA_START;
-			eh_cp_rpc_send_event(
-								RPC_ID__Event_WifiEventNoArgs,
-				&event_id, sizeof(event_id));
-		}
-		if ((mode == WIFI_MODE_AP) || (mode == WIFI_MODE_APSTA)) {
-			ESP_LOGI(TAG, "send WIFI_EVENT_AP_START");
-			event_id = WIFI_EVENT_AP_START;
-			eh_cp_rpc_send_event(
-								RPC_ID__Event_WifiEventNoArgs,
-				&event_id, sizeof(event_id));
-		}
-	}
-
+	RPC_RET_FAIL_IF(eh_cp_feat_wifi_request_start());
 	return ESP_OK;
 }
 
@@ -585,19 +395,7 @@ esp_err_t req_wifi_connect(Rpc *req, Rpc *resp, void *priv_data)
 			RpcReqWifiConnect, req_wifi_connect,
 			rpc__resp__wifi_connect__init);
 
-	int ret = eh_cp_feat_wifi_request_connect();
-	if (ret != ESP_OK) {
-		resp_payload->resp = ret;
-		return ESP_OK;
-	}
-
-	if (eh_cp_feat_wifi_is_station_connected()) {
-		ESP_LOGI(TAG, "connect recvd while already connected; replaying last real connected event");
-		eh_cp_feat_wifi_replay_connected_event_if_needed();
-	}
-
-	resp_payload->resp = ESP_OK;
-
+	resp_payload->resp = eh_cp_feat_wifi_request_connect();
 	return ESP_OK;
 }
 
@@ -607,7 +405,7 @@ esp_err_t req_wifi_disconnect(Rpc *req, Rpc *resp, void *priv_data)
 			RpcReqWifiDisconnect, req_wifi_disconnect,
 			rpc__resp__wifi_disconnect__init);
 
-	RPC_RET_FAIL_IF(eh_cp_feat_wifi_request_disconnect(false));
+	RPC_RET_FAIL_IF(eh_cp_feat_wifi_request_disconnect());
 
 	return ESP_OK;
 }
@@ -631,10 +429,12 @@ esp_err_t req_wifi_set_config(Rpc *req, Rpc *resp, void *priv_data)
 		WifiStaConfig * p_c_sta = req_payload->cfg->sta;
 		RPC_RET_FAIL_IF(!req_payload->cfg->sta);
 		RPC_REQ_COPY_STR(p_a_sta->ssid, p_c_sta->ssid, SSID_LENGTH);
-		if (strlen((char*)p_a_sta->ssid))
-			ESP_LOGI(TAG, "STA set config: SSID:%s", p_a_sta->ssid);
+		/* password[64] follows ssid[32], which is unterminated when full. */
+		size_t sta_slen = strnlen((char *)p_a_sta->ssid, sizeof(p_a_sta->ssid));
+		if (sta_slen)
+			ESP_LOGI(TAG, "STA set config: SSID:%.*s", (int)sta_slen, p_a_sta->ssid);
 		RPC_REQ_COPY_STR(p_a_sta->password, p_c_sta->password, PASSWORD_LENGTH);
-		if (strlen((char*)p_a_sta->password))
+		if (strnlen((char *)p_a_sta->password, sizeof(p_a_sta->password)))
 			ESP_LOGD(TAG, "STA: password:xxxxxxxx");
 		p_a_sta->scan_method = p_c_sta->scan_method;
 		p_a_sta->bssid_set = p_c_sta->bssid_set;
@@ -648,7 +448,7 @@ esp_err_t req_wifi_set_config(Rpc *req, Rpc *resp, void *priv_data)
 		if (p_c_sta->threshold) {
 			EH_ASSIGN_NARROW(p_a_sta->threshold.rssi, p_c_sta->threshold->rssi);
 			p_a_sta->threshold.authmode = p_c_sta->threshold->authmode;
-#if EH_CP_IDF_GE_5_4
+#if EH_CP_WIFI_GOT_RSSI_5G_ADJ
 			EH_ASSIGN_NARROW(p_a_sta->threshold.rssi_5g_adjustment, p_c_sta->threshold->rssi_5g_adjustment);
 #endif
 		}
@@ -664,6 +464,10 @@ esp_err_t req_wifi_set_config(Rpc *req, Rpc *resp, void *priv_data)
 		p_a_sta->ft_enabled = EH_CP_GET_BIT(WIFI_STA_CONFIG_1_ft_enabled, p_c_sta->bitmask);
 		p_a_sta->owe_enabled = EH_CP_GET_BIT(WIFI_STA_CONFIG_1_owe_enabled, p_c_sta->bitmask);
 		p_a_sta->transition_disable = EH_CP_GET_BIT(WIFI_STA_CONFIG_1_transition_disable, p_c_sta->bitmask);
+#if EH_CP_WIFI_GOT_WPA3_COMPATIBLE_MODE
+		p_a_sta->disable_wpa3_compatible_mode =
+			EH_CP_GET_BIT(WIFI_STA_CONFIG_1_disable_wpa3_compat, p_c_sta->bitmask);
+#endif
 #if EH_CP_DECODE_WIFI_RESERVED_FIELD
 #if EH_CP_WIFI_NEW_RESERVED_FIELDS
 		p_a_sta->reserved1 = WIFI_STA_CONFIG_1_GET_RESERVED_VAL(p_c_sta->bitmask);
@@ -688,10 +492,14 @@ esp_err_t req_wifi_set_config(Rpc *req, Rpc *resp, void *priv_data)
 		p_a_sta->he_trig_mu_bmforming_partial_feedback_disabled = EH_CP_GET_BIT(WIFI_STA_CONFIG_2_he_trig_mu_bmforming_partial_feedback_disabled_BIT, p_c_sta->he_bitmask);
 		p_a_sta->he_trig_cqi_feedback_disabled = EH_CP_GET_BIT(WIFI_STA_CONFIG_2_he_trig_cqi_feedback_disabled_BIT, p_c_sta->he_bitmask);
 
-#if EH_CP_IDF_GE_5_5
+#if EH_CP_WIFI_GOT_STA_VHT_CFG
 		p_a_sta->vht_su_beamformee_disabled = EH_CP_GET_BIT(WIFI_STA_CONFIG_2_vht_su_beamformee_disabled, p_c_sta->he_bitmask);
 		p_a_sta->vht_mu_beamformee_disabled = EH_CP_GET_BIT(WIFI_STA_CONFIG_2_vht_mu_beamformee_disabled, p_c_sta->he_bitmask);
 		p_a_sta->vht_mcs8_enabled = EH_CP_GET_BIT(WIFI_STA_CONFIG_2_vht_mcs8_enabled, p_c_sta->he_bitmask);
+#endif
+#if EH_CP_WIFI_GOT_STA_MAX_BW_NEG
+		p_a_sta->max_bandwidth_negotiation_enabled_2g = EH_CP_GET_BIT(WIFI_STA_CONFIG_2_max_bandwidth_negotiation_enabled_2g_BIT, p_c_sta->he_bitmask);
+		p_a_sta->max_bandwidth_negotiation_enabled_5g = EH_CP_GET_BIT(WIFI_STA_CONFIG_2_max_bandwidth_negotiation_enabled_5g_BIT, p_c_sta->he_bitmask);
 #endif
 
 #if EH_CP_DECODE_WIFI_RESERVED_FIELD
@@ -701,12 +509,6 @@ esp_err_t req_wifi_set_config(Rpc *req, Rpc *resp, void *priv_data)
 		p_a_sta->he_reserved = WIFI_STA_CONFIG_2_GET_RESERVED_VAL(p_c_sta->he_bitmask);
 #endif
 #endif
-
-		/* Avoid using fast scan, which leads to faster SSID selection,
-		 * but faces data throughput issues when same SSID broadcasted by weaker AP
-		 */
-		p_a_sta->scan_method = WIFI_ALL_CHANNEL_SCAN;
-		p_a_sta->sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
 
 		RPC_REQ_COPY_STR(p_a_sta->sae_h2e_identifier, p_c_sta->sae_h2e_identifier, SAE_H2E_IDENTIFIER_LEN);
 		RPC_RET_FAIL_IF(eh_cp_feat_wifi_set_sta_config(req_payload->iface, &cfg));
@@ -735,8 +537,11 @@ esp_err_t req_wifi_set_config(Rpc *req, Rpc *resp, void *priv_data)
 #if EH_CP_WIFI_GOT_AP_TRANSITION_DISABLE
 		p_a_ap->transition_disable = p_c_ap->transition_disable;
 #endif
-#if EH_CP_IDF_GE_5_5
+#if EH_CP_WIFI_GOT_AP_SAE_EXT
 		p_a_ap->sae_ext = (p_c_ap->sae_ext);
+#if EH_CP_WIFI_GOT_AP_WPA3_COMPATIBLE_MODE
+		p_a_ap->wpa3_compatible_mode = (p_c_ap->wpa3_compatible_mode) & 1u;
+#endif
 		if (p_c_ap->bss_max_idle_cfg) {
 			EH_ASSIGN_NARROW(p_a_ap->bss_max_idle_cfg.period, p_c_ap->bss_max_idle_cfg->period);
 			p_a_ap->bss_max_idle_cfg.protected_keep_alive = p_c_ap->bss_max_idle_cfg->protected_keep_alive;
@@ -786,7 +591,7 @@ esp_err_t req_wifi_get_config(Rpc *req, Rpc *resp, void *priv_data)
 		RPC_ALLOC_ELEMENT(WifiScanThreshold, p_c_sta->threshold, wifi_scan_threshold__init);
 		p_c_sta->threshold->rssi = p_a_sta->threshold.rssi;
 		p_c_sta->threshold->authmode = p_a_sta->threshold.authmode;
-#if EH_CP_IDF_GE_5_4
+#if EH_CP_WIFI_GOT_RSSI_5G_ADJ
 		p_c_sta->threshold->rssi_5g_adjustment = p_a_sta->threshold.rssi_5g_adjustment;
 #endif
 		RPC_ALLOC_ELEMENT(WifiPmfConfig, p_c_sta->pmf_cfg, wifi_pmf_config__init);
@@ -810,6 +615,10 @@ esp_err_t req_wifi_get_config(Rpc *req, Rpc *resp, void *priv_data)
 
 		if (p_a_sta->transition_disable)
 			EH_CP_SET_BIT(WIFI_STA_CONFIG_1_transition_disable, p_c_sta->bitmask);
+#if EH_CP_WIFI_GOT_WPA3_COMPATIBLE_MODE
+		if (p_a_sta->disable_wpa3_compatible_mode)
+			EH_CP_SET_BIT(WIFI_STA_CONFIG_1_disable_wpa3_compat, p_c_sta->bitmask);
+#endif
 
 #if EH_CP_DECODE_WIFI_RESERVED_FIELD
 #if EH_CP_WIFI_NEW_RESERVED_FIELDS
@@ -851,7 +660,7 @@ esp_err_t req_wifi_get_config(Rpc *req, Rpc *resp, void *priv_data)
 		if (p_a_sta->he_trig_cqi_feedback_disabled)
 			EH_CP_SET_BIT(WIFI_STA_CONFIG_2_he_trig_cqi_feedback_disabled_BIT, p_c_sta->he_bitmask);
 
-#if EH_CP_IDF_GE_5_5
+#if EH_CP_WIFI_GOT_STA_VHT_CFG
 		if (p_a_sta->vht_su_beamformee_disabled)
 			EH_CP_SET_BIT(WIFI_STA_CONFIG_2_vht_su_beamformee_disabled, p_c_sta->he_bitmask);
 
@@ -860,6 +669,13 @@ esp_err_t req_wifi_get_config(Rpc *req, Rpc *resp, void *priv_data)
 
 		if (p_a_sta->vht_mcs8_enabled)
 			EH_CP_SET_BIT(WIFI_STA_CONFIG_2_vht_mcs8_enabled, p_c_sta->he_bitmask);
+#endif
+#if EH_CP_WIFI_GOT_STA_MAX_BW_NEG
+		if (p_a_sta->max_bandwidth_negotiation_enabled_2g)
+			EH_CP_SET_BIT(WIFI_STA_CONFIG_2_max_bandwidth_negotiation_enabled_2g_BIT, p_c_sta->he_bitmask);
+
+		if (p_a_sta->max_bandwidth_negotiation_enabled_5g)
+			EH_CP_SET_BIT(WIFI_STA_CONFIG_2_max_bandwidth_negotiation_enabled_5g_BIT, p_c_sta->he_bitmask);
 #endif
 
 #if EH_CP_DECODE_WIFI_RESERVED_FIELD
@@ -898,8 +714,11 @@ esp_err_t req_wifi_get_config(Rpc *req, Rpc *resp, void *priv_data)
 #if EH_CP_WIFI_GOT_AP_TRANSITION_DISABLE
 		p_c_ap->transition_disable = p_a_ap->transition_disable;
 #endif
-#if EH_CP_IDF_GE_5_5
+#if EH_CP_WIFI_GOT_AP_SAE_EXT
 		p_c_ap->sae_ext = p_a_ap->sae_ext;
+#if EH_CP_WIFI_GOT_AP_WPA3_COMPATIBLE_MODE
+		p_c_ap->wpa3_compatible_mode = p_a_ap->wpa3_compatible_mode;
+#endif
 		RPC_ALLOC_ELEMENT(WifiBssMaxIdleConfig, p_c_ap->bss_max_idle_cfg, wifi_bss_max_idle_config__init);
 		p_c_ap->bss_max_idle_cfg->period = p_a_ap->bss_max_idle_cfg.period;
 		p_c_ap->bss_max_idle_cfg->protected_keep_alive = p_a_ap->bss_max_idle_cfg.protected_keep_alive;
@@ -969,8 +788,11 @@ esp_err_t req_wifi_get_config(Rpc *req, Rpc *resp, void *priv_data)
 #if EH_CP_WIFI_GOT_AP_TRANSITION_DISABLE
 		p_c_ap->transition_disable = p_a_ap->transition_disable;
 #endif
-#if EH_CP_IDF_GE_5_5
+#if EH_CP_WIFI_GOT_AP_SAE_EXT
 		p_c_ap->sae_ext = p_a_ap->sae_ext;
+#if EH_CP_WIFI_GOT_AP_WPA3_COMPATIBLE_MODE
+		p_c_ap->wpa3_compatible_mode = p_a_ap->wpa3_compatible_mode;
+#endif
 		RPC_ALLOC_ELEMENT(WifiBssMaxIdleConfig, p_c_ap->bss_max_idle_cfg, wifi_bss_max_idle_config__init);
 		p_c_ap->bss_max_idle_cfg->period = p_a_ap->bss_max_idle_cfg.period;
 		p_c_ap->bss_max_idle_cfg->protected_keep_alive = p_a_ap->bss_max_idle_cfg.protected_keep_alive;
@@ -1014,6 +836,9 @@ esp_err_t req_wifi_scan_start(Rpc *req, Rpc *resp, void *priv_data)
 
 		EH_ASSIGN_NARROW(p_a->channel, p_c->channel);
 		p_a->show_hidden = p_c->show_hidden;
+#if EH_CP_WIFI_GOT_COEX_BG_SCAN
+		p_a->coex_background_scan = p_c->coex_background_scan;
+#endif
 		p_a->scan_type = p_c->scan_type;
 
 		p_c_st = p_c->scan_time;
@@ -1152,6 +977,11 @@ static int copy_ap_record_to_rpc_struct(WifiApRecord *rpc, wifi_ap_record_t *sca
 	if (scan->ftm_initiator)
 		EH_CP_SET_BIT(WIFI_SCAN_AP_REC_ftm_initiator_BIT,rpc->bitmask);
 
+#if EH_CP_WIFI_GOT_AP_REC_AKM_DPP
+	if (scan->akm_dpp)
+		EH_CP_SET_BIT(WIFI_SCAN_AP_REC_akm_dpp_BIT,rpc->bitmask);
+#endif
+
 	WIFI_SCAN_AP_SET_RESERVED_VAL(scan->reserved, rpc->bitmask);
 
 	/* country */
@@ -1159,6 +989,9 @@ static int copy_ap_record_to_rpc_struct(WifiApRecord *rpc, wifi_ap_record_t *sca
 	rpc->country->schan        = scan->country.schan;
 	rpc->country->nchan        = scan->country.nchan;
 	rpc->country->max_tx_power = scan->country.max_tx_power;
+#if EH_CP_WIFI_GOT_5G_CHANNEL_MASK
+	rpc->country->wifi_5g_channel_mask = scan->country.wifi_5g_channel_mask;
+#endif
 	rpc->country->policy       = scan->country.policy;
 
 	ESP_LOGD(TAG, "Country cc:%c%c schan: %u nchan: %u max_tx_pow: %d policy: %u",
@@ -1240,17 +1073,26 @@ esp_err_t req_wifi_scan_get_ap_records(Rpc *req, Rpc *resp, void *priv_data)
 	EH_ASSIGN_NARROW(number, req->req_wifi_scan_get_ap_records->number);
 	ESP_LOGD(TAG,"n_elem_scan_list predicted: %u\n", number);
 
-	p_a_ap_list = (wifi_ap_record_t *)calloc(number, sizeof(wifi_ap_record_t));
-	RPC_RET_FAIL_IF(!p_a_ap_list);
-
+	/* number is host-supplied. Ask the radio how many records exist and
+	 * allocate the smaller of the two, so a wrong or hostile count cannot
+	 * turn into a multi-megabyte request on the coprocessor. */
 	ret = esp_wifi_scan_get_ap_num(&ap_count);
 	if (ret || !ap_count) {
 		ESP_LOGE(TAG,"esp_wifi_scan_get_ap_num: ret: %d num_ap_scanned:%u", ret, number);
 		goto err;
 	}
-	if (number < ap_count) {
-		ESP_LOGI(TAG,"n_elem_scan_list wants to return: %u Limit to %u\n", ap_count, number);
+	if (number > ap_count) {
+		ESP_LOGD(TAG,"n_elem_scan_list asked %u, only %u scanned", number, ap_count);
+		number = ap_count;
 	}
+	if (!number) {
+		/* Host asked for none: answer SUCCESS with an empty list. */
+		ESP_LOGD(TAG,"n_elem_scan_list asked 0 records");
+		goto err;
+	}
+
+	p_a_ap_list = (wifi_ap_record_t *)calloc(number, sizeof(wifi_ap_record_t));
+	RPC_RET_FAIL_IF(!p_a_ap_list);
 
 	ret = esp_wifi_scan_get_ap_records(&number, p_a_ap_list);
 	if(ret) {
@@ -1460,6 +1302,9 @@ esp_err_t req_wifi_set_country(Rpc *req, Rpc *resp, void *priv_data)
 	EH_ASSIGN_NARROW(country.schan, p_c_country->schan);
 	EH_ASSIGN_NARROW(country.nchan, p_c_country->nchan);
 	EH_ASSIGN_NARROW(country.max_tx_power, p_c_country->max_tx_power);
+#if EH_CP_WIFI_GOT_5G_CHANNEL_MASK
+	country.wifi_5g_channel_mask = p_c_country->wifi_5g_channel_mask;
+#endif
 	country.policy       = p_c_country->policy;
 
 	RPC_RET_FAIL_IF(esp_wifi_set_country(&country));
@@ -1483,6 +1328,9 @@ esp_err_t req_wifi_get_country(Rpc *req, Rpc *resp, void *priv_data)
 	p_c_country->schan        = country.schan;
 	p_c_country->nchan        = country.nchan;
 	p_c_country->max_tx_power = country.max_tx_power;
+#if EH_CP_WIFI_GOT_5G_CHANNEL_MASK
+	p_c_country->wifi_5g_channel_mask = country.wifi_5g_channel_mask;
+#endif
 	p_c_country->policy       = country.policy;
 
 err:
@@ -1502,13 +1350,28 @@ esp_err_t req_wifi_ap_get_sta_list(Rpc *req, Rpc *resp, void *priv_data)
 	RPC_ALLOC_ELEMENT(WifiStaList, resp_payload->sta_list, wifi_sta_list__init);
 	p_c_sta_list = resp_payload->sta_list;
 
-	resp_payload->sta_list->sta = (WifiStaInfo**)calloc(ESP_WIFI_MAX_CONN_NUM, sizeof(WifiStaInfo *));
-	if (!resp_payload->sta_list->sta) {
-		ESP_LOGE(TAG,"resp: malloc failed for resp_payload->sta_list->sta");
+	/* wifi_sta_list_t holds at most ESP_WIFI_MAX_CONN_NUM and entries past
+	 * num are invalid. Anything else is a broken list, not a short one. */
+	if (sta.num < 0 || sta.num > ESP_WIFI_MAX_CONN_NUM) {
+		ESP_LOGE(TAG,"esp_wifi_ap_get_sta_list returned num=%d, outside 0..%d",
+			sta.num, ESP_WIFI_MAX_CONN_NUM);
+		resp_payload->resp = ESP_ERR_INVALID_SIZE;
 		goto err;
 	}
 
-	for (int i = 0; i < ESP_WIFI_MAX_CONN_NUM; i++) {
+	if (sta.num) {
+		resp_payload->sta_list->sta = (WifiStaInfo**)calloc(sta.num, sizeof(WifiStaInfo *));
+		if (!resp_payload->sta_list->sta) {
+			ESP_LOGE(TAG,"resp: malloc failed for resp_payload->sta_list->sta");
+			resp_payload->resp = RPC_ERR_MEMORY_FAILURE;
+			goto err;
+		}
+		/* Set before filling: the free path walks n_sta, and calloc leaves
+		 * unfilled entries NULL, which free_unpacked skips. */
+		p_c_sta_list->n_sta = sta.num;
+	}
+
+	for (int i = 0; i < sta.num; i++) {
 		RPC_ALLOC_ELEMENT(WifiStaInfo, p_c_sta_list->sta[i], wifi_sta_info__init);
 		WifiStaInfo * p_c_sta_info = p_c_sta_list->sta[i];
 
@@ -1530,14 +1393,17 @@ esp_err_t req_wifi_ap_get_sta_list(Rpc *req, Rpc *resp, void *priv_data)
 		if (sta.sta[i].phy_11ax)
 			EH_CP_SET_BIT(WIFI_STA_INFO_phy_11ax_BIT, p_c_sta_info->bitmask);
 
+		if (sta.sta[i].phy_11a)
+			EH_CP_SET_BIT(WIFI_STA_INFO_phy_11a_BIT, p_c_sta_info->bitmask);
+
+		if (sta.sta[i].phy_11ac)
+			EH_CP_SET_BIT(WIFI_STA_INFO_phy_11ac_BIT, p_c_sta_info->bitmask);
+
 		if (sta.sta[i].is_mesh_child)
 			EH_CP_SET_BIT(WIFI_STA_INFO_is_mesh_child_BIT, p_c_sta_info->bitmask);
 
 		WIFI_STA_INFO_SET_RESERVED_VAL(sta.sta[i].reserved, p_c_sta_info->bitmask);
 	}
-	// number of sta records in the list
-	resp_payload->sta_list->n_sta = ESP_WIFI_MAX_CONN_NUM;
-
 	p_c_sta_list->num = sta.num;
 
 err:
@@ -1604,7 +1470,7 @@ esp_err_t req_wifi_sta_get_negotiated_phymode(Rpc *req, Rpc *resp, void *priv_da
 	return ESP_OK;
 }
 
-#if EH_CP_IDF_GE_5_4
+#if EH_CP_WIFI_DUALBAND
 esp_err_t req_wifi_set_protocols(Rpc *req, Rpc *resp, void *priv_data)
 {
 	RPC_TEMPLATE(RpcRespWifiSetProtocols, resp_wifi_set_protocols,
@@ -1760,7 +1626,7 @@ esp_err_t req_wifi_get_band_mode(Rpc *req, Rpc *resp, void *priv_data)
 
 	return ESP_OK;
 }
-#endif // EH_CP_IDF_GE_5_4
+#endif // EH_CP_WIFI_DUALBAND
 
 
 /* WiFi RPC handlers will be copied here */
@@ -1868,6 +1734,9 @@ esp_err_t req_wifi_scan_params(Rpc *req, Rpc *resp, void *priv_data)
 			config.scan_time.active.min = req_payload->config->scan_time->active->min;
 			config.scan_time.active.max = req_payload->config->scan_time->active->max;
 			EH_ASSIGN_NARROW(config.home_chan_dwell_time, req_payload->config->home_chan_dwell_time);
+#if EH_CP_WIFI_GOT_SCAN_MAX_OFFCHAN
+			EH_ASSIGN_NARROW(config.max_offchan_duration_ms, req_payload->config->max_offchan_duration_ms);
+#endif
 			ESP_LOGI(TAG, "rpc_wifi_scan_params_set: passive [%" PRIu32 "], active_min [%" PRIu32 "], active_max [%" PRIu32 "], home_chan_dwell_time [%" PRIu8 "]",
 				config.scan_time.passive, config.scan_time.active.min, config.scan_time.active.max, config.home_chan_dwell_time);
 			p_config = &config;
@@ -1887,6 +1756,9 @@ esp_err_t req_wifi_scan_params(Rpc *req, Rpc *resp, void *priv_data)
 		resp_payload->config->scan_time->active->min = config.scan_time.active.min;
 		resp_payload->config->scan_time->active->max = config.scan_time.active.max;
 		resp_payload->config->home_chan_dwell_time = config.home_chan_dwell_time;
+#if EH_CP_WIFI_GOT_SCAN_MAX_OFFCHAN
+		resp_payload->config->max_offchan_duration_ms = config.max_offchan_duration_ms;
+#endif
 
 		ESP_LOGI(TAG, "rpc_wifi_scan_params_get: passive [%" PRIu32 "], active_min [%" PRIu32 "], active_max [%" PRIu32 "], home_chan_dwell_time [%" PRIu8 "]",
 			config.scan_time.passive, config.scan_time.active.min, config.scan_time.active.max, config.home_chan_dwell_time);

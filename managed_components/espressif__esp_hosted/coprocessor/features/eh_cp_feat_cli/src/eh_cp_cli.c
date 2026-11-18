@@ -38,6 +38,7 @@ static esp_err_t eh_cp_feat_cli_init(void)
 	return eh_cp_feat_cli_start("coprocessor> ");
 }
 
+/* No deinit_fn: tearing down the CLI from its own task is unsafe. */
 #if EH_CP_FEAT_CLI_AUTO_INIT
 EH_CP_FEAT_REGISTER(eh_cp_feat_cli_init,
                    NULL,
@@ -64,9 +65,9 @@ static int task_dump_cli_handler(int argc, char *argv[])
 	for (int i = 0; i < num_of_tasks; i++) {
 		printf("%16s\t%u\t%u\t%u\n",
 			   task_array[i].pcTaskName,
-			   (unsigned) task_array[i].xTaskNumber,
-			   (unsigned) task_array[i].uxCurrentPriority,
-			   (unsigned) task_array[i].usStackHighWaterMark);
+			   (unsigned int) task_array[i].xTaskNumber,
+			   (unsigned int) task_array[i].uxCurrentPriority,
+			   (unsigned int) task_array[i].usStackHighWaterMark);
 	}
 	free(task_array);
 #endif

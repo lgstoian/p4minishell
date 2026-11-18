@@ -13,6 +13,8 @@ if ESP_HOSTED_HOST_TRANSPORT_BUS_UART
 
 		config ESP_HOSTED_HOST_RESET_GPIO
 			int "Slave reset GPIO (RST/EN line)"
+			default 3 if ESP_HOSTED_S31_DEV_BOARD && IDF_TARGET_ESP32P4
+			default 53 if ESP_HOSTED_S31_ON_P4_EV_HEADER
 			default 54 if ESP_HOSTED_P4_C5_CORE_BOARD || ESP_HOSTED_P4_C6_CORE_BOARD || ESP_HOSTED_P4_C61_CORE_BOARD
 			default 54 if ESP_HOSTED_P4X_C5_DEV_BOARD_FUNC_BOARD
 			default 9  if ESP32P4_EYE_C6_BOARD
@@ -20,21 +22,6 @@ if ESP_HOSTED_HOST_TRANSPORT_BUS_UART
 			default 42 if IDF_TARGET_ESP32S3
 			default 5
 			range -1 100
-
-		choice ESP_HOSTED_UART_RESET_GPIO_CONFIG
-			prompt "Slave reset active level"
-			# active-low so the reset pulse ends HIGH and the CP runs (as spi_hd/sdio)
-			default ESP_HOSTED_UART_RESET_ACTIVE_LOW
-			config ESP_HOSTED_UART_RESET_ACTIVE_HIGH
-				bool "Active high"
-			config ESP_HOSTED_UART_RESET_ACTIVE_LOW
-				bool "Active low"
-		endchoice
-
-		config ESP_HOSTED_HOST_RESET_ACTIVE_LOW
-			bool
-			default y if ESP_HOSTED_UART_RESET_ACTIVE_LOW
-			default n
 
 
 		config ESP_HOSTED_HOST_UART_PORT
@@ -53,6 +40,8 @@ if ESP_HOSTED_HOST_TRANSPORT_BUS_UART
 
 		config ESP_HOSTED_UART_TX_RANGE_MIN
 			int
+			default 2 if ESP_HOSTED_S31_DEV_BOARD && IDF_TARGET_ESP32P4
+			default 23 if ESP_HOSTED_S31_ON_P4_EV_HEADER
 			default 49 if ESP_HOSTED_P4_C5_CORE_BOARD
 			default 14 if ESP_HOSTED_P4X_C5_DEV_BOARD_FUNC_BOARD
 			default 50 if ESP_HOSTED_P4_C6_CORE_BOARD || ESP_HOSTED_P4_C61_CORE_BOARD
@@ -62,6 +51,8 @@ if ESP_HOSTED_HOST_TRANSPORT_BUS_UART
 
 		config ESP_HOSTED_UART_TX_RANGE_MAX
 			int
+			default 2 if ESP_HOSTED_S31_DEV_BOARD && IDF_TARGET_ESP32P4
+			default 23 if ESP_HOSTED_S31_ON_P4_EV_HEADER
 			default 49 if ESP_HOSTED_P4_C5_CORE_BOARD
 			default 14 if ESP_HOSTED_P4X_C5_DEV_BOARD_FUNC_BOARD
 			default 50 if ESP_HOSTED_P4_C6_CORE_BOARD || ESP_HOSTED_P4_C61_CORE_BOARD
@@ -71,6 +62,8 @@ if ESP_HOSTED_HOST_TRANSPORT_BUS_UART
 
 		config ESP_HOSTED_HOST_UART_TX_GPIO
 			int "UART TX GPIO"
+			default 2 if ESP_HOSTED_S31_DEV_BOARD && IDF_TARGET_ESP32P4
+			default 23 if ESP_HOSTED_S31_ON_P4_EV_HEADER
 			default 49 if ESP_HOSTED_P4_C5_CORE_BOARD
 			default 14 if ESP_HOSTED_P4X_C5_DEV_BOARD_FUNC_BOARD
 			default 50 if ESP_HOSTED_P4_C6_CORE_BOARD || ESP_HOSTED_P4_C61_CORE_BOARD
@@ -88,6 +81,7 @@ if ESP_HOSTED_HOST_TRANSPORT_BUS_UART
 
 		config ESP_HOSTED_UART_RX_RANGE_MIN
 			int
+			default 22 if ESP_HOSTED_S31_ON_P4_EV_HEADER
 			default 48 if ESP_HOSTED_P4_C5_CORE_BOARD
 			default 15 if ESP_HOSTED_P4X_C5_DEV_BOARD_FUNC_BOARD
 			default 49 if ESP_HOSTED_P4_C6_CORE_BOARD || ESP_HOSTED_P4_C61_CORE_BOARD
@@ -97,6 +91,7 @@ if ESP_HOSTED_HOST_TRANSPORT_BUS_UART
 
 		config ESP_HOSTED_UART_RX_RANGE_MAX
 			int
+			default 22 if ESP_HOSTED_S31_ON_P4_EV_HEADER
 			default 48 if ESP_HOSTED_P4_C5_CORE_BOARD
 			default 15 if ESP_HOSTED_P4X_C5_DEV_BOARD_FUNC_BOARD
 			default 49 if ESP_HOSTED_P4_C6_CORE_BOARD || ESP_HOSTED_P4_C61_CORE_BOARD
@@ -106,6 +101,7 @@ if ESP_HOSTED_HOST_TRANSPORT_BUS_UART
 
 		config ESP_HOSTED_HOST_UART_RX_GPIO
 			int "UART RX GPIO"
+			default 22 if ESP_HOSTED_S31_ON_P4_EV_HEADER
 			default 48 if ESP_HOSTED_P4_C5_CORE_BOARD
 			default 15 if ESP_HOSTED_P4X_C5_DEV_BOARD_FUNC_BOARD
 			default 49 if ESP_HOSTED_P4_C6_CORE_BOARD || ESP_HOSTED_P4_C61_CORE_BOARD
@@ -126,10 +122,22 @@ if ESP_HOSTED_HOST_TRANSPORT_BUS_UART
 	config ESP_HOSTED_HOST_UART_BAUD
 		int "UART baud rate"
 		default 921600
-		range 9600 3500000
+		range 9600 16000000
 		help
-		  Must match the CP-side CONFIG_ESP_HOSTED_BT_UART_BAUDRATE (or
-		  equivalent); mismatch will corrupt framing.
+		  Must match CONFIG_EH_TRANSPORT_CP_UART_BAUDRATE on the co-processor.
+		  A mismatch corrupts the framing.
+
+		  The SoC maximum is 5000000. Rates up to 16000000 were tested on
+		  ESP32-P4 + ESP32-C5 and ESP32-P4 + ESP32-S31 boards. Validate them
+		  on your board.
+
+		  On ESP32-P4, ESP32-C5 and ESP32-S31 the UART clock is 80 MHz. Above
+		  5000000, use 8000000 or 16000000, which divide 80000000 exactly.
+		  Other rates have bit-time jitter.
+
+		  Higher rates lose frames. The RX interrupt must empty the FIFO
+		  in time: 80 us at 8000000, 40 us at 16000000. Code that disables
+		  interrupts for longer causes the loss of a frame.
 
 	config ESP_HOSTED_HOST_UART_NUM_DATA_BITS
 		int "UART data bits"

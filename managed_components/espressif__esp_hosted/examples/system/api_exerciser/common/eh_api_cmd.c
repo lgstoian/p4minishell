@@ -12,6 +12,7 @@
 
 #include "esp_console.h"
 #include "esp_err.h"
+#include "esp_system.h"
 #include "esp_wifi_types.h"
 
 #include "eh_api_cmd.h"
@@ -61,8 +62,12 @@ static int parse_iface(const char *s, wifi_interface_t *out)
 
 static int parse_mac(const char *s, uint8_t mac[6])
 {
-    return sscanf(s, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-                  &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) == 6 ? 0 : -1;
+    /* newlib-nano scanf has no hh: it stops at the second h and converts nothing. */
+    unsigned int b[6] = {0};
+    if (sscanf(s, "%2x:%2x:%2x:%2x:%2x:%2x",
+               &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) != 6) return -1;
+    for (int i = 0; i < 6; i++) mac[i] = (uint8_t)b[i];
+    return 0;
 }
 
 /* ── system ─────────────────────────────────────────────────────────── */
@@ -75,7 +80,7 @@ static int cmd_sys_fw_version(int argc, char **argv)
     if (e == ESP_OK) {
         char f[48];
         snprintf(f, sizeof(f), "ver=%u.%u.%u",
-                 (unsigned)fw.major1, (unsigned)fw.minor1, (unsigned)fw.patch1);
+                 (unsigned int)fw.major1, (unsigned int)fw.minor1, (unsigned int)fw.patch1);
         eh_out("sys_fw_version", (int)e, f);
     } else {
         eh_out_rc("sys_fw_version", e);
@@ -214,7 +219,7 @@ static int cmd_wifi_get_channel(int argc, char **argv)
     uint8_t pri = 0;
     wifi_second_chan_t sec = WIFI_SECOND_CHAN_NONE;
     esp_err_t e = eh_host_wifi_get_channel(&pri, &sec);
-    if (e == ESP_OK) { char f[32]; snprintf(f, sizeof(f), "chan=%u sec=%d", (unsigned)pri, (int)sec); eh_out("wifi_get_channel", (int)e, f); }
+    if (e == ESP_OK) { char f[32]; snprintf(f, sizeof(f), "chan=%u sec=%d", (unsigned int)pri, (int)sec); eh_out("wifi_get_channel", (int)e, f); }
     else eh_out_rc("wifi_get_channel", e);
     return 0;
 }
@@ -271,7 +276,7 @@ static int cmd_wifi_get_inactive_time(int argc, char **argv)
     if (argc < 2 || parse_iface(argv[1], &ifx)) { eh_out("wifi_get_inactive_time", -1, "err=USAGE"); return 0; }
     uint16_t s = 0;
     esp_err_t e = eh_host_wifi_get_inactive_time(ifx, &s);
-    if (e == ESP_OK) { char f[24]; snprintf(f, sizeof(f), "sec=%u", (unsigned)s); eh_out("wifi_get_inactive_time", (int)e, f); }
+    if (e == ESP_OK) { char f[24]; snprintf(f, sizeof(f), "sec=%u", (unsigned int)s); eh_out("wifi_get_inactive_time", (int)e, f); }
     else eh_out_rc("wifi_get_inactive_time", e);
     return 0;
 }
@@ -328,16 +333,28 @@ static int cmd_wifi_cfg_reset(int argc, char **argv)
     return 0;
 }
 
+/* Full width: IDF reads these bounded, so no terminator is reserved. */
+static uint8_t stage_str(uint8_t *dst, size_t cap, const char *v)
+{
+    size_t n = strnlen(v, cap);
+    memset(dst, 0, cap);
+    memcpy(dst, v, n);
+    return (uint8_t)n;
+}
+
 static int cmd_wifi_cfg_set(int argc, char **argv)
 {
     if (argc < 3) { eh_out("wifi_cfg_set", -1, "err=USAGE"); return 0; }
     const char *k = argv[1], *v = argv[2];
-    if      (!strcmp(k, "sta_ssid"))     strncpy((char *)s_cfg.sta.ssid, v, sizeof(s_cfg.sta.ssid) - 1);
-    else if (!strcmp(k, "sta_password")) strncpy((char *)s_cfg.sta.password, v, sizeof(s_cfg.sta.password) - 1);
+    if      (!strcmp(k, "sta_ssid"))     stage_str(s_cfg.sta.ssid, sizeof(s_cfg.sta.ssid), v);
+    else if (!strcmp(k, "sta_password")) stage_str(s_cfg.sta.password, sizeof(s_cfg.sta.password), v);
     else if (!strcmp(k, "sta_channel"))  s_cfg.sta.channel = (uint8_t)atoi(v);
     else if (!strcmp(k, "sta_scan_all")) s_cfg.sta.scan_method = atoi(v) ? WIFI_ALL_CHANNEL_SCAN : WIFI_FAST_SCAN;
-    else if (!strcmp(k, "ap_ssid"))      strncpy((char *)s_cfg.ap.ssid, v, sizeof(s_cfg.ap.ssid) - 1);
-    else if (!strcmp(k, "ap_password"))  strncpy((char *)s_cfg.ap.password, v, sizeof(s_cfg.ap.password) - 1);
+    else if (!strcmp(k, "ap_ssid")) {
+        /* ssid_len too: a full-width SSID has no room for a terminator. */
+        s_cfg.ap.ssid_len = stage_str(s_cfg.ap.ssid, sizeof(s_cfg.ap.ssid), v);
+    }
+    else if (!strcmp(k, "ap_password"))  stage_str(s_cfg.ap.password, sizeof(s_cfg.ap.password), v);
     else if (!strcmp(k, "ap_channel"))   s_cfg.ap.channel = (uint8_t)atoi(v);
     else if (!strcmp(k, "ap_authmode"))  s_cfg.ap.authmode = (wifi_auth_mode_t)atoi(v);
     else if (!strcmp(k, "ap_max_conn"))  s_cfg.ap.max_connection = (uint8_t)atoi(v);
@@ -370,12 +387,16 @@ static int cmd_wifi_get_config(int argc, char **argv)
     if (e != ESP_OK) { eh_out_rc("wifi_get_config", e); return 0; }
     char f[96];
     if (ifx == WIFI_IF_STA) {
-        snprintf(f, sizeof(f), "ssid=%s channel=%u",
-                 (char *)out.sta.ssid, (unsigned)out.sta.channel);
+        snprintf(f, sizeof(f), "ssid=%.*s channel=%u pwlen=%u",
+                 (int)strnlen((char *)out.sta.ssid, sizeof(out.sta.ssid)),
+                 (char *)out.sta.ssid, (unsigned int)out.sta.channel,
+                 (unsigned int)strnlen((char *)out.sta.password,
+                                   sizeof(out.sta.password)));
     } else {
-        snprintf(f, sizeof(f), "ssid=%s channel=%u authmode=%d max_conn=%u hidden=%u",
-                 (char *)out.ap.ssid, (unsigned)out.ap.channel, (int)out.ap.authmode,
-                 (unsigned)out.ap.max_connection, (unsigned)out.ap.ssid_hidden);
+        snprintf(f, sizeof(f), "ssid=%.*s channel=%u authmode=%d max_conn=%u hidden=%u",
+                 (int)strnlen((char *)out.ap.ssid, sizeof(out.ap.ssid)),
+                 (char *)out.ap.ssid, (unsigned int)out.ap.channel, (int)out.ap.authmode,
+                 (unsigned int)out.ap.max_connection, (unsigned int)out.ap.ssid_hidden);
     }
     eh_out("wifi_get_config", 0, f);
     return 0;
@@ -390,12 +411,46 @@ static int cmd_wifi_set_config_null(int argc, char **argv)
 
 /* ── wifi scan ──────────────────────────────────────────────────────── */
 
+/* An SSID argument scans with a real wifi_scan_config_t. */
 static int cmd_wifi_scan_start(int argc, char **argv)
 {
     bool block = (argc >= 2) ? (atoi(argv[1]) != 0) : true;
-    eh_out_rc("wifi_scan_start", eh_host_wifi_scan_start(NULL, block));
+    if (argc < 3) {
+        eh_out_rc("wifi_scan_start", eh_host_wifi_scan_start(NULL, block));
+        return 0;
+    }
+    wifi_scan_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.ssid        = strcmp(argv[2], "-") ? (uint8_t *)argv[2] : NULL;
+    cfg.channel     = (argc >= 4) ? (uint8_t)atoi(argv[3]) : 0;
+    cfg.show_hidden = (argc >= 5) ? (atoi(argv[4]) != 0) : false;
+    if (argc >= 6 && !strcmp(argv[5], "passive")) {
+        cfg.scan_type = WIFI_SCAN_TYPE_PASSIVE;
+        cfg.scan_time.passive = 360;
+    } else {
+        cfg.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+        cfg.scan_time.active.min = 100;
+        cfg.scan_time.active.max = 300;
+    }
+    eh_out_rc("wifi_scan_start", eh_host_wifi_scan_start(&cfg, block));
     return 0;
 }
+
+static int cmd_wifi_clear_fast_connect(int argc, char **argv)
+{
+    eh_out_rc("wifi_clear_fast_connect", eh_host_wifi_clear_fast_connect());
+    return 0;
+}
+
+#if EH_HOST_GOT_EAP_OKC_SUPPORT
+static int cmd_wifi_set_okc_support(int argc, char **argv)
+{
+    if (argc < 2) { eh_out("wifi_set_okc_support", -1, "err=USAGE"); return 0; }
+    eh_out_rc("wifi_set_okc_support",
+              eh_host_wifi_set_okc_support(atoi(argv[1]) != 0));
+    return 0;
+}
+#endif
 
 static int cmd_wifi_scan_stop(int argc, char **argv)
 {
@@ -413,7 +468,7 @@ static int cmd_wifi_scan_get_ap_num(int argc, char **argv)
 {
     uint16_t n = 0;
     esp_err_t e = eh_host_wifi_scan_get_ap_num(&n);
-    if (e == ESP_OK) { char f[24]; snprintf(f, sizeof(f), "num=%u", (unsigned)n); eh_out("wifi_scan_get_ap_num", (int)e, f); }
+    if (e == ESP_OK) { char f[24]; snprintf(f, sizeof(f), "num=%u", (unsigned int)n); eh_out("wifi_scan_get_ap_num", (int)e, f); }
     else eh_out_rc("wifi_scan_get_ap_num", e);
     return 0;
 }
@@ -429,9 +484,12 @@ static int cmd_wifi_scan_dump(int argc, char **argv)
     uint16_t got = n;
     e = eh_host_wifi_scan_get_ap_records(&got, recs);
     for (uint16_t i = 0; i < got && e == ESP_OK; i++)
-        printf("EH scan ap ssid=\"%s\" rssi=%d ch=%u\n",
-               (char *)recs[i].ssid, (int)recs[i].rssi, (unsigned)recs[i].primary);
-    char f[24]; snprintf(f, sizeof(f), "n=%u", (unsigned)got);
+        printf("EH scan ap ssid=\"%s\" rssi=%d ch=%u phy=%u%u%u%u%u%u%u\n",
+               (char *)recs[i].ssid, (int)recs[i].rssi, (unsigned int)recs[i].primary,
+               recs[i].phy_11b, recs[i].phy_11g, recs[i].phy_11n,
+               recs[i].phy_11a, recs[i].phy_11ac, recs[i].phy_11ax,
+               recs[i].phy_lr);
+    char f[24]; snprintf(f, sizeof(f), "n=%u", (unsigned int)got);
     eh_out("wifi_scan_dump", (int)e, f);
     free(recs);
     return 0;
@@ -445,6 +503,17 @@ static int cmd_wifi_scan_dump(int argc, char **argv)
 static int cmd_wifi_connect(int argc, char **argv)    { eh_out_rc("wifi_connect",    eh_host_wifi_connect());    return 0; }
 static int cmd_wifi_disconnect(int argc, char **argv) { eh_out_rc("wifi_disconnect", eh_host_wifi_disconnect()); return 0; }
 static int cmd_wifi_restore(int argc, char **argv)    { eh_out_rc("wifi_restore",    eh_host_wifi_restore());    return 0; }
+
+#ifdef ESP_PLATFORM
+/* The host reboots; by default its bring-up resets the CP too. */
+static int cmd_host_restart(int argc, char **argv)
+{
+    eh_out("host_restart", 0, "");
+    fflush(stdout);
+    esp_restart();
+    return 0;
+}
+#endif
 
 static int cmd_wifi_set_storage(int argc, char **argv)
 {
@@ -476,14 +545,13 @@ static int cmd_wifi_ap_get_sta_list(int argc, char **argv)
 static int cmd_wifi_ap_get_sta_aid(int argc, char **argv)
 {
     uint8_t mac[6] = {0};
-    if (argc < 2 || sscanf(argv[1], "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-                           &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) != 6) {
+    if (argc < 2 || parse_mac(argv[1], mac) != 0) {
         eh_out("wifi_ap_get_sta_aid", -1, "err=USAGE");
         return 0;
     }
     uint16_t aid = 0;
     esp_err_t e = eh_host_wifi_ap_get_sta_aid(mac, &aid);
-    if (e == ESP_OK) { char f[24]; snprintf(f, sizeof(f), "aid=%u", (unsigned)aid); eh_out("wifi_ap_get_sta_aid", (int)e, f); }
+    if (e == ESP_OK) { char f[24]; snprintf(f, sizeof(f), "aid=%u", (unsigned int)aid); eh_out("wifi_ap_get_sta_aid", (int)e, f); }
     else eh_out_rc("wifi_ap_get_sta_aid", e);
     return 0;
 }
@@ -499,7 +567,7 @@ static int cmd_wifi_sta_get_aid(int argc, char **argv)
 {
     uint16_t aid = 0;
     esp_err_t e = eh_host_wifi_sta_get_aid(&aid);
-    if (e == ESP_OK) { char f[24]; snprintf(f, sizeof(f), "aid=%u", (unsigned)aid); eh_out("wifi_sta_get_aid", (int)e, f); }
+    if (e == ESP_OK) { char f[24]; snprintf(f, sizeof(f), "aid=%u", (unsigned int)aid); eh_out("wifi_sta_get_aid", (int)e, f); }
     else eh_out_rc("wifi_sta_get_aid", e);
     return 0;
 }
@@ -511,7 +579,7 @@ static int cmd_wifi_sta_get_ap_info(int argc, char **argv)
     esp_err_t e = eh_host_wifi_sta_get_ap_info(&ap);
     if (e == ESP_OK) {
         char f[80];
-        snprintf(f, sizeof(f), "ssid=%s rssi=%d chan=%u", (char *)ap.ssid, (int)ap.rssi, (unsigned)ap.primary);
+        snprintf(f, sizeof(f), "ssid=%s rssi=%d chan=%u", (char *)ap.ssid, (int)ap.rssi, (unsigned int)ap.primary);
         eh_out("wifi_sta_get_ap_info", (int)e, f);
     } else eh_out_rc("wifi_sta_get_ap_info", e);
     return 0;
@@ -553,7 +621,7 @@ static int cmd_wifi_itwt_flow_status(int argc, char **argv)
 {
     int32_t bm = 0;
     esp_err_t e = eh_host_wifi_sta_itwt_get_flow_id_status(&bm);
-    if (e == ESP_OK) { char f[24]; snprintf(f, sizeof(f), "bitmap=0x%x", (unsigned)bm); eh_out("wifi_itwt_flow_status", (int)e, f); }
+    if (e == ESP_OK) { char f[24]; snprintf(f, sizeof(f), "bitmap=0x%x", (unsigned int)bm); eh_out("wifi_itwt_flow_status", (int)e, f); }
     else eh_out_rc("wifi_itwt_flow_status", e);
     return 0;
 }
@@ -670,6 +738,20 @@ typedef struct {
 
 /* ── raw transport throughput (mirrors kmod raw_tp_mode; CP needs
  *    CONFIG_ESP_RAW_THROUGHPUT_TRANSPORT=y) ─────────────────────────── */
+#if CONFIG_ESP_HOSTED_HOST_FEAT_HEARTBEAT_READY
+#include "eh_host_heartbeat.h"
+static int cmd_sys_heartbeat(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("usage: sys_heartbeat <0|1> [sec]\n");
+        return 0;
+    }
+    int sec = (argc >= 3) ? atoi(argv[2]) : 0;
+    eh_out_rc("sys_heartbeat", eh_host_heartbeat_configure(atoi(argv[1]) != 0, sec));
+    return 0;
+}
+#endif
+
 #if CONFIG_ESP_HOSTED_RAW_THROUGHPUT_TRANSPORT
 #include "eh_host_raw_tp_stats.h"
 static int cmd_raw_tp(int argc, char **argv)
@@ -727,7 +809,7 @@ static const eh_api_entry_t s_cmds[] = {
     { "wifi_set_config",        cmd_wifi_set_config,         "wifi_set_config <sta|ap> — apply staged config" },
     { "wifi_get_config",        cmd_wifi_get_config,         "wifi_get_config <sta|ap>" },
     { "wifi_set_config_null",   cmd_wifi_set_config_null,    "wifi_set_config_null — NULL-arg guard (neg)" },
-    { "wifi_scan_start",        cmd_wifi_scan_start,         "wifi_scan_start [block 0|1]" },
+    { "wifi_scan_start",        cmd_wifi_scan_start,         "wifi_scan_start [block 0|1] [ssid|-] [channel] [show_hidden] [active|passive]" },
     { "wifi_scan_stop",         cmd_wifi_scan_stop,          "wifi_scan_stop" },
     { "wifi_clear_ap_list",     cmd_wifi_clear_ap_list,      "wifi_clear_ap_list" },
     { "wifi_scan_get_ap_num",   cmd_wifi_scan_get_ap_num,    "wifi_scan_get_ap_num" },
@@ -735,7 +817,14 @@ static const eh_api_entry_t s_cmds[] = {
     { "wifi_connect",           cmd_wifi_connect,            "wifi_connect (uses staged sta config)" },
     { "wifi_disconnect",        cmd_wifi_disconnect,         "wifi_disconnect" },
     { "wifi_restore",           cmd_wifi_restore,            "wifi_restore" },
+    { "wifi_clear_fast_connect", cmd_wifi_clear_fast_connect, "wifi_clear_fast_connect" },
+#if EH_HOST_GOT_EAP_OKC_SUPPORT
+    { "wifi_set_okc_support",   cmd_wifi_set_okc_support,    "wifi_set_okc_support <0|1>" },
+#endif
     { "wifi_set_storage",       cmd_wifi_set_storage,        "wifi_set_storage <0=flash|1=ram>" },
+#ifdef ESP_PLATFORM
+    { "host_restart",           cmd_host_restart,            "host_restart — esp_restart() the host" },
+#endif
     { "wifi_ap_get_sta_list",   cmd_wifi_ap_get_sta_list,    "wifi_ap_get_sta_list (AP: associated STAs)" },
     { "wifi_ap_get_sta_aid",    cmd_wifi_ap_get_sta_aid,     "wifi_ap_get_sta_aid <aa:bb:cc:dd:ee:ff>" },
     { "wifi_deauth_sta",        cmd_wifi_deauth_sta,         "wifi_deauth_sta <aid>" },
@@ -767,6 +856,9 @@ static const eh_api_entry_t s_cmds[] = {
     { "coex_set_grant_delay",   cmd_coex_set_grant_delay,    "coex_set_grant_delay <us>" },
     { "coex_set_validate_high", cmd_coex_set_validate_high,  "coex_set_validate_high <0|1>" },
     { "coex_disable",           cmd_coex_disable,            "coex_disable" },
+#endif
+#if CONFIG_ESP_HOSTED_HOST_FEAT_HEARTBEAT_READY
+    { "sys_heartbeat",          cmd_sys_heartbeat,           "sys_heartbeat <0|1> [sec]" },
 #endif
 #if CONFIG_ESP_HOSTED_RAW_THROUGHPUT_TRANSPORT
     { "raw_tp",                 cmd_raw_tp,                  "raw_tp start tx|rx|both | raw_tp stop" },

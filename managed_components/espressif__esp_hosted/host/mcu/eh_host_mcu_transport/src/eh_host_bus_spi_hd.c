@@ -1,5 +1,9 @@
-/* SPDX-License-Identifier: Apache-2.0 */
-/* MCU SPI half-duplex bus driver. 1/2/4 data lines, selected by Kconfig. */
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+/* MCU SPI half-duplex bus driver. 1/2/4 data lines, from the transport config. */
 
 #include "eh_host_port_master_config.h"
 
@@ -17,12 +21,15 @@
 #include "eh_host_mcu_hci_internal.h"
 #include "eh_common_header.h"
 #include "eh_common_header_v2.h"
+#include "eh_common_caps.h"
+#include "eh_host_mcu_transport_init_event.h"
 
 #ifdef ESP_PLATFORM
 
 #include "eh_host_port.h"
 #include "eh_host_port_power.h"
 #include "eh_host_port_dma.h"
+#include "eh_host_transport_config.h"
 #include "eh_mempool.h"
 #include "driver/spi_master.h"
 #include "esp_err.h"
@@ -49,7 +56,7 @@
 
 #define EH_SPIHD_TASK_STACK         4096
 #define EH_SPIHD_TASK_PRIO          22
-#define EH_SPIHD_MAX_BUF            ESP_TRANSPORT_SPI_HD_MAX_BUF_SIZE
+#define EH_SPIHD_MAX_BUF            ESP_TRANSPORT_HOST_MAX_BUF_SIZE
 #define EH_SPIHD_SLAVE_READY_WAIT_MS 5000
 #define EH_SPIHD_SLAVE_READY_POLL_MS 100
 
@@ -57,6 +64,10 @@
 #define EH_SPI_HD_REG_POLL_READS         3
 
 #define EH_SPI_HD_WR_BUF_MAX_RETRIES     25
+/* Post-wake credit wait, see the ps_wake tail of eh_host_bus_init(). Sized past
+ * the coprocessor's 100 ms SLAVE_CTRL poll plus its own 100 ms settle delay. */
+#define EH_SPIHD_PS_EXIT_CREDIT_WAIT_MS  600
+#define EH_SPIHD_PS_EXIT_CREDIT_POLL_MS  5
 
 #ifdef CONFIG_IDF_TARGET_ESP32
 #define EH_SPIHD_HOST_ID            HSPI_HOST
@@ -68,7 +79,6 @@
  * decodes the line mode from the command opcode, so the opcode (spihd_cmd)
  * and the per-transaction flags must agree — apply EH_SPIHD_LINE_FLAGS to
  * every transaction. Mirrors upstream port_esp_hosted_host_spi_hd.c. */
-#define EH_SPIHD_NUM_DATA_LINES     EH_HOST_PORT_SPI_HD_HOST_NUM_DATA_LINES
 
 /* DR pull + interrupt edge follow the CP-side configured active level. */
 #if EH_HOST_PORT_SPI_HD_DATAREADY_ACTIVE_HIGH
@@ -81,26 +91,18 @@
 
 static const char *TAG = "eh_bus_spi_hd";
 
+static struct eh_host_spi_hd_config s_cfg;   /* transport config, snapshotted at bus init */
+
 static void show_config(void)
 {
-#if EH_HOST_PORT_SPI_HD_HOST_NUM_DATA_LINES == 4
-	ESP_LOGI(TAG, "transport[host]: SPI_HD %d-line "
+	ESP_LOGI(TAG, "transport[host]: SPI_HD %d-line mode=%d %u MHz "
 		"CLK=%d CS=%d D0=%d D1=%d D2=%d D3=%d DATA_READY=%d RESET=%d",
-		(int)EH_HOST_PORT_SPI_HD_HOST_NUM_DATA_LINES,
-		EH_HOST_PORT_SPI_HD_PIN_CLK, EH_HOST_PORT_SPI_HD_PIN_CS,
-		EH_HOST_PORT_SPI_HD_PIN_D0,  EH_HOST_PORT_SPI_HD_PIN_D1,
-		EH_HOST_PORT_SPI_HD_PIN_D2,  EH_HOST_PORT_SPI_HD_PIN_D3,
-		EH_HOST_PORT_SPI_HD_PIN_DATA_READY,
-		EH_HOST_PORT_GPIO_PIN_RESET);
-#else
-	ESP_LOGI(TAG, "transport[host]: SPI_HD %d-line "
-		"CLK=%d CS=%d D0=%d D1=%d DATA_READY=%d RESET=%d",
-		(int)EH_HOST_PORT_SPI_HD_HOST_NUM_DATA_LINES,
-		EH_HOST_PORT_SPI_HD_PIN_CLK, EH_HOST_PORT_SPI_HD_PIN_CS,
-		EH_HOST_PORT_SPI_HD_PIN_D0,  EH_HOST_PORT_SPI_HD_PIN_D1,
-		EH_HOST_PORT_SPI_HD_PIN_DATA_READY,
-		EH_HOST_PORT_GPIO_PIN_RESET);
-#endif
+		(int)s_cfg.num_data_lines, (int)s_cfg.mode, (unsigned int)s_cfg.clk_mhz,
+		s_cfg.pin_clk.pin, s_cfg.pin_cs.pin,
+		s_cfg.pin_d0.pin,  s_cfg.pin_d1.pin,
+		s_cfg.pin_d2.pin,  s_cfg.pin_d3.pin,
+		s_cfg.pin_data_ready.pin,
+		s_cfg.pin_reset.pin);
 }
 
 #endif /* ESP_PLATFORM */
@@ -114,8 +116,10 @@ static volatile uint8_t     s_running;
 static volatile uint8_t     s_isr_installed;
 static volatile uint8_t     s_datapath_open;
 static uint32_t             s_rx_byte_count;  /* RX wrap counter */
-/* Active data-line count: 1 during bring-up, EH_SPIHD_NUM_DATA_LINES after the
- * slave is ready (see spihd_wait_slave_ready). */
+/* TX_BUF_LEN no longer matches s_rx_byte_count; RX stays stopped until re-init. */
+static bool                 s_rx_desync;
+/* Active data-line count: 1 during bring-up, raised by spihd_apply_cp_lines()
+ * to the widest mode both host and CP support. */
 static uint8_t              s_data_lines = 1;
 #endif
 
@@ -161,7 +165,7 @@ static int spihd_read_reg(uint32_t addr, uint8_t *buf, size_t len)
     esp_err_t rc = spi_device_polling_transmit(s_spi_dev,
                                                (spi_transaction_t *)&t);
     if (rc != ESP_OK) {
-        ESP_LOGE(TAG, "read_reg[0x%02x] failed: %d", (unsigned)addr, (int)rc);
+        ESP_LOGE(TAG, "read_reg[0x%02x] failed: %d", (unsigned int)addr, (int)rc);
         return -1;
     }
     return 0;
@@ -213,7 +217,7 @@ static int spihd_write_reg(uint32_t addr, const uint8_t *buf, size_t len)
     esp_err_t rc = spi_device_polling_transmit(s_spi_dev,
                                                (spi_transaction_t *)&t);
     if (rc != ESP_OK) {
-        ESP_LOGE(TAG, "write_reg[0x%02x] failed: %d", (unsigned)addr, (int)rc);
+        ESP_LOGE(TAG, "write_reg[0x%02x] failed: %d", (unsigned int)addr, (int)rc);
         return -1;
     }
     return 0;
@@ -259,7 +263,7 @@ static int spihd_rddma(uint8_t *out, size_t len)
     esp_err_t rc = spi_device_polling_transmit(s_spi_dev,
                                                (spi_transaction_t *)&t);
     if (rc != ESP_OK) {
-        ESP_LOGE(TAG, "rddma len=%u failed: %d", (unsigned)len, (int)rc);
+        ESP_LOGE(TAG, "rddma len=%u failed: %d", (unsigned int)len, (int)rc);
         return -1;
     }
     /* INT0 tells slave "done reading". */
@@ -295,7 +299,7 @@ static int spihd_is_write_buffer_available(uint32_t needed)
     }
     if (!ok) {
         ESP_LOGW(TAG, "wr-buf-available exhausted %d retries (needed=%u)",
-                    EH_SPI_HD_WR_BUF_MAX_RETRIES, (unsigned)needed);
+                    EH_SPI_HD_WR_BUF_MAX_RETRIES, (unsigned int)needed);
     }
     eh_host_port_dma_free(reg);
     return ok;
@@ -317,7 +321,7 @@ static int spihd_wrdma(const uint8_t *in, size_t len)
     esp_err_t rc = spi_device_polling_transmit(s_spi_dev,
                                                (spi_transaction_t *)&t);
     if (rc != ESP_OK) {
-        ESP_LOGE(TAG, "wrdma len=%u failed: %d", (unsigned)len, (int)rc);
+        ESP_LOGE(TAG, "wrdma len=%u failed: %d", (unsigned int)len, (int)rc);
         return -1;
     }
     /* WR_END terminator: complete-segment marker. */
@@ -335,7 +339,7 @@ static void eh_spihd_dr_isr_cb(const eh_host_port_gpio_desc_t *gpio, void *ctx)
 
 static int eh_spihd_dr_isr_install(void)
 {
-    const eh_host_port_gpio_desc_t dr_pin = { .port = 0, .pin = EH_HOST_PORT_SPI_HD_PIN_DATA_READY };
+    const eh_host_port_gpio_desc_t dr_pin = { .port = 0, .pin = s_cfg.pin_data_ready.pin };
     eh_host_port_gpio_config_cfg_t in_cfg = {
         .gpio = dr_pin,
         .dir  = EH_HOST_PORT_GPIO_DIR_INPUT,
@@ -357,7 +361,7 @@ static int eh_spihd_dr_isr_install(void)
 static void eh_spihd_dr_isr_uninstall(void)
 {
     if (!s_isr_installed) return;
-    const eh_host_port_gpio_desc_t dr_pin = { .port = 0, .pin = EH_HOST_PORT_SPI_HD_PIN_DATA_READY };
+    const eh_host_port_gpio_desc_t dr_pin = { .port = 0, .pin = s_cfg.pin_data_ready.pin };
     eh_host_port_gpio_intr_disable(&dr_pin);
     s_isr_installed = 0;
 }
@@ -402,6 +406,28 @@ static int spihd_open_datapath(void)
     return rc;
 }
 
+/* Host picks the lines: its own count, lowered to what the CP advertises in
+ * the init event the core just parsed. */
+static void spihd_apply_cp_lines(void)
+{
+    uint32_t ext = eh_host_mcu_transport_get_ext_capabilities();
+    uint8_t lines = 1;
+    if (s_cfg.num_data_lines == 4 && (ext & EH_TRANSPORT_CP_SPI_HD_4_DATA_LINES)) {
+        lines = 4;
+    } else if (s_cfg.num_data_lines >= 2 &&
+               (ext & (EH_TRANSPORT_CP_SPI_HD_4_DATA_LINES |
+                       EH_TRANSPORT_CP_SPI_HD_2_DATA_LINES))) {
+        lines = 2;
+    }
+    if (lines == s_data_lines) {
+        return;
+    }
+    eh_host_port_mutex_lock(s_bus_lock);
+    s_data_lines = lines;
+    eh_host_port_mutex_unlock(s_bus_lock);
+    ESP_LOGI(TAG, "SPI-HD data lines: %u (host %d)", lines, (int)s_cfg.num_data_lines);
+}
+
 /* RX worker: wait DR, read TX_BUF_LEN, clear via INT1, compute delta,
  * RDDMA, decode, dispatch. */
 static void eh_spihd_rx_task(void *arg)
@@ -427,6 +453,7 @@ static void eh_spihd_rx_task(void *arg)
             continue;
         }
         if (!s_running) break;
+        if (s_rx_desync) continue;
 
         eh_host_port_mutex_lock(s_bus_lock);
 
@@ -463,9 +490,15 @@ static void eh_spihd_rx_task(void *arg)
             continue;
         }
         if (size_to_xfer > EH_SPIHD_MAX_BUF) {
-            ESP_LOGE(TAG, "size_to_xfer=%u > MAX=%u; dropping",
-                     (unsigned)size_to_xfer, EH_SPIHD_MAX_BUF);
+            ESP_LOGE(TAG, "TX_BUF_LEN desync: cp[0x%06x] host[0x%06x] diff[%u] > max[%u]",
+                     (unsigned int)curr_masked, (unsigned int)s_rx_byte_count,
+                     (unsigned int)size_to_xfer, EH_SPIHD_MAX_BUF);
+            s_rx_desync = true;
             eh_host_port_mutex_unlock(s_bus_lock);
+            esp_event_post(EH_HOST_EVENT, (int32_t)EH_HOST_EVENT_TRANSPORT_FAILURE, NULL, 0, 0);
+#if EH_HOST_TRANSPORT_RESTART_ON_FAILURE
+            eh_host_port_restart_host();
+#endif
             continue;
         }
 
@@ -484,6 +517,9 @@ static void eh_spihd_rx_task(void *arg)
                 eh_host_mcu_hci_rx_deliver(h.payload, h.payload_len);
             } else {
                 eh_host_mcu_transport_dispatch_frame(&h);
+                if (h.if_type == ESP_PRIV_IF) {
+                    spihd_apply_cp_lines();
+                }
             }
         }
     }
@@ -504,6 +540,11 @@ int eh_host_bus_init(void)
     }
 
 #ifdef ESP_PLATFORM
+    struct eh_host_spi_hd_config *cfg_in = NULL;
+    if (eh_host_spi_hd_get_config(&cfg_in) != EH_HOST_TRANSPORT_RC_OK || !cfg_in) {
+        goto fail;
+    }
+    s_cfg = *cfg_in;
     show_config();
     s_dr_sem   = eh_host_port_sem_create();
     s_bus_lock = eh_host_port_mutex_create();
@@ -511,27 +552,24 @@ int eh_host_bus_init(void)
         goto fail;
     }
     s_rx_byte_count = 0;
+    s_rx_desync = false;
     s_spihd_tx_buf_count = 0;
+    s_data_lines = 1;
 
     spi_bus_config_t bus_cfg = {
-        .data0_io_num    = EH_HOST_PORT_SPI_HD_PIN_D0,
-        .data1_io_num    = EH_HOST_PORT_SPI_HD_PIN_D1,
-        .data2_io_num    = EH_HOST_PORT_SPI_HD_PIN_D2,   /* -1 unless 4-line */
-        .data3_io_num    = EH_HOST_PORT_SPI_HD_PIN_D3,   /* -1 unless 4-line */
+        .data0_io_num    = s_cfg.pin_d0.pin,
+        .data1_io_num    = s_cfg.pin_d1.pin,
+        .data2_io_num    = s_cfg.pin_d2.pin,
+        .data3_io_num    = s_cfg.pin_d3.pin,
         .data4_io_num    = -1,
         .data5_io_num    = -1,
         .data6_io_num    = -1,
         .data7_io_num    = -1,
-        .sclk_io_num     = EH_HOST_PORT_SPI_HD_PIN_CLK,
+        .sclk_io_num     = s_cfg.pin_clk.pin,
         .max_transfer_sz = EH_SPIHD_MAX_BUF,
-        .flags           = SPICOMMON_BUSFLAG_MASTER
-#if EH_SPIHD_NUM_DATA_LINES == 4
-                           | SPICOMMON_BUSFLAG_QUAD,
-#elif EH_SPIHD_NUM_DATA_LINES == 2
-                           | SPICOMMON_BUSFLAG_DUAL,
-#else
-                           ,
-#endif
+        .flags           = SPICOMMON_BUSFLAG_MASTER |
+                           ((s_cfg.num_data_lines == 4) ? SPICOMMON_BUSFLAG_QUAD :
+                            (s_cfg.num_data_lines == 2) ? SPICOMMON_BUSFLAG_DUAL : 0),
         .intr_flags      = 0,
     };
     esp_err_t ret = spi_bus_initialize(EH_SPIHD_HOST_ID, &bus_cfg,
@@ -545,11 +583,12 @@ int eh_host_bus_init(void)
         .command_bits    = 8,
         .address_bits    = 8,
         .dummy_bits      = 0,   /* per-transaction via SPI_TRANS_VARIABLE_DUMMY */
-        .clock_speed_hz  = EH_HOST_PORT_SPI_HD_CLK_MHZ * 1000 * 1000,
-        .mode            = EH_HOST_PORT_SPI_HD_MODE,
-        .spics_io_num    = EH_HOST_PORT_SPI_HD_PIN_CS,
+        .clock_speed_hz  = (int)s_cfg.clk_mhz * 1000 * 1000,
+        .mode            = s_cfg.mode,
+        .spics_io_num    = s_cfg.pin_cs.pin,
         .queue_size      = 4,
-        .flags           = SPI_DEVICE_HALFDUPLEX,
+        .flags           = SPI_DEVICE_HALFDUPLEX |
+                           ((s_cfg.num_data_lines == 1) ? SPI_DEVICE_3WIRE : 0),
         .duty_cycle_pos  = 128,
     };
 #ifdef CONFIG_IDF_TARGET_ESP32P4
@@ -561,9 +600,19 @@ int eh_host_bus_init(void)
         ESP_LOGE(TAG, "spi_bus_add_device failed: %d", (int)ret);
         goto fail_bus;
     }
+    int khz = 0;
+    spi_device_get_actual_freq(s_spi_dev, &khz);
+    ESP_LOGI(TAG, "bus applied: clk_khz=%d", khz);
 
+    int ps_wake = 0;
+#if EH_HOST_FEAT_POWER_SAVE_READY
+    ps_wake = (eh_host_port_wakeup_reason_get() != EH_HOST_PORT_WAKEUP_UNKNOWN);
+    if (ps_wake) {
+        ESP_LOGI(TAG, "Host woke up from power save");
+    }
+#endif
     /* Reset slave before wait_slave_ready (state reg meaningless until POR). */
-    {
+    if (!ps_wake) {
         eh_host_port_err_t rst = eh_host_port_reset_slave();
         if (rst == EH_HOST_PORT_OK) {
             ESP_LOGI(TAG, "Slave reset issued; bringing up SPI-HD");
@@ -600,6 +649,22 @@ int eh_host_bus_init(void)
             goto fail_isr;
         }
     }
+#if EH_HOST_FEAT_POWER_SAVE_READY
+    if (ps_wake) {
+        /* Last, and only with the rx task live, so the CP's answer cannot be missed:
+         * this is what re-opens the host's datapath after the sleep. */
+        for (uint32_t waited = 0; waited < EH_SPIHD_PS_EXIT_CREDIT_WAIT_MS;
+             waited += EH_SPIHD_PS_EXIT_CREDIT_POLL_MS) {
+            if (eh_host_bus_is_tx_ready() == 1) {
+                break;
+            }
+            eh_host_port_task_delay_ms(EH_SPIHD_PS_EXIT_CREDIT_POLL_MS);
+        }
+        if (eh_host_bus_inform_slave_ps_exit() != 0) {
+            ESP_LOGE(TAG, "ps_exit: not delivered; CP still thinks host sleeps");
+        }
+    }
+#endif
     return 0;
 
 fail_isr:
@@ -780,6 +845,7 @@ static int eh_spihd_send_ps_flag(uint8_t flag)
     interface_buffer_handle_t bh = {0};
     bh.payload_len = 0;
     bh.flags = flag;
+
     return eh_host_bus_tx(&bh) < 0 ? -1 : 0;
 }
 

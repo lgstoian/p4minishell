@@ -151,6 +151,39 @@ SDIO transport, 4-bit, 40 MHz, 5 GHz network, over the air:
 | iPerf, TCP | Test PC to P4 | 32 |
 | iPerf, UDP | Test PC to P4 | 68 |
 
+UART transport, 921600 baud, 2.4 GHz network, over the air:
+
+| Type | Direction | MBits/s |
+|------------|---------------|--------:|
+| Raw | P4 to C5 | 0.74 |
+| Raw | C5 to P4 | 0.74 |
+| iPerf, TCP | P4 to Test PC | 0.71 |
+| iPerf, UDP | P4 to Test PC | 0.71 |
+| iPerf, TCP | Test PC to P4 | 0.65 |
+| iPerf, UDP | Test PC to P4 | 0.70 |
+
+UART transport, 5 Mbaud, 2.4 GHz network, over the air:
+
+| Type | Direction | MBits/s |
+|------------|---------------|--------:|
+| Raw | P4 to C5 | &lt;TBD&gt; |
+| Raw | C5 to P4 | &lt;TBD&gt; |
+| iPerf, TCP | P4 to Test PC | 3.82 |
+| iPerf, UDP | P4 to Test PC | 3.86 |
+| iPerf, TCP | Test PC to P4 | 3.66 |
+| iPerf, UDP | Test PC to P4 | 3.73 |
+
+UART transport, 8 Mbaud, 2.4 GHz network, over the air (outside the SoC specification, maximum 5 Mbaud; tested on the P4-C5 core board):
+
+| Type | Direction | MBits/s |
+|------------|---------------|--------:|
+| Raw | P4 to C5 | 6.34 |
+| Raw | C5 to P4 | 6.26 |
+| iPerf, TCP | P4 to Test PC | 5.78 |
+| iPerf, UDP | P4 to Test PC | 6.12 |
+| iPerf, TCP | Test PC to P4 | 5.75 |
+| iPerf, UDP | Test PC to P4 | 6.11 |
+
 ### 1.3 ESP32-C61 as co-processor
 
 ```ini
@@ -313,6 +346,39 @@ SPI-FD transport, 40 MHz, 2.4 GHz network, over the air:
 
 ---
 
+### 1.7 ESP32-S31 as co-processor
+
+```ini
+### sdkconfig for ESP32-P4 + S31 as co-processor
+
+# Let P4 know, S31 is attached as slave
+CONFIG_SLAVE_IDF_TARGET_ESP32S31=y
+CONFIG_ESP_HOSTED_CP_TARGET_ESP32S31=y
+
+# S31 test board wired to the P4-Function-EV-Board J1 header (set on both sides)
+CONFIG_ESP_HOSTED_S31_DEV_BOARD=y
+```
+
+Use the Wi-Fi and TCP/IP settings of [1.3](#13-esp32-c61-as-co-processor). ESP32-P4 rev v1.0 host, SPI at 40 MHz, 2.4 GHz network, over the air:
+
+| Transport | Raw P4 to S31 | Raw S31 to P4 | TCP P4 to Test PC | UDP P4 to Test PC | TCP Test PC to P4 | UDP Test PC to P4 |
+|---|--:|--:|--:|--:|--:|--:|
+| SPI-FD | 29 | 27 | 23 | 29 | 20 | 20 |
+| SPI-HD, 1 line | 24 | 24 | 20 | 23 | 16 | 19 |
+| SPI-HD, 2 lines | 34 | 35 | 26 | 32 | 22 | 26 |
+| SPI-HD, 4 lines | 44 | 45 | 31 | 41 | 25 | 31 |
+| UART, 4 Mbaud | 3.2 | 3.1 | 3.0 | 3.1 | 2.9 | 2.9 |
+| UART, 5 Mbaud | 3.9 | 3.9 | 3.8 | 3.9 | 3.6 | 3.6 |
+| UART, 8 Mbaud | 6.3 | 6.3 | 5.9 | 6.2 | 5.6 | 5.7 |
+| UART, 10 Mbaud | 7.9 | 7.8 | 7.6 | 7.7 | 7.1 | 7.1 |
+| UART, 16 Mbaud | 12.6 | 12.4 | 12.1 | 12.3 | 10.7 | 11.1 |
+
+- The SPI-FD TCP values were measured with `CONFIG_LWIP_TCPIP_CORE_LOCKING_INPUT=n`.
+- UART: no raw frames were lost. Above 5 Mbaud is outside the SoC specification; it was tested on this board only. For the raw runs at 5 Mbaud and higher, `CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n` on the host: the raw TP TX task starves IDLE1, and the task watchdog print stalls UART TX.
+- UART UDP offered load was about 0.8 × baud.
+
+---
+
 ## 2. Transport optimization
 
 Throughput ranks **SDIO > SPI-HD > SPI-FD > UART**. Tune the transport you chose.
@@ -330,7 +396,7 @@ CONFIG_ESP_HOSTED_SDIO_BUS_WIDTH=4
 ```
 
 > [!NOTE]
-> See the SDIO transport guide for the trade-off between SDIO performance and memory use.
+> See [MCU host packet buffers](sdio.md#mcu-host-packet-buffers) for the trade-off between per-frame DMA allocation and a reserved SDIO mempool.
 
 ### 2.2 SPI Full-Duplex
 
@@ -349,8 +415,10 @@ CONFIG_ESP_HOSTED_SPI_CLK_FREQ=40
 
 ### 2.4 UART (lowest performance)
 
-- **Baud rate:** use 921600 (highest stable rate).
+- **Baud rate:** up to 5 Mbaud, the ESP32-P4 and ESP32-C5 maximum. Kconfig accepts up to 8 Mbaud, which is outside the SoC specification. Higher rates lose frames: see [UART timing budget](uart.md#timing-budget). Use 921600 for jumper wires.
+- **ISR placement:** the co-processor UART ISR must be in IRAM (`CONFIG_UART_ISR_IN_IRAM`). The UART transport selects it.
 - **Best for:** low-throughput applications and debugging.
+- **Measured values:** see [ESP32-C5 as co-processor](#12-esp32-c5-as-co-processor).
 
 ---
 
@@ -362,6 +430,8 @@ Trim the footprint for constrained hosts:
 # Reduce queue sizes
 CONFIG_ESP_HOSTED_SDIO_TX_Q_SIZE=10    # Default: 20
 CONFIG_ESP_HOSTED_SDIO_RX_Q_SIZE=10    # Default: 20
+# One RX staging buffer instead of two (lower peak RX rate)
+CONFIG_ESP_HOSTED_HOST_SDIO_RX_STAGING_SLOTS=1
 ```
 
 - Disable features you do not use (e.g. Bluetooth).

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 """SerialTarget — the real-hardware substrate: a host + a co-processor on two
 serial ports, joined by their physical transport (SDIO / SPI / UART on the board).
 
@@ -17,6 +19,8 @@ board) is machine-local, resolved by `bench_config()` — never baked into the f
 """
 import json
 import os
+import re
+import socket
 import time
 
 import pytest
@@ -24,6 +28,7 @@ import pytest
 from infra import build_fw, flasher, lab
 from infra.emu_dut import settle_check
 from infra.serial_dut import SerialDut
+from tools.build_examples import CompatMatrix
 
 from .base import Bench, BenchProvider, BenchSpec
 
@@ -177,12 +182,52 @@ def bench_config():
     # env.json default. host_extra/cp_extra layer any further per-bench Kconfig on top.
     host_extra = local.get("host_extra", []) or []
     cp_extra = local.get("cp_extra", []) or []
-    host_board = local.get("host_board_sdkconfig") or build_json.get("host_board_sdkconfig", []) or []
-    cp_board = local.get("cp_board_sdkconfig") or build_json.get("slave_board_sdkconfig", []) or []
+    # Board config, lowest precedence first; each level REPLACES the one below:
+    # env.json -> tests/boards/<board>.json -> lab.local.json explicit list ->
+    # EH_{HOST,CP}_BOARD_SDKCONFIG. host_extra/cp_extra stay additive on top.
+    host_board = build_json.get("host_board_sdkconfig", []) or []
+    cp_board = build_json.get("slave_board_sdkconfig", []) or []
+    board_name = env.get("EH_BOARD") or local.get("board")
+    if board_name:
+        bj = _read_json(lab._REPO / "tests" / "boards" / f"{board_name}.json")
+        if not bj:
+            raise RuntimeError(
+                f"unknown board '{board_name}': no tests/boards/{board_name}.json")
+        host_board = bj.get("host", []) or []
+        cp_board = bj.get("cp", []) or []
+    host_board = local.get("host_board_sdkconfig") or host_board
+    cp_board = local.get("cp_board_sdkconfig") or cp_board
+
+    def _env_lines(name):
+        v = env.get(name)
+        return [x.strip() for x in v.split(",") if x.strip()] if v else None
+
+    host_board = _env_lines("EH_HOST_BOARD_SDKCONFIG") or host_board
+    cp_board = _env_lines("EH_CP_BOARD_SDKCONFIG") or cp_board
     host_board_ovl = host_board + host_extra + opt
     cp_board_ovl = cp_board + cp_extra + opt
     return _Bench(host_port, cp_port, host_target, cp_target, flash_baud,
                   monitor_baud, flash_cfg, host_board_ovl, cp_board_ovl)
+
+
+def board_spinel_uart_overlays(transport):
+    """(host_overlay, cp_overlay) for standard OpenThread / Zigbee on a dedicated
+    spinel UART on this bench, from tests/boards/<board>.json["ot_spinel_uart"].
+    None when the board declares no spinel UART, or when the ESP-Hosted bus
+    `transport` uses the lines the spinel UART needs (its "transports" list)."""
+    local = _read_json(lab._REPO / "tests" / "lab.local.json")
+    name = os.environ.get("EH_BOARD") or local.get("board")
+    pins = (_read_json(lab._REPO / "tests" / "boards" / f"{name}.json").get("ot_spinel_uart")
+            if name else None)
+    if not pins or transport not in pins.get("transports", ()):
+        return None
+    host = ("CONFIG_OPENTHREAD_RADIO_SPINEL_UART=y",
+            f"CONFIG_EXAMPLE_HOST_UART_TX_PIN={pins['host_tx']}",
+            f"CONFIG_EXAMPLE_HOST_UART_RX_PIN={pins['host_rx']}")
+    cp = ("CONFIG_OPENTHREAD_RCP_UART=y",
+          f"CONFIG_EXAMPLE_RCP_UART_TX_PIN={pins['cp_tx']}",
+          f"CONFIG_EXAMPLE_RCP_UART_RX_PIN={pins['cp_rx']}")
+    return host, cp
 
 
 def _transport_overlays(transport):
@@ -190,7 +235,8 @@ def _transport_overlays(transport):
     real-HW build. sdio is the neutral default (no overlay). SPI/SPI-HD only
     select the bus — the board symbol (in *_board_ovl) supplies the pins/reset
     (host/Kconfig.ext defines them per board + CP target). spi_hd_{1,2,4}
-    additionally pin the data-line count on both ends. Kept in lockstep with
+    additionally pin the data-line count on both ends; sdio_1 pins the host's
+    SDIO bus to 1-bit. Kept in lockstep with
     tests/targets/emu.py so hw and emu build identical configs."""
     if transport == "uart":
         return (["CONFIG_EH_TRANSPORT_CP_UART=y"],
@@ -207,7 +253,36 @@ def _transport_overlays(transport):
             cp.append(f"CONFIG_EH_TRANSPORT_CP_SPI_HD_{suffix}=y")
             host.append(f"CONFIG_ESP_HOSTED_HOST_SPI_HD_{suffix}=y")
         return (cp, host)
+    if transport == "sdio_1":
+        return ([], ["CONFIG_ESP_HOSTED_HOST_SDIO_BUS_WIDTH_1=y"])
     return ([], [])  # sdio
+
+
+class HwNet:
+    """Packet stimulus over the bench's real network. wake() connects to the
+    host's current IP (the last `sta ip:` on its console) at the same
+    host-reserved port the emu forwards."""
+
+    def __init__(self, host, port=22):
+        self._host, self._port = host, port
+
+    def wake(self, payload=b"wakeup-host"):
+        with self._host._lock:
+            ips = re.findall(r'sta ip: (\d+\.\d+\.\d+\.\d+)', self._host._buf)
+        if not ips:
+            return
+        try:
+            with socket.create_connection((ips[-1], self._port), timeout=2) as s:
+                s.sendall(payload)
+        except OSError:
+            pass
+
+    def wake_udp(self, payload, port=60000):
+        with self._host._lock:
+            ips = re.findall(r'sta ip: (\d+\.\d+\.\d+\.\d+)', self._host._buf)
+        if ips:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.sendto(payload, (ips[-1], port))
 
 
 class SerialTarget(BenchProvider):
@@ -233,20 +308,35 @@ class SerialTarget(BenchProvider):
         # Resolve the actual chips from the bench (declared or probed), not spec
         # defaults — the substrate adapts to whatever silicon is connected.
         host_target, cp_target, host_rev = _resolve_targets(bench, spec)
+        skip = CompatMatrix.should_skip_example(spec.example, cp_target)
+        if skip:
+            pytest.skip(skip)
         rev_ovl = _rev_overlay(host_target, host_rev, bench.host_port)
         # Per-transport bus overlay (sdio = neutral default → none). SPI/SPI-HD
         # select the bus; the board symbol in *_board_ovl auto-selects that board's
         # SPI pins + reset line (host/Kconfig.ext, per board + CP target).
         cp_x, host_x = _transport_overlays(spec.transport)
-        cp_ovl = cp_x + bench.cp_board_ovl
+        cp_ovl = cp_x + bench.cp_board_ovl + list(spec.cp_extra_ovl)
         # Ordered layers: transport + board + rev + bench(slave chip) + case.
         # slave_overlay tells the host which CP it drives (its SoC caps), derived
         # from this bench's CP — not pinned in the example.
         host_ovl = (host_x + bench.host_board_ovl + rev_ovl
                     + build_fw.slave_overlay(cp_target) + list(spec.extra_ovl))
 
-        cp_fw = build_fw.build(spec.example, spec.cp_role, cp_target, cp_ovl)
-        host_fw = build_fw.build(spec.example, spec.host_role, host_target, host_ovl)
+        cp_fw = build_fw.build(spec.example, spec.cp_role, cp_target, cp_ovl,
+                               inject=spec.cp_inject)
+        # Same staging as emu: the host OTAs exactly the app-only CP .bin it was
+        # built against; cp_ota_ovl builds a different OTA config from transport
+        # + board overlays only (the boot image's choice lines would conflict).
+        host_inject = dict(spec.host_inject or {})
+        if spec.cp_app_to_host:
+            ota_fw = cp_fw
+            if spec.cp_ota_ovl:
+                ota_fw = build_fw.build(spec.example, spec.cp_role, cp_target,
+                                        cp_x + bench.cp_board_ovl + list(spec.cp_ota_ovl))
+            host_inject[spec.cp_app_to_host] = ota_fw["elf"][:-4] + ".bin"
+        host_fw = build_fw.build(spec.example, spec.host_role, host_target, host_ovl,
+                                 inject=host_inject or None)
         build_fw.stash_logs(lab_tmp, cp=cp_fw, host=host_fw)
         cp_build_dir = os.path.join(cp_fw["dir"], "build")
         host_build_dir = os.path.join(host_fw["dir"], "build")
@@ -298,7 +388,8 @@ class SerialTarget(BenchProvider):
                 host.stop()
                 cp.stop()
 
-        return Bench(duts=[host, cp], net=None, teardown=down, caps=self.caps)
+        return Bench(duts=[host, cp], net=HwNet(host) if spec.wake else None,
+                     teardown=down, caps=self.caps)
 
     @staticmethod
     def _open(spec, name, port, baud, logpath, retries=5):

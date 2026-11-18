@@ -1,0 +1,81 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+/* Periodic dump of the host-side transport packet counters (Kconfig-gated). */
+#include "eh_host_pkt_stats.h"
+
+#if EH_HOST_PKT_STATS
+
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "eh_host_mcu_transport_priv.h"
+
+#define TAG "eh_pkt_stats"
+
+struct pkt_stats_t pkt_stats;
+
+static esp_timer_handle_t s_stats_timer;
+
+static void pkt_stats_timer_func(void *arg)
+{
+	(void)arg;
+#if CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_UART
+	{
+		struct eh_host_bus_uart_stats st;
+		eh_host_bus_uart_get_stats(&st);
+		ESP_LOGI(TAG, "UART RX: fifo_ovf[%lu] resync_bytes[%lu] TX credit: unit[%lu] wait[%lu] ms[%lu] busy[%lu] reset[%lu] bad[%lu]",
+		         (unsigned long)st.fifo_ovf, (unsigned long)st.resync_bytes,
+		         (unsigned long)st.credit_unit, (unsigned long)st.credit_wait,
+		         (unsigned long)st.credit_wait_ms, (unsigned long)st.credit_busy,
+		         (unsigned long)st.credit_reset, (unsigned long)st.credit_bad);
+	}
+#endif
+	ESP_LOGI(TAG, "STA TX: in[%lu] trans[%lu] out[%lu] drop[%lu] credit_stall[%lu] "
+	         "RX: in[%lu] out[%lu]",
+	         (unsigned long)pkt_stats.sta_tx_in_pass,
+	         (unsigned long)pkt_stats.sta_tx_trans_in,
+	         (unsigned long)pkt_stats.sta_tx_out,
+	         (unsigned long)pkt_stats.sta_tx_out_drop,
+	         (unsigned long)pkt_stats.tx_credit_stalls,
+	         (unsigned long)pkt_stats.sta_rx_in,
+	         (unsigned long)pkt_stats.sta_rx_out);
+#if EH_HOST_USB_RNDIS
+	ESP_LOGI(TAG, "RNDIS: tx_q[%lu] tx_ok[%lu] tx_reject[%lu] tx_fail[%lu] "
+	         "rx_ok[%lu] rx_drop[%lu]",
+	         (unsigned long)pkt_stats.usb_rndis_tx_queued,
+	         (unsigned long)pkt_stats.usb_rndis_tx_sent,
+	         (unsigned long)pkt_stats.usb_rndis_tx_rejected,
+	         (unsigned long)pkt_stats.usb_rndis_tx_failed,
+	         (unsigned long)pkt_stats.usb_rndis_rx_delivered,
+	         (unsigned long)pkt_stats.usb_rndis_rx_dropped);
+#endif
+}
+
+void eh_host_pkt_stats_init(void)
+{
+	if (s_stats_timer)
+		return;
+	const esp_timer_create_args_t args = {
+		.callback = pkt_stats_timer_func,
+		.name = "eh_pkt_stats",
+	};
+	if (esp_timer_create(&args, &s_stats_timer) != ESP_OK) {
+		ESP_LOGE(TAG, "stats timer create failed");
+		return;
+	}
+	esp_timer_start_periodic(s_stats_timer,
+	    (uint64_t)EH_HOST_PKT_STATS_INTERVAL_SEC * 1000000ULL);
+}
+
+void eh_host_pkt_stats_deinit(void)
+{
+	if (!s_stats_timer)
+		return;
+	esp_timer_stop(s_stats_timer);
+	esp_timer_delete(s_stats_timer);
+	s_stats_timer = NULL;
+}
+
+#endif /* EH_HOST_PKT_STATS */

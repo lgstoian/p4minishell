@@ -1,13 +1,23 @@
-// SPDX-License-Identifier: Apache-2.0
-// Copyright 2025 Espressif Systems (Shanghai) PTE LTD
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /* eh_frame.c — V1/V2 wire frame encode/decode. Sole reader/writer of wire structs. */
 
 #include "eh_frame.h"
+#include <stddef.h>
 #include <string.h>
 #include <stdio.h>
 
 #define FRAME_WARN(fmt, ...) printf("[frame][W] " fmt "\n", ##__VA_ARGS__)
+
+/* Byte offset of the checksum field in each wire header. */
+#define FRAME_V1_CKSUM_OFF ((uint16_t)offsetof(struct esp_payload_header, checksum))
+#define FRAME_V2_CKSUM_OFF ((uint16_t)offsetof(eh_header_v2_t, checksum))
+_Static_assert(offsetof(struct esp_payload_header, checksum) == 6, "v1 wire checksum offset");
+_Static_assert(offsetof(eh_header_v2_t, checksum) == 12, "v2 wire checksum offset");
 
 /* ── Endian helpers (no OS dep) ───────────────────────────────────────── */
 #ifdef __KERNEL__
@@ -53,7 +63,7 @@ static uint16_t frame_checksum_zeroed(const uint8_t *buf, uint16_t len, uint16_t
 static void frame_dbg_hex(const char *tag, const uint8_t *buf, uint16_t len, uint16_t max)
 {
     uint16_t i, n = (len < max) ? len : max;
-    printf("[frame] %s len=%u: ", tag, (unsigned)len);
+    printf("[frame] %s len=%u: ", tag, (unsigned int)len);
     for (i = 0; i < n; i++) {
         printf("%02x ", buf[i]);
     }
@@ -64,16 +74,16 @@ static void frame_dbg_hex(const char *tag, const uint8_t *buf, uint16_t len, uin
 static void frame_dbg_v1(const uint8_t *buf, uint16_t buf_len, uint16_t len, uint16_t offset, uint16_t total, uint16_t stored, uint16_t calc)
 {
     printf("[frame] v1 buf_len=%u len=%u offset=%u total=%u stored=%u calc=%u\n",
-           (unsigned)buf_len, (unsigned)len, (unsigned)offset, (unsigned)total,
-           (unsigned)stored, (unsigned)calc);
+           (unsigned int)buf_len, (unsigned int)len, (unsigned int)offset, (unsigned int)total,
+           (unsigned int)stored, (unsigned int)calc);
     frame_dbg_hex("v1_hdr", buf, (uint16_t)((buf_len < 12) ? buf_len : 12), 12);
 }
 
 static void frame_dbg_v2(const uint8_t *buf, uint16_t buf_len, uint16_t len, uint16_t offset, uint16_t total, uint16_t stored, uint16_t calc)
 {
     printf("[frame] v2 buf_len=%u len=%u offset=%u total=%u stored=%u calc=%u\n",
-           (unsigned)buf_len, (unsigned)len, (unsigned)offset, (unsigned)total,
-           (unsigned)stored, (unsigned)calc);
+           (unsigned int)buf_len, (unsigned int)len, (unsigned int)offset, (unsigned int)total,
+           (unsigned int)stored, (unsigned int)calc);
     frame_dbg_hex("v2_hdr", buf, (uint16_t)((buf_len < 20) ? buf_len : 20), 20);
 }
 #endif
@@ -82,7 +92,7 @@ esp_err_t eh_frame_init(const eh_frame_cfg_t *cfg)
 {
     if (!cfg)
         return ESP_ERR_INVALID_ARG;
-    if (cfg->transport > EH_TRANSPORT_SPI_HD)
+    if (cfg->transport > EH_TRANSPORT_USB)
         return ESP_ERR_INVALID_ARG;
     if (cfg->hdr_version != ESP_HOSTED_HDR_VERSION_V1 &&
         cfg->hdr_version != ESP_HOSTED_HDR_VERSION_V2)
@@ -128,7 +138,8 @@ static uint8_t encode_v1(uint8_t *buf,
     hdr->len           = _to_le16(payload_len);
     hdr->offset        = _to_le16((uint16_t)sizeof(*hdr));
     hdr->seq_num       = _to_le16(h->seq_num);
-    hdr->throttle_cmd  = h->throttle_cmd & 0x03u;
+    hdr->throttle_cmd  = h->throttle_cmd & THROTTLE_CMD_MASK;
+    hdr->rx_credit     = h->rx_credit & RX_CREDIT_MASK;
     /* priv_pkt_type and hci_pkt_type alias the same union byte. */
     hdr->priv_pkt_type = h->pkt_type;
 
@@ -158,6 +169,7 @@ static uint8_t encode_v2(uint8_t *buf,
     hdr->offset        = _to_le16((uint16_t)sizeof(*hdr));
     hdr->len           = _to_le16(payload_len);
     hdr->tlv_offset    = h->tlv_offset;
+    hdr->rx_credit     = h->rx_credit & RX_CREDIT_MASK;
     /* byte 19 union — same alias as V1 byte 11. */
     hdr->priv_pkt_type = h->pkt_type;
 
@@ -197,7 +209,7 @@ uint8_t eh_frame_encode_dummy(uint8_t *buf, uint8_t throttle_cmd)
         memset(hdr, 0, sizeof(*hdr));
         hdr->if_type     = (uint8_t)(eh_if_type_dummy_wire() & 0x0Fu);
         hdr->if_num      = 0x0Fu;
-        hdr->throttle_cmd = throttle_cmd & 0x03u;
+        hdr->throttle_cmd = throttle_cmd & THROTTLE_CMD_MASK;
         return (uint8_t)sizeof(*hdr);
     }
 }
@@ -227,17 +239,29 @@ static eh_frame_result_t decode_v1(const uint8_t *buf,
     len    = _from_le16(hdr->len);
     offset = _from_le16(hdr->offset);
 
-    if (hdr->if_type == eh_if_type_dummy_wire() || len == 0)
+    /* A len==0 frame with flags (power save), a credit or a checksum is
+       validated below before they are returned: a credit of 0 is valid, and
+       only the checksum tells that frame from a zeroed dummy. Dummies never
+       carry flags, so a flag on one is dropped. */
+    if (hdr->if_type == eh_if_type_dummy_wire() ||
+        (len == 0 && !hdr->flags && !hdr->rx_credit && !hdr->checksum)) {
+        if (h) {
+            h->if_type = eh_if_type_from_wire(hdr->if_type);
+            h->if_num  = hdr->if_num;
+            h->flags   = 0;
+            h->throttle_cmd = hdr->throttle_cmd;
+        }
         return EH_FRAME_DUMMY;
+    }
 
-    /* Allow small offset padding (hdr_sz .. hdr_sz+3) for legacy hosts. */
+    /* Allow small offset padding (up to EH_FRAME_MAX_PAD_BYTES) for legacy hosts. */
     if ((offset < EH_FRAME_V1_MIN_OFFSET_BYTES) ||
       (offset > (EH_FRAME_V1_MAX_OFFSET_WITH_PADDING_BYTES))) {
         if (warn) {
             FRAME_WARN("v1 bad offset: got=%u exp=%u..%u len=%u",
-                       (unsigned)offset, (unsigned)EH_FRAME_V1_MIN_OFFSET_BYTES,
-                       (unsigned)EH_FRAME_V1_MAX_OFFSET_WITH_PADDING_BYTES,
-                       (unsigned)len);
+                       (unsigned int)offset, (unsigned int)EH_FRAME_V1_MIN_OFFSET_BYTES,
+                       (unsigned int)EH_FRAME_V1_MAX_OFFSET_WITH_PADDING_BYTES,
+                       (unsigned int)len);
         }
         return EH_FRAME_INVALID;
     }
@@ -253,20 +277,34 @@ static eh_frame_result_t decode_v1(const uint8_t *buf,
         total = (uint16_t)total32;
     }
 
-    if (s_cfg.checksum_enabled) {
+    /* A power-save frame may carry no checksum: the host can send its wake frame
+       before it learns from the CP that checksums are on, and the 2.x SPI host
+       never sets one on power-save frames. */
+    if (s_cfg.checksum_enabled && !(len == 0 && hdr->flags && hdr->checksum == 0)) {
         uint16_t stored = _from_le16(hdr->checksum);
-        uint16_t calc = frame_checksum_zeroed(buf, total, 6);
+        uint16_t calc = frame_checksum_zeroed(buf, total, FRAME_V1_CKSUM_OFF);
 #ifdef EH_FRAME_DEBUG
         frame_dbg_v1(buf, buf_len, len, offset, total, stored, calc);
 #endif
         if (calc != stored) {
             if (warn) {
                 FRAME_WARN("v1 checksum mismatch: stored=%u calc=%u len=%u offset=%u total=%u",
-                           (unsigned)stored, (unsigned)calc, (unsigned)len,
-                           (unsigned)offset, (unsigned)total);
+                           (unsigned int)stored, (unsigned int)calc, (unsigned int)len,
+                           (unsigned int)offset, (unsigned int)total);
             }
             return EH_FRAME_CORRUPT;
         }
+    }
+
+    if (len == 0) {
+        if (h) {
+            h->if_type   = eh_if_type_from_wire(hdr->if_type);
+            h->if_num    = hdr->if_num;
+            h->flags     = hdr->flags;
+            h->rx_credit = hdr->rx_credit;
+            h->throttle_cmd = hdr->throttle_cmd;
+        }
+        return EH_FRAME_DUMMY;
     }
 
     memset(h, 0, sizeof(*h));
@@ -278,6 +316,7 @@ static eh_frame_result_t decode_v1(const uint8_t *buf,
     h->payload_len  = len;
     h->payload      = (uint8_t *)(uintptr_t)buf + offset;
     h->throttle_cmd = hdr->throttle_cmd;
+    h->rx_credit    = hdr->rx_credit;
 
     return EH_FRAME_OK;
 }
@@ -304,13 +343,24 @@ static eh_frame_result_t decode_v2(const uint8_t *buf,
     len    = _from_le16(hdr->len);
     offset = _from_le16(hdr->offset);
 
-    if (hdr->if_type == eh_if_type_dummy_wire() || len == 0)
+    /* A len==0 frame with flags (power save), a credit or a checksum is
+       validated below before they are returned: a credit of 0 is valid, and
+       only the checksum tells that frame from a zeroed dummy. Dummies never
+       carry flags, so a flag on one is dropped. */
+    if (hdr->if_type == eh_if_type_dummy_wire() ||
+        (len == 0 && !hdr->flags && !hdr->rx_credit && !hdr->checksum)) {
+        if (h) {
+            h->if_type = eh_if_type_from_wire(hdr->if_type);
+            h->if_num  = hdr->if_num;
+            h->flags   = 0;
+        }
         return EH_FRAME_DUMMY;
+    }
 
     if (offset != hdr_sz) {
         if (warn)
             FRAME_WARN("v2 bad offset: got=%u exp=%u len=%u",
-                       (unsigned)offset, (unsigned)hdr_sz, (unsigned)len);
+                       (unsigned int)offset, (unsigned int)hdr_sz, (unsigned int)len);
         return EH_FRAME_INVALID;
     }
 
@@ -325,20 +375,33 @@ static eh_frame_result_t decode_v2(const uint8_t *buf,
         total = (uint16_t)total32;
     }
 
-    if (s_cfg.checksum_enabled) {
+    /* A power-save frame may carry no checksum: the host can send its wake frame
+       before it learns from the CP that checksums are on, and the 2.x SPI host
+       never sets one on power-save frames. */
+    if (s_cfg.checksum_enabled && !(len == 0 && hdr->flags && hdr->checksum == 0)) {
         uint16_t stored = _from_le16(hdr->checksum);
-        uint16_t calc = frame_checksum_zeroed(buf, total, 12);
+        uint16_t calc = frame_checksum_zeroed(buf, total, FRAME_V2_CKSUM_OFF);
 #ifdef EH_FRAME_DEBUG
         frame_dbg_v2(buf, buf_len, len, offset, total, stored, calc);
 #endif
         if (calc != stored) {
             if (warn) {
                 FRAME_WARN("v2 checksum mismatch: stored=%u calc=%u len=%u offset=%u total=%u",
-                           (unsigned)stored, (unsigned)calc, (unsigned)len,
-                           (unsigned)offset, (unsigned)total);
+                           (unsigned int)stored, (unsigned int)calc, (unsigned int)len,
+                           (unsigned int)offset, (unsigned int)total);
             }
             return EH_FRAME_CORRUPT;
         }
+    }
+
+    if (len == 0) {
+        if (h) {
+            h->if_type   = eh_if_type_from_wire(hdr->if_type);
+            h->if_num    = hdr->if_num;
+            h->flags     = hdr->flags;
+            h->rx_credit = hdr->rx_credit;
+        }
+        return EH_FRAME_DUMMY;
     }
 
     memset(h, 0, sizeof(*h));
@@ -351,6 +414,7 @@ static eh_frame_result_t decode_v2(const uint8_t *buf,
     h->payload      = (uint8_t *)(uintptr_t)buf + offset;
     h->frag_seq     = hdr->frag_seq_num;
     h->tlv_offset   = hdr->tlv_offset;
+    h->rx_credit    = hdr->rx_credit;
 
     return EH_FRAME_OK;
 }

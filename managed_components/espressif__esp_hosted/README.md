@@ -15,7 +15,16 @@ This high-level block diagram shows ESP-Hosted's relationship with the host MCU 
   <img src="docs/images/esp_hosted.jpg" alt="Architecture at a Glance" width="80%">
 </p>
 
-The host keeps the product logic. The ESP co-processor offloads the radio and network stack over your chosen transport bus. See [Architecture](docs/architecture.md) for the full design.
+The host keeps the product logic. The ESP co-processor offloads the radio and network stack over your chosen transport bus. See [Architecture](docs/architecture.md) for the details.
+
+
+#### Cloning the repo
+
+```bash
+git clone --recurse-submodules https://github.com/espressif/esp-hosted-mcu.git esp_hosted
+```
+
+The repository is named `esp-hosted-mcu`, but the registry component is maintained as `esp_hosted`, so the repository is cloned into the `esp_hosted` directory for consistency.
 
 ## 2. Directory Structure
 
@@ -106,7 +115,7 @@ The following guide demonstrates a **Raspberry Pi** host with an **ESP32-C5** co
 | Buses | SDIO `\|` SDIO + UART `\|` SPI `\|` SPI + UART | All |
 
 - **Get started:** Follow the [Linux Host](docs/getting-started-linux.md) guide to set up the Wi-Fi station example. It provides a step-by-step Raspberry Pi walkthrough for setup and verification.
-- Using a different Linux platform? See the [Linux Porting](docs/porting.md#linux-host-porting) guide. 
+- Using a different Linux platform? See the [Linux Porting](docs/porting.md#linux-host-porting) guide.
 
 After verifying the Wi-Fi station example, move on to the [supported examples](#5-example-layout).
 
@@ -118,13 +127,16 @@ The following guide demonstrates an **ESP32-P4** host with an **ESP32-C6** co-pr
 | :---: | :---: | :---: |
 | ESP Host | Any ESP SoC | ESP32-P4 with an ESP32-C6 as co-processor |
 | Non-ESP MCU Host | Any MCU (with porting) | - |
-| Co-processor | Any ESP SoC | ESP32-C6 (also C5, C61, C3, C2, S2, S3, ESP32) |
+| Co-processor | Any ESP SoC | ESP32-C6 (also C5, C61, C3, C2, S2, S3, S31, ESP32) |
 | Buses | SDIO `\|` SPI Full-Duplex `\|` SPI Half-Duplex (1/2/4 bit) `\|` UART | All |
 
 - **Get started:** Follow the [MCU Host](docs/getting-started-mcu.md) guide to set up the Wi-Fi station example.
 - **Non-ESP MCU / RTOS?** See [MCU Porting](docs/porting.md#mcu-host-porting) guide.
 
 After verifying the Wi-Fi station example, move on to the [supported examples](#5-example-layout).
+
+> **Coming from ESP-Hosted 2.x?**
+> The old `slave/` project is now replaced by a `cp/` project in each example. Use the `cp/` from the same example as your host, or configure its features with `idf.py menuconfig` → **Component config → ESP-Hosted → Configure coprocessor → Features**.
 
 ## 5. Example Layout
 
@@ -152,10 +164,13 @@ Flash `cp/` to the ESP coprocessor, then build and run one host role (`mcu_host`
 - [DPP](examples/wifi/dpp/README.md) — Device Provisioning Protocol.
 - [iTWT](examples/wifi/itwt/README.md) — individual Target Wake Time power save.
 
-### Bluetooth (MCU host) & OpenThread
+### Bluetooth (MCU host), OpenThread & Zigbee
 - [Bluetooth Examples](examples/bluetooth/README.md) — BLE and Classic BT controller HCI (NimBLE / BlueDroid). _On Linux, use BlueZ directly — no example needed._
-- [OpenThread CLI](examples/openthread/cli/README.md) — Thread command-line interface.
-- [OpenThread Border Router](examples/openthread/border_router/README.md) — Thread border router.
+- [OpenThread Examples](examples/openthread/README.md) — which setup to use, by where the 802.15.4 RCP runs.
+  - [OpenThread CLI](examples/openthread/rcp_on_hosted_cp/cli/README.md) — Thread command-line interface; the co-processor is the RCP.
+  - [OpenThread Border Router](examples/openthread/rcp_on_hosted_cp/border_router/README.md) — Thread border router; the co-processor is the RCP.
+  - [Thread Border Router, separate RCP](examples/openthread/rcp_separate_chip/border_router/README.md) — three chips: host, Wi-Fi/BLE co-processor, H2 RCP.
+- [Zigbee Thermostat](examples/zigbee/thermostat/README.md) — Zigbee on the host; the co-processor is the 802.15.4 RCP.
 
 ### Network split
 - [Station](examples/network_split/station/README.md) — offload standard networking.
@@ -168,6 +183,7 @@ Flash `cp/` to the ESP coprocessor, then build and run one host role (`mcu_host`
 
 ### Peripherals & control
 - [GPIO Expander](examples/gpio_expander/README.md) — drive co-processor GPIOs remotely.
+- [RF Certification Test](examples/rf_cert/README.md) — drive the co-processor's Wi-Fi and BLE PHY cert tests from a host console (off by default).
 - [Peer Data Transfer](examples/peer_data_transfer/README.md) — send custom control/data payloads.
 - [External Coexistence](examples/ext_coex/README.md) — coordinate with external radios.
 
@@ -182,7 +198,28 @@ Flash `cp/` to the ESP coprocessor, then build and run one host role (`mcu_host`
 - [MCU Transport Config](examples/system/mcu_transport_config/README.md) — configure transport pins and parameters.
 - [Memory Monitor](examples/mem_monitor/README.md) — track co-processor heap.
 
-## 6. References
+## 6. Releases and Timeline
+
+- Releases are published to the ESP Component Registry as [`espressif/esp_hosted`](https://components.espressif.com/components/espressif/esp_hosted).
+- Report 2.x.x and 3.x.x issues in the [GitHub issue tracker](https://github.com/espressif/esp-hosted-mcu/issues).
+
+### Release 3.x.x
+
+- Actively developed on the [`main`](https://github.com/espressif/esp-hosted-mcu/tree/main) branch.
+- Always use the latest release for new designs.
+
+### Release 2.x.x
+
+- Supported on the [`release/v2.x`](https://github.com/espressif/esp-hosted-mcu/tree/release/v2.x) branch.
+
+| Period              | Since 3.x.x    | 2.x.x support                                                      |
+| ------------------- | ------------ | ---------------------------------------------------------------- |
+| Jul 2026 – Jan 2027 | 0–6 months   | Bug and compatibility fixes, customer issues, selected backports |
+| Jan 2027 – Jul 2027 | 6–12 months  | Maintenance and compatibility fixes; no new features             |
+| Jul 2027 – Jul 2028 | 12–24 months | Critical and customer-blocking issues, security fixes            |
+| From Jul 2028       | 24+ months   | End of life                                                      |
+
+## 7. References
 
 ### Important links
 - [Host API Reference](docs/api-reference.md)

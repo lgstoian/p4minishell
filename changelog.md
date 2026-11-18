@@ -137,9 +137,56 @@ open bugs see [`bugs.md`](bugs.md).
   move together and the overlapping content is copied - so a running app keeps
   its drawing instead of being restarted. The resolver is pure and unit-tested
   for portrait, landscape and a tiny viewport.
+- **The reference apps fill the panel.** A `.bat` frame now publishes
+  `%TUICOLS%`/`%TUIROWS%` - the live logical grid - and every drawing app
+  derives its geometry from it through one shared helper set in
+  `apps/APPLIB.BAT` (`:box`, `:page`, `:bar`, `:panel`, `:footer`). Landscape
+  is unchanged by construction (the helpers reproduce the authored 80x25
+  coordinates), while a portrait panel uses the extra rows: TCMD's frame is
+  640 px wide and ~89 % of the 720x1280 panel instead of a 3-row bar with an
+  empty bottom half. `s27_apps_layout` scans every app for a hard-coded 80x25
+  draw geometry and asserts the frame and the 60 % content bar on the panel.
+- **Selection everywhere.** One leaf selection core
+  (`components/selection/`) owns the range model, cell assembly, the single
+  commit sink (the shell clipboard) and the paint primitives. The TUI/browser
+  page now uses it instead of its own copy, and the modal pagers (`view`,
+  `hexview`, `browse` rows) and the transcript scrollback gained long-press +
+  drag selection: pagers copy a character-accurate range from the label's own
+  text, the transcript copies whole visible rows from the renderer's row
+  table (its rows are word-wrapped by LVGL, so a row is the addressable unit),
+  and a tap inside the highlight copies it. `ui selection copy|clear` is the
+  script/serial form, dispatched to the active pager or the transcript.
 
 ### Changed
 
+- **LVGL 9.6.0~1** (was 9.5.0; `esp_lvgl_port` stays at 2.9.0, which accepts
+  `lvgl >=8,<10`). 9.6 is the last v9 release, so this is the release that
+  clears the deprecations v10 removes. Both profiles build with zero errors
+  and zero warnings. Measured on `jc1060p470c` with the same sources and each
+  version's own Kconfig defaults: flash +21,658 bytes, static DIRAM +152
+  bytes; the `lvgl__lvgl` archive grows 409,744 -> 429,637.
+- **Deprecated generic flag API migrated to the per-flag setters** (152 call
+  sites, 11 files). 9.6 marks `lv_obj_add_flag`/`remove_flag`/`clear_flag`/
+  `has_flag`/`set_flag` `LV_DEPRECATED`, which produced 152 warnings in
+  otherwise-unchanged files. Each OR-ed flag list is now one
+  `lv_obj_set_<flag>(obj, true/false)` (or `lv_obj_is_<flag>()`) call - the
+  exact bit operations the old wrappers performed.
+- **Extended `unscii_16` font rebuilt for 9.6 and deduplicated.** 9.6 changed
+  the generated descriptor (`cap_height`, `x_height`, `static_bitmap`,
+  `fallback`, `user_data`), so the old file no longer compiled. The rebuild
+  keeps upstream's layout and appends the documented extra ranges
+  (`U+2500-257F`, `U+2600-26FF`). The previous regeneration passed those
+  ranges twice, so the file carried a byte-identical second copy of all 384
+  bitmaps referenced by the `U+2600-26FF` descriptors: 12,288 redundant
+  `.rodata` bytes, now gone. Glyph data is unchanged (verified codepoint by
+  codepoint).
+- **`lv_async` and button-matrix patches re-applied on 9.6**: `lv_async_call`/
+  `_cancel` still take the recursive LVGL lock around timer-list mutation and
+  allocate their descriptor from PSRAM; the button-area getter used by the
+  `ui` touch verbs now lives in `include/lvgl/widgets/lv_buttonmatrix.h`.
+  `tools/reapply_managed_patches.ps1` reads the version from
+  `include/lvgl/lv_version.h` (the component-root header is a shim now), so it
+  still refuses to restore a font built for another minor.
 - `dom_render` threads style alpha through its cell and rectangle sinks, and
   exposes optional emoji hooks (`put_emoji`, `emoji_fallback`) so the markdown
   leaf stays free of emoji tables and storage dependencies.
@@ -162,6 +209,15 @@ open bugs see [`bugs.md`](bugs.md).
   against, with the keyboard reclaimed) next to `transcript rect`, and
   `grid fit` reports that same viewport. The two regions used to be printed as
   if they were one, which made their heights look contradictory in tests.
+- **ESP-Hosted 3.1.0 on both sides.** The host component and the ESP32-C6
+  coprocessor moved from 3.0.6 to 3.1.0 together (`main/idf_component.yml`,
+  `coprocessor/esp32c6_slave/`), which replaces the SDIO card-init retry,
+  stream depth, RX staging, mempool and task-stack fixes with upstream code;
+  no local SDIO patch is carried. 3.1.0 range-locks the host SDIO pins per PCB
+  personality, so the Tab5 now selects its upstream personality
+  (`CONFIG_ESP32P4_TAB5_C6_BOARD`). `c6ota` transfers 1200-byte chunks: a
+  1500-byte chunk no longer fits one vserial frame once the `OTAWrite` request
+  is packed, and the coprocessor silently never answers it.
 
 ### Fixed
 
@@ -176,6 +232,12 @@ open bugs see [`bugs.md`](bugs.md).
   of running the network stack inside the render recursion. A negative image
   cache records undecodable URLs, so a page that references the same broken or
   unsupported image dozens of times does not refetch it per reference.
+- **Hosted-SDIO init under load no longer asserts** (`bugs.md` F61). Under
+  Wi-Fi plus SD pressure the card init could fail and the next queue take
+  asserted (`xQueueSemaphoreTake`); esp_hosted 3.1.0 fixes that class
+  upstream. Verified with 20/20 cold boots, three Wi-Fi + HTTPS + SD cycles
+  and a full `c6ota` transfer (1,361,856 bytes) on the Tab5, and the JC1060
+  image is built from the same tree.
 - **ZIP CRC verification.** The extraction paths seeded CRC-32 with 0 and
   compared the raw accumulator with the entry's stored CRC; a ZIP CRC is
   seeded with `0xFFFFFFFF` and inverted at the end, so the check rejected every
@@ -194,6 +256,14 @@ open bugs see [`bugs.md`](bugs.md).
   duplicate command-table entry always listed instead) jumps to the right
   chapter, and a book opens on chapter 1 so `epub read` works right after
   `epub open`.
+- **LVGL chrome draws the symbols the cell font ships.** The emoji font link
+  consulted its emoji map and then FontAwesome; a Unicode symbol that is not
+  an emoji (U+2605 star, U+2665 heart, U+266A note) missed both and drew the
+  FontAwesome placeholder, so `echo ★` and a private-use codepoint looked
+  identical. A symbol layer (the shipped unscii-16 cell font) now sits between
+  the emoji map and FontAwesome, and the map's own misses delegate to the base
+  font before giving up. Covered by a pixel check in `s24_render_alpha`
+  (`★` must not render as the same placeholder as U+E000).
 - **Batch loop parsing.** An interactive `for %v in (...) do ...` no longer
   loses its loop variable to variable expansion: a `%...%` token that contains
   whitespace, quotes, parentheses or `=` is not a name-shaped reference and

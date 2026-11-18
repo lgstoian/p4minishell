@@ -762,8 +762,8 @@ static void shell_splash_show(void)
     lv_obj_set_size(overlay, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_color(overlay, windows_get_color(WINDOWS_COLOR_BG_SCREEN), 0);
     lv_obj_set_style_bg_opa(overlay, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(overlay, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(overlay, false);
+    lv_obj_set_clickable(overlay, true);
     lv_obj_add_event_cb(overlay, shell_splash_click_cb, LV_EVENT_CLICKED, NULL);
 
     img = lv_image_create(overlay);

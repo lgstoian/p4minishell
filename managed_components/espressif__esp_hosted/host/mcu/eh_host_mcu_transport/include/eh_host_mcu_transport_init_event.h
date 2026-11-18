@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Slave PRIV_EVENT_INIT TLV parser + host/slave compat verifiers. */
 
@@ -18,12 +23,19 @@ uint32_t eh_host_mcu_transport_get_fw_version(void);
 uint8_t  eh_host_mcu_transport_get_capabilities(void);
 uint32_t eh_host_mcu_transport_get_ext_capabilities(void);
 
+/* The CP runs network split, this host has none: -1 after logging it and the
+ * option to change; 0 otherwise. */
+int eh_host_mcu_transport_nw_split_check(void);
+
 /* true once the CP init event has been parsed AND it carried the
  * EH_PRIV_RPC_VERSION TLV (tag 0x1A).  Callers that build the host->CP
  * caps reply use this to decide whether to echo 0x1A back: older CP
  * parsers may not silently skip unknown tags, so we only emit when we
  * know the CP understands the tag. */
 bool eh_host_mcu_transport_peer_advertised_rpc_version(void);
+
+/* CP transport size from its 0x1C TLV; 0 if it did not report one. */
+uint32_t eh_host_mcu_transport_get_cp_transfer_size(void);
 
 /* CP's SDIO buf-config (0x1B) from the init event, or NULL if the CP did
  * not advertise one (rel-2 firmware). Struct in eh_common_sdio_cfg.h. */

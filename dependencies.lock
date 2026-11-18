@@ -74,8 +74,36 @@ dependencies:
     - esp32p4
     version: 1.4.1
   espressif/esp_hosted:
-    component_hash: 1b1c2aa8f82e0826950ec92ff16fd8f327abd2de6c8a3899301ad8cfb4747879
+    component_hash: 22b08509494d4465f0e2f91ee16973d76fe90d5a930fa3910b7a43615db001bf
     dependencies:
+    - name: cherry-embedded/cherryusb
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32p4]
+      - if: $CONFIG{ESP_HOSTED_HOST_USB_CHERRYUSB_MANIFEST} == 1
+      version: '>=1.6.0'
+    - name: espressif/esp_tinyusb
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32s2, esp32s3, esp32s31]
+      - if: $CONFIG{ESP_HOSTED_CP_TINYUSB_MANIFEST} == 1
+      version: '*'
+    - name: espressif/iot_usbh_rndis
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32p4]
+      - if: $CONFIG{ESP_HOSTED_HOST_USB_RNDIS_MANIFEST} == 1
+      version: ^0.5.2
+    - name: espressif/usb_host_cdc_acm
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32p4]
+      - if: $CONFIG{ESP_HOSTED_HOST_USB_CDC_ACM_MANIFEST} == 1
+      version: '*'
     - name: idf
       require: private
       version: '>=5.5'
@@ -84,17 +112,19 @@ dependencies:
       type: service
     targets:
     - esp32
-    - esp32c2
     - esp32s2
     - esp32s3
+    - esp32s31
+    - esp32c2
     - esp32c3
     - esp32c5
     - esp32c6
     - esp32c61
     - esp32h2
     - esp32h4
+    - esp32h21
     - esp32p4
-    version: 3.0.6
+    version: 3.1.0
   espressif/esp_io_expander:
     component_hash: 7b7f91270172e46ca4597e3874f48d8412e280e8c295559f5922ec38656e3e5f
     dependencies:
@@ -135,22 +165,6 @@ dependencies:
     targets:
     - esp32p4
     version: 2.5.0
-  espressif/esp_lcd_ek79007:
-    component_hash: 8005700b7f10c7136b6e2a3f19a48f972aa1d13ed107ed298574e8d24d17ea83
-    dependencies:
-    - name: espressif/cmake_utilities
-      registry_url: https://components.espressif.com
-      require: private
-      version: 0.*
-    - name: idf
-      require: private
-      version: '>=5.3'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    targets:
-    - esp32p4
-    version: 1.0.4
   espressif/esp_lcd_ili9881c:
     component_hash: 0288df12755c95d406ccea245a427595f314df0b14a61846286d926ea6f3698e
     dependencies:
@@ -163,22 +177,6 @@ dependencies:
     targets:
     - esp32p4
     version: 1.1.0
-  espressif/esp_lcd_jd9165:
-    dependencies: []
-    source:
-      path: D:\Code\new\p4minishell\managed_components\espressif__esp_lcd_jd9165
-      type: local
-    version: 1.0.2
-  espressif/esp_lcd_lt8912b:
-    component_hash: e85b82fc4366dadff18af76df8584249df9df3326d44feb30888130e19930098
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=5.3'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 0.2.1
   espressif/esp_lcd_st7123:
     component_hash: 067236d959e1b4e51467708242083926d3fe898e071a5a92086c5a94f1c5dac7
     dependencies:
@@ -493,17 +491,14 @@ dependencies:
     source:
       path: D:\Code\new\p4minishell\managed_components\lvgl__lvgl
       type: local
-    version: 9.5.0
+    version: 9.6.0~1
 direct_dependencies:
 - espressif/cmake_utilities
 - espressif/esp_codec_dev
 - espressif/esp_hosted
 - espressif/esp_io_expander
 - espressif/esp_io_expander_pi4ioe5v6408
-- espressif/esp_lcd_ek79007
 - espressif/esp_lcd_ili9881c
-- espressif/esp_lcd_jd9165
-- espressif/esp_lcd_lt8912b
 - espressif/esp_lcd_st7123
 - espressif/esp_lcd_touch
 - espressif/esp_lcd_touch_gt911
@@ -520,6 +515,6 @@ direct_dependencies:
 - espressif/zlib
 - idf
 - lvgl/lvgl
-manifest_hash: 78a5dc5b3b47a922cc2e82c858470ad556e1846e8e7caf23b8937a6a2d63f0c4
+manifest_hash: b3504c125d132586fc06eb17c03774057bab902ce86cea87cb33aa634f4f55d0
 target: esp32p4
 version: 2.0.0

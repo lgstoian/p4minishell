@@ -144,9 +144,9 @@ bool epub_parse_ncx(const char *xml, size_t len,
 
     ok = XML_Parse(parser, xml, (int)len, 1) != 0;
     if (!ok) {
-        ESP_LOGW("epub_ncx", "NCX parse error: %s at line %lu",
+        ESP_LOGW("epub_ncx", "NCX parse error: %s at line %llu",
                  XML_ErrorString(XML_GetErrorCode(parser)),
-                 XML_GetCurrentLineNumber(parser));
+                 (unsigned long long)XML_GetCurrentLineNumber64(parser));
     }
     XML_ParserFree(parser);
     return ok;

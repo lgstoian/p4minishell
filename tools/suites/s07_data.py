@@ -8,15 +8,17 @@ formulas, portable ``export`` / ``import`` for databases and alarms, ``archive``
 create/list/verify/extract, the ``crypt`` lock/unlock round-trip, the
 persistent-state verbs (``ini``, ``appconfig``, ``temp``), the ``alarm`` /
 ``cal`` calendar store, ``json validate|pretty``, ``markdown`` (render +
-``export`` to html/print/text, validated on the host and read back through
+``export`` to html/print/text/epub (the EPUB is opened back on the device),
 ``type``) and ``gfind``.
 
 A scratch database name and a scratch ``sd:/P4DATA`` directory are used and
 both are cleaned up. ``alarm purge`` is only reached after deleting exactly the
 events this suite created.
 """
+import io
 import re
 import time
+import zipfile
 
 from p4test.asserts import Checklist
 
@@ -212,6 +214,49 @@ def run(dev, ctx):
     txt = dev.pull_file("%s/doc2.txt" % DATA).decode("utf-8", "replace")
     c.check("text export stripped ANSI", "\x1b" not in txt)
     c.check("text export keeps content", ("Doc %s" % stamp) in txt)
+
+    # EPUB export: the device writes a complete EPUB 3 (mimetype first and
+    # stored), the host proves the container, and the on-device reader opens
+    # the book it just wrote. This closes the export -> reader round trip.
+    dev.run("markdown export %s/doc2.md %s/doc2.epub epub" % (DATA, DATA))
+    epub = dev.pull_file("%s/doc2.epub" % DATA)
+    c.check("epub export is a ZIP", epub[:2] == b"PK", "%r" % epub[:4])
+    try:
+        with zipfile.ZipFile(io.BytesIO(epub)) as z:
+            c.check("epub archive is intact", z.testzip() is None)
+            infos = z.infolist()
+            first = infos[0] if infos else None
+            c.check("epub names the mimetype first",
+                    first is not None and first.filename == "mimetype",
+                    first.filename if first else "(empty)")
+            c.check("epub stores the mimetype uncompressed",
+                    first is not None and first.compress_type == zipfile.ZIP_STORED)
+            c.check("epub mimetype is the EPUB type",
+                    first is not None
+                    and z.read(first) == b"application/epub+zip")
+            names = set(z.namelist())
+            for wanted in ("META-INF/container.xml", "OEBPS/content.opf",
+                           "OEBPS/nav.xhtml", "OEBPS/toc.ncx",
+                           "OEBPS/chapter.xhtml"):
+                c.check("epub contains %s" % wanted, wanted in names)
+            chapter = z.read("OEBPS/chapter.xhtml").decode("utf-8", "replace")
+            c.check("epub chapter has the document", ("Doc %s" % stamp) in chapter)
+            c.check("epub chapter is XHTML", "<html" in chapter and
+                    "xmlns=\"http://www.w3.org/1999/xhtml\"" in chapter)
+            c.check("epub chapter renders the table", "<table>" in chapter)
+    except zipfile.BadZipFile as exc:
+        c.check("epub export is readable", False, str(exc))
+
+    out = dev.run("epub open %s/doc2.epub" % DATA)
+    c.expect("epub opens the device-written book", "Opened:", out)
+    c.expect("epub reads its own title", "Doc %s" % stamp, out)
+    c.expect("epub reports one chapter", "Chapters: 1", out)
+    out = dev.run("epub toc")
+    c.expect("epub toc lists the chapter", "Doc %s" % stamp, out)
+    out = dev.run("epub read")
+    c.expect("epub renders the chapter", "Doc %s" % stamp, out)
+    out = dev.run("epub close")
+    c.expect("epub closes", "closed", out)
 
     # Host well-formedness validator (browser proxy, stdlib only).
     try:

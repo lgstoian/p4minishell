@@ -515,7 +515,7 @@ void keyboard_show(void)
      * task (e.g. `keyboard show`/`hide`/`toggle` commands). */
     lvgl_port_lock(0);
 
-    lv_obj_remove_flag(s_keyboard.widget, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_keyboard.widget, false);
     s_keyboard.visible = true;
 
     /* Re-bind textarea if one was set */
@@ -550,7 +550,7 @@ void keyboard_hide(void)
      * task (e.g. `keyboard show`/`hide`/`toggle` commands). */
     lvgl_port_lock(0);
 
-    lv_obj_add_flag(s_keyboard.widget, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_keyboard.widget, true);
     s_keyboard.visible = false;
 
     lvgl_port_unlock();

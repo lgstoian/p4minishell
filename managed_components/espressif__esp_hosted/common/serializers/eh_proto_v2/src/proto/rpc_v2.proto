@@ -3,6 +3,9 @@
 
 syntax = "proto3";
 
+/* No descriptor names in flash; RPC id names come from gen_v2_names.c. */
+option optimize_for = CODE_SIZE;
+
 enum Rpc_WifiBw {
 	BW_Invalid = 0;
 	HT20 = 1;
@@ -57,6 +60,8 @@ enum RpcFeature {
 	Feature_Bluetooth = 1;
 	// OpenThread RCP (Radio Co-processor) Feature
 	Feature_Openthread_Rcp = 2;
+	// RF certification test (PHY cert test APIs). Conducted measurement only.
+	Feature_Rf_Cert = 3;
 	// add additional features here
 }
 
@@ -274,9 +279,25 @@ enum RpcId {
 
 	Req_ExtCoex                      = 396; // 0x18C
 
+	/* RF certification test (PHY cert test).  Needs the coprocessor built with
+	 * CONFIG_ESP_HOSTED_CP_FEAT_RF_CERT and CONFIG_ESP_PHY_ENABLE_CERT_TEST. */
+	Req_PhyWifiTx                     = 397; // 0x18D
+	Req_PhyWifiRx                     = 398; // 0x18E
+	Req_PhyWifiTxTone                 = 399; // 0x18F
+	Req_PhyGetRxResult                = 400; // 0x190
+	Req_PhyCmdStop                    = 401; // 0x191
+	Req_PhyTxContinEn                 = 402; // 0x192
+	Req_PhyCbw40mEn                   = 403; // 0x193
+	Req_PhyWifi11axTxSet              = 404; // 0x194
+	Req_PhyBleTx                      = 405; // 0x195
+	Req_PhyBleRx                      = 406; // 0x196
+	Req_PhyBtTxTone                   = 407; // 0x197
+
+	Req_SetContext                    = 408; // 0x198
+
 	/* Add new control path command response before Req_Max
 	 * and update Req_Max */
-	Req_Max = 397; //0x18D
+	Req_Max = 409; //0x199
 
 	/** Response Msgs **/
 	Resp_Base                         = 512;
@@ -456,9 +477,24 @@ enum RpcId {
 	Resp_GpioSetPullMode                      = 651;
 	Resp_ExtCoex                              = 652;
 
+	/* RF certification test (PHY cert test) */
+	Resp_PhyWifiTx                            = 653;
+	Resp_PhyWifiRx                            = 654;
+	Resp_PhyWifiTxTone                        = 655;
+	Resp_PhyGetRxResult                       = 656;
+	Resp_PhyCmdStop                           = 657;
+	Resp_PhyTxContinEn                        = 658;
+	Resp_PhyCbw40mEn                          = 659;
+	Resp_PhyWifi11axTxSet                     = 660;
+	Resp_PhyBleTx                             = 661;
+	Resp_PhyBleRx                             = 662;
+	Resp_PhyBtTxTone                          = 663;
+
+	Resp_SetContext                           = 664;
+
 	/* Add new control path command response before Resp_Max
 	 * and update Resp_Max */
-	Resp_Max = 653;
+	Resp_Max = 665;
 
 	/** Event Msgs **/
 	Event_Base = 768;
@@ -490,10 +526,11 @@ enum RpcId {
 	Event_CustomRpc = 788;
 
 	Event_MemMonitor = 789;
+	Event_Context = 790;
 
 	/* Add new control path command notification before Event_Max
 	 * and update Event_Max */
-	Event_Max = 790;
+	Event_Max = 791;
 }
 
 message wifi_init_config {
@@ -521,6 +558,13 @@ message wifi_init_config {
 	int32          rx_mgmt_buf_num = 22;        /**< WiFi RX MGMT buffer number */
 	int32          tx_hetb_queue_num = 23;      /**< WiFi TX HE TB QUEUE number for STA HE TB PPDU transmission */
 	int32          dump_hesigb_enable = 24;     /**< enable dump sigb field */
+	/* One bit per field below, set when the sender's wifi_init_config_t has the
+	 * field. The receiver applies only the set ones and keeps its own default
+	 * otherwise: a missing field would decode as 0. Bits: WIFI_INIT_CONFIG_EXT_*. */
+	uint32         ext_present_bitmask = 25;
+	bool           privacy_enhancements = 26;   /**< random MAC, sequence and token numbers */
+	int32          rmac_auto_reset_int = 27;    /**< random MAC auto-reset interval in hours (1-24) */
+	int32          wifi_task_stack_size = 28;   /**< Wi-Fi task stack size */
 }
 
 message wifi_country {
@@ -530,6 +574,9 @@ message wifi_country {
 	int32          max_tx_power = 4;            /**< This field is used for getting WiFi maximum transmitting power,
 												  call esp_wifi_set_max_tx_power to set the maximum transmitting power. */
 	int32          policy = 5;                  /**< country policy */
+	uint32         wifi_5g_channel_mask = 6;    /**< A bitmask representing the allowed 5GHz Wi-Fi channels.
+													  0 allows them according to local regulatory rules.
+													  Takes effect only when policy is manual. */
 }
 
 
@@ -561,11 +608,13 @@ message wifi_scan_config {
 	wifi_scan_channel_bitmap channel_bitmap = 8; /**< Channel bitmap for setting specific channels to be scanned.
 												   Please note that the 'channel' parameter above needs to be set to 0 to allow scanning by bitmap.
 												   Also, note that only allowed channels configured by wifi_country_t can be scanned. */
+	bool           coex_background_scan = 9;    /**< Enable it to scan return home channel under coexist */
 }
 
 message wifi_scan_default_params {
 	wifi_scan_time scan_time = 1;               /**< Scan time per channel */
 	uint32         home_chan_dwell_time = 2;    /**< Time spent at home channel between scanning consecutive channels.*/
+	uint32         max_offchan_duration_ms = 3; /**< Max accumulated off-channel scan time before returning home; 0 = IDF default */
 }
 
 message wifi_he_ap_info {
@@ -648,6 +697,11 @@ message wifi_ap_config {
 	uint32        sae_ext = 16;                 /**< Enable SAE EXT feature. SOC_GCMP_SUPPORT is required for this feature. */
 	wifi_bss_max_idle_config bss_max_idle_cfg = 17; /**< Configuration for bss max idle, effective if CONFIG_WIFI_BSS_MAX_IDLE_SUPPORT is enabled */
 	uint32        gtk_rekey_interval = 18;      /**< GTK rekeying interval in seconds. If set to 0, GTK rekeying is disabled. Range: 60 ~ 65535 including 0. */
+	uint32        wpa3_compatible_mode = 19;   /**< Enable WPA3 compatible authmode feature. Note: Enabling this will
+													  override the AP configuration's authmode and pairwise_cipher. The AP will
+													  operate as a WPA2 access point for all stations except for those that
+													  support WPA3 compatible mode. Only WPA3 compatibility mode stations will
+													  be able to use WPA3-SAE */
 }
 
 message  wifi_sta_config {
@@ -688,7 +742,9 @@ Units: AP beacon intervals. Defaults to 3 if set to 0. */
 	// uint32_t vht_su_beamformee_disabled: 1;                       /**< Whether to disable support for operation as an VHT SU beamformee. */
 	// uint32_t vht_mu_beamformee_disabled: 1;                       /**< Whether to disable support for operation as an VHT MU beamformee. */
 	// uint32_t vht_mcs8_enabled: 1;                                 /**< Whether to support VHT-MCS8. The default value is 0. */
-	// uint32_t he_reserved:19;                                      /**< Reserved for future feature set */
+	// uint32_t max_bandwidth_negotiation_enabled_2g: 1;             /**< Whether to enable maximum bandwidth negotiation for the 2.4GHz band. */
+	// uint32_t max_bandwidth_negotiation_enabled_5g: 1;             /**< Whether to enable maximum bandwidth negotiation for the 5GHz band. */
+	// uint32_t he_reserved:17;                                      /**< Reserved for future feature set */
 	uint32              he_bitmask = 14;
 	bytes               sae_h2e_identifier = 15;                     /**< Password identifier for H2E. this needs to be null terminated string. SAE_H2E_IDENTIFIER_LEN chars */
 	uint32              sae_pk_mode = 16;                            /**< Configuration for SAE-PK (Public Key) Authentication method */
@@ -1617,6 +1673,20 @@ message Rpc_Resp_GetDhcpDnsStatus {
 	int32 resp = 10;
 }
 
+/* type: eh_ctx_type_t (eh_common_ctx.h); data: that type's packed little-endian
+ * struct. Types and fields are only ever added: an unknown type is refused,
+ * a longer data is read up to the fields the receiver knows. */
+message Rpc_Req_SetContext {
+	uint32 type = 1;
+	bytes data = 2;
+}
+
+message Rpc_Resp_SetContext {
+	int32 resp = 1;
+	uint32 type = 2;
+	bytes data = 3;
+}
+
 message Rpc_Req_SuppDppInit {
 	bool cb = 1; // enables sending of Event_SuppDpp to host via callback
 }
@@ -2132,6 +2202,129 @@ message Rpc_Event_WifiDppFail {
 	int32 reason = 2; // failure reason
 }
 
+/* ---- RF certification test (PHY cert test) ----
+ * Thin wrappers over the ESP-IDF esp_phy_cert_test.h APIs.  Argument names and
+ * units follow that header exactly; see docs/features/rf-cert-test.md. */
+
+/* esp_phy_wifi_tx(chan, rate, backoff, length_byte, packet_delay, packet_num) */
+message Rpc_Req_PhyWifiTx {
+	uint32 chan         = 1; /* 1..14 */
+	uint32 rate         = 2; /* esp_phy_wifi_rate_t */
+	int32  backoff      = 3; /* TX power attenuation, unit 0.25 dB */
+	uint32 length_byte  = 4; /* PSDU length in bytes */
+	uint32 packet_delay = 5; /* inter-packet gap, us */
+	uint32 packet_num   = 6; /* 0 = send continuously */
+}
+message Rpc_Resp_PhyWifiTx {
+	int32 resp = 1;
+}
+
+/* esp_phy_wifi_rx(chan, rate) */
+message Rpc_Req_PhyWifiRx {
+	uint32 chan = 1; /* 1..14 */
+	uint32 rate = 2; /* esp_phy_wifi_rate_t */
+}
+message Rpc_Resp_PhyWifiRx {
+	int32 resp = 1;
+}
+
+/* esp_phy_wifi_tx_tone(start, chan, backoff) */
+message Rpc_Req_PhyWifiTxTone {
+	uint32 start   = 1; /* 1 = transmit, 0 = stop */
+	uint32 chan    = 2; /* 1..14 */
+	uint32 backoff = 3; /* unit 0.25 dB */
+}
+message Rpc_Resp_PhyWifiTxTone {
+	int32 resp = 1;
+}
+
+/* esp_phy_get_rx_result(&result) */
+message Rpc_Req_PhyGetRxResult {
+}
+message Rpc_Resp_PhyGetRxResult {
+	int32  resp              = 1;
+	uint32 rx_correct_count  = 2; /* desired packets received */
+	int32  rx_rssi           = 3; /* average RSSI of desired packets */
+	uint32 rx_total_count    = 4; /* total packets received */
+	uint32 rx_result_flag    = 5; /* 0 none, 1 Wi-Fi, 2 BLE */
+}
+
+/* esp_phy_test_start_stop(value) — 0 ends the running TX/RX test.
+ * The coprocessor sets the value 3 that must precede a test itself. */
+message Rpc_Req_PhyCmdStop {
+	uint32 value = 1;
+}
+message Rpc_Resp_PhyCmdStop {
+	int32 resp = 1;
+}
+
+/* esp_phy_tx_contin_en(contin_en) */
+message Rpc_Req_PhyTxContinEn {
+	bool contin_en = 1; /* true = continuous packet TX */
+}
+message Rpc_Resp_PhyTxContinEn {
+	int32 resp = 1;
+}
+
+/* esp_phy_cbw40m_en(en) */
+message Rpc_Req_PhyCbw40mEn {
+	bool en = 1; /* false = 11n HT20, true = 11n HT40 */
+}
+message Rpc_Resp_PhyCbw40mEn {
+	int32 resp = 1;
+}
+
+/* esp_phy_11ax_tx_set(he_format, pe, giltf_num, ru_index).
+ * Needs SOC_WIFI_HE_SUPPORT on the coprocessor. */
+message Rpc_Req_PhyWifi11axTxSet {
+	uint32 he_format  = 1;
+	uint32 pe         = 2;
+	uint32 giltf_num  = 3;
+	uint32 ru_index   = 4;
+}
+message Rpc_Resp_PhyWifi11axTxSet {
+	int32 resp = 1;
+}
+
+/* ---- BLE PHY cert commands ----
+ * These drive the PHY directly.  They do NOT use the Bluetooth controller or
+ * any host stack, so they are not reachable through the ESP-Hosted HCI path.
+ * Controller-level BLE testing is HCI Direct Test Mode, which is separate. */
+
+/* esp_phy_ble_tx(txpwr, chan, len, data_type, syncw, rate, tx_num) */
+message Rpc_Req_PhyBleTx {
+	uint32 txpwr     = 1; /* level; TX power is about (level-8)*3 dBm */
+	uint32 chan      = 2; /* 0..39, freq = 2402 + chan*2 MHz */
+	uint32 len       = 3; /* payload bytes, 0..255; 37 is typical */
+	uint32 data_type = 4; /* esp_phy_ble_type_t */
+	uint32 syncw     = 5; /* packet identifier; 0x71764129 is typical */
+	uint32 rate      = 6; /* esp_phy_ble_rate_t */
+	uint32 tx_num    = 7; /* 0 = send continuously */
+}
+message Rpc_Resp_PhyBleTx {
+	int32 resp = 1;
+}
+
+/* esp_phy_ble_rx(chan, syncw, rate) */
+message Rpc_Req_PhyBleRx {
+	uint32 chan  = 1; /* 0..39 */
+	uint32 syncw = 2;
+	uint32 rate  = 3; /* esp_phy_ble_rate_t */
+}
+message Rpc_Resp_PhyBleRx {
+	int32 resp = 1;
+}
+
+/* esp_phy_bt_tx_tone(start, chan, power) */
+message Rpc_Req_PhyBtTxTone {
+	uint32 start = 1; /* 1 = transmit, 0 = stop */
+	uint32 chan  = 2; /* 0..39 */
+	uint32 power = 3; /* attenuation, unit 0.25 dB */
+}
+message Rpc_Resp_PhyBtTxTone {
+	int32 resp = 1;
+}
+
 /* Custom RPC messages for user-defined packed structures */
 message Rpc_Req_CustomRpc {
 	uint32 custom_msg_id = 1;  /* User-defined message ID */
@@ -2157,6 +2350,13 @@ message Rpc_Event_MemMonitor {
 	uint32 curr_min_free_heap_size = 3;    // current minimum heap size
 	heap_info curr_internal = 4;           // current heap levels for internal memory
 	heap_info curr_external = 5;           // current heap levels for external memory
+}
+
+/* A context the CP changed on its own; same type and data as Rpc_Resp_SetContext. */
+message Rpc_Event_Context {
+	int32 resp = 1;
+	uint32 type = 2;
+	bytes data = 3;
 }
 
 message Rpc {
@@ -2311,6 +2511,18 @@ message Rpc {
 		Rpc_Req_GpioSetPullMode             req_gpio_set_pull_mode            = 395;
 
 		Rpc_Req_ExtCoex                     req_ext_coex                      = 396;
+		Rpc_Req_PhyWifiTx                   req_phy_wifi_tx                   = 397;
+		Rpc_Req_PhyWifiRx                   req_phy_wifi_rx                   = 398;
+		Rpc_Req_PhyWifiTxTone               req_phy_wifi_tx_tone              = 399;
+		Rpc_Req_PhyGetRxResult              req_phy_get_rx_result             = 400;
+		Rpc_Req_PhyCmdStop                  req_phy_cmd_stop                  = 401;
+		Rpc_Req_PhyTxContinEn               req_phy_tx_contin_en              = 402;
+		Rpc_Req_PhyCbw40mEn                 req_phy_cbw40m_en                 = 403;
+		Rpc_Req_PhyWifi11axTxSet            req_phy_wifi_11ax_tx_set          = 404;
+		Rpc_Req_PhyBleTx                    req_phy_ble_tx                    = 405;
+		Rpc_Req_PhyBleRx                    req_phy_ble_rx                    = 406;
+		Rpc_Req_PhyBtTxTone                 req_phy_bt_tx_tone                = 407;
+		Rpc_Req_SetContext                  req_set_context                   = 408;
 
 		/** Responses **/
 		Rpc_Resp_GetMacAddress              resp_get_mac_address               = 513;
@@ -2451,6 +2663,18 @@ message Rpc {
 		Rpc_Resp_GpioSetPullMode            resp_gpio_set_pull_mode            = 651;
 
 		Rpc_Resp_ExtCoex                    resp_ext_coex                     = 652;
+		Rpc_Resp_PhyWifiTx                  resp_phy_wifi_tx                  = 653;
+		Rpc_Resp_PhyWifiRx                  resp_phy_wifi_rx                  = 654;
+		Rpc_Resp_PhyWifiTxTone              resp_phy_wifi_tx_tone             = 655;
+		Rpc_Resp_PhyGetRxResult             resp_phy_get_rx_result            = 656;
+		Rpc_Resp_PhyCmdStop                 resp_phy_cmd_stop                 = 657;
+		Rpc_Resp_PhyTxContinEn              resp_phy_tx_contin_en             = 658;
+		Rpc_Resp_PhyCbw40mEn                resp_phy_cbw40m_en                = 659;
+		Rpc_Resp_PhyWifi11axTxSet           resp_phy_wifi_11ax_tx_set         = 660;
+		Rpc_Resp_PhyBleTx                   resp_phy_ble_tx                   = 661;
+		Rpc_Resp_PhyBleRx                   resp_phy_ble_rx                   = 662;
+		Rpc_Resp_PhyBtTxTone                resp_phy_bt_tx_tone               = 663;
+		Rpc_Resp_SetContext                 resp_set_context                  = 664;
 
 		/** Notifications **/
 		Rpc_Event_ESPInit                   event_esp_init                     = 769;
@@ -2475,5 +2699,6 @@ message Rpc {
 
 		Rpc_Event_CustomRpc                 event_custom_rpc                   = 788;
 		Rpc_Event_MemMonitor                event_mem_monitor                  = 789;
+		Rpc_Event_Context                   event_context                      = 790;
 	}
 }

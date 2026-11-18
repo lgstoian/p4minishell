@@ -45,7 +45,8 @@ void sel_paint_rect(lv_obj_t *layer, lv_coord_t x, lv_coord_t y,
     lv_obj_set_style_bg_opa(box, LV_OPA_50, 0);
     lv_obj_set_style_border_color(box, lv_color_hex(SEL_BORDER_COLOR), 0);
     lv_obj_set_style_border_width(box, 1, 0);
-    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(box, false);
+    lv_obj_set_clickable(box, false);
 }
 
 void sel_paint_cells(lv_obj_t *layer, lv_coord_t ox, lv_coord_t oy,

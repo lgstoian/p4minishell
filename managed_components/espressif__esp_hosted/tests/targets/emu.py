@@ -13,18 +13,41 @@ import struct
 import subprocess
 import time
 
-from infra import build_fw, lab
-from infra.emu_dut import EmuDut, emu_bin, settle_check
+from infra import cp_apps
+from infra import host_apps
+from infra import build_fw, lab, sandbox
+from infra.emu_dut import EmuDut, emu_bin, quiet, settle_check
 
 from .base import (CAP_GPIO_LOOPBACK, CAP_NET, CAP_WAKE, CAP_WIFI_ITWT,
                    Bench, BenchProvider, BenchSpec)
 
-_WAKE_GPIO = "2"     # CP→host wake line (framed bridge carries it as OP_WAKE)
+# CP→host wake line (framed bridge carries it as OP_WAKE). Board- AND
+# transport-dependent, exactly like the firmware: these mirror the Kconfig
+# defaults for ESP_HOSTED_P4_DEV_BOARD_FUNC_BOARD, which is the board every emu
+# build selects. Keep them in step with:
+#   coprocessor/features/eh_cp_feat_host_ps/Kconfig.ext
+#     CP out : default 2 if FUNC_BOARD && !SPI_HD ; default 9 if FUNC_BOARD && SPI_HD
+#   host/features/eh_host_feat_power_save/Kconfig.ext
+#     host in: default 6 if FUNC_BOARD && !SPI_HD ; default 4 if FUNC_BOARD && SPI_HD
+# The host side needs no flag here - the host firmware arms its own Kconfig pin -
+# but it is recorded so the pairing is auditable against the schematic.
+_WAKE_GPIO_CP = {"spi_hd": "9"}          # every other wire uses 2
+_WAKE_GPIO_CP_DEFAULT = "2"
+
+
+def _wake_gpio_cp(transport):
+    """The CP-side wake pin for this wire, mirroring the firmware Kconfig."""
+    return _WAKE_GPIO_CP["spi_hd"] if transport.startswith("spi_hd") \
+        else _WAKE_GPIO_CP_DEFAULT
 _RESET_GPIO = "54"   # host→CP reset line (OP_RESET)
+
 
 # The emulator's C6 wifi model advertises a fixed WPA2-PSK SoftAP; STA-connect
 # tests on the emu associate to this (real benches use lab.local.json wifi_ap).
-EMU_SOFTAP = {"ssid": "myssid", "password": "mypassword"}
+# EH_EMU_WIFI_SSID renames the modeled SoftAP (emu --wifi-ssid), so a test can
+# exercise a maximum-length SSID. The password is fixed in the emulator.
+EMU_SOFTAP = {"ssid": os.environ.get("EH_EMU_WIFI_SSID", "myssid"),
+              "password": "mypassword"}
 
 # ESP-Hosted SPI transport GPIOs, P4-C6 Function-EV board (both sides FUNC_BOARD).
 # handshake (FD only) + data-ready are slave→host, forwarded out-of-band as bridge
@@ -54,6 +77,10 @@ def _emu_supports(emu, flag: str) -> bool:
     return flag in _emu_help_cache[key]
 
 
+# UDP port the power-save wake tests reserve for the host (their CP overlay).
+WAKE_UDP_PORT = 60000
+
+
 class Net:
     """Stimulus provider over the CP's user-net host-forward. `wake()` fires a
     fire-and-forget packet at the host-reserved port (wake-on-packet). `request()`
@@ -78,6 +105,12 @@ class Net:
 
     def wake(self, payload=b"wakeup-host"):
         self._shoot(payload, self._port)
+
+    def wake_udp(self, payload):
+        """One datagram to guest UDP WAKE_UDP_PORT: no retransmit, so its arrival on
+        the host proves the frame that woke it was delivered."""
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.sendto(payload, ("127.0.0.1", self._port))
 
     def request(self, guest_port, payload=b"", read_bytes=512, timeout=4):
         """Connect to the CP guest `guest_port` (via its host-forward), send
@@ -104,7 +137,7 @@ class EmuTarget(BenchProvider):
     # The emulator provides both wires, models the wake path (net stimulus), and
     # models CP GPIO (so GPIO reads back what was driven). It does NOT model
     # external-coex wiring, so coex config ops are drivable-only.
-    transports = frozenset({"sdio", "uart", "spi_fd",
+    transports = frozenset({"sdio", "sdio_1", "uart", "spi_fd",
                             "spi_hd", "spi_hd_1", "spi_hd_2", "spi_hd_4"})
     caps = frozenset({CAP_WAKE, CAP_GPIO_LOOPBACK, "wifi_ap",
                       CAP_WIFI_ITWT})  # emu CP = C6 (HE)
@@ -125,7 +158,23 @@ class EmuTarget(BenchProvider):
                 import pytest
                 pytest.skip(f"esp-emu at {emu} lacks {flag} (rebuild esp-emulator)")
         if transport == "spi_fd":
-            cp_ovl = ["CONFIG_EH_TRANSPORT_CP_SPI=y"]
+            # DEASSERT_HS_ON_CS=n for the emulator only.
+            #
+            # On silicon CS falls at the START of a transfer, so deasserting
+            # handshake on that edge is the earliest correct instant and it closes
+            # the master's re-read race. The emulator does not model it that way:
+            # gpspi_slave.rs completes the transfer first and only then REPLAYS the
+            # CS pulse (complete_fd() -> cs_countdown = CS_PULSE_TICKS, ~32 ticks
+            # later), so the edge lands after the coprocessor has already reaped and
+            # re-armed, and the late ISR then lowers handshake while a transaction
+            # IS armed - the master stops clocking and the link stalls. Measured:
+            # 3/8 with CS-edge deassert here versus 6/8 with completion-based.
+            #
+            # So pick the deassert point that matches each platform's CS timing
+            # rather than bending the firmware to the model: hardware keeps the
+            # Kconfig default (=y), the emulator runs with it off.
+            cp_ovl = ["CONFIG_EH_TRANSPORT_CP_SPI=y",
+                      "CONFIG_EH_TRANSPORT_CP_SPI_DEASSERT_HS_ON_CS=n"]
             host_bus_ovl = ["CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_SPI=y"]
         elif spi_hd:
             # spi_hd defaults to the Kconfig default (4-line); spi_hd_1/2/4
@@ -140,14 +189,21 @@ class EmuTarget(BenchProvider):
         elif uart:
             cp_ovl = ["CONFIG_EH_TRANSPORT_CP_UART=y"]
             host_bus_ovl = ["CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_UART=y"]
-        else:  # sdio
+        else:  # sdio (4-bit) or sdio_1 (1-bit host bus; the CP follows the host)
             cp_ovl = []
-            host_bus_ovl = []
+            host_bus_ovl = (["CONFIG_ESP_HOSTED_HOST_SDIO_BUS_WIDTH_1=y"]
+                            if transport == "sdio_1" else [])
         # Host also builds for the P4-C6 Function-EV board so its GPIOs (reset, SPI
         # signals) match the CP's FUNC_BOARD pinout; else the two sides disagree.
         host_board_ovl = (["CONFIG_ESP_HOSTED_P4_DEV_BOARD_FUNC_BOARD=y"]
                           if spec.host_target == "esp32p4" else [])
-        host_ovl = host_board_ovl + host_bus_ovl + list(spec.extra_ovl)
+        host_ex, host_role, scenario = host_apps.host_source(spec.example, spec.host_role)
+        host_ovl_req = host_bus_ovl + host_apps.always_overlay(spec.example, spec.host_role) \
+            + list(spec.extra_ovl)
+        if scenario:
+            host_role, host_ovl_req = host_apps.variant(host_role, host_ovl_req)
+        host_rest, host_opts = host_apps.runtime_options(scenario, host_ovl_req)
+        host_ovl = host_board_ovl + host_rest
         cp_bus_ovl = list(cp_ovl)              # transport-derived only
         # Base image assumes the P4-C6 Function-EV board so board-wired defaults
         # (e.g. host-wakeup GPIO) resolve; product Kconfig keeps board=NONE -> -1.
@@ -155,11 +211,14 @@ class EmuTarget(BenchProvider):
             cp_bus_ovl.append("CONFIG_ESP_HOSTED_P4_DEV_BOARD_FUNC_BOARD=y")
         cp_ovl = cp_bus_ovl + list(spec.cp_extra_ovl)
 
-        cp_fw = build_fw.build(spec.example, spec.cp_role, spec.cp_target, cp_ovl)
+        cp_ex, cp_role = cp_apps.cp_source(spec.example, spec.cp_role, spec.cp_app)
+        cp_fw = build_fw.build(cp_ex, cp_role, spec.cp_target, cp_ovl,
+                               inject=spec.cp_inject)
         # Stage the freshly-built CP app image into the host build (e.g. the host's
         # LittleFS OTA source dir) — app-only .bin, not merged, so the host OTAs
         # exactly the CP app it was built against.
-        host_inject = None
+        host_inject = dict(spec.host_inject or {})
+        ota_inject = None
         if spec.cp_app_to_host:
             ota_fw = cp_fw
             if spec.cp_ota_ovl:
@@ -167,11 +226,18 @@ class EmuTarget(BenchProvider):
                 # image (e.g. stream -> SW_AGGR migration drill).
                 # bus overlays only + the OTA-specific config: the boot image's
                 # cp_overlay must not leak in (choice lines would conflict)
-                ota_fw = build_fw.build(spec.example, spec.cp_role, spec.cp_target,
+                ota_fw = build_fw.build(cp_ex, cp_role, spec.cp_target,
                                         cp_bus_ovl + list(spec.cp_ota_ovl))
-            host_inject = {spec.cp_app_to_host: ota_fw["elf"][:-4] + ".bin"}
-        host_fw = build_fw.build(spec.example, spec.host_role, spec.host_target,
-                                 host_ovl, inject=host_inject)
+            ota_inject = {spec.cp_app_to_host: ota_fw["elf"][:-4] + ".bin"}
+        # the super host takes the OTA image in its LittleFS partition at boot, not in the build
+        host_fs = ota_inject if scenario else None
+        if ota_inject and not scenario:
+            host_inject.update(ota_inject)
+        host_fw = build_fw.build(host_ex, host_role, spec.host_target,
+                                 host_ovl, inject=host_inject or None)
+        if os.environ.get("EH_PLAN"):
+            import pytest
+            pytest.skip("plan: images recorded")
         build_fw.stash_logs(lab_tmp, cp=cp_fw, host=host_fw)
         # Prewarm pass: firmware is built + cached now; skip the emu launch so the
         # build phase never overlaps the real run's emus (cold-cache all-cores
@@ -183,7 +249,10 @@ class EmuTarget(BenchProvider):
         # COW level 2: each bench boots its OWN reflink copy so parallel benches
         # and NVS writes never touch the cached base.
         cp_flash = build_fw.cow_flash(cp_fw["merged"], lab_tmp)
-        host_flash = build_fw.cow_flash(host_fw["merged"], lab_tmp)
+        host_flash = (build_fw.flash_with_fs(host_fw, "storage",
+                                             {os.path.basename(d): f for d, f in host_fs.items()},
+                                             lab_tmp)
+                      if host_fs else build_fw.cow_flash(host_fw["merged"], lab_tmp))
 
         # One unique {slot, port} per bench — never shared with another pair, never
         # reused this session (see lab.alloc_bench). slot uniquifies the socket.
@@ -200,7 +269,11 @@ class EmuTarget(BenchProvider):
         if spi:
             # SPI (GPSPI2) master↔slave. Handshake (FD only) + data-ready are the
             # slave's out-of-band GPIOs, forwarded as bridge GPIO frames; the flag
-            # values differ per role (CP vs host pinout). No CP→host wake path.
+            # values differ per role (CP vs host pinout). The CP→host wake line is
+            # wired here too: it used to be omitted on SPI while caps still
+            # advertised CAP_WAKE, so a wake=True bench was accepted for a wire
+            # that physically had no way to wake the host - the host deep-slept
+            # and nothing could ever pulse it.
             wire = "--hosted-spi-hd" if spi_hd else "--hosted-spi"
             pins = _SPI_PINS["spi_hd" if spi_hd else "spi_fd"]
             cp_sig = (["--hosted-spi-hs-gpio", pins["cp_hs"]] if pins["cp_hs"] else []) \
@@ -208,7 +281,9 @@ class EmuTarget(BenchProvider):
                    + ["--hosted-spi-cs-gpio", pins["cp_cs"]]
             host_sig = (["--hosted-spi-hs-gpio", pins["host_hs"]] if pins["host_hs"] else []) \
                      + ["--hosted-spi-dr-gpio", pins["host_dr"]]
-            cp_bridge = [wire, f"bridge:slave:{sock}", *cp_sig]
+            spi_wake_arg = (["--hosted-wake-gpio", _wake_gpio_cp(transport)]
+                            if spec.wake else [])
+            cp_bridge = [wire, f"bridge:slave:{sock}", *cp_sig, *spi_wake_arg]
             # P4-C6 Function-EV board: one active-low EN on GPIO 54 for every transport.
             host_bridge = [wire, f"bridge:host:{sock}", *host_sig,
                            "--hosted-reset-gpio", _RESET_GPIO]
@@ -217,7 +292,8 @@ class EmuTarget(BenchProvider):
             reset_pol = []   # FUNC_BOARD reset is active-low on every transport
             # Only wire the CP→host wake GPIO when the test actually uses wake — a
             # non-wake test shouldn't require an esp-emu new enough to know the flag.
-            wake_arg = ["--hosted-wake-gpio", _WAKE_GPIO] if spec.wake else []
+            wake_arg = (["--hosted-wake-gpio", _wake_gpio_cp(transport)]
+                        if spec.wake else [])
             cp_bridge = [wire, f"bridge:slave:{sock}", *wake_arg]
             host_bridge = [wire, f"bridge:host:{sock}", "--hosted-reset-gpio", _RESET_GPIO, *reset_pol]
         # host-forward map: guest CP port → host loopback port. :22 (host-reserved)
@@ -229,15 +305,17 @@ class EmuTarget(BenchProvider):
             fwd[22] = port
         for i, gp in enumerate(spec.hostfwd):
             fwd[int(gp)] = port + 1 + i
-        net_arg = ["--net", "user," + ",".join(
-            f"hostfwd=tcp:127.0.0.1:{hp}-:{gp}" for gp, hp in fwd.items())] if fwd else []
+        rules = [f"hostfwd=tcp:127.0.0.1:{hp}-:{gp}" for gp, hp in fwd.items()]
+        if spec.wake:
+            rules.append(f"hostfwd=udp:127.0.0.1:{port}-:{WAKE_UDP_PORT}")
+        net_arg = ["--net", "user," + ",".join(rules)] if rules else []
 
         # BLE connect/GATT via Bumble: forward the CP's HCI to a Bumble virtual
         # controller (the host's peripheral HCI reaches it over the transport).
         _ble_port = os.environ.get("EH_BLE_HCI_PORT")
         ble_arg = ["--ble-hci", f"tcp:localhost:{_ble_port}"] if _ble_port else []
-        # OpenThread/Zigbee: the RCP↔host spinel link is a DEDICATED UART, separate
-        # from the SDIO/SPI control transport — bridge it as a 2nd --hosted-uart
+        # Standard OpenThread / Zigbee: the RCP↔host spinel link is a DEDICATED UART,
+        # separate from the ESP-Hosted SDIO/SPI transport — bridge it as a 2nd --hosted-uart
         # (UART1) over its own socket. The RCP's 802.15.4 radio rides --thread-sim
         # to a peer (the test sets EH_THREAD_SIM_CP="bind:PA,peer:127.0.0.1:PB" and
         # spawns that peer). Both env-driven, mirroring EH_BLE_HCI_PORT.
@@ -252,6 +330,8 @@ class EmuTarget(BenchProvider):
             spinel_host = ["--hosted-uart", f"bridge:host:{spin_sock}"]
         _ts_cp = os.environ.get("EH_THREAD_SIM_CP")
         thread_arg = ["--thread-sim", _ts_cp] if _ts_cp else []
+        _emu_ssid = os.environ.get("EH_EMU_WIFI_SSID")
+        ssid_arg = ["--wifi-ssid", _emu_ssid] if _emu_ssid else []
         # Firmware is built and bridges are resolved; the DUTs are about to launch.
         # Run the test's pre_launch hook HERE so an external peer (e.g. Bumble)
         # opens its connect window now — after the (possibly cold-cache, minutes-
@@ -259,28 +339,52 @@ class EmuTarget(BenchProvider):
         # prewarm pass never starts a peer with no emu to answer it.
         if pre_launch is not None:
             pre_launch()
-        cp = EmuDut("cp", [str(emu), "--chip", spec.cp_target, "--firmware", cp_flash,
-                           "--elf", cp_fw["elf"], *cp_bridge, *spinel_cp, *thread_arg,
-                           *ble_arg, *net_arg, "--timeout", timeout],
-                    lab_tmp / f"cp_{spec.transport}.log")
-        # Deterministic ordering: wait for the slave socket before the host connects
-        # (polls; returns the instant it appears — no fixed sleep).
-        end = time.time() + 10
-        while not os.path.exists(sock) and time.time() < end and cp.proc.poll() is None:
-            time.sleep(0.05)
-        host = EmuDut("host", [str(emu), "--chip", spec.host_target, "--firmware", host_flash,
-                               "--elf", host_fw["elf"], *host_bridge, *spinel_host, "--timeout", timeout],
-                      lab_tmp / f"host_{spec.transport}.log")
+        # Admission control: hold one live-emu-pair slot for this bench's lifetime so
+        # total concurrent pairs never oversubscribe the box (the cause of the spi_fd /
+        # power-save under-load 5s-RPC flake), regardless of --jobs. Released in down().
+        emu_slot = lab.acquire_emu_slot()
+        try:
+            # Optional isolation (EH_SANDBOX; default none = identity): both emus need
+            # WORK read-write (the bridge socket lives there); only the CP owns --net
+            # user (hostfwd), so it shares the host net when forwarding, host does not.
+            cp = EmuDut("cp", sandbox.wrap(
+                            [str(emu), "--chip", spec.cp_target, "--firmware", cp_flash,
+                             "--elf", cp_fw["elf"], *cp_bridge, *spinel_cp, *thread_arg,
+                             *ble_arg, *net_arg, *ssid_arg, "--timeout", timeout],
+                            rw_paths=[lab.WORK], net=bool(fwd)),
+                        lab_tmp / f"cp_{spec.transport}.log")
+            # Deterministic ordering: wait for the slave socket before the host connects
+            # (polls; returns the instant it appears — no fixed sleep).
+            end = time.time() + 10
+            while not os.path.exists(sock) and time.time() < end and cp.proc.poll() is None:
+                time.sleep(0.05)
+            host = EmuDut("host", sandbox.wrap(
+                              [str(emu), "--chip", spec.host_target, "--firmware", host_flash,
+                               "--elf", host_fw["elf"], *host_bridge, *spinel_host,
+                               *host_apps.select_args(scenario, host_opts), "--timeout", timeout],
+                              rw_paths=[lab.WORK], net=False),
+                          lab_tmp / f"host_{spec.transport}.log")
+        except BaseException:
+            lab.release_emu_slot(emu_slot)  # never leak the slot if a DUT fails to launch
+            raise
 
         def down():
-            settle_check(host, cp)  # post-success crash catch (late panic / wake fault)
-            host.stop()
-            cp.stop()
+            # settle_check RAISES on a late crash (real signal); the finally still runs
+            # each stop() in isolation and releases the scarce emu-pair slot LAST and
+            # UNCONDITIONALLY — a leaked slot shrinks R4's global anti-starvation cap.
             try:
-                os.unlink(sock)
-            except OSError:
-                pass
+                settle_check(host, cp)  # post-success crash catch (late panic / wake fault)
+            finally:
+                quiet(host.stop)
+                quiet(cp.stop)
+                lab.release_emu_slot(emu_slot)  # free the pair slot for a waiting bench
+                try:
+                    os.unlink(sock)
+                except OSError:
+                    pass
 
         caps = self.caps | ({CAP_NET} if fwd else frozenset())
         return Bench(duts=[host, cp], net=Net(port, fwd) if fwd else None,
-                     teardown=down, caps=caps)
+                     teardown=down, caps=caps,
+                     artifacts={'cp_elf': cp_fw.get('elf'),
+                                'host_elf': host_fw.get('elf')})

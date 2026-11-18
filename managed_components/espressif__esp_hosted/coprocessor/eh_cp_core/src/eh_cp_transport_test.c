@@ -4,6 +4,7 @@
  */
 
 #include "eh_cp_transport_test.h"
+#include "eh_cp_idf_compat.h"
 #include <unistd.h>
 #include "esp_log.h"
 #include <string.h>
@@ -11,6 +12,7 @@
 #include "eh_caps.h"
 #include "eh_header.h"
 #include "eh_check.h"
+#include "eh_raw_tp_seq.h"
 
 #if TEST_RAW_TP
 static const char TAG[] = "eh_transport_cp_utils";
@@ -45,9 +47,13 @@ static esp_timer_handle_t s_raw_tp_timer;
 static volatile uint8_t s_raw_tp_timer_running;
 static uint32_t s_raw_tp_timer_count;
 
-void eh_transport_utils_update_raw_tp_rx_count(uint16_t len)
+static eh_raw_tp_seq_t s_raw_tp_rx_seq;
+static uint32_t s_raw_tp_tx_seq;
+
+void eh_transport_utils_update_raw_tp_rx_count(const uint8_t *payload, uint16_t len)
 {
 	test_raw_tp_rx_len += len;
+	eh_raw_tp_seq_check(&s_raw_tp_rx_seq, payload, len);
 }
 
 DMA_ATTR static uint8_t tx_buf[TEST_RAW_TP__BUF_SIZE];
@@ -61,17 +67,21 @@ static void ehtc_utils_raw_tp_timer_func(void* arg)
 
 	actual_bandwidth_tx = ((double)test_raw_tp_tx_len * 8.0) / TEST_RAW_TP__TIMEOUT;
 	actual_bandwidth_rx = ((double)test_raw_tp_rx_len * 8.0) / TEST_RAW_TP__TIMEOUT;
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+#if EH_CP_IDF_V5_API
     ESP_LOGI(TAG,"%lu-%lu sec       Rx: %.2f Tx: %.2f kbps",
 	         (unsigned long)s_raw_tp_timer_count,
 	         (unsigned long)(s_raw_tp_timer_count + TEST_RAW_TP__TIMEOUT),
 	         actual_bandwidth_rx / div, actual_bandwidth_tx / div);
-#else /* ESP_IDF_VERSION */
+#else
     ESP_LOGI(TAG,"%u-%u sec       Rx: %.2f Tx: %.2f kbps",
 	         s_raw_tp_timer_count,
 	         s_raw_tp_timer_count + TEST_RAW_TP__TIMEOUT,
 	         actual_bandwidth_rx / div, actual_bandwidth_tx / div);
-#endif /* ESP_IDF_VERSION */
+#endif
+	/* Totals since boot: lost = gaps in the host's frame counter. */
+	ESP_LOGI(TAG, "raw_tp seq: rx frames=%" PRIu32 " lost=%" PRIu32 " restarts=%" PRIu32
+	         " tx frames=%" PRIu32, s_raw_tp_rx_seq.frames, s_raw_tp_rx_seq.lost,
+	         s_raw_tp_rx_seq.restarts, s_raw_tp_tx_seq);
 	s_raw_tp_timer_count += TEST_RAW_TP__TIMEOUT;
 	test_raw_tp_rx_len = test_raw_tp_tx_len = 0;
 }
@@ -109,6 +119,7 @@ static void ehtc_utils_raw_tp_tx_task(void* pvParameters)
 		buf_handle.payload_len = TEST_RAW_TP__BUF_SIZE;
 		buf_handle.free_buf_handle = NULL;
 		buf_handle.priv_buffer_handle = buf_handle.payload;
+		eh_raw_tp_seq_put(raw_tp_tx_buf, s_raw_tp_tx_seq);
 
 		ret = send_to_host_queue(&buf_handle, PRIO_Q_OTHERS);
 
@@ -117,6 +128,7 @@ static void ehtc_utils_raw_tp_tx_task(void* pvParameters)
 			continue;
 		}
 		test_raw_tp_tx_len += (TEST_RAW_TP__BUF_SIZE);
+		s_raw_tp_tx_seq++;
 	}
 	s_raw_tp_tx_task_handle = NULL;
 	vTaskDelete(NULL);

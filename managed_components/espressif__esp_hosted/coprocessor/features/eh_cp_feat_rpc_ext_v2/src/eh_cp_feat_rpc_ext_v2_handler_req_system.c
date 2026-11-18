@@ -29,10 +29,15 @@
 
 static const char* TAG = "mcu_sys_rpc";
 
-#define MIN_HEARTBEAT_INTERVAL      (10)
-#define MAX_HEARTBEAT_INTERVAL      (60*60)
+#define MIN_HEARTBEAT_INTERVAL      (1)
+#define MAX_HEARTBEAT_INTERVAL      (7*24*60*60)
 
-#define OTA_ACTIVATE_RESTART_TIMEOUT 2000
+/* Long enough for the activate response to reach the host before the reboot,
+ * which is one RPC round trip.  It is also the floor under every host's
+ * post-activate wait: the host must outlast this plus the coprocessor's boot,
+ * or it resets the coprocessor inside the pending-verify window and
+ * BOOTLOADER_APP_ROLLBACK reverts the update. */
+#define OTA_ACTIVATE_RESTART_TIMEOUT 500
 
 
 #define IFACE_MAC_SIZE              8 // 6 for MAC-48, 8 for EIU-64, 2 for EFUSE_EXT
@@ -105,7 +110,7 @@ esp_err_t req_ota_begin_handler (Rpc *req,
 	}
 
 	ESP_LOGI(TAG, "Prepare partition for OTA\n");
-	ret = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &handle);
+	ret = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &handle);
 	if (ret) {
 		ESP_LOGE(TAG, "OTA begin failed[%d]", ret);
 		s_ota_status = OTA_FAILED;
@@ -283,7 +288,7 @@ esp_err_t req_ota_activate_handler (Rpc *req,
 		ret = -2;
 		goto err;
 	}
-	ESP_LOGE(TAG, "**** OTA activation initiated, ESP32 will reboot in 2 sec ****");
+	ESP_LOGW(TAG, "OTA activated; rebooting in %d ms", (int)OTA_ACTIVATE_RESTART_TIMEOUT);
 	resp_payload->resp = SUCCESS;
 	return ESP_OK;
 err:
@@ -307,10 +312,10 @@ static esp_err_t configure_heartbeat(bool enable, int hb_duration)
 		eh_cp_feat_system_heartbeat_stop();
 
 	} else {
-		if (duration < MIN_HEARTBEAT_INTERVAL)
-			duration = MIN_HEARTBEAT_INTERVAL;
-		if (duration > MAX_HEARTBEAT_INTERVAL)
-			duration = MAX_HEARTBEAT_INTERVAL;
+		if ((duration < MIN_HEARTBEAT_INTERVAL) ||
+				(duration > MAX_HEARTBEAT_INTERVAL)) {
+			return ESP_ERR_INVALID_ARG;
+		}
 
 		eh_cp_feat_system_heartbeat_stop();
 		ret = eh_cp_feat_system_heartbeat_start(duration);
@@ -433,6 +438,13 @@ esp_err_t req_feature_control(Rpc *req, Rpc *resp, void *priv_data)
 		return req_feature_control_openthread(req_payload, resp_payload);
 #else
 		ESP_LOGE(TAG, "Openthread is not enabled");
+		resp_payload->resp = FAILURE;
+#endif
+	} else if (req_payload->feature == RPC_FEATURE__Feature_Rf_Cert) {
+#if EH_CP_FEAT_RF_CERT_READY
+		return req_feature_control_rf_cert(req_payload, resp_payload);
+#else
+		ESP_LOGE(TAG, "RF cert test is not enabled");
 		resp_payload->resp = FAILURE;
 #endif
 	} else {

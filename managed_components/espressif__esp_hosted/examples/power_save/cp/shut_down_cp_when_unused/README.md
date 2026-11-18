@@ -11,17 +11,25 @@ with heap-tracing wired in so you can confirm there is no leak across cycles.
 
 ## Supported Platforms and Transports
 
-| Host device | ESP32-P4 | ESP32-H2 | Other MCUs |
+### Supported Coprocessors
+
+| Coprocessor | Any Espressif chip with Wi-Fi (default ESP32-C6), except ESP32-S31 |
+| :---------- | :----------------------------------------------------------------- |
+| Support     | Yes ¹                                                              |
+
+¹ ESP32-S31: not validated yet.
+
+### Supported Host Devices
+
+| Host Device | ESP32-P4 | ESP32-H2 | Other MCUs |
 | :---------- | :------: | :------: | :--------: |
 | Support     | Yes      | Yes      | [Yes](https://github.com/espressif/esp-hosted/blob/master/docs/getting-started-mcu.md) |
 
-| Coprocessor | Any Espressif chip with Wi-Fi (default ESP32-C6) |
-| :---------- | :----------------------------------------------- |
-| Support     | Yes                                              |
+### Supported Connection buses
 
-| Communication bus | SDIO | SPI Full-Duplex | SPI Half-Duplex | UART |
-| :---------------- | :--: | :-------------: | :-------------: | :--: |
-| MCU host          | Yes  | Yes             | Yes             | Yes  |
+| Connection bus | SDIO | SPI Full-Duplex | SPI Half-Duplex | UART |
+| :------------- | :--: | :-------------: | :-------------: | :--: |
+| MCU host       | Yes  | Yes             | Yes             | Yes  |
 <!-- common-stop -->
 
 ## Directory layout

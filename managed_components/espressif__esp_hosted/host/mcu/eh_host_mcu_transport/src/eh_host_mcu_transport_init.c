@@ -1,4 +1,8 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 /* Bus-agnostic dispatcher. Holds RX cb registration; forwards _init/_deinit
  * /_tx to the single compiled-in bus backend. */
 
@@ -20,12 +24,15 @@
 #include "eh_host_mcu_transport_init_event.h"
 #include "eh_host_mcu_transport_send_caps.h"
 #include "eh_host_mcu_transport_state.h"
+#if EH_HOST_AUTO_FEAT_INIT
 #include "eh_host_auto_init.h"
+#endif
 #include "eh_host_port_task.h"
 #include "eh_host_raw_tp_stats.h"
+#include "eh_host_pkt_stats.h"
 #include "esp_log.h"
-#include "esp_heap_caps.h"
 
+#if EH_HOST_AUTO_FEAT_INIT
 /* Once per bring-up; cleared in eh_host_mcu_transport_deinit() so a reinit
  * re-runs feature auto-init. */
 static int s_auto_init_started;
@@ -35,6 +42,7 @@ static void auto_init_features_task(void *arg)
     (void)arg;
     eh_host_auto_init_features();
 }
+#endif
 
 /* esp_priv_event header bytes [0]=event_type [1]=event_len. */
 #define EH_PRIV_EVENT_INIT          0x22u
@@ -84,16 +92,46 @@ void eh_host_mcu_transport_priv_dispatch_rx(const uint8_t *buf, size_t len)
     eh_host_port_mutex_unlock(s_mtx);
     if (cb) {
         cb(buf, len, ctx);
+    } else {
+        ESP_LOGW("eh_dispatch", "rx-drop: no priv consumer, %u bytes", (unsigned int)len);
     }
+}
+
+void eh_host_mcu_transport_channel_rx(uint8_t if_type, uint8_t flags, uint8_t *copy, uint16_t len)
+{
+    if ((flags & FLAG_WAKEUP_PKT) && len < 1500) {
+        ESP_LOGW("eh_dispatch", "Host wakeup triggered, if_type: %u, len: %u",
+                    (unsigned int)if_type, (unsigned int)len);
+    }
+    eh_host_channel_t *chan = eh_host_transport_get_channel(if_type);
+    if (!chan || !chan->rx) {
+        free(copy);
+        return;
+    }
+    (void)chan->rx(chan->api_chan, copy, copy, len);
 }
 
 void eh_host_mcu_transport_dispatch_frame(const interface_buffer_handle_t *h)
 {
     if (!h || !h->payload || !h->payload_len) return;
 
+    /* Wi-Fi first: most of the traffic. */
+    if (h->if_type == ESP_STA_IF || h->if_type == ESP_AP_IF) {
+        eh_host_channel_t *chan = eh_host_transport_get_channel(h->if_type);
+        if (chan && chan->rx) {
+            /* Copy: channel_rx may retain past return; bus frees DMA sync. */
+            uint8_t *copy = (uint8_t *)malloc(h->payload_len);
+            if (copy) {
+                memcpy(copy, h->payload, h->payload_len);
+                eh_host_mcu_transport_channel_rx(h->if_type, h->flags, copy, h->payload_len);
+            }
+            return;
+        }
+    }
+
     if ((h->flags & FLAG_WAKEUP_PKT) && h->payload_len < 1500) {
         ESP_LOGW("eh_dispatch", "Host wakeup triggered, if_type: %u, len: %u",
-                    (unsigned)h->if_type, (unsigned)h->payload_len);
+                    (unsigned int)h->if_type, (unsigned int)h->payload_len);
     }
 
     if (h->if_type == ESP_PRIV_IF && h->payload_len >= 2) {
@@ -111,10 +149,7 @@ void eh_host_mcu_transport_dispatch_frame(const interface_buffer_handle_t *h)
                 /* Order: flip -> send -> delayed_init. Flip MUST precede send. */
                 eh_host_mcu_transport_state_set(EH_HOST_MCU_TRANSPORT_TX_ACTIVE);
 
-                /* 20-byte buffer: 2 evt hdr + 5 fixed host->slave TLVs (15)
-                 * + 3 for the optional RPC_VERSION echo (0x1A).  See
-                 * eh_host_mcu_transport_send_caps.h for the size contract. */
-                uint8_t caps_pkt[20];
+                uint8_t caps_pkt[EH_HOST_CAPS_PKT_MAX_SIZE];
                 int n = eh_host_transport_build_host_caps_pkt(
                             caps_pkt, sizeof(caps_pkt),
                             0, chip_id, (uint8_t)EH_HOST_PORT_TEST_RAW_TP_DIR,
@@ -124,6 +159,7 @@ void eh_host_mcu_transport_dispatch_frame(const interface_buffer_handle_t *h)
                     eh_host_transport_tx(ESP_PRIV_IF, 0,
                                                 caps_pkt, (uint16_t)n, 0);
                 }
+#if EH_HOST_AUTO_FEAT_INIT
                 /* Worker; running inline self-deadlocks against our own RX task. */
                 if (!s_auto_init_started && eh_host_auto_init_count() > 0) {
                     s_auto_init_started = 1;
@@ -141,6 +177,7 @@ void eh_host_mcu_transport_dispatch_frame(const interface_buffer_handle_t *h)
                         s_auto_init_started = 0;
                     }
                 }
+#endif
             }
             return;
         }
@@ -150,7 +187,7 @@ void eh_host_mcu_transport_dispatch_frame(const interface_buffer_handle_t *h)
         size_t new_len = s_serial_rx.len + h->payload_len;
         uint8_t *new_buf = (uint8_t *)realloc(s_serial_rx.data, new_len);
         if (!new_buf) {
-            ESP_LOGE("eh_dispatch", "serial_rx: realloc failed (%u bytes)", (unsigned)new_len);
+            ESP_LOGE("eh_dispatch", "serial_rx: realloc failed (%u bytes)", (unsigned int)new_len);
             free(s_serial_rx.data);
             s_serial_rx.data = NULL;
             s_serial_rx.len = 0;
@@ -166,7 +203,7 @@ void eh_host_mcu_transport_dispatch_frame(const interface_buffer_handle_t *h)
 
         if (s_serial_rx.len > UINT16_MAX) {
             ESP_LOGE("eh_dispatch", "serial_rx: reassembled msg too large (%u bytes)",
-                        (unsigned)s_serial_rx.len);
+                        (unsigned int)s_serial_rx.len);
             free(s_serial_rx.data);
             s_serial_rx.data = NULL;
             s_serial_rx.len = 0;
@@ -181,34 +218,20 @@ void eh_host_mcu_transport_dispatch_frame(const interface_buffer_handle_t *h)
     }
 
     if (h->if_type == ESP_TEST_IF) {
-        eh_host_raw_tp_update_rx_len(h->payload_len);
+        eh_host_raw_tp_update_rx_len(h->payload, h->payload_len);
         return;
     }
 
-    /* Copy: channel_rx may retain past return; bus frees DMA sync. */
-    eh_host_channel_t *chan = eh_host_transport_get_channel(h->if_type);
-    if (chan && chan->rx) {
-        /* Prefer SPIRAM so an overrun in the wifi_remote RX path lands in
-         * PSRAM instead of the internal-RAM heap shared with LVGL/esp_event
-         * (see W1). free() works on heap_caps memory in ESP-IDF. */
-        uint8_t *copy = (uint8_t *)heap_caps_malloc(h->payload_len,
-                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (copy == NULL) {
-            copy = (uint8_t *)malloc(h->payload_len);
-        }
-        if (copy) {
-            memcpy(copy, h->payload, h->payload_len);
-            (void)chan->rx(chan->api_chan, copy, copy, h->payload_len);
-        }
+    if (h->if_type == ESP_AUX_IF) {
+        eh_host_transport_aux_rx(h->pkt_type, h->payload, h->payload_len);
         return;
     }
 
-    /* A WiFi data iface with no registered channel — e.g. a frame (the buffered
-     * wake packet) arriving during the post-wake re-init window before the wifi
-     * channel is back. Drop it: routing a data frame to the RPC dispatcher
-     * misparses the payload as an msg_id and jumps through a garbage handler. */
-    if (h->if_type == ESP_STA_IF || h->if_type == ESP_AP_IF ||
-        h->if_type == ESP_ETH_IF) {
+    /* The priv dispatcher reads any payload as an msg_id: give it PRIV only. */
+    if (h->if_type != ESP_PRIV_IF) {
+        ESP_LOGW("eh_dispatch", "rx-drop: no channel for if_type=%u len=%u flags=0x%x",
+                 (unsigned int)h->if_type, (unsigned int)h->payload_len,
+                 (unsigned int)h->flags);
         return;
     }
 
@@ -236,12 +259,14 @@ int eh_host_mcu_transport_init(void)
     eh_host_port_mutex_lock(s_mtx);
     s_inited = 1;
     eh_host_port_mutex_unlock(s_mtx);
+    eh_host_pkt_stats_init();
     return 0;
 }
 
 int eh_host_mcu_transport_deinit(void)
 {
     eh_host_raw_tp_deinit();
+    eh_host_pkt_stats_deinit();
 
     ensure_mtx();
     eh_host_port_mutex_lock(s_mtx);
@@ -253,9 +278,12 @@ int eh_host_mcu_transport_deinit(void)
     s_inited = 0;
     s_rx.cb  = NULL;
     s_rx.ctx = NULL;
+#if EH_HOST_AUTO_FEAT_INIT
     /* Re-arm auto-init so the next INIT event re-spawns feature init; without
      * this the second bring-up skips it and CP async events go unhandled. */
     s_auto_init_started = 0;
+    eh_host_auto_init_rearm();
+#endif
     eh_host_port_mutex_unlock(s_mtx);
     eh_host_mcu_transport_state_set(EH_HOST_MCU_TRANSPORT_INACTIVE);
     return eh_host_bus_deinit();

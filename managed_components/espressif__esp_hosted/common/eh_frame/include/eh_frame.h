@@ -37,6 +37,11 @@ typedef struct {
     /* CP TX: V1 throttle_cmd:2 (V2 ignores). RX: extracted from V1 hdr. */
     uint8_t   throttle_cmd;
 
+    /* UART, CP to host: bytes the CP has read from its RX ring, in units
+     * announced by EH_PRIV_UART_CREDIT, modulo 64. RX: left unchanged when
+     * the frame carries none, so the caller presets EH_FRAME_NO_CREDIT. */
+    uint8_t   rx_credit;
+
     /* MCU SPI-HD TX only: 1 = don't free payload after DMA. */
     uint8_t   payload_zcopy;
 
@@ -47,6 +52,8 @@ typedef struct {
     /* Caller-set free callback for the DMA buf. */
     void    (*free_buf_handle)(void *priv_buffer_handle);
 } interface_buffer_handle_t;
+
+#define EH_FRAME_NO_CREDIT 0xFFu
 
 typedef enum {
     EH_FRAME_OK      = 0,
@@ -61,6 +68,7 @@ typedef enum {
     EH_TRANSPORT_SDIO   = 1,
     EH_TRANSPORT_UART   = 2,
     EH_TRANSPORT_SPI_HD = 3,
+    EH_TRANSPORT_USB    = 4,
 } eh_transport_t;
 
 /* hdr_version starts V1; re-init after PRIV handshake to upgrade or enable checksum. */
@@ -105,6 +113,13 @@ typedef struct {
     .checksum_enabled = 1,                                   \
     .reserved         = {0, 0},                              \
 }
+#define EH_FRAME_CFG_CP_LINUX_802_3_USB_DEFAULT    {  \
+    .transport        = EH_TRANSPORT_USB,           \
+    .max_buf_size     = ESP_TRANSPORT_USB_MAX_BUF_SIZE,     \
+    .hdr_version      = ESP_HOSTED_HDR_VERSION_V1,          \
+    .checksum_enabled = 1,                                   \
+    .reserved         = {0, 0},                              \
+}
 
 /* ── Coprocessor side — paired with MCU host ────────────────────────────── */
 #define EH_FRAME_CFG_CP_MCU_SPI_DEFAULT         {  \
@@ -135,6 +150,13 @@ typedef struct {
     .checksum_enabled = 1,                                   \
     .reserved         = {0, 0},                              \
 }
+#define EH_FRAME_CFG_CP_MCU_USB_DEFAULT         {  \
+    .transport        = EH_TRANSPORT_USB,           \
+    .max_buf_size     = ESP_TRANSPORT_USB_MAX_BUF_SIZE,     \
+    .hdr_version      = ESP_HOSTED_HDR_VERSION_V1,          \
+    .checksum_enabled = 1,                                   \
+    .reserved         = {0, 0},                              \
+}
 
 /* ── Host side — MCU (IDF/FreeRTOS) ────────────────────────────────────── */
 #define EH_FRAME_CFG_HOST_MCU_SPI_DEFAULT       {  \
@@ -161,6 +183,13 @@ typedef struct {
 #define EH_FRAME_CFG_HOST_MCU_SPI_HD_DEFAULT    {  \
     .transport        = EH_TRANSPORT_SPI_HD,        \
     .max_buf_size     = ESP_TRANSPORT_SPI_HD_MAX_BUF_SIZE,  \
+    .hdr_version      = ESP_HOSTED_HDR_VERSION_V1,          \
+    .checksum_enabled = 1,                                   \
+    .reserved         = {0, 0},                              \
+}
+#define EH_FRAME_CFG_HOST_MCU_USB_DEFAULT       {  \
+    .transport        = EH_TRANSPORT_USB,           \
+    .max_buf_size     = ESP_TRANSPORT_USB_MAX_BUF_SIZE,     \
     .hdr_version      = ESP_HOSTED_HDR_VERSION_V1,          \
     .checksum_enabled = 1,                                   \
     .reserved         = {0, 0},                              \

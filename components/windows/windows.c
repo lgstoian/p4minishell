@@ -444,10 +444,9 @@ static void windows_create_transcript(void)
     /* Make the transcript a vertical scroll container: touch pan, USB mouse
      * wheel, and USB keyboard Up/Down all drive it via LVGL's built-in scroll
      * handling. */
-    lv_obj_add_flag(s_windows.transcript,
-                    LV_OBJ_FLAG_SCROLLABLE |
-                    LV_OBJ_FLAG_SCROLL_WITH_ARROW |
-                    LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(s_windows.transcript, true);
+    lv_obj_set_scroll_with_arrow(s_windows.transcript, true);
+    lv_obj_set_clickable(s_windows.transcript, true);
     lv_obj_set_scroll_dir(s_windows.transcript, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_windows.transcript, LV_SCROLLBAR_MODE_AUTO);
 
@@ -459,8 +458,8 @@ static void windows_create_transcript(void)
     s_windows.transcript_spacer = lv_obj_create(s_windows.transcript);
     lv_obj_set_width(s_windows.transcript_spacer, LV_PCT(100));
     lv_obj_set_height(s_windows.transcript_spacer, 0);
-    lv_obj_clear_flag(s_windows.transcript_spacer,
-                      LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(s_windows.transcript_spacer, false);
+    lv_obj_set_clickable(s_windows.transcript_spacer, false);
     lv_obj_set_style_bg_opa(s_windows.transcript_spacer, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_windows.transcript_spacer, 0, 0);
     lv_obj_set_style_radius(s_windows.transcript_spacer, 0, 0);
@@ -480,7 +479,7 @@ static void windows_create_transcript(void)
      * in one pass while the container still scrolls through the taller
      * spacer. */
     lv_obj_set_height(s_windows.transcript_spans, 0);
-    lv_obj_clear_flag(s_windows.transcript_spans, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(s_windows.transcript_spans, false);
     lv_obj_set_style_bg_opa(s_windows.transcript_spans, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_windows.transcript_spans, 0, 0);
     lv_obj_set_style_pad_all(s_windows.transcript_spans, 0, 0);
@@ -496,8 +495,8 @@ static void windows_create_transcript(void)
     s_windows.transcript_measure = lv_spangroup_create(s_windows.transcript);
     lv_obj_set_width(s_windows.transcript_measure, LV_PCT(100));
     lv_obj_set_height(s_windows.transcript_measure, 0);
-    lv_obj_add_flag(s_windows.transcript_measure, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_windows.transcript_measure, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_hidden(s_windows.transcript_measure, true);
+    lv_obj_set_scrollable(s_windows.transcript_measure, false);
     lv_obj_set_style_bg_opa(s_windows.transcript_measure, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_windows.transcript_measure, 0, 0);
     lv_obj_set_style_pad_all(s_windows.transcript_measure, 0, 0);
@@ -597,7 +596,7 @@ static void windows_create_input_row(void)
     lv_obj_set_style_text_font(stop_label, windows_get_ui_font(), 0);
     lv_obj_center(stop_label);
     s_windows.stop_label = stop_label;
-    lv_obj_add_flag(s_windows.stop_button, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_windows.stop_button, true);
 
     /* Input line textarea */
     s_windows.input_line = lv_textarea_create(s_windows.input_row);
@@ -633,8 +632,8 @@ static void windows_create_input_row(void)
     lv_obj_set_style_text_color(s_windows.input_ghost,
                                 windows_get_color(WINDOWS_COLOR_TEXT_MUTED), 0);
     lv_label_set_text(s_windows.input_ghost, "");
-    lv_obj_add_flag(s_windows.input_ghost, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(s_windows.input_ghost, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_hidden(s_windows.input_ghost, true);
+    lv_obj_set_clickable(s_windows.input_ghost, false);
 
     /* Reverse-history search query: floats just above the input row while
      * Ctrl+R search is active (positioned by the shell when shown). */
@@ -647,8 +646,8 @@ static void windows_create_input_row(void)
     lv_obj_set_style_bg_opa(s_windows.search_label, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_hor(s_windows.search_label, 6, 0);
     lv_label_set_text(s_windows.search_label, "");
-    lv_obj_add_flag(s_windows.search_label, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(s_windows.search_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_hidden(s_windows.search_label, true);
+    lv_obj_set_clickable(s_windows.search_label, false);
 }
 
 /** Style the input-line cursor as a block (true, editor-like) or a thin
@@ -1516,9 +1515,9 @@ static void windows_transcript_selection_init(void)
     s_transcript_sel_layer = lv_obj_create(s_windows.transcript);
     if (s_transcript_sel_layer != NULL) {
         lv_obj_remove_style_all(s_transcript_sel_layer);
-        lv_obj_add_flag(s_transcript_sel_layer, LV_OBJ_FLAG_IGNORE_LAYOUT);
-        lv_obj_clear_flag(s_transcript_sel_layer,
-                          LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_ignore_layout(s_transcript_sel_layer, true);
+        lv_obj_set_scrollable(s_transcript_sel_layer, false);
+        lv_obj_set_clickable(s_transcript_sel_layer, false);
         lv_obj_set_pos(s_transcript_sel_layer, 0, 0);
         lv_obj_set_size(s_transcript_sel_layer, 0, 0);
     }
@@ -1712,11 +1711,11 @@ void windows_transcript_selection_clear(void)
     s_transcript_selecting = false;
     s_transcript_sel_suppress_click = false;
     if (s_transcript_sel_press_obj != NULL) {
-        lv_obj_remove_flag(s_transcript_sel_press_obj, LV_OBJ_FLAG_PRESS_LOCK);
+        lv_obj_set_press_lock(s_transcript_sel_press_obj, false);
         s_transcript_sel_press_obj = NULL;
     }
     if (s_windows.transcript != NULL) {
-        lv_obj_add_flag(s_windows.transcript, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scrollable(s_windows.transcript, true);
     }
     windows_transcript_selection_clear_rects();
 }
@@ -1839,9 +1838,9 @@ static void windows_transcript_selection_event_cb(lv_event_t *event)
         s_transcript_sel_suppress_click = false;
         s_transcript_sel_press_obj = target;
         if (s_windows.transcript != NULL) {
-            lv_obj_clear_flag(s_windows.transcript, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_set_scrollable(s_windows.transcript, false);
         }
-        lv_obj_add_flag(target, LV_OBJ_FLAG_PRESS_LOCK);
+        lv_obj_set_press_lock(target, true);
         windows_transcript_sel_paint();
         break;
     case LV_EVENT_PRESSING:
@@ -1861,11 +1860,11 @@ static void windows_transcript_selection_event_cb(lv_event_t *event)
             s_transcript_sel_suppress_click = true;
         }
         if (s_transcript_sel_press_obj != NULL) {
-            lv_obj_remove_flag(s_transcript_sel_press_obj, LV_OBJ_FLAG_PRESS_LOCK);
+            lv_obj_set_press_lock(s_transcript_sel_press_obj, false);
             s_transcript_sel_press_obj = NULL;
         }
         if (s_windows.transcript != NULL) {
-            lv_obj_add_flag(s_windows.transcript, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_set_scrollable(s_windows.transcript, true);
         }
         break;
     case LV_EVENT_CLICKED:
@@ -2371,18 +2370,18 @@ void windows_shell_spans_set_hidden(bool hidden)
         return;
     }
     if (hidden) {
-        lv_obj_add_flag(s_windows.transcript_spans, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.transcript_spans, true);
     } else {
-        lv_obj_remove_flag(s_windows.transcript_spans, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.transcript_spans, false);
     }
     /* The spacer defines the scroll range; hide it with the spans so a stale
      * range cannot swallow scroll input on an overlaid transcript, and restore
      * the range on the way back out. It is never hidden otherwise. */
     if (s_windows.transcript_spacer != NULL) {
         if (hidden) {
-            lv_obj_add_flag(s_windows.transcript_spacer, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_windows.transcript_spacer, true);
         } else {
-            lv_obj_remove_flag(s_windows.transcript_spacer, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_windows.transcript_spacer, false);
         }
     }
     s_windows.shell_spans_hidden = hidden;
@@ -2401,9 +2400,9 @@ static void windows_apply_stop_visibility(void)
     show = s_windows.stop_wanted && !s_windows.editor_mode &&
            !s_windows.app_mode && !s_windows.tui_mode;
     if (show) {
-        lv_obj_remove_flag(s_windows.stop_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.stop_button, false);
     } else {
-        lv_obj_add_flag(s_windows.stop_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.stop_button, true);
     }
 }
 
@@ -2767,22 +2766,22 @@ lv_obj_t *windows_enter_editor_mode(void)
      * transcript-region height (hiding it makes LVGL flex skip it, collapsing
      * the editor area to ~one line and dragging the keyboard up under it). */
     if (s_windows.prev_button != NULL) {
-        lv_obj_add_flag(s_windows.prev_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.prev_button, true);
     }
     if (s_windows.next_button != NULL) {
-        lv_obj_add_flag(s_windows.next_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.next_button, true);
     }
     if (s_windows.scroll_up_button != NULL) {
-        lv_obj_add_flag(s_windows.scroll_up_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.scroll_up_button, true);
     }
     if (s_windows.scroll_down_button != NULL) {
-        lv_obj_add_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.scroll_down_button, true);
     }
     if (s_windows.tab_button != NULL) {
-        lv_obj_add_flag(s_windows.tab_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.tab_button, true);
     }
     if (s_windows.input_line != NULL) {
-        lv_obj_add_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.input_line, true);
     }
 
     /* The editor renders into the EXISTING transcript widget (proven,
@@ -2831,7 +2830,7 @@ void windows_exit_editor_mode(void)
     s_windows.editor_surface = NULL;
 
     if (s_windows.transcript != NULL) {
-        lv_obj_remove_flag(s_windows.transcript, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.transcript, false);
         windows_apply_transcript_height();
     }
 
@@ -2841,22 +2840,22 @@ void windows_exit_editor_mode(void)
     }
 
     if (s_windows.prev_button != NULL) {
-        lv_obj_remove_flag(s_windows.prev_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.prev_button, false);
     }
     if (s_windows.next_button != NULL) {
-        lv_obj_remove_flag(s_windows.next_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.next_button, false);
     }
     if (s_windows.scroll_up_button != NULL) {
-        lv_obj_remove_flag(s_windows.scroll_up_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.scroll_up_button, false);
     }
     if (s_windows.scroll_down_button != NULL) {
-        lv_obj_remove_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.scroll_down_button, false);
     }
     if (s_windows.tab_button != NULL) {
-        lv_obj_remove_flag(s_windows.tab_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.tab_button, false);
     }
     if (s_windows.input_line != NULL) {
-        lv_obj_remove_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.input_line, false);
     }
 
     s_windows.editor_mode = false;
@@ -2888,22 +2887,22 @@ void windows_enter_app_mode(void)
         return;
     }
     if (s_windows.prev_button != NULL) {
-        lv_obj_add_flag(s_windows.prev_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.prev_button, true);
     }
     if (s_windows.next_button != NULL) {
-        lv_obj_add_flag(s_windows.next_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.next_button, true);
     }
     if (s_windows.scroll_up_button != NULL) {
-        lv_obj_add_flag(s_windows.scroll_up_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.scroll_up_button, true);
     }
     if (s_windows.scroll_down_button != NULL) {
-        lv_obj_add_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.scroll_down_button, true);
     }
     if (s_windows.tab_button != NULL) {
-        lv_obj_add_flag(s_windows.tab_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.tab_button, true);
     }
     if (s_windows.input_line != NULL) {
-        lv_obj_add_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.input_line, true);
     }
     s_windows.app_mode = true;
     windows_apply_stop_visibility();
@@ -2916,22 +2915,22 @@ void windows_exit_app_mode(void)
         return;
     }
     if (s_windows.prev_button != NULL) {
-        lv_obj_remove_flag(s_windows.prev_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.prev_button, false);
     }
     if (s_windows.next_button != NULL) {
-        lv_obj_remove_flag(s_windows.next_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.next_button, false);
     }
     if (s_windows.scroll_up_button != NULL) {
-        lv_obj_remove_flag(s_windows.scroll_up_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.scroll_up_button, false);
     }
     if (s_windows.scroll_down_button != NULL) {
-        lv_obj_remove_flag(s_windows.scroll_down_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.scroll_down_button, false);
     }
     if (s_windows.tab_button != NULL) {
-        lv_obj_remove_flag(s_windows.tab_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.tab_button, false);
     }
     if (s_windows.input_line != NULL) {
-        lv_obj_remove_flag(s_windows.input_line, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_windows.input_line, false);
     }
     s_windows.app_mode = false;
     windows_apply_stop_visibility();
@@ -3062,7 +3061,7 @@ void windows_exit_tui_mode(void)
     s_windows.tui_surface = NULL;
     s_windows.tui_mode = false;
     windows_exit_app_surface();
-    if (s_windows.transcript) lv_obj_remove_flag(s_windows.transcript, LV_OBJ_FLAG_HIDDEN);
+    if (s_windows.transcript) lv_obj_set_hidden(s_windows.transcript, false);
     windows_apply_stop_visibility();
 }
 
@@ -3096,8 +3095,8 @@ void windows_set_fullscreen(bool fullscreen)
     s_windows.fullscreen = fullscreen;
     header_set_visible(!fullscreen);
     if (s_windows.input_row) {
-        if (fullscreen) lv_obj_add_flag(s_windows.input_row, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_remove_flag(s_windows.input_row, LV_OBJ_FLAG_HIDDEN);
+        if (fullscreen) lv_obj_set_hidden(s_windows.input_row, true);
+        else lv_obj_set_hidden(s_windows.input_row, false);
     }
     // Keyboard auto-hidden in fullscreen; will be restored on exit if needed
     if (fullscreen) {

@@ -119,7 +119,8 @@ static void sta_set_country(void)
  * MUST run after esp_wifi_start() (else ESP_ERR_WIFI_NOT_STARTED). */
 static void sta_set_band(void)
 {
-#if CONFIG_SLAVE_SOC_WIFI_SUPPORT_5G
+/* Handle for CP and Host both */
+#if defined(CONFIG_SOC_WIFI_SUPPORT_5G) || defined(CONFIG_SLAVE_SOC_WIFI_SUPPORT_5G)
     ESP_ERROR_CHECK(esp_wifi_set_band_mode(EH_EXAMPLE_WIFI_BAND_MODE));
 #endif
 }
@@ -133,9 +134,9 @@ static void sta_set_protocol(void)
     esp_err_t rc = esp_wifi_set_protocol(WIFI_IF_STA, EH_EXAMPLE_WIFI_PROTO);
     if (rc != ESP_OK)
         ESP_LOGW(TAG, "set_protocol(0x%02x) not applied: %s",
-                 (unsigned)EH_EXAMPLE_WIFI_PROTO, esp_err_to_name(rc));
+                 (unsigned int)EH_EXAMPLE_WIFI_PROTO, esp_err_to_name(rc));
     else
-        ESP_LOGI(TAG, "STA protocol set to 0x%02x", (unsigned)EH_EXAMPLE_WIFI_PROTO);
+        ESP_LOGI(TAG, "STA protocol set to 0x%02x", (unsigned int)EH_EXAMPLE_WIFI_PROTO);
 #endif
 }
 
@@ -234,9 +235,11 @@ esp_err_t eh_example_sta_start(const char *ssid, const char *password)
     }
 
     wifi_config_t wcfg = { 0 };
-    strncpy((char *)wcfg.sta.ssid, ssid, sizeof(wcfg.sta.ssid) - 1);
+    /* Full width: IDF reads these bounded, so no terminator is reserved. */
+    memcpy(wcfg.sta.ssid, ssid, strnlen(ssid, sizeof(wcfg.sta.ssid)));
     if (password && password[0]) {
-        strncpy((char *)wcfg.sta.password, password, sizeof(wcfg.sta.password) - 1);
+        memcpy(wcfg.sta.password, password,
+               strnlen(password, sizeof(wcfg.sta.password)));
         wcfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     } else {
         wcfg.sta.threshold.authmode = WIFI_AUTH_OPEN;

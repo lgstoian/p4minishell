@@ -1,9 +1,9 @@
 /*
- * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  * SPDX-License-Identifier: Apache-2.0
  */
 
-/* Interface RX/TX table + capability accumulator (spinlock-guarded). */
+/* Per-interface traffic callbacks + capability accumulator (spinlock-guarded). */
 
 #include <string.h>
 #include <stdlib.h>
@@ -22,58 +22,95 @@
 
 static const char TAG[] = "ehcp_reg";
 
-eh_iface_entry_t g_iface_table[ESP_IF_TYPE_MAX];
+static struct {
+    eh_cp_traffic_cb_t rx;
+    eh_cp_traffic_cb_t tx;
+} s_traffic[ESP_IF_TYPE_MAX];
 
-esp_err_t eh_cp_register_rx_cb(eh_if_type_t iface_type,
-                                       hosted_rx_cb_t rx_cb, void *ctx)
+/* ESP_AUX_IF handlers, by aux_type. */
+static struct {
+    hosted_rx_cb_t rx;
+    void          *ctx;
+} g_aux_table[ESP_AUX_TYPE_MAX];
+
+/* STA/AP may be taken over (network split); any other interface has one owner. */
+static esp_err_t set_cb(eh_if_type_t if_type, bool tx, eh_cp_traffic_cb_t cb)
 {
-    if (iface_type >= ESP_IF_TYPE_MAX) {
-        ESP_LOGE(TAG, "register_rx_cb: invalid iface_type %d", iface_type);
+    if (if_type <= ESP_INVALID_IF || if_type >= ESP_IF_TYPE_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    eh_cp_traffic_cb_t *slot = tx ? &s_traffic[if_type].tx : &s_traffic[if_type].rx;
+
+    if (cb && *slot && if_type != ESP_STA_IF && if_type != ESP_AP_IF) {
+        ESP_LOGE(TAG, "iface %d already claimed", if_type);
+        return ESP_ERR_INVALID_STATE;
+    }
+    *slot = cb;
+    return ESP_OK;
+}
+
+esp_err_t eh_cp_set_traffic_rx_cb(eh_if_type_t if_type, eh_cp_traffic_cb_t cb)
+{
+    return set_cb(if_type, false, cb);
+}
+
+esp_err_t eh_cp_set_traffic_tx_cb(eh_if_type_t if_type, eh_cp_traffic_cb_t cb)
+{
+    return set_cb(if_type, true, cb);
+}
+
+eh_cp_traffic_cb_t eh_cp_get_traffic_rx_cb(eh_if_type_t if_type)
+{
+    return if_type < ESP_IF_TYPE_MAX ? s_traffic[if_type].rx : NULL;
+}
+
+eh_cp_traffic_cb_t eh_cp_get_traffic_tx_cb(eh_if_type_t if_type)
+{
+    return if_type < ESP_IF_TYPE_MAX ? s_traffic[if_type].tx : NULL;
+}
+
+esp_err_t eh_cp_register_aux_rx_cb(eh_aux_type_t aux_type,
+                                   hosted_rx_cb_t rx_cb, void *ctx)
+{
+    if (aux_type >= ESP_AUX_TYPE_MAX) {
+        ESP_LOGE(TAG, "register_aux_rx_cb: invalid aux_type %d", aux_type);
         return ESP_ERR_INVALID_ARG;
     }
     if (!rx_cb) {
-        ESP_LOGE(TAG, "register_rx_cb: rx_cb is NULL");
+        ESP_LOGE(TAG, "register_aux_rx_cb: rx_cb is NULL");
         return ESP_ERR_INVALID_ARG;
     }
-    /* STA/AP allow re-registration so network-split can override. */
-    if (g_iface_table[iface_type].rx != NULL &&
-        iface_type != ESP_STA_IF && iface_type != ESP_AP_IF) {
-        ESP_LOGE(TAG, "register_rx_cb: iface %d already claimed", iface_type);
+    if (g_aux_table[aux_type].rx != NULL) {
+        ESP_LOGE(TAG, "register_aux_rx_cb: aux_type %d already claimed", aux_type);
         return ESP_ERR_INVALID_STATE;
     }
-    g_iface_table[iface_type].rx  = rx_cb;
-    g_iface_table[iface_type].ctx = ctx;
-    ESP_LOGD(TAG, "RX cb registered for iface %d", iface_type);
+    g_aux_table[aux_type].rx  = rx_cb;
+    g_aux_table[aux_type].ctx = ctx;
+    ESP_LOGD(TAG, "RX cb registered for aux_type %d", aux_type);
     return ESP_OK;
 }
 
-esp_err_t eh_cp_register_tx_cb(eh_if_type_t iface_type,
-                                       hosted_tx_cb_t tx_cb, void *ctx)
+esp_err_t eh_cp_unregister_aux_rx_cb(eh_aux_type_t aux_type)
 {
-    if (iface_type >= ESP_IF_TYPE_MAX) {
-        ESP_LOGE(TAG, "register_tx_cb: invalid iface_type %d", iface_type);
+    if (aux_type >= ESP_AUX_TYPE_MAX) {
+        ESP_LOGE(TAG, "unregister_aux_rx_cb: invalid aux_type %d", aux_type);
         return ESP_ERR_INVALID_ARG;
     }
-    /* NULL clears any existing TX override. */
-    g_iface_table[iface_type].tx  = tx_cb;
-    g_iface_table[iface_type].ctx = ctx;
-    ESP_LOGD(TAG, "TX cb %s for iface %d", tx_cb ? "registered" : "cleared", iface_type);
+    g_aux_table[aux_type].rx  = NULL;
+    g_aux_table[aux_type].ctx = NULL;
+    ESP_LOGD(TAG, "RX cb cleared for aux_type %d", aux_type);
     return ESP_OK;
 }
 
-esp_err_t eh_cp_dispatch_rx(eh_if_type_t iface_type,
-                                    void *buf, uint16_t len, void *eb)
+esp_err_t eh_cp_dispatch_aux_rx(eh_aux_type_t aux_type,
+                                void *buf, uint16_t len, void *eb)
 {
-    if (iface_type >= ESP_IF_TYPE_MAX) {
-        ESP_LOGE(TAG, "dispatch_rx: invalid iface_type %d", iface_type);
-        return ESP_ERR_INVALID_ARG;
-    }
-    const eh_iface_entry_t *e = &g_iface_table[iface_type];
-    if (!e->rx) {
-        /* NOT_FOUND lets callers (e.g. STA fallback) know nobody consumed it. */
+    if (aux_type >= ESP_AUX_TYPE_MAX)
         return ESP_ERR_NOT_FOUND;
-    }
-    return e->rx(e->ctx, buf, len, eb);
+
+    if (!g_aux_table[aux_type].rx)
+        return ESP_ERR_NOT_FOUND;
+    return g_aux_table[aux_type].rx(g_aux_table[aux_type].ctx, buf, len, eb);
 }
 
 

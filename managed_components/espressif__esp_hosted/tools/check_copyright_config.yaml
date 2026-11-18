@@ -55,6 +55,8 @@ ignore:
     - common/serializers/eh_proto_v1/src/gen_v1.c
     - common/serializers/eh_proto_v2/include/gen_v2.h
     - common/serializers/eh_proto_v2/src/gen_v2.c
+    - common/serializers/eh_proto_v2/include/gen_v2_names.h
+    - common/serializers/eh_proto_v2/src/gen_v2_names.c
     - tools/vendor/
     - port/idf_components/esp_wifi_remote/
     # Upstream lwip / esp_netif-lwip glue (BSD-3-Clause).
@@ -62,3 +64,6 @@ ignore:
     - port/idf_components/esp_netif/lwip/
     # Apache mynewt/NimBLE-derived example — upstream ASF header block.
     - examples/bluetooth/esp_hosted_nimble/bleprph_wifi_coex/
+    - examples/openthread/rcp_separate_chip/border_router/esp_host/main/ble_prph.c
+    - examples/openthread/rcp_separate_chip/border_router/esp_host/main/bleprph.h
+    - examples/openthread/rcp_separate_chip/border_router/esp_host/main/gatt_svr.c

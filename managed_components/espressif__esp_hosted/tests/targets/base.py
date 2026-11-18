@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 """The Target contract — the substrate seam.
 
 `BenchProvider.make(spec) -> Bench`. `spec` names *what* to run (example, roles,
@@ -25,6 +27,7 @@ class BenchSpec:
     example: str
     host_role: str = "mcu_host"      # mcu_host | esp_host | linux_802_3_host/c_app
     cp_role: str = "cp"
+    cp_app: str = None               # test-owned CP app (infra/cp_apps.py); "own" = example's cp/
     host_target: str = "esp32p4"
     cp_target: str = "esp32c6"
     transport: str = "sdio"          # sdio | uart
@@ -32,6 +35,10 @@ class BenchSpec:
     timeout: str = "60s"             # per-DUT run cap (EH_EMU_TIMEOUT overrides)
     extra_ovl: tuple = ()            # per-test host sdkconfig lines (e.g. wifi creds)
     cp_extra_ovl: tuple = ()         # per-test CP sdkconfig lines (e.g. SDIO SW_AGGR)
+    cp_inject: dict = None           # {dest_rel: abs_src} staged into the CP's
+                                     # scratch build copy — lets tests/fw/ own a
+                                     # harness instead of an example carrying it
+    host_inject: dict = None         # same, staged into the host's build copy
     hostfwd: tuple = ()              # extra CP guest ports to forward for network-split
                                      # routing tests (e.g. 61500 echo, 61600 http);
                                      # each maps to a distinct host loopback port,
@@ -53,6 +60,9 @@ class Bench:
     net: object = None
     teardown: object = None          # callable() or None
     caps: frozenset = field(default_factory=frozenset)
+    # Build outputs a test may need, e.g. {'cp_elf': ..., 'host_elf': ...} for
+    # resolving addresses a DUT printed.
+    artifacts: dict = field(default_factory=dict)
 
     @property
     def host(self):

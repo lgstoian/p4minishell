@@ -11,6 +11,7 @@ set(srcs
     src/eh_cp_feat_rpc_ext_v2_dispatcher_evt.c
     src/eh_cp_feat_rpc_ext_v2_handler_evt.c
     src/eh_cp_feat_rpc_ext_v2_dispatcher_req.c
+    src/eh_cp_feat_rpc_ext_v2_handler_req_context.c
 )
 
 if(CONFIG_ESP_HOSTED_CP_FEAT_WIFI_READY)
@@ -47,6 +48,10 @@ endif()
 
 if(CONFIG_ESP_HOSTED_CP_FEAT_OPENTHREAD_READY)
     list(APPEND srcs src/eh_cp_feat_rpc_ext_v2_handler_req_openthread.c)
+endif()
+
+if(CONFIG_ESP_HOSTED_CP_FEAT_RF_CERT_READY)
+    list(APPEND srcs src/eh_cp_feat_rpc_ext_v2_handler_req_rf_cert.c)
 endif()
 
 add_library(eh_cp_feat_rpc_ext_v2 STATIC ${srcs})
@@ -97,11 +102,6 @@ if(CONFIG_ESP_HOSTED_CP_FEAT_RPC_EXT_V2_AUTO_INIT)
         "-Wl,--undefined=eh_cp_feat_rpc_ext_v2_init")
 endif()
 if(CONFIG_ESP_HOSTED_CP_FEAT_WIFI_READY)
-    target_link_options(eh_cp_feat_rpc_ext_v2 INTERFACE
-        "-Wl,--wrap=esp_wifi_init")
-endif()
-
-if(CONFIG_ESP_HOSTED_CP_FEAT_WIFI_READY)
     target_link_libraries(eh_cp_feat_rpc_ext_v2 PUBLIC eh_cp_feat_wifi)
 endif()
 if(CONFIG_ESP_HOSTED_CP_FEAT_WIFI_EXT_ENT_READY)
@@ -121,6 +121,9 @@ if(CONFIG_ESP_HOSTED_CP_FEAT_GPIO_EXP_READY)
 endif()
 if(CONFIG_ESP_HOSTED_CP_FEAT_OPENTHREAD_READY)
     target_link_libraries(eh_cp_feat_rpc_ext_v2 PUBLIC eh_cp_feat_openthread)
+endif()
+if(CONFIG_ESP_HOSTED_CP_FEAT_RF_CERT_READY)
+    target_link_libraries(eh_cp_feat_rpc_ext_v2 PUBLIC eh_cp_feat_rf_cert)
 endif()
 
 if(TARGET eh_cp)

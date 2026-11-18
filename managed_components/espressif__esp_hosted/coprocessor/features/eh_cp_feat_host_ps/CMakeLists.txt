@@ -5,6 +5,7 @@ endif()
 set(srcs
     "src/eh_cp_feat_host_ps.c"
     "src/eh_cp_feat_host_ps_internal.c"
+    "src/eh_cp_feat_host_ps_worker.c"
 )
 
 add_library(eh_cp_feat_host_ps STATIC ${srcs})
@@ -21,9 +22,6 @@ target_link_libraries(eh_cp_feat_host_ps
 )
 if(CONFIG_ESP_HOSTED_CP_FEAT_WIFI_READY)
     target_link_libraries(eh_cp_feat_host_ps PUBLIC eh_cp_feat_wifi)
-endif()
-if(CONFIG_ESP_HOSTED_CP_FEAT_NW_SPLIT_READY)
-    target_link_libraries(eh_cp_feat_host_ps PUBLIC eh_cp_feat_nw_split)
 endif()
 if(CONFIG_ESP_HOSTED_CP_FEAT_HOST_PS_AUTO_INIT)
     target_link_options(eh_cp_feat_host_ps INTERFACE

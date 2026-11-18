@@ -11,9 +11,11 @@ command + an expected line) rather than a new example per scenario.
 
 ### Supported Coprocessors
 
-| Coprocessor | ESP32 | ESP32-C Series | ESP32-S Series |
-| :----------: | :---: | :------------: | :------------: |
-| Support     | Yes   | Yes            | Yes            |
+| Coprocessor | ESP32 | ESP32-C Series | ESP32-S2/S3 | ESP32-S31 |
+| :----------: | :---: | :------------: | :---------: | :-------: |
+| Support     | Yes   | Yes            | Yes         | Yes ¹     |
+
+¹ ESP32-S31: preview target, 2.4 GHz only, no SDIO. See [ESP32-S31 test board](https://github.com/espressif/esp-hosted/blob/master/docs/getting-started-mcu.md#esp32-s31-test-board-on-the-esp32-p4-function-ev-board).
 
 ### Supported Host Devices
 
@@ -39,6 +41,14 @@ system/api_exerciser/
      └── c_app/          native C app
 ```
 
+> [!IMPORTANT]
+> **New here? Get a base example working first.** Follow
+> [Getting Started: MCU](https://github.com/espressif/esp-hosted/blob/master/docs/getting-started-mcu.md)
+> or
+> [Getting Started: Linux](https://github.com/espressif/esp-hosted/blob/master/docs/getting-started-linux.md)
+> to wire the boards and confirm the host↔co-processor handshake. This example
+> is normally driven by the pytest bench rather than flashed by hand.
+
 <!-- esp_host-start -->
 ## The result contract
 
@@ -56,6 +66,43 @@ EH rc=<int> cmd=<name> [k=v ...]
 Type `help` at the `eh>` prompt for the full command list.
 <!-- esp_host-stop -->
 
+<!-- coprocessor-start -->
+## Configuration
+
+The exerciser needs every feature whose API it offers as a command, so the
+co-processor config is **pre-set in `sdkconfig.defaults`** (do not remove):
+
+```text
+CONFIG_ESP_HOSTED_CP_FEAT_WIFI=y          # Wi-Fi API surface
+CONFIG_ESP_HOSTED_CP_FEAT_GPIO_EXP=y      # GPIO expander API surface
+CONFIG_ESP_HOSTED_CP_FEAT_CP_EXT_COEX=y   # external-coexistence API surface
+```
+
+Dropping one of these removes the matching commands, and the tests that
+drive them fail rather than skip.
+<!-- coprocessor-stop -->
+
+<!-- esp_host-start -->
+## Configuration
+
+The exerciser needs every feature whose API it offers as a command, so the
+host config is **pre-set in `sdkconfig.defaults`** (do not remove):
+
+```text
+CONFIG_ESP_HOSTED_HOST_FEAT_RPC=y         # RPC control path
+CONFIG_ESP_HOSTED_HOST_FEAT_RPC_EXT_V2=y  # RPC ext-v2 (required)
+CONFIG_ESP_HOSTED_HOST_FEAT_SYSTEM=y
+CONFIG_ESP_HOSTED_HOST_FEAT_WIFI=y
+CONFIG_ESP_HOSTED_HOST_FEAT_GPIO_EXP=y
+CONFIG_ESP_HOSTED_HOST_FEAT_CP_EXT_COEX=y
+```
+
+The co-processor must enable the matching CP-side features.
+
+Dropping one of these removes the matching commands, and the tests that
+drive them fail rather than skip.
+<!-- esp_host-stop -->
+
 ## Run
 
 ```
@@ -63,9 +110,49 @@ Type `help` at the `eh>` prompt for the full command list.
 python3 tools/eh.py test emu-mcu -k api_exerciser
 ```
 
+## Verify
+
+A command answers on one line and the test compares that line verbatim:
+
+```text
+eh> wifi_get_ps
+EH rc=0 cmd=wifi_get_ps ps=2
+```
+
+`rc=0` is a pass. A non-zero `rc` carries `err=<name>` and the test reports
+the whole line, so a failure says what the API returned rather than only
+that it differed.
+
 ## Adding coverage
 
 Add a row to `mcu_host/main/eh_api_cmd.c`'s command table (one thin
 `argv → eh_host_* call → eh_out(...)` wrapper), then a pytest data file under
 `tests/emu-mcu/eh_test_feat_api/`. No emulator change is needed for the
 scalar/string API surface (SCENARIO_BACKLOG bucket **B2**).
+
+## USB OTG host (ESP32-P4)
+
+`mcu_host/sdkconfig.defaults` enables the host features this example drives
+from the console. `mcu_host/sdkconfig.defaults.esp32p4.usb` adds the ESP32-P4
+USB OTG host transport: host target `esp32p4`, coprocessor `esp32s31`, and
+`CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_OTG_HOST`.
+
+From `mcu_host/`:
+
+```bash
+idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.esp32p4.usb" set-target esp32p4
+idf.py build
+idf.py -p PORT flash monitor
+```
+
+`set-target` regenerates `sdkconfig` from those two files. List
+`sdkconfig.defaults` first so the USB file can override the transport.
+
+The coprocessor firmware must use USB OTG device (CDC-ACM). Keep the host
+console off the USB OTG peripheral; that controller is the ESP-Hosted bus.
+The console prompt is `eh>`.
+
+[USB RNDIS is not yet enabled.] For the USB RNDIS Wi-Fi data plane, append
+`sdkconfig.defaults.esp32p4.usb_rndis` to the host defaults and
+`cp/sdkconfig.defaults.esp32s31.usb_rndis` to the CP defaults. RNDIS options
+must be enabled on both ends.

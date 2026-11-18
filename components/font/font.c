@@ -31,7 +31,9 @@
 #include "esp_lvgl_port.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "libs/tiny_ttf/lv_tiny_ttf.h"
+/* tiny_ttf's declarations come from the public lvgl.h (LVGL 9.6 moved them to
+ * include/lvgl/font/lv_tiny_ttf.h; the old src/libs path is a deprecated shim). */
+#include "lvgl.h"
 #include "bsp/esp-bsp.h"
 
 #define FONT_TAG "font"

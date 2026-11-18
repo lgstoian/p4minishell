@@ -1036,13 +1036,13 @@ static esp_err_t display_mouse_indev_sync(bool want)
                 lv_obj_set_style_border_width(s_mouse.cursor_obj, 2, 0);
                 lv_obj_set_style_border_color(s_mouse.cursor_obj,
                                               lv_color_white(), 0);
-                lv_obj_add_flag(s_mouse.cursor_obj, LV_OBJ_FLAG_FLOATING);
-                lv_obj_remove_flag(s_mouse.cursor_obj, LV_OBJ_FLAG_CLICKABLE);
+                lv_obj_set_floating(s_mouse.cursor_obj, true);
+                lv_obj_set_clickable(s_mouse.cursor_obj, false);
             }
-            lv_obj_remove_flag(s_mouse.cursor_obj, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_mouse.cursor_obj, false);
             display_mouse_place_now();
         } else if (s_mouse.cursor_obj != NULL) {
-            lv_obj_add_flag(s_mouse.cursor_obj, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_mouse.cursor_obj, true);
         }
         return ESP_OK;
     }
@@ -1050,7 +1050,7 @@ static esp_err_t display_mouse_indev_sync(bool want)
         lv_indev_enable(s_mouse.indev, false);
     }
     if (s_mouse.cursor_obj != NULL) {
-        lv_obj_add_flag(s_mouse.cursor_obj, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_mouse.cursor_obj, true);
     }
     return ESP_OK;
 }

@@ -1,0 +1,5 @@
+dependencies:
+  joltwallet/littlefs:
+    rules:
+    - if: $CONFIG{RF_CERT_EXAMPLE_INTEGRATED_OTA} == True
+    version: '*'

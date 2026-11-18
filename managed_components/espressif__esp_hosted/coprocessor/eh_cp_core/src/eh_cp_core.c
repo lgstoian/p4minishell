@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -13,7 +13,6 @@
 #include "soc/soc.h"
 #include "eh_cp_master_config.h"
 #include <unistd.h>
-#include <inttypes.h>
 #ifndef CONFIG_IDF_TARGET_ARCH_RISCV
 #include "xtensa/core-macros.h"
 #endif
@@ -34,9 +33,11 @@
 #include "eh_cp_event.h"
 #include "eh_cp_rpc.h"
 #include "eh_cp_utils.h"
+#include "eh_cp_host_ps_state.h"
 #include "eh_common_fw_version.h"
 #include "eh_cp_transport_test.h"
 #include "eh_cp_core.h"
+#include "eh_tlv.h"
 #if EH_CP_FEAT_BT_READY
 #include "eh_cp_feat_bt_core.h"
 #endif
@@ -45,11 +46,12 @@
 #include "eh_frame.h"
 #include "eh_check.h"
 
+/* Limit feature count to the mask size; overflow could skip init/deinit. */
+#define EH_CP_FEAT_CAP 32
 static void auto_feat_init_task(void *pvParameters);
+static size_t feat_count(void);
+static size_t feat_next(uint32_t *seen, size_t n, bool ascending);
 
-#if EH_CP_FEAT_HOST_PS_READY
-#include "eh_cp_feat_host_ps_apis.h"
-#endif
 
 #define BYPASS_TX_PRIORITY_Q 1
 static const char TAG[] = "ehcp_core";
@@ -57,7 +59,15 @@ static const char TAG[] = "ehcp_core";
 #define TO_HOST_QUEUE_SIZE               10
 
 #define ETH_DATA_LEN                     1500
-#define MAX_WIFI_STA_TX_RETRY            2
+/* Host->WiFi TX retry-on-transient-pool-full: hold the frame briefly so bursty
+ * TCP paces via SDIO credit instead of dropping into an RTO. Tunable via Kconfig
+ * (throughput vs latency); default 16 keeps the fallback for non-Kconfig builds. */
+#ifdef CONFIG_ESP_HOSTED_CP_WIFI_TX_RETRY_LIMIT
+#define MAX_WIFI_STA_TX_RETRY            CONFIG_ESP_HOSTED_CP_WIFI_TX_RETRY_LIMIT
+#else
+#define MAX_WIFI_STA_TX_RETRY            16
+#endif
+#define WIFI_TX_RETRY_DELAY_MS           1
 
 /* Serial RX reassembly buffer: heap-grown via realloc per fragment. */
 static struct serial_rx_data {
@@ -65,6 +75,12 @@ static struct serial_rx_data {
 	int      len;
 	uint8_t *data;
 } s_serial_rx;
+
+static void serial_rx_reset(void)
+{
+	free(s_serial_rx.data);
+	s_serial_rx = (struct serial_rx_data){0};
+}
 
 #if CONFIG_EH_TRANSPORT_CP_SPI
     #define ESP_GPIO_SLAVE_RESET CONFIG_EH_TRANSPORT_CP_SPI_GPIO_RESET
@@ -82,8 +98,6 @@ static struct serial_rx_data {
 
 volatile uint8_t datapath = 0;
 static volatile uint8_t datapath_open_pending = 0;
-volatile uint8_t station_connected = 0;
-volatile uint8_t softap_started = 0;
 
 
 /* Default V1 until host ACK upgrades to V2; readers safe before negotiation. */
@@ -104,10 +118,30 @@ esp_netif_t *slave_sta_netif = NULL;
 
 SemaphoreHandle_t host_reset_sem;
 
-static bool g_eh_cp_initialized = false;
+typedef enum {
+    EH_CP_DOWN,
+    EH_CP_UP,
+    /* A datapath task outlived deinit. Its resources stay; only a deinit retry
+     * may move on from here. */
+    EH_CP_STOP_FAILED,
+} eh_cp_state_t;
+
+static eh_cp_state_t g_eh_cp_state = EH_CP_DOWN;
+
+static volatile bool g_cp_running;
+static EventGroupHandle_t g_task_exit_eg;
+#define EH_CP_EXIT_RECV   BIT0
+#define EH_CP_EXIT_SEND   BIT1
+#define EH_CP_EXIT_RESET  BIT2
+#define EH_CP_Q_SENTINEL  0xFF   /* not a queue index */
+#define EH_CP_TASK_EXIT_WAIT_MS 2000
+#define EH_CP_FEAT_INIT_WAIT_MS 10000
 static SemaphoreHandle_t g_init_mutex = NULL;
 
 EventGroupHandle_t g_auto_feat_init_done_eg = NULL;
+
+/* Tracks which features have been initialized. */
+static uint32_t s_feat_inited_mask;
 
 
 static void print_firmware_version(void);
@@ -215,7 +249,13 @@ static esp_err_t default_wlan_sta_rx_callback(void *buffer, uint16_t len, void *
 }
 #endif
 
-static eh_cp_rx_cb_t s_rx_cb[ESP_MAX_IF];
+/* ESP_ERR_NOT_FOUND: nobody claimed it (STA/AP then go to the air). */
+static esp_err_t host_rx(eh_if_type_t if_type, void *buf, uint16_t len)
+{
+	eh_cp_traffic_cb_t cb = eh_cp_get_traffic_rx_cb(if_type);
+
+	return cb ? cb(buf, len, NULL) : ESP_ERR_NOT_FOUND;
+}
 
 static void process_tx_pkt(interface_buffer_handle_t *buf_handle)
 {
@@ -233,7 +273,8 @@ static void process_tx_pkt(interface_buffer_handle_t *buf_handle)
 
 	if (if_context && if_context->if_ops && if_context->if_ops->write) {
         #if EH_CP_FEAT_HOST_PS_READY
-        if (eh_cp_feat_host_ps_is_host_wakeup_needed(buf_handle)) {
+        const eh_cp_host_ps_ops_t *o = eh_cp_host_ps_ops();
+        if (o && o->wakeup_needed && o->wakeup_needed(buf_handle)) {
             uint16_t wakeup_pkt_display_len = 32;
             ESP_LOGI(TAG, "Host sleeping, trigger wake-up");
         #if EH_CP_FEAT_HOST_PS_PRINT_FULL_WAKEUP_PACKET
@@ -241,7 +282,7 @@ static void process_tx_pkt(interface_buffer_handle_t *buf_handle)
         #endif
             ESP_HEXLOGW("Wakeup_pkt", buf_handle->payload+EH_ESP_PAYLOAD_HEADER_OFFSET,
                     buf_handle->payload_len, wakeup_pkt_display_len);
-            host_awake = eh_cp_feat_host_ps_wakeup_host(portMAX_DELAY);
+            host_awake = o->wakeup ? o->wakeup(portMAX_DELAY) : 0;
             buf_handle->flags |= FLAG_WAKEUP_PKT;
         }
         #endif
@@ -271,7 +312,7 @@ static esp_err_t host_to_slave_reconfig(uint8_t *evt_buf, uint16_t len)
 	pos = evt_buf;
 	ESP_LOGD(TAG, "Init event length: %u", len);
 
-	while (len_left) {
+	while (len_left >= 2) {
 		tag_len = *(pos + 1);
 
 		/* TLV is type(1) + len(1) + value(tag_len). */
@@ -349,6 +390,8 @@ static esp_err_t host_to_slave_reconfig(uint8_t *evt_buf, uint16_t len)
 				frame_cfg = (eh_frame_cfg_t)EH_FRAME_CFG_CP_MCU_SPI_HD_DEFAULT;
 #elif CONFIG_EH_TRANSPORT_CP_UART
 				frame_cfg = (eh_frame_cfg_t)EH_FRAME_CFG_CP_MCU_UART_DEFAULT;
+#elif CONFIG_EH_TRANSPORT_CP_USB_OTG_DEVICE
+				frame_cfg = (eh_frame_cfg_t)EH_FRAME_CFG_CP_MCU_USB_DEFAULT;
 #endif
 #else
 #if CONFIG_EH_TRANSPORT_CP_SDIO
@@ -359,6 +402,8 @@ static esp_err_t host_to_slave_reconfig(uint8_t *evt_buf, uint16_t len)
 				frame_cfg = (eh_frame_cfg_t)EH_FRAME_CFG_CP_LINUX_802_3_SPI_HD_DEFAULT;
 #elif CONFIG_EH_TRANSPORT_CP_UART
 				frame_cfg = (eh_frame_cfg_t)EH_FRAME_CFG_CP_LINUX_802_3_UART_DEFAULT;
+#elif CONFIG_EH_TRANSPORT_CP_USB_OTG_DEVICE
+				frame_cfg = (eh_frame_cfg_t)EH_FRAME_CFG_CP_LINUX_802_3_USB_DEFAULT;
 #endif
 #endif
 				frame_cfg.checksum_enabled = EH_CP_CHECKSUM;
@@ -390,14 +435,26 @@ static esp_err_t host_to_slave_reconfig(uint8_t *evt_buf, uint16_t len)
 			uint8_t peer_ver = *(pos + 2);
 			if (peer_ver != EH_CP_RPC_WIRE_VERSION) {
 				ESP_LOGE(TAG, "RPC version mismatch: peer=0x%02x, ours=0x%02x — aborting",
-				         (unsigned)peer_ver, (unsigned)EH_CP_RPC_WIRE_VERSION);
+				         (unsigned int)peer_ver, (unsigned int)EH_CP_RPC_WIRE_VERSION);
 				abort();
 			}
-			ESP_LOGI(TAG, "RPC version negotiated: V%u", (unsigned)peer_ver);
+			ESP_LOGI(TAG, "RPC version negotiated: V%u", (unsigned int)peer_ver);
 
 		} else if (*pos == ESP_PRIV_RPC_EP_ACK) {
 			if (tag_len >= 1 && *(pos + 2) == 1) {
 				ESP_LOGI(TAG, "RPC endpoint TLVs acknowledged by host");
+			}
+
+		} else if (*pos == SLV_CONFIG_SET_TRANSFER_SIZE) {
+
+			if (tag_len >= 4 && if_context && if_context->if_ops && if_context->if_ops->set_transfer_size) {
+				uint32_t transfer_size = eh_tlv_val_u32_le(pos + 2, tag_len);
+				if (if_context->if_ops->set_transfer_size(transfer_size) == ESP_OK)
+					ESP_LOGI(TAG, "Transfer size set to %" PRIu32, transfer_size);
+				else
+					ESP_LOGW(TAG, "Failed to set transfer size to %" PRIu32, transfer_size);
+			} else {
+				ESP_LOGD(TAG, "Transport does not implement set_transfer_size");
 			}
 
 		} else {
@@ -408,6 +465,9 @@ static esp_err_t host_to_slave_reconfig(uint8_t *evt_buf, uint16_t len)
 
 		pos += (tag_len+2);
 		len_left -= (tag_len+2);
+	}
+	if (len_left == 1) {
+		ESP_LOGW(TAG, "TLV truncated: lone tag 0x%02x at end", *pos);
 	}
 
 	{
@@ -476,14 +536,28 @@ static void process_priv_command(uint8_t *payload, uint16_t payload_len)
 #endif
 }
 
+/* Hold the frame over transient WiFi pool exhaustion so a burst paces on the
+ * bus instead of dropping into a TCP RTO. Any other error is terminal. */
+static int wifi_tx_with_retry(wifi_interface_t wifi_if, uint8_t *payload,
+                              uint16_t payload_len)
+{
+	int ret = ESP_OK;
+	int retry = MAX_WIFI_STA_TX_RETRY;
+
+	do {
+		ret = esp_wifi_internal_tx(wifi_if, payload, payload_len);
+		if (ret != ESP_ERR_NO_MEM)
+			break;
+		vTaskDelay(pdMS_TO_TICKS(WIFI_TX_RETRY_DELAY_MS));
+	} while (--retry);
+
+	return ret;
+}
+
 static void process_rx_pkt(interface_buffer_handle_t *buf_handle)
 {
 	uint8_t *payload = NULL;
 	uint16_t payload_len = 0;
-
-#if EH_CP_FEAT_WIFI_READY
-	int retry_wifi_tx = MAX_WIFI_STA_TX_RETRY;
-#endif
 
 	/* Fields already decoded by transport via eh_frame_decode; don't re-parse. */
 	payload     = buf_handle->payload;
@@ -501,27 +575,22 @@ static void process_rx_pkt(interface_buffer_handle_t *buf_handle)
 #if EH_CP_FEAT_WIFI_READY
 	} else if (buf_handle->if_type == ESP_STA_IF) {
 		/* Registry dispatch first; fall back to direct WiFi TX if no RX cb. */
-		esp_err_t reg_ret = eh_cp_dispatch_rx(ESP_STA_IF, payload, payload_len, NULL);
-		if (reg_ret == ESP_ERR_NOT_FOUND && station_connected) {
-			int ret = 0;
-			do {
-				ret = esp_wifi_internal_tx(WIFI_IF_STA, payload, payload_len);
-				if (ret) {
-					vTaskDelay(pdMS_TO_TICKS(1));
-				}
-				retry_wifi_tx--;
-			} while (ret && retry_wifi_tx);
+		esp_err_t reg_ret = host_rx(ESP_STA_IF, payload, payload_len);
+		if (reg_ret == ESP_ERR_NOT_FOUND) {
+			int ret = wifi_tx_with_retry(WIFI_IF_STA, payload, payload_len);
   #if ESP_PKT_STATS
 			if (ret)
 				pkt_stats.hs_bus_sta_fail++;
 			else
 				pkt_stats.hs_bus_sta_out++;
+  #else
+			(void)ret;
   #endif
 		}
 	} else if (buf_handle->if_type == ESP_AP_IF) {
-		esp_err_t reg_ret = eh_cp_dispatch_rx(ESP_AP_IF, payload, payload_len, NULL);
-		if (reg_ret == ESP_ERR_NOT_FOUND && softap_started) {
-			esp_wifi_internal_tx(WIFI_IF_AP, payload, payload_len);
+		esp_err_t reg_ret = host_rx(ESP_AP_IF, payload, payload_len);
+		if (reg_ret == ESP_ERR_NOT_FOUND) {
+			wifi_tx_with_retry(WIFI_IF_AP, payload, payload_len);
 			ESP_HEXLOGV("AP_Put", payload, payload_len, 32);
 		}
 #endif
@@ -546,15 +615,9 @@ static void process_rx_pkt(interface_buffer_handle_t *buf_handle)
 			ESP_LOGW(TAG, "serial_rx_pkt: seq mismatch (got %u expected %u), flushing",
 			         buf_handle->seq_num, s_serial_rx.cur_seq_no);
 			if (s_serial_rx.len > 0 && s_serial_rx.data) {
-				eh_cp_dispatch_rx(ESP_SERIAL_IF,
-				                                s_serial_rx.data,
-				                                (uint16_t)s_serial_rx.len,
-				                                NULL);
+				host_rx(ESP_SERIAL_IF, s_serial_rx.data, (uint16_t)s_serial_rx.len);
 			}
-			free(s_serial_rx.data);
-			s_serial_rx.data = NULL;
-			s_serial_rx.len = 0;
-			s_serial_rx.cur_seq_no = 0;
+			serial_rx_reset();
 			goto done;
 		}
 
@@ -562,10 +625,7 @@ static void process_rx_pkt(interface_buffer_handle_t *buf_handle)
 		if (!new_buf) {
 			ESP_LOGE(TAG, "serial_rx_pkt: realloc failed (need %d bytes)",
 			         s_serial_rx.len + payload_len);
-			free(s_serial_rx.data);
-			s_serial_rx.data = NULL;
-			s_serial_rx.len = 0;
-			s_serial_rx.cur_seq_no = 0;
+			serial_rx_reset();
 			goto done;
 		}
 		s_serial_rx.data = new_buf;
@@ -577,27 +637,33 @@ static void process_rx_pkt(interface_buffer_handle_t *buf_handle)
 				ESP_LOGE(TAG, "serial_rx_pkt: reassembled msg too large (%d bytes), drop",
 				         s_serial_rx.len);
 			} else {
-				eh_cp_dispatch_rx(ESP_SERIAL_IF,
-				                                s_serial_rx.data,
-				                                (uint16_t)s_serial_rx.len,
-				                                NULL);
+				host_rx(ESP_SERIAL_IF, s_serial_rx.data, (uint16_t)s_serial_rx.len);
 			}
 			/* Consumer takes its own copy; safe to free reassembly buffer. */
-			free(s_serial_rx.data);
-			s_serial_rx.data = NULL;
-			s_serial_rx.len = 0;
-			s_serial_rx.cur_seq_no = 0;
+			serial_rx_reset();
 		}
 
 	}
 	else if (buf_handle->if_type == ESP_HCI_IF) {
-		eh_cp_dispatch_rx(ESP_HCI_IF, payload, payload_len, NULL);
+		host_rx(ESP_HCI_IF, payload, payload_len);
+	}
+	else if (buf_handle->if_type == ESP_AUX_IF) {
+		if (eh_cp_dispatch_aux_rx(buf_handle->pkt_type, payload, payload_len,
+		                          NULL) == ESP_ERR_NOT_FOUND)
+			ESP_LOGW(TAG, "rx-drop: no handler for aux_type=%u len=%u",
+			         buf_handle->pkt_type, payload_len);
 	}
 #if TEST_RAW_TP
 	else if (buf_handle->if_type == ESP_TEST_IF) {
-		eh_transport_utils_update_raw_tp_rx_count(payload_len);
+		eh_transport_utils_update_raw_tp_rx_count(payload, payload_len);
 	}
 #endif
+	/* STA/AP/TEST of a compiled-out feature: drop without a log (data flood). */
+	else if (buf_handle->if_type != ESP_STA_IF && buf_handle->if_type != ESP_AP_IF &&
+	         buf_handle->if_type != ESP_TEST_IF) {
+		ESP_LOGW(TAG, "rx-drop: no handler for if_type=%u len=%u",
+		         buf_handle->if_type, payload_len);
+	}
 
 done:
 	if (buf_handle->free_buf_handle && buf_handle->priv_buffer_handle) {
@@ -607,30 +673,55 @@ done:
 
 }
 
+static inline bool recv_ready(void)
+{
+	return datapath && if_handle && if_handle->state == ACTIVE && eh_cp_host_ps_reachable();
+}
+
+static TaskHandle_t s_recv_task_handle;
+
+IRAM_ATTR void eh_cp_recv_kick(void)
+{
+	if (!s_recv_task_handle)
+		return;
+
+	if (xPortInIsrContext()) {
+		BaseType_t yield = pdFALSE;
+
+		vTaskNotifyGiveFromISR(s_recv_task_handle, &yield);
+		if (yield)
+			portYIELD_FROM_ISR();
+	} else {
+		xTaskNotifyGive(s_recv_task_handle);
+	}
+}
+
 static void recv_task(void* pvParameters)
 {
 	interface_buffer_handle_t buf_handle = {0};
 
-	for (;;) {
+	while (g_cp_running) {
 
-		if (!datapath) {
-			vTaskDelay(pdMS_TO_TICKS(20));
+		while (g_cp_running && !recv_ready())
+			ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+		if (!g_cp_running)
+			break;
+
+		int len = if_context->if_ops->read(if_handle, &buf_handle);
+		if (len <= 0) {
 			continue;
 		}
-
-		if (if_context && if_context->if_ops && if_context->if_ops->read) {
-			int len = if_context->if_ops->read(if_handle, &buf_handle);
-			if (len <= 0) {
-				vTaskDelay(pdMS_TO_TICKS(1));
-				continue;
-			}
-			ESP_LOGD(TAG, "rx_read: len=%d if_type=%u flags=0x%02x seq=%u payload_len=%u",
-			         len, buf_handle.if_type, buf_handle.flags, buf_handle.seq_num,
-			         buf_handle.payload_len);
-		}
+		ESP_LOGD(TAG, "rx_read: len=%d if_type=%u flags=0x%02x seq=%u payload_len=%u",
+		         len, buf_handle.if_type, buf_handle.flags, buf_handle.seq_num,
+		         buf_handle.payload_len);
 
 		process_rx_pkt(&buf_handle);
 	}
+
+	s_recv_task_handle = NULL;   /* eh_cp_recv_kick() reads this */
+	xEventGroupSetBits(g_task_exit_eg, EH_CP_EXIT_RECV);
+	vTaskDelete(NULL);
 }
 
 
@@ -660,24 +751,6 @@ int send_to_host_queue(interface_buffer_handle_t *buf_handle, uint8_t queue_type
 #endif
 }
 
-static void power_save_alert_task(void *pvParameters)
-{
-#if EH_CP_FEAT_HOST_PS_READY
-    uint32_t event = (uint32_t)pvParameters;
-	eh_cp_feat_host_ps_handle_alert(event);
-	//if (event == ESP_POWER_SAVE_OFF && host_reset_sem) {
-		//xSemaphoreGive(host_reset_sem);
-	//}
-#else
-    (void)pvParameters;
-#endif
-    vTaskDelete(NULL);
-}
-
-static esp_err_t eh_cp_handle_power_save_alert(uint32_t event)
-{
-	return xTaskCreate(power_save_alert_task, "ps_alert_task", 3072, (void *)event, tskIDLE_PRIORITY + 5, NULL);
-}
 
 static int event_handler(uint8_t val)
 {
@@ -687,6 +760,10 @@ static int event_handler(uint8_t val)
 			if (if_handle) {
 				if_handle->state = ACTIVE;
 				datapath = 1;
+#if EH_CP_FEAT_HOST_PS_READY
+				(void)eh_cp_host_ps_input(EH_HOST_PS_EV_AWAKE);
+#endif
+				eh_cp_recv_kick();
 				ESP_EARLY_LOGI(TAG, "Open Data Path");
 				if (host_reset_sem) {
 					ESP_EARLY_LOGI(TAG, "Open Data Path: giving host_reset_sem");
@@ -703,6 +780,7 @@ static int event_handler(uint8_t val)
 		case ESP_CLOSE_DATA_PATH:
 			datapath = 0;
 			datapath_open_pending = 0;
+			eh_cp_recv_kick();
 			if (if_handle) {
 				ESP_EARLY_LOGI(TAG, "Close Data Path");
 				if (if_handle->state > DEACTIVE) {
@@ -714,66 +792,84 @@ static int event_handler(uint8_t val)
 			break;
 
 		case ESP_POWER_SAVE_ON:
-			eh_cp_handle_power_save_alert(ESP_POWER_SAVE_ON);
+#if EH_CP_FEAT_HOST_PS_READY
+			/* Announced only from AWAKE: a PS_ON in any other phase is stale. */
+			if (eh_cp_host_ps_input(EH_HOST_PS_EV_SLEEP)) {
+				const eh_cp_host_ps_ops_t *o = eh_cp_host_ps_ops();
+				eh_cp_recv_kick();
+				if (o && o->on_ps_event)
+					o->on_ps_event(ESP_POWER_SAVE_ON);
+			} else {
+				eh_cp_host_ps_state_t st = eh_cp_host_ps_get();
+				ESP_EARLY_LOGI(TAG, "PS_ON ignored in state %u", (unsigned int)st);
+			}
+#else
+			eh_cp_recv_kick();
+#endif
 			break;
 
 		case ESP_POWER_SAVE_OFF:
 			ESP_EARLY_LOGI(TAG, "event_handler: ESP_POWER_SAVE_OFF");
 			datapath = 1;
-			if_handle->state = ACTIVE;
-			eh_cp_handle_power_save_alert(ESP_POWER_SAVE_OFF);
+			if (if_handle)
+				if_handle->state = ACTIVE;
+#if EH_CP_FEAT_HOST_PS_READY
+			(void)eh_cp_host_ps_input(EH_HOST_PS_EV_AWAKE);
+#endif
+			eh_cp_recv_kick();
+#if EH_CP_FEAT_HOST_PS_READY
+			{
+				const eh_cp_host_ps_ops_t *o = eh_cp_host_ps_ops();
+				if (o && o->on_ps_event)
+					o->on_ps_event(ESP_POWER_SAVE_OFF);
+			}
+#endif
 			break;
 
 		default:
-			ESP_EARLY_LOGW(TAG, "event_handler: unknown event %u", (unsigned)val);
+			ESP_EARLY_LOGW(TAG, "event_handler: unknown event %u", (unsigned int)val);
 			break;
 	}
 	return 0;
 }
 
 #if defined(ESP_GPIO_SLAVE_RESET) && (ESP_GPIO_SLAVE_RESET != -1)
+/* Host drives this like EN: parked HIGH, pulsed LOW. Host pulse is 10 ms. */
+#define SLAVE_RESET_MIN_PULSE_US 2000
+
 static void IRAM_ATTR gpio_resetpin_isr_handler(void* arg)
 {
-	if (ESP_GPIO_SLAVE_RESET == -1) {
-		ESP_EARLY_LOGI(TAG, "%s: using EN pin for slave reset", __func__);
-		return;
-	}
-
-	static uint32_t lasthandshaketime_us;
-	uint32_t currtime_us = esp_timer_get_time();
+	static uint32_t fall_us;
+	uint32_t now_us = esp_timer_get_time();
 
 	if (gpio_get_level(ESP_GPIO_SLAVE_RESET) == 0) {
-		lasthandshaketime_us = currtime_us;
-	} else {
-		uint32_t diff = currtime_us - lasthandshaketime_us;
-		ESP_EARLY_LOGI(TAG, "%s Diff: %u", __func__, diff);
-		if (diff < 500) {
-			return; //ignore everything < half ms after an earlier irq
-		} else {
-			ESP_EARLY_LOGI(TAG, "Host triggered slave reset");
-			esp_restart();
-		}
+		fall_us = now_us;
+		return;
+	}
+	if (now_us - fall_us >= SLAVE_RESET_MIN_PULSE_US) {
+		esp_restart();
 	}
 }
 
-static void register_reset_pin(uint32_t gpio_num)
+static void register_reset_pin(int gpio_num)
 {
-	if (gpio_num != -1) {
-		ESP_LOGI(TAG, "Using GPIO [%lu] as slave reset pin", gpio_num);
-		gpio_reset_pin(gpio_num);
+	ESP_LOGI(TAG, "Using GPIO [%d] as slave reset pin (soft reset; EN still resets the chip)", gpio_num);
+	gpio_reset_pin(gpio_num);
 
-		gpio_config_t slave_reset_pin_conf={
-			.intr_type=GPIO_INTR_DISABLE,
-			.mode=GPIO_MODE_INPUT,
-			.pull_up_en=1,
-			.pin_bit_mask=(1<<gpio_num)
-		};
+	gpio_config_t slave_reset_pin_conf = {
+		.intr_type    = GPIO_INTR_ANYEDGE,
+		.mode         = GPIO_MODE_INPUT,
+		.pull_up_en   = 1,
+		.pin_bit_mask = (1ULL << gpio_num),
+	};
+	gpio_config(&slave_reset_pin_conf);
 
-		gpio_config(&slave_reset_pin_conf);
-		gpio_set_intr_type(gpio_num, GPIO_INTR_ANYEDGE);
-		gpio_install_isr_service(0);
-		gpio_isr_handler_add(gpio_num, gpio_resetpin_isr_handler, NULL);
+	esp_err_t rc = gpio_install_isr_service(0);   /* may already be installed */
+	if (rc != ESP_OK && rc != ESP_ERR_INVALID_STATE) {
+		ESP_LOGE(TAG, "reset pin: gpio_install_isr_service rc=%d", (int)rc);
+		return;
 	}
+	gpio_isr_handler_add(gpio_num, gpio_resetpin_isr_handler, NULL);
 }
 #endif
 
@@ -783,17 +879,23 @@ static void send_task(void* pvParameters)
 	uint8_t queue_type = 0;
 	interface_buffer_handle_t buf_handle = {0};
 
-	while (1) {
+	while (g_cp_running) {
 
 		if (!datapath) {
 			vTaskDelay(pdMS_TO_TICKS(100));
 			continue;
 		}
 
-		if (xQueueReceive(meta_to_host_queue, &queue_type, portMAX_DELAY))
+		if (xQueueReceive(meta_to_host_queue, &queue_type, portMAX_DELAY)) {
+			if (!g_cp_running || queue_type == EH_CP_Q_SENTINEL)
+				break;
 			if (xQueueReceive(to_host_queue[queue_type], &buf_handle, portMAX_DELAY))
 				process_tx_pkt(&buf_handle);
+		}
 	}
+
+	xEventGroupSetBits(g_task_exit_eg, EH_CP_EXIT_SEND);
+	vTaskDelete(NULL);
 }
 #endif
 
@@ -806,10 +908,12 @@ static void host_reset_task(void* pvParameters)
 
 	ESP_LOGI(TAG, "host reset handler task started");
 
-	while (1) {
+	while (g_cp_running) {
 
 		if (host_reset_sem) {
 			xSemaphoreTake(host_reset_sem, portMAX_DELAY);
+			if (!g_cp_running)
+				break;
 			ESP_LOGI(TAG, "host_reset_task: host_reset_sem taken, preparing slave-up TLV");
 		} else {
 			vTaskDelay(pdMS_TO_TICKS(100));
@@ -827,45 +931,20 @@ static void host_reset_task(void* pvParameters)
 		ESP_LOGI(TAG,"Send slave up event");
 		generate_startup_event(capa, ext_capa, raw_tp_cap, feat_caps);
 	}
+
+	xEventGroupSetBits(g_task_exit_eg, EH_CP_EXIT_RESET);
+	vTaskDelete(NULL);
 }
 
-
-esp_err_t eh_cp_rx_register(eh_if_type_t if_type, eh_cp_rx_cb_t cb)
-{
-	if (if_type <= ESP_INVALID_IF || if_type >= ESP_MAX_IF) {
-		return ESP_ERR_INVALID_ARG;
-	}
-
-	s_rx_cb[if_type] = cb;
-
-#if EH_CP_FEAT_WIFI_READY
-	if (if_type == ESP_STA_IF) {
-		esp_wifi_internal_reg_rxcb(WIFI_IF_STA, (wifi_rxcb_t)cb);
-	} else if (if_type == ESP_AP_IF) {
-		esp_wifi_internal_reg_rxcb(WIFI_IF_AP, (wifi_rxcb_t)cb);
-	}
-#endif
-
-	return ESP_OK;
-}
-
-esp_err_t eh_cp_rx_unregister(eh_if_type_t if_type)
-{
-	return eh_cp_rx_register(if_type, NULL);
-}
-
-eh_cp_rx_cb_t eh_cp_rx_get(eh_if_type_t if_type)
-{
-	if (if_type <= ESP_INVALID_IF || if_type >= ESP_MAX_IF) {
-		return NULL;
-	}
-	return s_rx_cb[if_type];
-}
 
 esp_err_t eh_cp_init_internal(void)
 {
-    if (g_eh_cp_initialized) {
+    if (g_eh_cp_state == EH_CP_UP) {
         return ESP_OK;
+    }
+    if (g_eh_cp_state == EH_CP_STOP_FAILED) {
+        ESP_LOGE(TAG, "init: previous deinit left tasks running, retry eh_cp_deinit() first");
+        return ESP_ERR_INVALID_STATE;
     }
 
     ESP_LOGI(TAG, "ESP-Hosted core init");
@@ -875,6 +954,12 @@ esp_err_t eh_cp_init_internal(void)
         ESP_LOGE(TAG, "Failed to create ext_init_done event group");
         return ESP_ERR_NO_MEM;
     }
+    g_task_exit_eg = xEventGroupCreate();
+    if (!g_task_exit_eg) {
+        ESP_LOGE(TAG, "Failed to create task_exit event group");
+        return ESP_ERR_NO_MEM;
+    }
+    g_cp_running = true;
     populate_core_caps();
 
     assert(host_reset_sem = xSemaphoreCreateBinary());
@@ -882,8 +967,8 @@ esp_err_t eh_cp_init_internal(void)
 
     print_firmware_version();
 #if EH_CP_FEAT_WIFI_READY
-    EH_CHECK_OK_WARN(eh_cp_rx_register(ESP_STA_IF, default_wlan_sta_rx_callback));
-    EH_CHECK_OK_WARN(eh_cp_rx_register(ESP_AP_IF, wlan_ap_rx_callback));
+    EH_CHECK_OK_WARN(eh_cp_set_traffic_tx_cb(ESP_STA_IF, default_wlan_sta_rx_callback));
+    EH_CHECK_OK_WARN(eh_cp_set_traffic_tx_cb(ESP_AP_IF, wlan_ap_rx_callback));
 #endif
 
 #if defined(ESP_GPIO_SLAVE_RESET) && (ESP_GPIO_SLAVE_RESET != -1)
@@ -910,14 +995,16 @@ esp_err_t eh_cp_init_internal(void)
         return ESP_FAIL;
     }
 
+
     assert(xTaskCreate(recv_task , "recv_task" ,
             EH_CP_TASK_STACK_SIZE, NULL ,
-            EH_CP_TASK_PRIO_DEFAULT, NULL) == pdTRUE);
+            EH_CP_TASK_PRIO_DEFAULT, &s_recv_task_handle) == pdTRUE);
 
     if (datapath_open_pending) {
         datapath_open_pending = 0;
         if_handle->state = ACTIVE;
         datapath = 1;
+        eh_cp_recv_kick();
         if (host_reset_sem)
             xSemaphoreGive(host_reset_sem);
         ESP_LOGI(TAG, "Open Data Path (deferred)");
@@ -932,8 +1019,8 @@ esp_err_t eh_cp_init_internal(void)
 		assert(to_host_queue[prio_q_idx]);
 	}
 	assert(xTaskCreate(send_task , "send_task" ,
-			CONFIG_ESP_HOSTED_DEFAULT_TASK_STACK_SIZE, NULL ,
-			CONFIG_ESP_HOSTED_DEFAULT_TASK_PRIORITY, NULL) == pdTRUE);
+			EH_CP_TASK_STACK_SIZE, NULL ,
+			EH_CP_TASK_PRIO_DEFAULT, NULL) == pdTRUE);
 #endif
 
 
@@ -953,7 +1040,7 @@ esp_err_t eh_cp_init_internal(void)
     xEventGroupSetBits(g_auto_feat_init_done_eg, EH_CP_FEAT_INIT_DONE_BIT);
 #endif
 
-    g_eh_cp_initialized = true;
+    g_eh_cp_state = EH_CP_UP;
     ESP_LOGI(TAG, "ESP-Hosted core initialized");
     return ESP_OK;
 }
@@ -987,6 +1074,8 @@ static void print_firmware_version(void)
 	const char *tp = "SPI-HD";
 #elif CONFIG_EH_TRANSPORT_CP_UART
 	const char *tp = "UART";
+#elif CONFIG_EH_TRANSPORT_CP_USB_OTG_DEVICE
+	const char *tp = "USB-OTG";
 #else
 	const char *tp = "SDIO";
 #endif
@@ -1046,76 +1135,241 @@ static void populate_core_caps(void)
     ext_caps |= ESP_WLAN_UART_SUPPORT;
 #endif
 
+    /* This CP reports network split (bit 11, set by its init); the host checks the pairing. */
+    ext_caps |= ESP_EXT_CAP_NW_SPLIT_REPORTED;
+
+    ESP_LOGI(TAG, "- AUX interface");
+    ext_caps |= ESP_EXT_CAP_AUX_IF;
+
     eh_cp_add_feat_cap_bits(caps, ext_caps);
 
     ESP_LOGI(TAG, "Core caps: 0x%02x  ext_caps: 0x%08"PRIx32, caps, ext_caps);
 }
 
-esp_err_t eh_cp_deinit(void)
+/* Wait for feature init to finish before deinit. */
+static esp_err_t deinit_await_feat_init(void)
 {
-    eh_cp_deinit_transport_test_debugging_tasks();
+    if (!g_auto_feat_init_done_eg)
+        return ESP_OK;
 
-    for (const eh_cp_feat_desc_t *d = &_eh_cp_feat_descs_start;
-         d < &_eh_cp_feat_descs_end; d++) {
-        if (d->deinit_fn) {
-            esp_err_t r = d->deinit_fn();
-            if (r != ESP_OK) {
-                ESP_LOGW(TAG, "ext '%s' deinit failed: %s",
-                         d->name ? d->name : "?", esp_err_to_name(r));
-            }
+    EventBits_t done = xEventGroupWaitBits(g_auto_feat_init_done_eg,
+                                           EH_CP_FEAT_INIT_DONE_BIT, pdFALSE, pdTRUE,
+                                           pdMS_TO_TICKS(EH_CP_FEAT_INIT_WAIT_MS));
+    if (!(done & EH_CP_FEAT_INIT_DONE_BIT)) {
+        ESP_LOGE(TAG, "deinit: feature init unfinished after %d ms, releasing nothing",
+                 EH_CP_FEAT_INIT_WAIT_MS);
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
+}
+
+/* Stop datapath tasks before releasing their resources. */
+static esp_err_t deinit_stop_tasks(void)
+{
+    /* datapath clears before any wake, so a woken task leaves. */
+    g_cp_running = false;
+    datapath = 0;
+
+    /* A notify only covers the recv_ready() gate. A reader parked inside
+     * if_ops->read() needs the transport to release it, and deinit does that
+     * too late - the core waits for recv_task to exit before calling it. */
+    if (if_context && if_context->if_ops && if_context->if_ops->stop)
+        if_context->if_ops->stop(if_handle);
+    if (s_recv_task_handle)
+        xTaskNotifyGive(s_recv_task_handle);
+#if !BYPASS_TX_PRIORITY_Q
+    if (meta_to_host_queue) {
+        uint8_t sentinel = EH_CP_Q_SENTINEL;
+        xQueueSend(meta_to_host_queue, &sentinel, 0);
+    }
+#endif
+    if (host_reset_sem)
+        xSemaphoreGive(host_reset_sem);
+
+    EventBits_t want = EH_CP_EXIT_RECV | EH_CP_EXIT_RESET;
+#if !BYPASS_TX_PRIORITY_Q
+    want |= EH_CP_EXIT_SEND;
+#endif
+    EventBits_t got = xEventGroupWaitBits(g_task_exit_eg, want, pdFALSE, pdTRUE,
+                                          pdMS_TO_TICKS(EH_CP_TASK_EXIT_WAIT_MS));
+    if ((got & want) != want) {
+        ESP_LOGE(TAG, "deinit: tasks still running (want 0x%02x got 0x%02x)",
+                 (unsigned int)want, (unsigned int)got);
+        return ESP_ERR_TIMEOUT;
+    }
+    ESP_LOGI(TAG, "deinit: tasks stopped (0x%02x)", (unsigned int)want);
+    return ESP_OK;
+}
+
+/* Reverse of init: a feature may depend on every lower-priority one. */
+static void deinit_features(void)
+{
+    size_t n = feat_count();
+    uint32_t seen = 0;
+
+    for (size_t k = 0; k < n; k++) {
+        size_t i = feat_next(&seen, n, false);
+        if (i == SIZE_MAX)
+            break;
+        if (!(s_feat_inited_mask & (1u << i)))
+            continue;
+        s_feat_inited_mask &= ~(1u << i);
+
+        const eh_cp_feat_desc_t *d = &_eh_cp_feat_descs_start[i];
+        if (!d->deinit_fn)
+            continue;
+        esp_err_t r = d->deinit_fn();
+        if (r != ESP_OK) {
+            ESP_LOGW(TAG, "ext '%s' deinit failed: %s",
+                     d->name ? d->name : "?", esp_err_to_name(r));
         }
     }
+}
+
+static void deinit_transport(void)
+{
+#if EH_CP_FEAT_WIFI_READY
+    (void)eh_cp_set_traffic_tx_cb(ESP_STA_IF, NULL);
+    (void)eh_cp_set_traffic_tx_cb(ESP_AP_IF, NULL);
+#endif
+    if (if_context && if_context->if_ops && if_context->if_ops->deinit)
+        if_context->if_ops->deinit(if_handle);
+    interface_remove_driver();
+    if_handle = NULL;
+    if_context = NULL;
+    datapath_open_pending = 0;
+}
+
+/* Last: every task that waits on these has confirmed it left. */
+static void deinit_core_objects(void)
+{
+#if !BYPASS_TX_PRIORITY_Q
+    interface_buffer_handle_t buf_handle = {0};
+
+    /* Queued handles own their buffers; vQueueDelete does not free them. */
+    for (uint8_t i = 0; i < MAX_PRIORITY_QUEUES; i++) {
+        if (!to_host_queue[i])
+            continue;
+        while (xQueueReceive(to_host_queue[i], &buf_handle, 0) == pdTRUE) {
+            if (buf_handle.free_buf_handle && buf_handle.priv_buffer_handle)
+                buf_handle.free_buf_handle(buf_handle.priv_buffer_handle);
+        }
+        vQueueDelete(to_host_queue[i]);
+        to_host_queue[i] = NULL;
+    }
+    if (meta_to_host_queue) {
+        vQueueDelete(meta_to_host_queue);
+        meta_to_host_queue = NULL;
+    }
+#endif
+    if (host_reset_sem) {
+        vSemaphoreDelete(host_reset_sem);
+        host_reset_sem = NULL;
+    }
+    if (g_auto_feat_init_done_eg) {
+        vEventGroupDelete(g_auto_feat_init_done_eg);
+        g_auto_feat_init_done_eg = NULL;
+    }
+    if (g_task_exit_eg) {
+        vEventGroupDelete(g_task_exit_eg);
+        g_task_exit_eg = NULL;
+    }
+}
+
+esp_err_t eh_cp_deinit(void)
+{
+    if (g_eh_cp_state == EH_CP_DOWN)
+        return ESP_OK;
+
+    esp_err_t ret = deinit_await_feat_init();
+    if (ret != ESP_OK)
+        return ret;
+
+    ret = deinit_stop_tasks();
+    if (ret != ESP_OK) {
+        g_eh_cp_state = EH_CP_STOP_FAILED;
+        return ret;
+    }
+
+    eh_cp_utils_stop_debugging_tasks();
+    eh_cp_deinit_transport_test_debugging_tasks();
+    deinit_features();
+    deinit_transport();
+    deinit_core_objects();
+
+    g_eh_cp_state = EH_CP_DOWN;
     ESP_LOGI(TAG, "ESP-Hosted CP deinitialized successfully");
     return ESP_OK;
 }
 
-static void auto_feat_init_task(void *pvParameters)
+static size_t feat_count(void)
 {
-    uintptr_t _ds = (uintptr_t)&_eh_cp_feat_descs_start;
-    size_t _dbytes = (size_t)((uintptr_t)&_eh_cp_feat_descs_end - _ds);
-    /* Link-collected array: a fill gap before _start would mis-index the walk
-     * and deref garbage names. Require struct alignment + whole-entry span. */
-    size_t n = ((_ds & (_Alignof(eh_cp_feat_desc_t) - 1)) != 0 ||
-                (_dbytes % sizeof(eh_cp_feat_desc_t)) != 0)
-                   ? 0 : _dbytes / sizeof(eh_cp_feat_desc_t);
-    if (n == 0 && _dbytes != 0)
-        ESP_LOGE(TAG, "auto_feat_init_task: descriptor section misaligned "
-                 "(start=%p span=%uB) — skipping", (void *)_ds, (unsigned)_dbytes);
-    ESP_LOGI(TAG, "auto_feat_init_task: found %u extension descriptor(s)", (unsigned)n);
+    uintptr_t start = (uintptr_t)_eh_cp_feat_descs_start;
+    size_t bytes = (size_t)((uintptr_t)_eh_cp_feat_descs_end - start);
+
+    /* A fill gap before _start would mis-index the walk and deref garbage. */
+    if ((start & (_Alignof(eh_cp_feat_desc_t) - 1)) != 0 ||
+        (bytes % sizeof(eh_cp_feat_desc_t)) != 0) {
+        if (bytes != 0)
+            ESP_LOGE(TAG, "feat descriptors misaligned (start=%p span=%uB)",
+                     (void *)start, (unsigned int)bytes);
+        return 0;
+    }
+
+    size_t n = bytes / sizeof(eh_cp_feat_desc_t);
+    if (n > EH_CP_FEAT_CAP) {
+        ESP_LOGE(TAG, "%u features exceeds the %u-bit record: running none",
+                 (unsigned int)n, (unsigned int)EH_CP_FEAT_CAP);
+        return 0;
+    }
+    return n;
+}
+
+/* Select the next feature by priority and position. */
+static size_t feat_next(uint32_t *seen, size_t n, bool ascending)
+{
+    size_t best = SIZE_MAX;
 
     for (size_t i = 0; i < n; i++) {
-        const eh_cp_feat_desc_t *d = &_eh_cp_feat_descs_start + i;
-        ESP_LOGI(TAG, "  desc[%zu] name='%s' prio=%d init=%p deinit=%p @%p",
-                 i, d->name ? d->name : "(null)", (int)d->priority,
-                 (void *)(uintptr_t)d->init_fn, (void *)(uintptr_t)d->deinit_fn, (const void *)d);
+        if (*seen & (1u << i))
+            continue;
+        int p = _eh_cp_feat_descs_start[i].priority;
+        if (best == SIZE_MAX ||
+            (ascending ? p <  _eh_cp_feat_descs_start[best].priority
+                       : p >= _eh_cp_feat_descs_start[best].priority))
+            best = i;
+    }
+    if (best != SIZE_MAX)
+        *seen |= (1u << best);
+    return best;
+}
+
+static void auto_feat_init_task(void *pvParameters)
+{
+    size_t n = feat_count();
+
+    s_feat_inited_mask = 0;
+    ESP_LOGI(TAG, "auto_feat_init_task: found %u extension descriptor(s)", (unsigned int)n);
+    for (size_t i = 0; i < n; i++) {
+        const eh_cp_feat_desc_t *d = &_eh_cp_feat_descs_start[i];
+        ESP_LOGI(TAG, "  desc[%u] name='%s' prio=%d init=%p deinit=%p",
+                 (unsigned int)i, d->name ? d->name : "(null)", (int)d->priority,
+                 (void *)(uintptr_t)d->init_fn, (void *)(uintptr_t)d->deinit_fn);
     }
 
     if (n == 0) {
-        ESP_LOGW(TAG, "auto_feat_init_task: no extensions registered via EH_CP_FEAT_REGISTER");
+        ESP_LOGW(TAG, "auto_feat_init_task: no extensions registered");
         xEventGroupSetBits(g_auto_feat_init_done_eg, EH_CP_FEAT_INIT_DONE_BIT);
         vTaskDelete(NULL);
         return;
     }
 
-    /* Insertion sort over pointer array; linker section is read-only. */
-    const eh_cp_feat_desc_t *sorted[16];
-    if (n > 16) {
-        ESP_LOGE(TAG, "auto_feat_init_task: too many extensions (%u > 16), truncating", (unsigned)n);
-        n = 16;
-    }
-    for (size_t i = 0; i < n; i++) sorted[i] = &_eh_cp_feat_descs_start + i;
-    for (size_t i = 1; i < n; i++) {
-        const eh_cp_feat_desc_t *key = sorted[i];
-        size_t j = i;
-        while (j > 0 && sorted[j-1]->priority > key->priority) {
-            sorted[j] = sorted[j-1];
-            j--;
-        }
-        sorted[j] = key;
-    }
-
-    for (size_t i = 0; i < n; i++) {
-        const eh_cp_feat_desc_t *d = sorted[i];
+    uint32_t seen = 0;
+    for (size_t k = 0; k < n; k++) {
+        size_t i = feat_next(&seen, n, true);
+        if (i == SIZE_MAX)
+            break;
+        const eh_cp_feat_desc_t *d = &_eh_cp_feat_descs_start[i];
         if (!d->init_fn) {
             ESP_LOGW(TAG, "auto_feat_init_task: descriptor '%s' has NULL init_fn, skipping",
                      d->name ? d->name : "?");
@@ -1123,6 +1377,8 @@ static void auto_feat_init_task(void *pvParameters)
         }
         ESP_LOGI(TAG, "auto_feat_init_task: initialising '%s' (priority %d)",
                  d->name ? d->name : "?", d->priority);
+        /* Record before the call: a partial init still holds resources. */
+        s_feat_inited_mask |= (1u << i);
         esp_err_t r = d->init_fn();
         if (r != ESP_OK) {
             ESP_LOGE(TAG, "auto_feat_init_task: '%s' init() failed: %s",

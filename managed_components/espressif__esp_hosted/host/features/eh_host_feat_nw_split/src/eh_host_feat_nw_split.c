@@ -1,168 +1,57 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 /* Network-Split host feature: configurable STA netif ownership. */
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_err.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
-#include "esp_netif_net_stack.h"
-#ifdef ESP_PLATFORM
-#include "lwip/netif.h"   /* netif->input peek — IDF/lwip only */
-#endif
 #include "esp_wifi.h"
 #include "esp_wifi_default.h"
 #include "esp_wifi_netif.h"
 #include "eh_host_feat_nw_split.h"
 #include "eh_host_nw_split.h"
+#include "eh_host_port_master_config.h"
+#if EH_HOST_AUTO_FEAT_INIT
 #include "eh_host_auto_init.h"
-#include "eh_host_event.h"
+#endif
 #include "eh_host_wifi.h"
-#include "eh_host_wifi_priv.h"
+#include "eh_host_nw_split_lease_fsm.h"
+#include "eh_common_caps.h"
+#include "eh_host_event.h"
+#if EH_HOST_TYPE_MCU
+#include "eh_host_mcu_transport_init_event.h"
+#endif
 
 #define NW_SPLIT_TAG "eh_nw_split"
 
+/* WIFI_STA_DEF made by this feature (INTERNAL_*): destroyed at deinit. The app's
+ * is used as is and never touched. */
+typedef enum { NETIF_NONE, NETIF_DEFAULT, NETIF_STATIC } netif_origin_t;
+
 static struct {
-    bool         initialised;
-    bool         owns_netif;
-    bool         custom_netif;
-    esp_netif_t *netif;
-    bool         status_pending;   /* CP status arrived before the netif was re-added (wake) */
-    eh_host_nw_split_status_t pending;
+    bool           inited;
+    esp_netif_t   *created;
+    netif_origin_t origin;
 } s_state;
 
-#if CONFIG_ESP_HOSTED_HOST_FEAT_WIFI_STA_AUTO_CONNECT_ON_START
-static void on_sta_start(void *arg, esp_event_base_t base, int32_t id, void *data)
-{
-    (void)arg;
-    (void)base;
-    (void)id;
-    (void)data;
-    esp_err_t rc = esp_wifi_connect();
-    ESP_LOGD(NW_SPLIT_TAG, "auto-connect on STA_START rc=%d", (int)rc);
-}
-#endif
-
-#if CONFIG_ESP_HOSTED_HOST_FEAT_WIFI_STA_AUTO_RECONNECT_ON_DISCONNECT
-static void on_sta_disconnected(void *arg, esp_event_base_t base, int32_t id, void *data)
-{
-    (void)arg;
-    (void)base;
-    (void)id;
-    (void)data;
-    esp_err_t rc = esp_wifi_connect();
-    ESP_LOGD(NW_SPLIT_TAG, "auto-reconnect on STA_DISCONNECTED rc=%d", (int)rc);
-}
-#endif
-
-#if !CONFIG_ESP_HOSTED_HOST_FEAT_NW_SPLIT_NETIF_INTERNAL_DHCP
-static bool nw_split_netif_added(void)
-{
-#ifdef ESP_PLATFORM
-    struct netif *impl = (struct netif *)esp_netif_get_netif_impl(s_state.netif);
-    return impl && impl->input;
+#if CONFIG_ESP_HOSTED_HOST_FEAT_NW_SPLIT_NETIF_INTERNAL_DHCP
+#define NETIF_MODE_OWNER EH_HOST_NW_SPLIT_IP_OWNER_HOST
 #else
-    return esp_netif_get_netif_impl(s_state.netif) != NULL;
+#define NETIF_MODE_OWNER EH_HOST_NW_SPLIT_IP_OWNER_CP
 #endif
-}
 
-static void on_cp_dhcp_status(void *arg, esp_event_base_t base, int32_t id, void *data)
-{
-    (void)arg;
-    (void)base;
-    (void)id;
-
-    if (!data || !s_state.netif) {
-        return;
-    }
-
-    const eh_host_nw_split_status_t *e =
-        (const eh_host_nw_split_status_t *)data;
-
-    if (!e->dhcp_up || !e->has_ipv4 || e->ipv4.ip.addr == 0) {
-        return;
-    }
-
-    /* Wake ordering: the CP replays this status fast, but the real STA_START that
-     * re-adds the netif is relayed ~hundreds of ms later. Upping the netif now
-     * (via the synthesized STA_CONNECTED below) would hit an unadded netif and
-     * fault wlanif_input on a NULL netif->input. If it isn't added yet, stash the
-     * status; on_nw_split_sta_start re-drives it once STA_START adds the netif.
-     * Cold boot: STA_START already ran, so this applies immediately. */
-    if (!nw_split_netif_added()) {
-        s_state.pending = *e;
-        s_state.status_pending = true;
-        return;
-    }
-
-    /* Synthesize WIFI_EVENT_STA_CONNECTED: when CP skips re-firing it for
-     * an already-associated network, esp_wifi_remote's default handler
-     * never installs the CHANNEL_STA rxcb, so echo replies get dropped.
-     * Idempotent if a real StaConnected later arrives. */
-    wifi_event_sta_connected_t conn_evt = {0};
-    (void)esp_event_post(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED,
-                         &conn_evt, sizeof(conn_evt), 0);
-    ESP_LOGD(NW_SPLIT_TAG,
-             "synthesized STA_CONNECTED (CP gave IP without StaConnected)");
-
-    eh_host_wifi_admit_rx(false /*is_ap*/, true);
-
-    esp_err_t rc = esp_netif_dhcpc_stop(s_state.netif);
-    if (rc != ESP_OK && rc != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
-        ESP_LOGW(NW_SPLIT_TAG, "dhcpc_stop failed: 0x%x", rc);
-    }
-
-    if (esp_netif_set_ip_info(s_state.netif, &e->ipv4) != ESP_OK) {
-        ESP_LOGE(NW_SPLIT_TAG, "set_ip_info failed");
-        return;
-    }
-
-    if (e->dns_main.type == ESP_IPADDR_TYPE_V4 &&
-        e->dns_main.u_addr.ip4.addr != 0) {
-        esp_netif_dns_info_t dns = { .ip = e->dns_main };
-        rc = esp_netif_set_dns_info(s_state.netif, ESP_NETIF_DNS_MAIN, &dns);
-        if (rc != ESP_OK) {
-            ESP_LOGW(NW_SPLIT_TAG, "set_dns_info failed: 0x%x", rc);
-        }
-    }
-
-    ip_event_got_ip_t evt = {
-        .esp_netif  = s_state.netif,
-        .ip_info    = e->ipv4,
-        .ip_changed = true,
-    };
-    rc = esp_event_post(IP_EVENT, IP_EVENT_STA_GOT_IP, &evt, sizeof(evt), 0);
-    if (rc != ESP_OK) {
-        ESP_LOGW(NW_SPLIT_TAG, "GOT_IP post failed: 0x%x", rc);
-    }
-    ESP_LOGD(NW_SPLIT_TAG, "CP IP applied to host netif: " IPSTR,
-             IP2STR(&e->ipv4.ip));
-}
-
-/* On a host-power-save wake the CP relays STA_START (which re-adds the netif)
- * only after it has already replayed the network status. STA_START's default
- * handler (registered before this one) has now added the netif, so re-drive any
- * status we stashed earlier — on_cp_dhcp_status will apply it in order. */
-static void on_nw_split_sta_start(void *arg, esp_event_base_t base, int32_t id, void *data)
-{
-    (void)arg;
-    (void)base;
-    (void)id;
-    (void)data;
-    if (!s_state.status_pending || !nw_split_netif_added()) {
-        return;
-    }
-    s_state.status_pending = false;
-    (void)esp_event_post(EH_HOST_EVENT, EH_HOST_EVENT_NW_SPLIT_STATUS,
-                         &s_state.pending, sizeof(s_state.pending), 0);
-}
-
-/* Gate to its only use site (INTERNAL_STATIC); the broader !INTERNAL_DHCP guard left it defined-but-unused in APP_EXTERNAL mode. */
 #if CONFIG_ESP_HOSTED_HOST_FEAT_NW_SPLIT_NETIF_INTERNAL_STATIC
+/* The CP lease is the only address: no host DHCP client. */
 static esp_netif_t *create_static_sta_netif(void)
 {
     esp_netif_inherent_config_t base = ESP_NETIF_INHERENT_DEFAULT_WIFI_STA();
@@ -185,7 +74,6 @@ static esp_netif_t *create_static_sta_netif(void)
         return NULL;
     }
 
-    /* INTERNAL_STATIC must not run local DHCP; IP comes from CP event. */
     esp_err_t dhcpc_rc = esp_netif_dhcpc_stop(n);
     if (dhcpc_rc != ESP_OK && dhcpc_rc != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
         ESP_LOGW(NW_SPLIT_TAG, "dhcpc_stop rc=%d", (int)dhcpc_rc);
@@ -193,134 +81,129 @@ static esp_netif_t *create_static_sta_netif(void)
 
     return n;
 }
-#endif /* NETIF_INTERNAL_STATIC */
 #endif
+
+/* The app, its Wi-Fi layer (e.g. wifi-cmd) and this feature may each create the
+ * default STA netif, in any order: the later callers get the existing one, and
+ * the lease FSM gets the first one (APP_EXTERNAL waits for it). */
+esp_netif_t *__real_esp_netif_create_default_wifi_sta(void);
+esp_netif_t *__wrap_esp_netif_create_default_wifi_sta(void);
+esp_netif_t *__wrap_esp_netif_create_default_wifi_sta(void)
+{
+    esp_netif_t *n = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+
+    if (n) {
+        return n;
+    }
+    n = __real_esp_netif_create_default_wifi_sta();
+    if (n && s_state.inited) {
+        eh_host_nw_split_lease_fsm_netif(n);
+    }
+    return n;
+}
+
+/* An existing WIFI_STA_DEF is used as is in every mode; INTERNAL_* create one
+ * when absent. NULL: APP_EXTERNAL and the app has none yet. */
+static esp_netif_t *netif_take(void)
+{
+    esp_netif_t *n = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+
+    if (n) {
+        ESP_LOGI(NW_SPLIT_TAG, "WIFI_STA_DEF from the app, used as is");
+        return n;
+    }
+#if CONFIG_ESP_HOSTED_HOST_FEAT_NW_SPLIT_NETIF_INTERNAL_STATIC
+    n = create_static_sta_netif();
+    s_state.origin = NETIF_STATIC;
+#elif CONFIG_ESP_HOSTED_HOST_FEAT_NW_SPLIT_NETIF_INTERNAL_DHCP
+    n = __real_esp_netif_create_default_wifi_sta();
+    s_state.origin = NETIF_DEFAULT;
+#endif
+    if (!n) {
+        s_state.origin = NETIF_NONE;
+        return NULL;
+    }
+    s_state.created = n;
+    ESP_LOGI(NW_SPLIT_TAG, "WIFI_STA_DEF created by network split");
+    return n;
+}
+
+static void netif_release(void)
+{
+    if (s_state.origin == NETIF_STATIC) {
+        esp_wifi_clear_default_wifi_driver_and_handlers(s_state.created);
+        esp_netif_destroy(s_state.created);
+    } else if (s_state.origin == NETIF_DEFAULT) {
+        esp_netif_destroy_default_wifi(s_state.created);
+    }
+    s_state.created = NULL;
+    s_state.origin = NETIF_NONE;
+}
+
+/* The CP's network split build and Kconfig IP owner, from its INIT caps. A CP
+ * that reports nothing (older) is taken as split, CP-owned. */
+static eh_host_nw_split_ip_owner_t cp_boot_owner(bool *cp_split)
+{
+#if EH_HOST_TYPE_MCU
+    uint32_t ext = eh_host_mcu_transport_get_ext_capabilities();
+    uint32_t o = (ext & ESP_EXT_CAP_NW_SPLIT_DHCP_MASK) >> ESP_EXT_CAP_NW_SPLIT_DHCP_SHIFT;
+
+    *cp_split = !(ext & ESP_EXT_CAP_NW_SPLIT_REPORTED) || (ext & ESP_EXT_CAP_NW_SPLIT);
+    return o == ESP_EXT_CAP_NW_SPLIT_DHCP_HOST ? EH_HOST_NW_SPLIT_IP_OWNER_HOST
+                                               : EH_HOST_NW_SPLIT_IP_OWNER_CP;
+#else
+    *cp_split = true;
+    return EH_HOST_NW_SPLIT_IP_OWNER_CP;
+#endif
+}
 
 int eh_host_feat_nw_split_init(void)
 {
-    if (s_state.initialised) {
+    bool cp_split;
+    eh_host_nw_split_ip_owner_t boot;
+
+    if (s_state.inited) {
         return 0;
     }
-    memset(&s_state, 0, sizeof(s_state));
-
-#if CONFIG_ESP_HOSTED_HOST_FEAT_NW_SPLIT_NETIF_APP_EXTERNAL
-    s_state.netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (!s_state.netif) {
-        ESP_LOGE(NW_SPLIT_TAG,
-                 "APP_EXTERNAL requires WIFI_STA_DEF before esp_hosted_init");
-        return ESP_ERR_INVALID_STATE;
-    }
-    s_state.owns_netif = false;
-    s_state.custom_netif = false;
-#else
-#if !CONFIG_WIFI_CMD_NO_LWIP
-    ESP_LOGE(NW_SPLIT_TAG,
-             "INTERNAL_* netif mode requires CONFIG_WIFI_CMD_NO_LWIP=y; "
-             "otherwise app/wifi-cmd and nw_split both create WIFI_STA_DEF");
-    return ESP_ERR_INVALID_STATE;
-#endif
-
-    if (esp_netif_get_handle_from_ifkey("WIFI_STA_DEF") != NULL) {
-        ESP_LOGE(NW_SPLIT_TAG,
-                 "INTERNAL mode conflict: WIFI_STA_DEF already exists");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-#if CONFIG_ESP_HOSTED_HOST_FEAT_NW_SPLIT_NETIF_INTERNAL_STATIC
-    s_state.netif = create_static_sta_netif();
-    s_state.custom_netif = true;
-#else
-    s_state.netif = esp_netif_create_default_wifi_sta();
-    s_state.custom_netif = false;
-#endif
-
-    if (!s_state.netif) {
-        ESP_LOGE(NW_SPLIT_TAG, "netif create failed");
-        return ESP_ERR_NO_MEM;
-    }
-    s_state.owns_netif = true;
-#endif
-
-#if CONFIG_ESP_HOSTED_HOST_FEAT_WIFI_STA_AUTO_CONNECT_ON_START
-    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_START,
-                                     on_sta_start, NULL);
-#endif
-#if CONFIG_ESP_HOSTED_HOST_FEAT_WIFI_STA_AUTO_RECONNECT_ON_DISCONNECT
-    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
-                                     on_sta_disconnected, NULL);
-#endif
-
-#if !CONFIG_ESP_HOSTED_HOST_FEAT_NW_SPLIT_NETIF_INTERNAL_DHCP
-    esp_event_handler_register(EH_HOST_EVENT,
-                                     EH_HOST_EVENT_NW_SPLIT_STATUS,
-                                     on_cp_dhcp_status, NULL);
-    /* Registered after the default STA_START handler so the netif is already
-     * added when we re-drive a stashed wake-path status. */
-    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_START,
-                                     on_nw_split_sta_start, NULL);
-#endif
-
+    s_state.inited = true;
+    boot = cp_boot_owner(&cp_split);
     if (eh_host_nw_split_register_event_handlers() != ESP_OK) {
         ESP_LOGW(NW_SPLIT_TAG, "nw_split event handler register failed");
     }
-
-    s_state.initialised = true;
+    if (eh_host_nw_split_lease_fsm_start(netif_take(), boot, NETIF_MODE_OWNER, cp_split) != ESP_OK) {
+        ESP_LOGE(NW_SPLIT_TAG, "lease FSM start failed");
+    }
     return 0;
 }
 
 int eh_host_feat_nw_split_deinit(void)
 {
-    if (!s_state.initialised) {
+    if (!s_state.inited) {
         return 0;
     }
-
-#if !CONFIG_ESP_HOSTED_HOST_FEAT_NW_SPLIT_NETIF_INTERNAL_DHCP
-    (void)esp_event_handler_unregister(EH_HOST_EVENT,
-                                       EH_HOST_EVENT_NW_SPLIT_STATUS,
-                                       on_cp_dhcp_status);
-    (void)esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_STA_START,
-                                       on_nw_split_sta_start);
-#endif
-#if CONFIG_ESP_HOSTED_HOST_FEAT_WIFI_STA_AUTO_RECONNECT_ON_DISCONNECT
-    (void)esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
-                                       on_sta_disconnected);
-#endif
-#if CONFIG_ESP_HOSTED_HOST_FEAT_WIFI_STA_AUTO_CONNECT_ON_START
-    (void)esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_STA_START,
-                                       on_sta_start);
-#endif
-
+    s_state.inited = false;
+    eh_host_nw_split_lease_fsm_stop();
     eh_host_nw_split_unregister_event_handlers();
-
-    if (s_state.owns_netif && s_state.netif) {
-        if (s_state.custom_netif) {
-            esp_wifi_clear_default_wifi_driver_and_handlers(s_state.netif);
-            esp_netif_destroy(s_state.netif);
-        } else {
-            esp_netif_destroy_default_wifi(s_state.netif);
-        }
-    }
-
-    s_state.netif = NULL;
-    s_state.owns_netif = false;
-    s_state.custom_netif = false;
-    s_state.initialised = false;
+    netif_release();
     return 0;
 }
 
 esp_err_t eh_host_nw_split_bind_mac(const uint8_t mac[6], uint16_t mtu)
 {
+    esp_netif_t *n = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    uint8_t mac_copy[6];
+
     (void)mtu;
-    if (!s_state.initialised || !s_state.netif || !mac) {
+    if (!n || !mac) {
         return ESP_ERR_INVALID_STATE;
     }
-
     /* esp_netif_set_mac takes non-const but only reads; copy to keep our const. */
-    uint8_t mac_copy[6];
     memcpy(mac_copy, mac, sizeof(mac_copy));
-    return esp_netif_set_mac(s_state.netif, mac_copy);
+    return esp_netif_set_mac(n, mac_copy);
 }
 
+#if EH_HOST_AUTO_FEAT_INIT
 EH_HOST_FEAT_REGISTER(eh_host_feat_nw_split_init,
                       eh_host_feat_nw_split_deinit,
                       "nw_split", 200);
+#endif

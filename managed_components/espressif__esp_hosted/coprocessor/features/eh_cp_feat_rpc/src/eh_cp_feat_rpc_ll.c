@@ -28,7 +28,7 @@
 
 static const char TAG[] = "ehcp_pcom_pserial";
 
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+#if EH_CP_IDF_V5_API
   #define QUEUE_HANDLE QueueHandle_t
 #else
   #define QUEUE_HANDLE xQueueHandle
@@ -37,6 +37,7 @@ static const char TAG[] = "ehcp_pcom_pserial";
 #define EPNAME_MAX                   16
 #define MIN_EP_NAME_LEN              1
 #define MAX_EP_NAME_LEN              (EPNAME_MAX - 1)
+#define PSERIAL_EXIT_WAIT_MS 2000
 /* pserial_task queue depth — must absorb WiFi re-init event storm (6+ events). */
 #if defined(CONFIG_IDF_TARGET_ESP32C2)
   #define REQ_Q_MAX                  6
@@ -64,6 +65,8 @@ struct pserial_config {
 	pserial_xmit    xmit;
 	pserial_recv    recv;
 	QUEUE_HANDLE    req_queue;
+	SemaphoreHandle_t exited;    /* task confirms it left before stop() frees this */
+	volatile bool   exit_req;
 };
 
 typedef struct {
@@ -142,8 +145,8 @@ static esp_err_t parse_tlv(uint8_t **buf, size_t *total_len,
 
 	/* Bounds check: value bytes must fit within remaining buffer */
 	if ((size_t)tlv_len > *total_len - 3) {
-		ESP_LOGE("parse_tlv", "TLV truncated: type=%d val_len=%u remaining=%zu",
-		         b[0], tlv_len, *total_len - 3);
+		ESP_LOGE("parse_tlv", "TLV truncated: type=%d val_len=%u remaining=%u",
+		         b[0], tlv_len, (unsigned int)(*total_len - 3));
 		return ESP_FAIL;
 	}
 
@@ -257,8 +260,13 @@ static bool rpc_ep_is_allowed(const char *epname, bool is_req)
     return (strcmp(epname, g_rpc_evt_ep) == 0);
 }
 
+/* may_offload: caller owns `in` and permits handing it to a task.
+ * *offloaded set => the task owns `in`; caller must not free it. */
+static esp_err_t slow_req_offload(protocomm_t *pc, uint8_t *data, size_t len);
+
 static esp_err_t protocomm_pserial_ctrl_req_handler(protocomm_t *pc,
-		uint8_t *in, size_t in_len)
+		uint8_t *in, size_t in_len,
+		bool may_offload, bool *offloaded)
 {
 	uint8_t *buf = in;
 	size_t total_len = 0, len = 0;
@@ -305,6 +313,20 @@ static esp_err_t protocomm_pserial_ctrl_req_handler(protocomm_t *pc,
 		         epname, g_rpc_req_ep);
 		return ESP_FAIL;
 	}
+
+	/* Blocking handlers must not hold the dispatcher. `data` is already the
+	 * inner protobuf, so no second parse. On failure, run inline. */
+	if (may_offload && offloaded) {
+		uint32_t msg_id = 0;
+		if (eh_proto_extract_msg_id(data, (uint16_t)data_len, &msg_id) ==
+		        EH_PROTO_FIELD_MSG_ID &&
+		    eh_cp_rpc_req_is_slow(msg_id) &&
+		    slow_req_offload(pc, in, in_len) == ESP_OK) {
+			*offloaded = true;
+			return ESP_OK;
+		}
+	}
+
 	ret = protocomm_req_handle(pc, epname, 0, data,
 			data_len, &out, (ssize_t *) &outlen);
 	if (ret != ESP_OK) {
@@ -512,6 +534,64 @@ static esp_err_t protocomm_pserial_remove_ep(const char *ep_name)
 	return ESP_ERR_NOT_FOUND;
 }
 
+/* Run slow requests outside pserial_task so the dispatcher stays responsive.
+ * Use one worker to keep blocking requests serialized and bounded. */
+#define SLOW_Q_MAX  2u
+
+typedef struct {
+	protocomm_t *pc;
+	uint8_t     *data;   /* owned once queued */
+	size_t       len;
+} slow_req_item_t;
+
+static QUEUE_HANDLE  s_slow_q;
+static TaskHandle_t  s_slow_task;
+
+static void slow_req_worker(void *params)
+{
+	(void)params;
+	slow_req_item_t item;
+
+	while (xQueueReceive(s_slow_q, &item, portMAX_DELAY) == pdTRUE) {
+		(void)protocomm_pserial_ctrl_req_handler(item.pc, item.data, item.len,
+		                                        false, NULL);
+		free(item.data);
+	}
+}
+
+/* ESP_OK => the worker owns `data`; on failure the caller keeps it. */
+static esp_err_t slow_req_offload(protocomm_t *pc, uint8_t *data, size_t len)
+{
+	if (!s_slow_q) return ESP_ERR_INVALID_STATE;
+
+	slow_req_item_t item = { .pc = pc, .data = data, .len = len };
+
+	/* Non-blocking: a full queue must never stall the dispatcher. */
+	if (xQueueSend(s_slow_q, &item, 0) != pdTRUE) {
+		ESP_LOGW(TAG, "slow-req queue full, running inline");
+		return ESP_FAIL;
+	}
+	return ESP_OK;
+}
+
+static esp_err_t slow_req_start(void)
+{
+	if (s_slow_q) return ESP_OK;   /* idempotent across re-init */
+
+	s_slow_q = xQueueCreate(SLOW_Q_MAX, sizeof(slow_req_item_t));
+	if (!s_slow_q) return ESP_ERR_NO_MEM;
+
+	if (xTaskCreate(slow_req_worker, "eh_rpc_slow",
+	                CONFIG_ESP_HOSTED_DEFAULT_TASK_STACK_SIZE, NULL,
+	                CONFIG_ESP_HOSTED_TASK_PRIORITY_DEFAULT,
+	                &s_slow_task) != pdPASS) {
+		vQueueDelete(s_slow_q);
+		s_slow_q = NULL;
+		return ESP_ERR_NO_MEM;
+	}
+	return ESP_OK;
+}
+
 static void pserial_task(void *params)
 {
 	protocomm_t *pc = (protocomm_t *) params;
@@ -526,6 +606,9 @@ static void pserial_task(void *params)
 	}
 
 	while (xQueueReceive(pserial_cfg->req_queue, &arg, portMAX_DELAY) == pdTRUE) {
+		if (pserial_cfg->exit_req)
+			break;
+
 		if (arg.type == PROTO_EVT_ENDPOINT) {
 			/* Events */
 			ESP_HEXLOGV("pserial_evt_rx", arg.data, arg.len, 32);
@@ -534,8 +617,13 @@ static void pserial_task(void *params)
 			/* Request */
 			len = pserial_cfg->recv(arg.data, arg.len);
 			if (len > 0) {
+				bool offloaded = false;
 				/*ESP_LOG_BUFFER_HEXDUMP("serial_rx", arg.data, len<16?len:16, ESP_LOG_INFO);*/
-				ret = protocomm_pserial_ctrl_req_handler(pc, arg.data, len);
+				ret = protocomm_pserial_ctrl_req_handler(pc, arg.data, len,
+				                                        true, &offloaded);
+				if (offloaded) {
+					continue;   /* worker owns arg.data */
+				}
 			}
 		} else {
 			ESP_LOGE(TAG, "Unexpected. Invalid type found in the packet");
@@ -551,7 +639,12 @@ static void pserial_task(void *params)
 		}
 	}
 
-	ESP_LOGI(TAG, "Unexpected termination of pserial task");
+	if (arg.data) {
+		free(arg.data);
+		arg.data = NULL;
+	}
+	xSemaphoreGive(pserial_cfg->exited);
+	vTaskDelete(NULL);
 }
 
 static esp_err_t protocomm_pserial_start(protocomm_t *pc,
@@ -574,11 +667,25 @@ static esp_err_t protocomm_pserial_start(protocomm_t *pc,
 	pserial_cfg->xmit = xmit;
 	pserial_cfg->recv = recv;
 	pserial_cfg->req_queue = xQueueCreate(REQ_Q_MAX, sizeof(serial_arg_t));
+	pserial_cfg->exited    = xSemaphoreCreateBinary();
+	pserial_cfg->exit_req  = false;
+	if (!pserial_cfg->req_queue || !pserial_cfg->exited) {
+		if (pserial_cfg->req_queue)
+			vQueueDelete(pserial_cfg->req_queue);
+		if (pserial_cfg->exited)
+			vSemaphoreDelete(pserial_cfg->exited);
+		free(pserial_cfg);
+		return ESP_ERR_NO_MEM;
+	}
 
 	pc->priv = pserial_cfg;
 
 	xTaskCreate(pserial_task, "pserial_task", CONFIG_ESP_HOSTED_DEFAULT_TASK_STACK_SIZE,
 			(void *) pc, CONFIG_ESP_HOSTED_TASK_PRIORITY_DEFAULT, NULL);
+
+	if (slow_req_start() != ESP_OK) {
+		ESP_LOGW(TAG, "slow-req worker unavailable; blocking requests run inline");
+	}
 
 	return ESP_OK;
 }
@@ -598,6 +705,16 @@ static esp_err_t protocomm_pserial_stop(protocomm_t *pc)
 
 	pserial_cfg = (struct pserial_config *) pc->priv;
 
+	/* Stop the task before deleting its queue. */
+	pserial_cfg->exit_req = true;
+	serial_arg_t wake = {0};
+	xQueueSend(pserial_cfg->req_queue, &wake, 0);
+	if (pserial_cfg->exited &&
+	    xSemaphoreTake(pserial_cfg->exited, pdMS_TO_TICKS(PSERIAL_EXIT_WAIT_MS)) != pdTRUE) {
+		ESP_LOGE(TAG, "pserial_task did not exit; releasing nothing");
+		return ESP_ERR_TIMEOUT;
+	}
+
 	while (xQueueReceive(pserial_cfg->req_queue, &arg, 0) == pdTRUE) {
 		if (arg.data) {
 			free(arg.data);
@@ -605,9 +722,17 @@ static esp_err_t protocomm_pserial_stop(protocomm_t *pc)
 		}
 	}
 
-	vQueueDelete(pserial_cfg->req_queue);
-	vTaskDelay(pdMS_TO_TICKS(100));
+	/* Queue and worker outlive stop() — the worker may be mid-request and there
+	 * is no join point. Drain so queued buffers are not leaked. */
+	if (s_slow_q) {
+		slow_req_item_t item;
+		while (xQueueReceive(s_slow_q, &item, 0) == pdTRUE) {
+			free(item.data);
+		}
+	}
 
+	vQueueDelete(pserial_cfg->req_queue);
+	vSemaphoreDelete(pserial_cfg->exited);
 	free(pserial_cfg);
 	pc->priv = NULL;
 
@@ -630,7 +755,7 @@ static esp_err_t rpc_ll_slist_req_handler(uint32_t session_id,
 
     uint32_t msg_id = 0;
     uint32_t field  = eh_proto_extract_msg_id(inbuf, (uint16_t)inlen, &msg_id);
-    if (field != 2) {
+    if (field != EH_PROTO_FIELD_MSG_ID) {
         ESP_LOGE(TAG, "slist_req_handler: failed to extract msg_id (field=%"PRIu32")", field);
         return ESP_FAIL;
     }
@@ -797,6 +922,10 @@ esp_err_t eh_cp_protocomm_deinit(void)
         return ESP_OK;
     }
 
+	/* Stop the endpoint consumer before freeing its resources. */
+    protocomm_pserial_stop(g_protocomm_instance);
+    protocomm_delete(g_protocomm_instance);
+
     if (g_endpoint_mutex) {
         xSemaphoreTake(g_endpoint_mutex, portMAX_DELAY);
         for (size_t i = 0; i < g_endpoint_count; i++) {
@@ -811,9 +940,6 @@ esp_err_t eh_cp_protocomm_deinit(void)
         vSemaphoreDelete(g_endpoint_mutex);
         g_endpoint_mutex = NULL;
     }
-
-    protocomm_pserial_stop(g_protocomm_instance);
-    protocomm_delete(g_protocomm_instance);
 
     g_protocomm_instance = NULL;
     g_write_cb = NULL;

@@ -5,6 +5,7 @@
  */
 
 #include "eh_cp_master_config.h"
+#include "eh_cp_host_ps_state.h"
 
 #include "eh_tlv.h"
 #include "eh_tlv_defs.h"
@@ -43,7 +44,6 @@ static const char TAG[] = "SPI_HD_DRIVER";
  * Mirrors upstream MCU's per-transport show_configuration() pattern. */
 static void show_config(void)
 {
-#if EH_CP_SPI_HD_NUM_DATA_LINES == 4
 	ESP_LOGI(TAG, "transport[cp]: SPI_HD %d-line mode=%d q=%d "
 		"CLK=%d CS=%d D0=%d D1=%d D2=%d D3=%d DATA_READY=%d",
 		(int)EH_CP_SPI_HD_NUM_DATA_LINES, (int)EH_CP_SPI_HD_MODE,
@@ -52,30 +52,22 @@ static void show_config(void)
 		(int)EH_CP_SPI_HD_PIN_D0,  (int)EH_CP_SPI_HD_PIN_D1,
 		(int)EH_CP_SPI_HD_PIN_D2,  (int)EH_CP_SPI_HD_PIN_D3,
 		(int)EH_CP_SPI_HD_PIN_DATA_READY);
-#else
-	ESP_LOGI(TAG, "transport[cp]: SPI_HD %d-line mode=%d q=%d "
-		"CLK=%d CS=%d D0=%d D1=%d DATA_READY=%d",
-		(int)EH_CP_SPI_HD_NUM_DATA_LINES, (int)EH_CP_SPI_HD_MODE,
-		(int)EH_CP_SPI_HD_Q_SIZE,
-		(int)EH_CP_SPI_HD_PIN_CLK, (int)EH_CP_SPI_HD_PIN_CS,
-		(int)EH_CP_SPI_HD_PIN_D0,  (int)EH_CP_SPI_HD_PIN_D1,
-		(int)EH_CP_SPI_HD_PIN_DATA_READY);
-#endif
 }
 
 /* SPI HD settings */
-#define NUM_DATA_BITS              CONFIG_EH_TRANSPORT_CP_SPI_HD_NUM_DATA_LINES
+#define NUM_DATA_BITS              EH_CP_SPI_HD_NUM_DATA_LINES
+#if (NUM_DATA_BITS == 1) && !defined(SPI_SLAVE_HD_3WIRE_MODE)
+#error "SPI-HD 1 data line needs ESP-IDF v6.0.3, v6.1 or later (SPI_SLAVE_HD_3WIRE_MODE)"
+#endif
 
 #define ESP_SPI_HD_MODE            CONFIG_EH_TRANSPORT_CP_SPI_HD_MODE_VALUE
-#define GPIO_CS                    CONFIG_EH_TRANSPORT_CP_SPI_HD_GPIO_CS
-#define GPIO_SCLK                  CONFIG_EH_TRANSPORT_CP_SPI_HD_GPIO_CLK
-#define GPIO_D0                    CONFIG_EH_TRANSPORT_CP_SPI_HD_GPIO_D0
-#define GPIO_D1                    CONFIG_EH_TRANSPORT_CP_SPI_HD_GPIO_D1
-#if (NUM_DATA_BITS == 4)
-#define GPIO_D2                    CONFIG_EH_TRANSPORT_CP_SPI_HD_GPIO_D2
-#define GPIO_D3                    CONFIG_EH_TRANSPORT_CP_SPI_HD_GPIO_D3
-#endif
-#define GPIO_DATA_READY            CONFIG_EH_TRANSPORT_CP_SPI_HD_GPIO_DATA_READY
+#define GPIO_CS                    EH_CP_SPI_HD_PIN_CS
+#define GPIO_SCLK                  EH_CP_SPI_HD_PIN_CLK
+#define GPIO_D0                    EH_CP_SPI_HD_PIN_D0
+#define GPIO_D1                    EH_CP_SPI_HD_PIN_D1
+#define GPIO_D2                    EH_CP_SPI_HD_PIN_D2
+#define GPIO_D3                    EH_CP_SPI_HD_PIN_D3
+#define GPIO_DATA_READY            EH_CP_SPI_HD_PIN_DATA_READY
 
 #define TX_MEMPOOL_NUM_BLOCKS      CONFIG_EH_TRANSPORT_CP_SPI_HD_Q_SIZE
 #define RX_MEMPOOL_NUM_BLOCKS      CONFIG_EH_TRANSPORT_CP_SPI_HD_Q_SIZE
@@ -107,6 +99,9 @@ static void show_config(void)
 #define DMA_CHAN SPI_DMA_CH_AUTO // automatically select the DMA channel
 
 #define SPI_HD_BUFFER_SIZE          MAX_TRANSPORT_BUF_SIZE
+
+static volatile size_t spi_hd_transfer_size = SPI_HD_BUFFER_SIZE;
+static esp_err_t spi_hd_set_transfer_size(size_t n);
 #define SPI_HD_QUEUE_SIZE           CONFIG_EH_TRANSPORT_CP_SPI_HD_Q_SIZE
 
 #define GPIO_MASK_DATA_READY        (1ULL << GPIO_DATA_READY)
@@ -129,6 +124,11 @@ static void show_config(void)
   #define reset_dataready_gpio()   { ESP_EARLY_LOGV(TAG, "reset_dataready_gpio"); gpio_set_level(GPIO_DATA_READY, 1); data_ready_gpio_active = false; }
 #endif
 
+/* Grace for a running worker to reach its loop top and suspend itself. The
+ * driver-facing waits stay untimed - a task parked in the driver is not in the
+ * heap, so deleting it there is safe; the flag covers the case where it is. */
+#define SPI_HD_EXIT_GRACE_MS 100
+
 // for flow control
 static volatile uint8_t wifi_flow_ctrl = 0;
 static void flow_ctrl_task(void* pvParameters);
@@ -144,6 +144,18 @@ static QueueHandle_t spi_hd_rx_queue[MAX_PRIORITY_QUEUES];
 static void spi_hd_rx_task(void* pvParameters);
 static void spi_hd_tx_done_task(void* pvParameters);
 
+/* Everything init() creates, deinit() destroys. The workers exit cooperatively
+ * first, so they are never vTaskDelete'd mid-malloc (the heap-lock corruption
+ * the SDIO path hit - see its deinit + commit fba4a6a6). */
+/* TODO: revisit what we can clean off */
+static TaskHandle_t spi_hd_rx_task_handle      = NULL;
+static TaskHandle_t spi_hd_tx_done_task_handle = NULL;
+static TaskHandle_t flow_ctrl_task_handle      = NULL;
+#if EH_CP_FEAT_HOST_PS_UNLOAD_BUS_WHILE_SLEEPING
+/* Set by deinit; the workers observe it and suspend themselves. */
+static volatile bool spi_hd_exit_requested = false;
+#endif
+
 static uint32_t tx_ready_buf_size = 0;
 static uint32_t rx_ready_buf_num  = 0;
 
@@ -155,6 +167,7 @@ static interface_handle_t * esp_spi_hd_init(void);
 static int esp_spi_hd_read(interface_handle_t *if_handle, interface_buffer_handle_t *buf_handle);
 static int32_t esp_spi_hd_write(interface_handle_t *handle, interface_buffer_handle_t *buf_handle);
 static void esp_spi_hd_deinit(interface_handle_t * handle);
+static void esp_spi_hd_stop(interface_handle_t *handle);
 static esp_err_t esp_spi_hd_reset(interface_handle_t *handle);
 
 if_ops_t if_ops = {
@@ -163,6 +176,8 @@ if_ops_t if_ops = {
 	.read = esp_spi_hd_read,
 	.reset = esp_spi_hd_reset,
 	.deinit = esp_spi_hd_deinit,
+	.stop = esp_spi_hd_stop,
+	.set_transfer_size = spi_hd_set_transfer_size,
 };
 
 static struct hosted_mempool * buf_mp_tx_g;
@@ -171,8 +186,7 @@ static struct hosted_mempool * trans_tx_g;
 static struct hosted_mempool * trans_rx_g;
 static SemaphoreHandle_t mempool_tx_sem = NULL; // to count number of Tx bufs in IDF SPI HD driver
 
-uint8_t power_save_started;
-#define IS_HOST_POWER_SAVING() (power_save_started)
+#define IS_HOST_POWER_SAVING() (!eh_cp_host_ps_reachable())
 
 static inline void spi_hd_mempool_create(void)
 {
@@ -297,6 +311,9 @@ static void flow_ctrl_task(void* pvParameters)
 		interface_buffer_handle_t buf_handle = {0};
 
 		xSemaphoreTake(flow_ctrl_sem, portMAX_DELAY);
+#if EH_CP_FEAT_HOST_PS_UNLOAD_BUS_WHILE_SLEEPING
+		if (spi_hd_exit_requested) { vTaskSuspend(NULL); continue; }
+#endif
 
 		if (wifi_flow_ctrl)
 			buf_handle.throttle_cmd = EH_FRAME_FLOW_CTRL_ON;
@@ -359,27 +376,23 @@ static void esp_spi_hd_get_bus_cfg(spi_bus_config_t * bus_cfg)
 {
 	bus_cfg->data0_io_num = GPIO_D0;
 	bus_cfg->data1_io_num = GPIO_D1;
-#if (NUM_DATA_BITS == 4)
 	bus_cfg->data2_io_num = GPIO_D2;
 	bus_cfg->data3_io_num = GPIO_D3;
-#else
-	bus_cfg->data2_io_num = -1;
-	bus_cfg->data3_io_num = -1;
-#endif
-	/* bus_cfg is an uninitialized stack struct; octal signals must be marked
-	 * unused or spi_bus_initialize validates garbage GPIOs on S3/P4. */
 	bus_cfg->data4_io_num = -1;
 	bus_cfg->data5_io_num = -1;
 	bus_cfg->data6_io_num = -1;
 	bus_cfg->data7_io_num = -1;
 	bus_cfg->sclk_io_num = GPIO_SCLK;
 	bus_cfg->max_transfer_sz = SPI_HD_BUFFER_SIZE;
-#if (NUM_DATA_BITS == 4)
+/* The slave reads the line count from each command; DUAL/QUAD only check pins.
+ * On chips with octal SPI, some IDF versions also move the pins to the octal
+ * function for these flags, which disconnects SPI2 from them. */
+#if (NUM_DATA_BITS == 4) && !SOC_SPI_SUPPORT_OCT
 	bus_cfg->flags = SPICOMMON_BUSFLAG_QUAD;
-#elif (NUM_DATA_BITS == 2)
+#elif (NUM_DATA_BITS == 2) && !SOC_SPI_SUPPORT_OCT
 	bus_cfg->flags = SPICOMMON_BUSFLAG_DUAL;
 #else
-	bus_cfg->flags = 0; /* 1-line: D0/D1 as MOSI/MISO, base command set */
+	bus_cfg->flags = 0;
 #endif
 	bus_cfg->intr_flags = 0;
 }
@@ -387,7 +400,11 @@ static void esp_spi_hd_get_bus_cfg(spi_bus_config_t * bus_cfg)
 static void esp_spi_hd_get_slot_cfg(spi_slave_hd_slot_config_t * slot_cfg)
 {
 	slot_cfg->spics_io_num = GPIO_CS;
+#if (NUM_DATA_BITS == 1)
+	slot_cfg->flags = SPI_SLAVE_HD_3WIRE_MODE;
+#else
 	slot_cfg->flags = 0;
+#endif
 	slot_cfg->mode = ESP_SPI_HD_MODE;
 	slot_cfg->command_bits = NUM_COMMAND_BITS;
 	slot_cfg->address_bits = NUM_ADDRESS_BITS;
@@ -438,6 +455,24 @@ static void spi_hd_read_done(void *handle)
 		ESP_LOGE(TAG, "%s: Failed to re-queue Rx transaction", __func__);
 		spi_hd_buffer_rx_free(trans->data);
 		spi_hd_trans_rx_free(trans);
+	}
+}
+
+static void spi_hd_apply_ps_flags(uint8_t flags)
+{
+	if (flags & FLAG_POWER_SAVE_STARTED) {
+		ESP_LOGI(TAG, "Host informed starting to power sleep");
+		if (context.event_handler)
+			context.event_handler(ESP_POWER_SAVE_ON);
+	} else if (flags & FLAG_POWER_SAVE_STOPPED) {
+		ESP_LOGI(TAG, "Host informed that it waken up");
+#if !EH_CP_FEAT_HOST_PS_UNLOAD_BUS_WHILE_SLEEPING
+		/* Only if the bus stayed up: otherwise init() already did it, and repeating
+		 * here rewinds past slave-up. */
+		tx_ready_buf_size = 0;
+#endif
+		if (context.event_handler)
+			context.event_handler(ESP_POWER_SAVE_OFF);
 	}
 }
 
@@ -492,6 +527,9 @@ static void spi_hd_rx_task(void* pvParameters)
 
 	while (1) {
 
+#if EH_CP_FEAT_HOST_PS_UNLOAD_BUS_WHILE_SLEEPING
+		if (spi_hd_exit_requested) { vTaskSuspend(NULL); continue; }
+#endif
 		// wait for incoming transactions
 		res = spi_slave_hd_get_trans_res(SPI_HOST, SPI_SLAVE_CHAN_RX,
 				&ret_trans, portMAX_DELAY);
@@ -521,23 +559,15 @@ static void spi_hd_rx_task(void* pvParameters)
 			if (fres == EH_FRAME_DUMMY || fres != EH_FRAME_OK) {
 				if (fres != EH_FRAME_DUMMY)
 					ESP_LOGE(TAG, "spi_hd_rx: frame_decode err %d, drop", fres);
+				else
+					/* Header-only frame */
+					spi_hd_apply_ps_flags(buf_handle.flags);
 				spi_hd_read_done(ret_trans);
 				continue;
 			}
 		}
 
-		if (buf_handle.flags & FLAG_POWER_SAVE_STARTED) {
-			ESP_LOGI(TAG, "Host informed starting to power sleep");
-			power_save_started = 1;
-			if (context.event_handler)
-				context.event_handler(ESP_POWER_SAVE_ON);
-		} else if (buf_handle.flags & FLAG_POWER_SAVE_STOPPED) {
-			ESP_LOGI(TAG, "Host informed that it waken up");
-			tx_ready_buf_size = 0;
-			power_save_started = 0;
-			if (context.event_handler)
-				context.event_handler(ESP_POWER_SAVE_OFF);
-		}
+		spi_hd_apply_ps_flags(buf_handle.flags);
 
 		buf_handle.free_buf_handle = spi_hd_read_done;
 		buf_handle.priv_buffer_handle = ret_trans;
@@ -566,6 +596,9 @@ static void spi_hd_tx_done_task(void* pvParameters)
 	spi_slave_hd_data_t *ret_trans;
 
 	while (1) {
+#if EH_CP_FEAT_HOST_PS_UNLOAD_BUS_WHILE_SLEEPING
+		if (spi_hd_exit_requested) { vTaskSuspend(NULL); continue; }
+#endif
 		err = spi_slave_hd_get_trans_res(SPI_HOST, SPI_SLAVE_CHAN_TX,
 				&ret_trans, portMAX_DELAY);
 		if (err == ESP_OK) {
@@ -590,8 +623,8 @@ static interface_handle_t * esp_spi_hd_init(void)
 	uint16_t prio_q_idx = 0;
 	uint8_t init_value[SOC_SPI_MAXIMUM_BUFFER_SIZE] = {0x0}; // used to init SPI shared registers
 
-	spi_bus_config_t bus_cfg;
-	spi_slave_hd_slot_config_t slave_hd_cfg;
+	spi_bus_config_t bus_cfg = {0};
+	spi_slave_hd_slot_config_t slave_hd_cfg = {0};
 
 	/* Configuration for data_ready line */
 	gpio_config_t io_data_ready_conf={
@@ -625,9 +658,15 @@ static interface_handle_t * esp_spi_hd_init(void)
 	/* Initialize SPI slave interface */
 
 	ret = spi_slave_hd_init(SPI_HOST, &bus_cfg, &slave_hd_cfg);
-	assert(ret == ESP_OK);
+	if (ret != ESP_OK) {
+		ESP_LOGE(TAG, "spi_slave_hd_init failed: %s", esp_err_to_name(ret));
+		return NULL;
+	}
 
 	// initialise shared spi hd registers
+
+	tx_ready_buf_size = 0;
+	rx_ready_buf_num  = 0;
 
 	// Reset all the SPI shared registers to 0
 	spi_slave_hd_write_buffer(SPI_HOST, 0, init_value, SOC_SPI_MAXIMUM_BUFFER_SIZE);
@@ -654,32 +693,64 @@ static interface_handle_t * esp_spi_hd_init(void)
 	mempool_tx_sem = xSemaphoreCreateCounting(SPI_HD_QUEUE_SIZE, SPI_HD_QUEUE_SIZE);
 	assert(mempool_tx_sem);
 
-	spi_hd_rx_sem = xSemaphoreCreateCounting(SPI_HD_QUEUE_SIZE * MAX_PRIORITY_QUEUES, 0);
-	assert(spi_hd_rx_sem != NULL);
-
+#if EH_CP_FEAT_HOST_PS_UNLOAD_BUS_WHILE_SLEEPING
+	spi_hd_exit_requested = false;
+#endif
+	if (!spi_hd_rx_sem) {
+		spi_hd_rx_sem = xSemaphoreCreateCounting(SPI_HD_QUEUE_SIZE * MAX_PRIORITY_QUEUES, 0);
+		assert(spi_hd_rx_sem != NULL);
+	}
 	for (prio_q_idx = 0; prio_q_idx < MAX_PRIORITY_QUEUES; prio_q_idx++) {
-		spi_hd_rx_queue[prio_q_idx] = xQueueCreate(SPI_HD_QUEUE_SIZE, sizeof(interface_buffer_handle_t));
-		assert(spi_hd_rx_queue[prio_q_idx] != NULL);
+		if (!spi_hd_rx_queue[prio_q_idx]) {
+			spi_hd_rx_queue[prio_q_idx] = xQueueCreate(SPI_HD_QUEUE_SIZE, sizeof(interface_buffer_handle_t));
+			assert(spi_hd_rx_queue[prio_q_idx] != NULL);
+		}
+	}
+	if (!flow_ctrl_task_handle) {
+		assert(xTaskCreate(flow_ctrl_task, "flow_ctrl_task" ,
+				CONFIG_ESP_HOSTED_DEFAULT_TASK_STACK_SIZE, NULL ,
+				CONFIG_ESP_HOSTED_TASK_PRIORITY_DEFAULT,
+				&flow_ctrl_task_handle) == pdTRUE);
 	}
 
 	assert(xTaskCreate(spi_hd_rx_task, "spi_hd_rx_task" ,
 			CONFIG_ESP_HOSTED_DEFAULT_TASK_STACK_SIZE, NULL,
-			CONFIG_ESP_HOSTED_TASK_PRIORITY_DEFAULT, NULL) == pdTRUE);
+			CONFIG_ESP_HOSTED_TASK_PRIORITY_DEFAULT,
+			&spi_hd_rx_task_handle) == pdTRUE);
 
 	// task to clean up after doing tx
 	assert(xTaskCreate(spi_hd_tx_done_task, "spi_hd_tx_done_task" ,
 			CONFIG_ESP_HOSTED_DEFAULT_TASK_STACK_SIZE, NULL,
-			CONFIG_ESP_HOSTED_TASK_PRIORITY_DEFAULT, NULL) == pdTRUE);
-
-	assert(xTaskCreate(flow_ctrl_task, "flow_ctrl_task" ,
-			CONFIG_ESP_HOSTED_DEFAULT_TASK_STACK_SIZE, NULL ,
-			CONFIG_ESP_HOSTED_TASK_PRIORITY_DEFAULT, NULL) == pdTRUE);
+			CONFIG_ESP_HOSTED_TASK_PRIORITY_DEFAULT,
+			&spi_hd_tx_done_task_handle) == pdTRUE);
 
 	// data path opened. Continue
 	memset(&if_handle_g, 0, sizeof(if_handle_g));
 	if_handle_g.state = ACTIVE;
 
 	return &if_handle_g;
+}
+
+static void esp_spi_hd_stop(interface_handle_t *handle)
+{
+	/* Do NOT touch handle->state: deinit returns early when it is already
+	 * DEINIT, which would skip the whole teardown. The give is the release. */
+	(void)handle;
+	if (spi_hd_rx_sem)
+		for (int i = 0; i < MAX_PRIORITY_QUEUES; i++)
+			xSemaphoreGive(spi_hd_rx_sem);
+}
+
+/* Clear handshake flags before deinit; stale flags can cause the host and CP
+ * to get out of sync during the next wake/init cycle. */
+static void clear_handshake_flags(void)
+{
+	uint32_t zero = 0;
+
+	spi_slave_hd_write_buffer(SPI_HOST, SPI_HD_REG_SLAVE_READY,
+			(uint8_t *)&zero, sizeof(zero));
+	spi_slave_hd_write_buffer(SPI_HOST, SPI_HD_REG_SLAVE_CTRL,
+			(uint8_t *)&zero, sizeof(zero));
 }
 
 static void esp_spi_hd_deinit(interface_handle_t * handle)
@@ -691,23 +762,62 @@ static void esp_spi_hd_deinit(interface_handle_t * handle)
 		return;
 	}
 	if_handle_g.state = DEINIT;
-	spi_hd_mempool_destroy();
-	vSemaphoreDelete(mempool_tx_sem);
-	mempool_tx_sem = NULL;
 
-	// close data path
-	if (context.event_handler) {
-		context.event_handler(ESP_CLOSE_DATA_PATH);
+	clear_handshake_flags();
+
+	/* 1. Ask the workers to exit. One that is awake reaches its loop top and
+	 *    suspends itself, so it is never deleted mid-malloc; one parked in
+	 *    spi_slave_hd_get_trans_res() is deleted there, which is safe. The
+	 *    flow-ctrl waiter needs a give to wake at all. */
+	spi_hd_exit_requested = true;
+	if (flow_ctrl_sem)
+		xSemaphoreGive(flow_ctrl_sem);
+	vTaskDelay(pdMS_TO_TICKS(SPI_HD_EXIT_GRACE_MS));
+	if (spi_hd_rx_task_handle)      { vTaskDelete(spi_hd_rx_task_handle);      spi_hd_rx_task_handle = NULL; }
+	if (spi_hd_tx_done_task_handle) { vTaskDelete(spi_hd_tx_done_task_handle); spi_hd_tx_done_task_handle = NULL; }
+	if (flow_ctrl_task_handle)      { vTaskDelete(flow_ctrl_task_handle);      flow_ctrl_task_handle = NULL; }
+	vTaskDelay(pdMS_TO_TICKS(20));    // let IDLE reap the TCBs/stacks
+
+	/* No ESP_CLOSE_DATA_PATH: an unload, not a shutdown. */
+
+	/* 2. Release the driver before the buffers its transactions point into. */
+	esp_err_t dret = spi_slave_hd_deinit(SPI_HOST);
+	if (dret != ESP_OK)
+		ESP_LOGE(TAG, "spi_slave_hd_deinit: %d %s", dret, esp_err_to_name(dret));
+
+	/* 3. Release a reader blocked in esp_spi_hd_read() so it returns before we
+	 *    delete what it is waiting on; it finds the queues empty and fails. */
+	if (spi_hd_rx_sem) {
+		for (int i = 0; i < MAX_PRIORITY_QUEUES; i++)
+			xSemaphoreGive(spi_hd_rx_sem);
+		vTaskDelay(pdMS_TO_TICKS(10));
 	}
 
-	assert(spi_slave_hd_deinit(SPI_HOST) == ESP_OK);
+	/* 4. Drain undelivered RX frames while the mempool is still alive, so their
+	 *    buffers are returned rather than lost, then drop queues + semaphores. */
+	for (int p = 0; p < MAX_PRIORITY_QUEUES; p++) {
+		if (!spi_hd_rx_queue[p])
+			continue;
+		interface_buffer_handle_t b;
+		while (xQueueReceive(spi_hd_rx_queue[p], &b, 0) == pdTRUE)
+			if (b.free_buf_handle)
+				b.free_buf_handle(b.priv_buffer_handle);
+		vQueueDelete(spi_hd_rx_queue[p]);
+		spi_hd_rx_queue[p] = NULL;
+	}
+	if (spi_hd_rx_sem)  { vSemaphoreDelete(spi_hd_rx_sem);  spi_hd_rx_sem = NULL; }
+	if (flow_ctrl_sem)  { vSemaphoreDelete(flow_ctrl_sem);  flow_ctrl_sem = NULL; }
+	if (mempool_tx_sem) { vSemaphoreDelete(mempool_tx_sem); mempool_tx_sem = NULL; }
+
+	/* 5. Pools last: the workers are gone, so no allocator races. */
+	spi_hd_mempool_destroy();
 #endif
 }
 
 static esp_err_t esp_spi_hd_reset(interface_handle_t *handle)
 {
-	spi_bus_config_t bus_cfg;
-	spi_slave_hd_slot_config_t slave_hd_cfg;
+	spi_bus_config_t bus_cfg = {0};
+	spi_slave_hd_slot_config_t slave_hd_cfg = {0};
 	esp_err_t ret = ESP_OK;
 
 	ret = spi_slave_hd_deinit(SPI_HOST);
@@ -759,6 +869,7 @@ static int32_t esp_spi_hd_write(interface_handle_t *handle, interface_buffer_han
 	if (sendbuf == NULL) {
 		ESP_LOGE(TAG , "send buffer[%"PRIu32"] malloc fail", total_len);
 		MEM_DUMP("malloc failed");
+		xSemaphoreGive(mempool_tx_sem);   /* taken just above; do not lose credit */
 		return ESP_FAIL;
 	}
 
@@ -772,6 +883,7 @@ static int32_t esp_spi_hd_write(interface_handle_t *handle, interface_buffer_han
 		h.flags          = buf_handle->flags;
 		h.seq_num        = buf_handle->seq_num;
 		h.throttle_cmd   = buf_handle->throttle_cmd;
+		h.pkt_type       = buf_handle->pkt_type;
 		UPDATE_HEADER_TX_PKT_NO_IBUF(&h);
 		eh_frame_encode(sendbuf, &h, buf_handle->payload_len);
 	}
@@ -780,6 +892,12 @@ static int32_t esp_spi_hd_write(interface_handle_t *handle, interface_buffer_han
 	ESP_HEXLOGD("spi_hd_tx", sendbuf, total_len, 32);
 
 	tx_trans = spi_hd_trans_tx_alloc(MEMSET_REQUIRED);
+	if (!tx_trans) {
+		ESP_LOGE(TAG, "no tx transaction descriptor");
+		spi_hd_buffer_tx_free(sendbuf);
+		xSemaphoreGive(mempool_tx_sem);
+		return ESP_FAIL;
+	}
 	tx_trans->data = sendbuf;
 	tx_trans->len  = total_len;
 
@@ -789,6 +907,7 @@ static int32_t esp_spi_hd_write(interface_handle_t *handle, interface_buffer_han
 		ESP_LOGE(TAG , "spi hd slave transmit error, ret : 0x%"PRIx16, ret);
 		spi_hd_buffer_tx_free(sendbuf);
 		spi_hd_trans_tx_free(tx_trans);
+		xSemaphoreGive(mempool_tx_sem);
 		return ESP_FAIL;
 	}
 
@@ -886,6 +1005,11 @@ void generate_startup_event(uint8_t cap, uint32_t ext_cap, uint8_t raw_tp_cap,
 	if (rc) { ESP_LOGE(TAG, "TLV v2 overflow"); spi_hd_buffer_tx_free(buf_handle.payload); xSemaphoreGive(mempool_tx_sem); return; }
 #endif
 
+	if (eh_tlv_add_u32_le(&tlv, EH_PRIV_TRANSFER_SIZE, (uint32_t)spi_hd_transfer_size))
+		ESP_LOGW(TAG, "no room for transfer-size TLV");
+	else
+		ESP_LOGI(TAG, "advertising transfer size %u", (unsigned)spi_hd_transfer_size);
+
 	len = eh_tlv_builder_len(&tlv);
 	event->event_len = len;
 	len += 2;
@@ -919,4 +1043,22 @@ void generate_startup_event(uint8_t cap, uint32_t ext_cap, uint8_t raw_tp_cap,
 		spi_hd_buffer_tx_free(buf_handle.payload);
 		spi_hd_trans_tx_free(tx_trans);
 	}
+}
+
+static esp_err_t spi_hd_set_transfer_size(size_t n)
+{
+	uint32_t value;
+
+	if (!n || n > SPI_HD_BUFFER_SIZE) {
+		ESP_LOGE(TAG, "refusing transfer size %u", (unsigned)n);
+		return ESP_FAIL;
+	}
+	spi_hd_transfer_size = n;
+
+	value = (uint32_t)spi_hd_transfer_size;
+	spi_slave_hd_write_buffer(SPI_HOST, SPI_HD_REG_MAX_TX_BUF_LEN,
+			(uint8_t *)&value, sizeof(value));
+	spi_slave_hd_write_buffer(SPI_HOST, SPI_HD_REG_MAX_RX_BUF_LEN,
+			(uint8_t *)&value, sizeof(value));
+	return ESP_OK;
 }

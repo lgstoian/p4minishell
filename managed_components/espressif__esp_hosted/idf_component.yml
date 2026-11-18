@@ -1,24 +1,46 @@
 dependencies:
+  cherry-embedded/cherryusb:
+    rules:
+    - if: target in [esp32p4]
+    - if: $CONFIG{ESP_HOSTED_HOST_USB_CHERRYUSB_MANIFEST} == 1
+    version: '>=1.6.0'
+  espressif/esp_tinyusb:
+    rules:
+    - if: target in [esp32s2, esp32s3, esp32s31]
+    - if: $CONFIG{ESP_HOSTED_CP_TINYUSB_MANIFEST} == 1
+    version: '*'
+  espressif/iot_usbh_rndis:
+    rules:
+    - if: target in [esp32p4]
+    - if: $CONFIG{ESP_HOSTED_HOST_USB_RNDIS_MANIFEST} == 1
+    version: ^0.5.2
+  espressif/usb_host_cdc_acm:
+    rules:
+    - if: target in [esp32p4]
+    - if: $CONFIG{ESP_HOSTED_HOST_USB_CDC_ACM_MANIFEST} == 1
+    version: '*'
   idf:
     version: '>=5.5'
 description: ESP-Hosted - Unified coprocessor connectivity
-documentation: https://docs.espressif.com/projects/esp-hosted
+documentation: https://github.com/espressif/esp-hosted-mcu
 license: Apache-2.0
-repository: git://github.com/espressif/esp-hosted.git
+repository: git://github.com/espressif/esp-hosted-mcu.git
 repository_info:
-  commit_sha: e1a4f5492ac44fa248d77ac971d2055f8c565442
+  commit_sha: 235aca95b52e3501b55eeb610b0275d288edc8c2
   path: .
 targets:
 - esp32
-- esp32c2
 - esp32s2
 - esp32s3
+- esp32s31
+- esp32c2
 - esp32c3
 - esp32c5
 - esp32c6
 - esp32c61
 - esp32h2
 - esp32h4
+- esp32h21
 - esp32p4
-url: https://github.com/espressif/esp-hosted
-version: 3.0.6
+url: https://github.com/espressif/esp-hosted-mcu
+version: 3.1.0

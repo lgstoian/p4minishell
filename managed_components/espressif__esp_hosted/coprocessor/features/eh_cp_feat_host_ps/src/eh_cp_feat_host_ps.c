@@ -13,9 +13,6 @@
 #if EH_CP_FEAT_WIFI_READY
 #include "eh_cp_feat_wifi.h"
 #endif
-#if EH_CP_FEAT_NW_SPLIT_READY
-#include "eh_cp_feat_nw_split.h"
-#endif
 
 /* Priority 50 — must init before RPC adapters (100). */
 #if EH_CP_FEAT_HOST_PS_AUTO_INIT
@@ -41,6 +38,10 @@ esp_err_t eh_cp_feat_host_ps_cp__init(void)
 
 esp_err_t eh_cp_feat_host_ps_cp__deinit(void)
 {
+    if (s_host_ps_initialized) {
+        host_power_save_deinit();
+        s_host_ps_initialized = false;
+    }
     ESP_LOGI(TAG, "Power save extension deinitialized");
     return ESP_OK;
 }

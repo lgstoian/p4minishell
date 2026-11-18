@@ -2,6 +2,105 @@
 
 # Releases
 
+# $${\color{green} \text{3.1.0}}$$
+
+- cp/sdio: stream mode keeps 14 frames in flight on every target and advertises that depth, so the host staging slot is 14 × 1536 B. The in-flight depth no longer depends on the DMA descriptor size (ESP32 had dropped to 2 frames)
+- USB OTG transport (Experimental)
+  - host/cp: new USB OTG bus. The MCU is the USB host and the co-processor is the USB device. CDC-ACM carries the length-prefixed frames (RPC and data)
+  - ESP32-S31 is a co-processor target
+  - host examples: `sdkconfig.defaults.esp32p4.usb` builds an ESP32-P4 host against an ESP32-S31 co-processor on this bus in `examples/system/api_exerciser/mcu_host` and `examples/wifi/iperf/mcu_host`
+  - host/usb: the MCU host can use ESP-IDF `usb_host_cdc_acm` (default) or CherryUSB. Default is `usb_host_cdc_acm`
+  - docs: [USB OTG Host](design/usb-otg-host.md)
+- cp/sdio: the init event advertises the RX buffer, as a count of 1536-byte frames, in packet and software-aggregation mode. It no longer sends `EH_TRANSPORT_CP_SDIO_TX_Q_SIZE`. The Kconfig option is unused and kept so existing sdkconfigs still parse
+- host/sdio: streaming RX staging buffers are sized from the co-processor TX capacity when INIT arrives. The read task allocates them once, after every staging slot has been drained, so a buffer still in use is not freed. `ESP_HOSTED_HOST_SDIO_RX_STAGING_SLOTS=1` keeps a single buffer and the read waits until it has been copied out
+- host/sdio: optional DMA mempool for packet buffers (`ESP_HOSTED_HOST_SDIO_USE_MEMPOOL`, off by default) when a 1536-byte DMA allocation fails on a fragmented heap
+- cp: add ESP32-S31 as co-processor on SPI full-duplex, SPI half-duplex and UART. ESP32-S31 has no SDIO slave
+- cp/bt: ESP32-S31 Bluetooth: BLE and Classic BT (BR/EDR) over hosted HCI, and HCI over a dedicated UART (H4). With a Bluedroid host on a dedicated UART, ESP32-S31 needs ESP-IDF with commit `64018e19824` (v6.2 or later)
+- cp/bt: with HCI over a dedicated UART, the co-processor starts the Bluetooth controller itself. Before, the controller started only after a host RPC, which a standard HCI host does not send
+- cp/bt: `ESP_HOSTED_CP_AUTO_STOP_BT_ON_HOSTED_DEINIT` stops and deinits the Bluetooth controller, but no longer releases the controller memory. Bluetooth can start again on the next hosted init. To release the memory, call `eh_cp_bt_deinit(true)` on the co-processor, or `eh_host_bt_controller_deinit(true)` on the host (RPC v2). After a release, Bluetooth cannot start until reboot
+- examples/bt: the UART HCI hosts drop bytes that are not an H4 packet type and continue. Before, a stray byte at boot stopped the host with an assert
+- examples/bt: the NimBLE UART HCI host opens the UART after NimBLE is initialized, and NimBLE handles an HCI Hardware Error event. Before, an early event stopped the host
+- host/spi: TCP TX no longer stalls with `CONFIG_LWIP_TCPIP_CORE_LOCKING_INPUT=y`. A new task, `eh_spi_wifi_rx`, delivers Wi-Fi RX frames. When its queue is full, the frame is dropped and `wifi rx queue full` is logged
+- host/spi: RPC and host caps frames are sent before data, so a data flood no longer blocks `raw_tp stop` or an RPC request
+- cp/sdio: enabled SDIO packet mode operation
+- host/task: removed division by sizeof(StackType_t). In IDF, the stack size should be specified as bytes
+- host: with `CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM=y`, starting a detached Hosted task no longer corrupts the heap ([#254](https://github.com/espressif/esp-hosted-mcu/issues/254))
+- openthread: hosted OpenThread carries spinel over the ESP-Hosted transport (SPI, SDIO, SPI-HD or UART) as `ESP_AUX_IF` frames. It needs an ESP-IDF with the OpenThread custom transport: `CONFIG_OPENTHREAD_RCP_CUSTOM` on the co-processor and `CONFIG_OPENTHREAD_RADIO_SPINEL_CUSTOM` on the host
+- openthread: hosted OpenThread no longer has a dedicated UART option. The co-processor options `ESP_HOSTED_OT_TRANSPORT_HOSTED`, `ESP_HOSTED_OT_TRANSPORT_UART` and `ESP_HOSTED_OT_UART_*`, and the host options `ESP_HOSTED_OT_HOST_TRANSPORT_*` and `ESP_HOSTED_OT_HOST_UART_*`, are gone, and so are `eh_host_port_openthread_get_radio_config()` (`esp_hosted_openthread_get_radio_config()`) and the types `esp_hosted_openthread_radio_config_t`, `esp_hosted_openthread_uart_config_t`, `esp_hosted_openthread_radio_transport_t` and `HOSTED_OPENTHREAD_TRANSPORT_*`. For spinel on a dedicated UART, use standard OpenThread as in ESP-IDF `ot_rcp` / `ot_cli` (the ESP-Hosted OpenThread feature stays inactive on that link); on the co-processor, set `CONFIG_OPENTHREAD_RCP_UART=y` and start the RCP from the app (the `rcp_on_hosted_cp` and Zigbee co-processor examples do this from `EXAMPLE_RCP_UART_*`); on the host, set `CONFIG_OPENTHREAD_RADIO_SPINEL_UART=y` and copy the UART port, pins and baud rate into `ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG()`. Standard OpenThread needs no ESP-Hosted RPC
+- openthread: the host gets `ESP_ERR_NOT_SUPPORTED` from `eh_host_openthread_rcp_start()` if the co-processor does not run hosted OpenThread
+- openthread: `ESP_HOSTED_OPENTHREAD_RADIO_CONFIG()` gives the hosted OpenThread radio configuration. The cli and border_router host examples use the ESP-IDF example code with this macro
+- openthread: `eh_host_openthread_rcp_start()` can be called more than once. The first spinel write calls it. On the co-processor, start also does init, and init does not change a started RCP
+- zigbee: the thermostat example uses standard OpenThread RCP firmware on the co-processor, with spinel on a dedicated UART, and no ESP-Hosted OpenThread RPC
+- new interface type `ESP_AUX_IF` (wire value 7) for auxiliary streams. The `pkt_type` header byte selects the stream (`eh_aux_type_t`). Co-processor API: `eh_cp_register_aux_rx_cb()`. Host API: `eh_host_transport_add_aux_channel()` and `eh_host_transport_aux_tx()`
+- `ESP_ETH_IF` is renamed to `ESP_AUX_IF`. `ESP_ETH_IF` was never sent. Code that uses the name `ESP_ETH_IF` must change it
+- host: a frame with an `if_type` that has no handler is now dropped. Before, the host parsed it as an RPC message
+- co-processor: a frame from the host with an `if_type` that has no handler is now logged
+
+# $${\color{green} \text{3.0.10}}$$
+
+- host/spi_hd: report a Tx byte-count desync once as `EH_HOST_EVENT_TRANSPORT_FAILURE` instead of logging it forever
+- frame: ignore flags on dummy frames. A corrupted SPI-FD idle frame could make the co-processor act on a power-save flag
+- frame: trust power-save flags on a header-only frame only if its checksum holds. A corrupted frame could reset the SPI-HD co-processor Tx byte count and stall host rx
+- wifi: support new IDF Wi-Fi fields `privacy_enhancements`, `rmac_auto_reset_int`, `wifi_task_stack_size`,
+  `max_offchan_duration_ms` and `max_bandwidth_negotiation_enabled_2g/5g`
+- host/wifi: `max_bandwidth_negotiation_enabled_2g/5g` builds only where the IDF headers have them (IDF v5.5.6, v6.0.4, v6.1.1 or later)
+- wifi: `esp_wifi_set_okc_support()` now reaches the co-processor; it needs IDF v5.5 or later on both sides
+- cp: builds on IDF v5.3.4+ and v5.4.3+ no longer reference `esp_wifi_set_okc_support()`, which IDF has only from v5.5
+- cp: `esp_eap_client_set_eap_methods()` works on IDF v5.3.4+, v5.4.3+ and v5.5.1+; before, only on v5.4.3+ within v5.4
+- cp: `wifi_ap_config_t::transition_disable` is carried on IDF v5.3.3+ within v5.3, as on the host
+- cp/ota: OTA begin no longer erases the whole partition up front, so it no longer stalls for seconds or times out the RPC
+- host/sdio: card init retries no longer fail with `can't acquire the channel` on the on-chip LDO
+- host/sdio: 1-bit SDIO host builds work again ([#245](https://github.com/espressif/esp-hosted-mcu/issues/245))
+- host/spi_hd: 2-line and 4-line builds now use 2/4 data lines; before, every transfer ran on 1 line
+- spi_hd: 1-line mode uses D0 only, as in 2.x; the co-processor needs ESP-IDF v6.0.3 / v6.1 or later
+- cp: the GPIO expander no longer touches the transport reset pin; SDIO speed and timing options now take effect
+- bt (co-processor): drop `ESP_HOSTED_CP_BT_STACK_ENABLED`; a BT host stack on the co-processor now needs `ESP_HOSTED_CP_FEAT_BT=n`
+- cp/heartbeat: no heartbeat while the host is in power save, so it no longer wakes the host every interval
+- cp/heartbeat: interval is 1 s – 7 days; out-of-range is rejected, not clamped
+- rf-cert: new optional feature giving the host the ESP-IDF PHY certification test APIs over RPC, for Wi-Fi and BLE. Off by default
+- rf-cert: new console with the ESP-IDF `phy/cert_test` command set, and `examples/rf_cert`
+- examples/zigbee: builds on IDF 6.1
+- cp/wifi: new `ESP_HOSTED_CP_FEAT_WIFI_EXT_EAP_FAST`; EAP-FAST needs the internal TLS client
+- host (Linux): builds again; `akm_dpp` is used only on ESP-IDF builds
+- bt/nimble: NimBLE host builds link on IDF 6.x
+- host/sdio: the max-frequency warning reports the clock in use after a runtime `set_config`
+- host: with `ESP_HOSTED_HOST_AUTO_FEAT_INIT=n`, no feature auto-init code is built or linked
+- proto: no protobuf names in flash (~38 KB smaller CP and host images); host logs show short RPC names
+- host/uart, host/spi: data the co-processor sent before its reset is no longer taken as the new link
+- host/uart: replies are read as they arrive; no 100 ms read timeout per short reply
+- host: SPI, SPI-HD and UART now use the transport config set with `esp_hosted_*_set_config()` (they used the Kconfig values); a new config is accepted after `esp_hosted_deinit()`
+- examples: a P4 host defaults to the P4 Function EV board with a C6 co-processor, and to the P4X Function EV board with a C5 co-processor
+- examples: `mcu_transport_config` shows a staged manual bring-up (auto-init off) against a Wi-Fi + BLE co-processor
+- nw_split: the host app gets one `IP_EVENT_STA_GOT_IP` per lease, and only the DHCP owner (host or co-processor) runs a DHCP client on the shared MAC
+- host/wifi: STA events reach the app only after its `esp_wifi_start()`; `esp_wifi_stop()` stops the STA netif in every netif mode
+- cp/wifi: a STA config set while Wi-Fi is stopped is applied at once, not cached
+- host/wifi: at `esp_wifi_start()`, the host adopts a co-processor link that is already up only with network split
+
+# $${\color{green} \text{3.0.9}}$$
+
+- cp/host_ps: under network split, a sleeping host is no longer woken by IPv4 or IPv6 multicast, or IPv4 broadcast
+
+# $${\color{green} \text{3.0.8}}$$
+
+- nw_split: the lwIP source-port hook now reaches the build, so co-processor sockets stay inside the configured split range
+- host/power_save: the auto-enter timer puts the host into deep sleep
+- host: `ESP_HOSTED_VERSION_*` report the component version
+- host: removed the slave-reset polarity Kconfig options; reset now always parks the pin HIGH
+- wifi: carry ssid and password at full width, and return the AP-record, station, iTWT, country 5G-mask, scan-coex and WPA3 fields the RPCs dropped
+- cp/rpc: bound the host-supplied scan record count before allocating
+- cp: deinit returns every resource, so init/deinit cycles no longer leak
+- throughput: host/sdio yields instead of busy-waiting the credit budget, and cp/wifi matches native buffers and retries TX when the pool is full
+- cp/transport: reserve the SDIO bus pins and the host-wake pin
+- host/transport: new Kconfig-gated packet stats for the SDIO datapath
+- newlib-nano: dropped the printf and scanf specifiers it cannot parse, across host, co-processor and examples
+
+# $${\color{green} \text{3.0.7}}$$
+
+- host: updated OpenThread host configuration for UART Tx and Rx, and OpenThread document
+- host: fix memory leak by saving allocated GPIO ISRs in a list when enabled. GPIO ISR is deallocated from list and freed when disabled.
+- repo: 3.x moves to `espressif/esp-hosted-mcu` `main`; 2.x continues on `release/v2.x`
+- ci: the pipeline tags the release and pushes to GitHub; the registry publishes from a `v3.*` tag instead of a branch push
+
 # $${\color{green} \text{3.0.6}}$$
 
 - bt: renamed the host BT stack adapter + API `esp_hosted_bt_stack*` → `esp_hosted_bt_host_stack*` (component, header, `setup()`/`teardown()`, `ESP_HOSTED_BT_HOST_STACK_CONFIG_*`); no back-compat

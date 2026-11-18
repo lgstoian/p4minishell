@@ -3218,9 +3218,11 @@ c6ota:
     description: "HTTP download block size"
     range: "512..8192"
   transfer_chunk:
-    value: 1500
+    value: 1200
     type: size_t
-    description: "ESP-Hosted SDIO OTA transfer chunk size"
+    description: "ESP-Hosted SDIO OTA transfer chunk size (must keep the
+      serialized RPC request inside one ESP-Hosted vserial frame; esp_hosted
+      3.1.0 drops a fragmented OTAWrite and the host sees ESP_FAIL)"
     range: "256..4096"
   progress_step:
     value: 5

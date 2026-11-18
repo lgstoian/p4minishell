@@ -9,6 +9,8 @@
 
 #include "esp_idf_version.h"
 
+#include "eh_cp_idf_compat.h"
+
 #define EH_CP_SET_BIT(pos, val)         (val|=(1<<pos))
 
 #define EH_CP_GET_BIT(pos, val)         (((val) >> (pos)) & 1u)
@@ -24,10 +26,11 @@ enum {
 	WIFI_SCAN_AP_REC_ftm_initiator_BIT = 7,
 	WIFI_SCAN_AP_REC_phy_11a_BIT       = 8,
 	WIFI_SCAN_AP_REC_phy_11ac_BIT      = 9,
-	WIFI_SCAN_AP_REC_MAX_USED_BIT      = 10,
+	WIFI_SCAN_AP_REC_akm_dpp_BIT       = 10,
+	WIFI_SCAN_AP_REC_MAX_USED_BIT      = 11,
 };
 
-#define WIFI_SCAN_AP_RESERVED_BITMASK             0xFC00
+#define WIFI_SCAN_AP_RESERVED_BITMASK             0xFFFFF800
 
 #define WIFI_SCAN_AP_GET_RESERVED_VAL(num)                                      \
     ((num & WIFI_SCAN_AP_RESERVED_BITMASK) >> WIFI_SCAN_AP_REC_MAX_USED_BIT)
@@ -42,10 +45,12 @@ enum {
 	WIFI_STA_INFO_phy_lr_BIT        = 3,
 	WIFI_STA_INFO_phy_11ax_BIT      = 4,
 	WIFI_STA_INFO_is_mesh_child_BIT = 5,
-	WIFI_STA_INFO_MAX_USED_BIT      = 6,
+	WIFI_STA_INFO_phy_11a_BIT       = 6,
+	WIFI_STA_INFO_phy_11ac_BIT      = 7,
+	WIFI_STA_INFO_MAX_USED_BIT      = 8,
 };
 
-#define WIFI_STA_INFO_RESERVED_BITMASK             0xFFC0
+#define WIFI_STA_INFO_RESERVED_BITMASK             0xFF00
 
 #define WIFI_STA_INFO_GET_RESERVED_VAL(num)                                      \
     ((num & WIFI_STA_INFO_RESERVED_BITMASK) >> WIFI_STA_INFO_MAX_USED_BIT)
@@ -73,10 +78,11 @@ enum {
 	WIFI_STA_CONFIG_1_ft_enabled = 3,
 	WIFI_STA_CONFIG_1_owe_enabled = 4,
 	WIFI_STA_CONFIG_1_transition_disable = 5,
-	WIFI_STA_CONFIG_1_MAX_USED_BIT = 6,
+	WIFI_STA_CONFIG_1_disable_wpa3_compat = 6,
+	WIFI_STA_CONFIG_1_MAX_USED_BIT = 7,
 };
 
-#define WIFI_STA_CONFIG_1_RESERVED_BITMASK 0xFFFFFFC0
+#define WIFI_STA_CONFIG_1_RESERVED_BITMASK 0xFFFFFF80
 
 #define WIFI_STA_CONFIG_1_GET_RESERVED_VAL(num)                                   \
     ((num & WIFI_STA_CONFIG_1_RESERVED_BITMASK) >> WIFI_STA_CONFIG_1_MAX_USED_BIT)
@@ -96,18 +102,26 @@ enum {
 	WIFI_STA_CONFIG_2_he_trig_su_bmforming_feedback_disabled_BIT         = 7,
 	WIFI_STA_CONFIG_2_he_trig_mu_bmforming_partial_feedback_disabled_BIT = 8,
 	WIFI_STA_CONFIG_2_he_trig_cqi_feedback_disabled_BIT                  = 9,
-#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 5, 0)
+#if !EH_CP_WIFI_GOT_STA_VHT_CFG
 	WIFI_STA_CONFIG_2_MAX_USED_BIT                                       = 10,
 #else
 	WIFI_STA_CONFIG_2_vht_su_beamformee_disabled                         = 10,
 	WIFI_STA_CONFIG_2_vht_mu_beamformee_disabled                         = 11,
 	WIFI_STA_CONFIG_2_vht_mcs8_enabled                                   = 12,
+#if EH_CP_WIFI_GOT_STA_MAX_BW_NEG
+	WIFI_STA_CONFIG_2_max_bandwidth_negotiation_enabled_2g_BIT           = 13,
+	WIFI_STA_CONFIG_2_max_bandwidth_negotiation_enabled_5g_BIT           = 14,
+	WIFI_STA_CONFIG_2_MAX_USED_BIT                                       = 15,
+#else
 	WIFI_STA_CONFIG_2_MAX_USED_BIT                                       = 13,
+#endif
 #endif
 };
 
-#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 5, 0)
+#if !EH_CP_WIFI_GOT_STA_VHT_CFG
 #define WIFI_STA_CONFIG_2_RESERVED_BITMASK 0xFFFFFC00
+#elif EH_CP_WIFI_GOT_STA_MAX_BW_NEG
+#define WIFI_STA_CONFIG_2_RESERVED_BITMASK 0xFFFF8000
 #else
 #define WIFI_STA_CONFIG_2_RESERVED_BITMASK 0xFFFFE000
 #endif
@@ -119,6 +133,13 @@ enum {
     (num_out |= (reserved_in << WIFI_STA_CONFIG_2_MAX_USED_BIT));
 
 #endif
+
+/* WifiInitConfig.ext_present_bitmask */
+enum {
+	WIFI_INIT_CONFIG_EXT_privacy_enhancements_BIT = 0,
+	WIFI_INIT_CONFIG_EXT_rmac_auto_reset_int_BIT  = 1,
+	WIFI_INIT_CONFIG_EXT_wifi_task_stack_size_BIT = 2,
+};
 
 /* WIFI ITWT Setup Config bitmasks */
 

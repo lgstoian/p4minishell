@@ -518,7 +518,7 @@ See [documentation.md](documentation.md) for the full module map and
 
 Two first-class board profiles ship under `boards/` (select with
 `-DP4_BOARD=<name>`, default `jc1060p470c`). Both are ESP32-P4 + ESP32-C6 with
-LVGL 9.5.0 (esp_lvgl_port 2.9.0), FATFS SD storage (255-char long filenames),
+LVGL 9.6.0~1 (esp_lvgl_port 2.9.0), FATFS SD storage (255-char long filenames),
 USB host (MSC at `/usb0` + HID keyboard/mouse + lazy CDC-ACM serial), and
 ESP-IDF v5.5.5. Full bring-up checklist in [`PORTING.md`](PORTING.md).
 

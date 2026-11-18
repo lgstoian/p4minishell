@@ -33,6 +33,12 @@
 #else
     #define EH_HOST_PORT_DFLT_TASK_FROM_SPIRAM (0)
 #endif
+#ifdef CONFIG_ESP_HOSTED_HOST_PKT_STATS
+    #define EH_HOST_PKT_STATS (1)
+    #define EH_HOST_PKT_STATS_INTERVAL_SEC CONFIG_ESP_HOSTED_HOST_PKT_STATS_INTERVAL_SEC
+#else
+    #define EH_HOST_PKT_STATS (0)
+#endif
 
 /* Allow external code to override Hosted functions. */
 #define EH_HOST_PORT_WEAK_REF __attribute__((weak))
@@ -42,6 +48,7 @@
 #define EH_HOST_PORT_TRANSPORT_SPI_HD 2
 #define EH_HOST_PORT_TRANSPORT_SPI 3
 #define EH_HOST_PORT_TRANSPORT_UART 4
+#define EH_HOST_PORT_TRANSPORT_USB 5
 
 /* Upstream MCU H_* namespace aliases for mirrored sources. */
 #ifndef H_TRANSPORT_NONE
@@ -50,6 +57,7 @@
 #define H_TRANSPORT_SPI_HD   EH_HOST_PORT_TRANSPORT_SPI_HD
 #define H_TRANSPORT_SPI      EH_HOST_PORT_TRANSPORT_SPI
 #define H_TRANSPORT_UART     EH_HOST_PORT_TRANSPORT_UART
+#define H_TRANSPORT_USB      EH_HOST_PORT_TRANSPORT_USB
 #define H_TRANSPORT_IN_USE   EH_HOST_PORT_TRANSPORT_IN_USE
 #define H_GPIO_PORT_RESET    EH_HOST_PORT_GPIO_PORT_RESET
 #define H_GPIO_PIN_RESET     EH_HOST_PORT_GPIO_PIN_RESET
@@ -127,6 +135,18 @@
 #  define EH_HOST_CP_TARGET_ESP32S3         0
 #endif
 
+#ifdef CONFIG_ESP_HOSTED_CP_TARGET_ESP32S31
+#  define EH_HOST_CP_TARGET_ESP32S31        1
+#else
+#  define EH_HOST_CP_TARGET_ESP32S31        0
+#endif
+
+#ifdef CONFIG_ESP_HOSTED_CP_HAS_BT_CLASSIC
+#  define EH_HOST_CP_HAS_BT_CLASSIC         1
+#else
+#  define EH_HOST_CP_HAS_BT_CLASSIC         0
+#endif
+
 /* Feature auto-init master gate */
 
 #ifdef CONFIG_ESP_HOSTED_HOST_AUTO_FEAT_INIT
@@ -165,6 +185,30 @@
 #  define EH_HOST_TRANSPORT_BUS_UART        1
 #else
 #  define EH_HOST_TRANSPORT_BUS_UART        0
+#endif
+
+#ifdef CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_OTG_HOST
+#  define EH_HOST_TRANSPORT_BUS_USB         1
+#else
+#  define EH_HOST_TRANSPORT_BUS_USB         0
+#endif
+
+#ifdef CONFIG_ESP_HOSTED_HOST_USB_STACK_CDC_ACM
+#  define EH_HOST_USB_STACK_CDC_ACM         1
+#else
+#  define EH_HOST_USB_STACK_CDC_ACM         0
+#endif
+
+#ifdef CONFIG_ESP_HOSTED_HOST_USB_STACK_CHERRYUSB
+#  define EH_HOST_USB_STACK_CHERRYUSB       1
+#else
+#  define EH_HOST_USB_STACK_CHERRYUSB       0
+#endif
+
+#ifdef CONFIG_ESP_HOSTED_HOST_USB_RNDIS
+#  define EH_HOST_USB_RNDIS                 1
+#else
+#  define EH_HOST_USB_RNDIS                 0
 #endif
 
 #ifdef CONFIG_ESP_HOSTED_HOST_VSERIAL_MCU
@@ -257,6 +301,12 @@
 #  define EH_HOST_FEAT_WIFI_AUTO_INIT       1
 #else
 #  define EH_HOST_FEAT_WIFI_AUTO_INIT       0
+#endif
+#ifdef CONFIG_ESP_HOSTED_HOST_WIFI_SCAN_BLOCK_TIMEOUT_MS
+#  define EH_HOST_WIFI_SCAN_BLOCK_TIMEOUT_MS \
+                          CONFIG_ESP_HOSTED_HOST_WIFI_SCAN_BLOCK_TIMEOUT_MS
+#else
+#  define EH_HOST_WIFI_SCAN_BLOCK_TIMEOUT_MS 30000
 #endif
 
 /* BT */
@@ -360,6 +410,16 @@
 #else
 #  define EH_HOST_FEAT_GPIO_EXP_AUTO_INIT   0
 #endif
+#ifdef CONFIG_ESP_HOSTED_HOST_FEAT_RF_CERT_READY
+#  define EH_HOST_FEAT_RF_CERT_READY       1
+#else
+#  define EH_HOST_FEAT_RF_CERT_READY       0
+#endif
+#ifdef CONFIG_ESP_HOSTED_HOST_FEAT_RF_CERT_CLI_IDF_NAMES
+#  define EH_HOST_FEAT_RF_CERT_CLI_IDF_NAMES 1
+#else
+#  define EH_HOST_FEAT_RF_CERT_CLI_IDF_NAMES 0
+#endif
 
 /* EXT_COEX */
 #ifdef CONFIG_ESP_HOSTED_HOST_FEAT_CP_EXT_COEX
@@ -410,6 +470,13 @@
 #  define EH_HOST_FEAT_MEM_MONITOR_AUTO_INIT   1
 #else
 #  define EH_HOST_FEAT_MEM_MONITOR_AUTO_INIT   0
+#endif
+
+/* CLI */
+#ifdef CONFIG_ESP_HOSTED_HOST_FEAT_CLI_AUTO_INIT
+#  define EH_HOST_FEAT_CLI_AUTO_INIT           1
+#else
+#  define EH_HOST_FEAT_CLI_AUTO_INIT           0
 #endif
 
 /* POWER_SAVE */
@@ -579,6 +646,9 @@
 #if CONFIG_ESP_HOSTED_CP_TARGET_ESP32C61
   #define EH_HOST_PORT_SLAVE_TARGET_ESP32C61 1
 #endif
+#if CONFIG_ESP_HOSTED_CP_TARGET_ESP32S31
+  #define EH_HOST_PORT_SLAVE_TARGET_ESP32S31 1
+#endif
 #if CONFIG_ESP_HOSTED_CP_TARGET_ESP32H2
   #define EH_HOST_PORT_SLAVE_TARGET_ESP32H2 1
 #endif
@@ -595,6 +665,7 @@
   defined(EH_HOST_PORT_SLAVE_TARGET_ESP32C6) + \
   defined(EH_HOST_PORT_SLAVE_TARGET_ESP32C5) + \
   defined(EH_HOST_PORT_SLAVE_TARGET_ESP32C61) + \
+  defined(EH_HOST_PORT_SLAVE_TARGET_ESP32S31) + \
   defined(EH_HOST_PORT_SLAVE_TARGET_ESP32H2) + \
   defined(EH_HOST_PORT_SLAVE_TARGET_ESP32H4) != 1
   #error "No Slave Target or more than one Slave Target was defined."
@@ -726,17 +797,23 @@
     #define EH_HOST_PORT_SDIO_PIN_CMD                             -1
     #define EH_HOST_PORT_SDIO_PIN_D0                              -1
     #define EH_HOST_PORT_SDIO_PIN_D1                              -1
-    #if (EH_HOST_PORT_SDIO_BUS_WIDTH == 4)
-      #define EH_HOST_PORT_SDIO_PIN_D2                            -1
-      #define EH_HOST_PORT_SDIO_PIN_D3                            -1
-    #else
-      #define EH_HOST_PORT_SDIO_PIN_D2                            -1
-      #define EH_HOST_PORT_SDIO_PIN_D3                            -1
-    #endif
+    #define EH_HOST_PORT_SDIO_PIN_D2                              -1
+    #define EH_HOST_PORT_SDIO_PIN_D3                              -1
   #endif
 
   #define EH_HOST_PORT_SDIO_TX_Q                                  CONFIG_ESP_HOSTED_HOST_SDIO_TX_Q_SIZE
   #define EH_HOST_PORT_SDIO_RX_Q                                  CONFIG_ESP_HOSTED_HOST_SDIO_RX_Q_SIZE
+  #ifdef CONFIG_ESP_HOSTED_HOST_SDIO_RX_STAGING_SLOTS
+    #define EH_HOST_PORT_SDIO_RX_STAGING_SLOTS                    CONFIG_ESP_HOSTED_HOST_SDIO_RX_STAGING_SLOTS
+  #else
+    #define EH_HOST_PORT_SDIO_RX_STAGING_SLOTS                    2
+  #endif
+
+  #ifdef CONFIG_ESP_HOSTED_HOST_SDIO_USE_MEMPOOL
+    #define EH_HOST_PORT_SDIO_USE_MEMPOOL                         1
+  #else
+    #define EH_HOST_PORT_SDIO_USE_MEMPOOL                         0
+  #endif
 
   #define EH_HOST_PORT_SDIO_HOST_STREAMING_MODE 1
   #define EH_HOST_PORT_SDIO_ALWAYS_HOST_RX_MAX_TRANSPORT_SIZE 2
@@ -815,8 +892,12 @@
   #define EH_HOST_PORT_SPI_HD_PORT_CLK                            NULL
 
   #define EH_HOST_PORT_SPI_HD_PIN_D0                              CONFIG_ESP_HOSTED_HOST_SPI_HD_D0_GPIO
-  #define EH_HOST_PORT_SPI_HD_PIN_D1                              CONFIG_ESP_HOSTED_HOST_SPI_HD_D1_GPIO
-  #if (CONFIG_ESP_HOSTED_HOST_SPI_HD_NUM_DATA_LINES == 4)
+  #if (EH_HOST_PORT_SPI_HD_HOST_NUM_DATA_LINES >= 2)
+    #define EH_HOST_PORT_SPI_HD_PIN_D1                              CONFIG_ESP_HOSTED_HOST_SPI_HD_D1_GPIO
+  #else
+    #define EH_HOST_PORT_SPI_HD_PIN_D1                              -1
+  #endif
+  #if (EH_HOST_PORT_SPI_HD_HOST_NUM_DATA_LINES == 4)
     #define EH_HOST_PORT_SPI_HD_PIN_D2                              CONFIG_ESP_HOSTED_HOST_SPI_HD_D2_GPIO
     #define EH_HOST_PORT_SPI_HD_PIN_D3                              CONFIG_ESP_HOSTED_HOST_SPI_HD_D3_GPIO
   #else
@@ -869,6 +950,31 @@
   #define EH_HOST_PORT_UART_HOST_TRANSPORT 0
 #endif
 
+#ifdef CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_OTG_HOST
+  #define EH_HOST_PORT_TRANSPORT_IN_USE EH_HOST_PORT_TRANSPORT_USB
+
+  #define EH_HOST_PORT_USB_HOST_TRANSPORT 1
+
+  #define EH_HOST_PORT_USB_CONNECTION_TIMEOUT_MS                 CONFIG_ESP_HOSTED_HOST_USB_CONNECTION_TIMEOUT_MS
+  #define EH_HOST_PORT_USB_VID                                   CONFIG_ESP_HOSTED_HOST_USB_VID
+  #define EH_HOST_PORT_USB_PID                                   CONFIG_ESP_HOSTED_HOST_USB_PID
+  #define EH_HOST_PORT_USB_TX_QUEUE_SIZE                         0
+  #define EH_HOST_PORT_USB_RX_QUEUE_SIZE                         CONFIG_ESP_HOSTED_HOST_USB_RX_Q_SIZE
+  #define EH_HOST_PORT_USB_OUT_BUF_SIZE                          CONFIG_ESP_HOSTED_HOST_USB_OUT_BUF_SIZE
+  #define EH_HOST_PORT_USB_IN_BUF_SIZE                           CONFIG_ESP_HOSTED_HOST_USB_IN_BUF_SIZE
+  #define EH_HOST_PORT_USB_RX_TASK_STACK                         CONFIG_ESP_HOSTED_HOST_USB_RX_TASK_STACK
+  #define EH_HOST_PORT_USB_RX_TASK_PRIO                          CONFIG_ESP_HOSTED_HOST_USB_RX_TASK_PRIO
+#ifdef CONFIG_ESP_HOSTED_HOST_USB_RNDIS
+  #define EH_HOST_PORT_USB_RNDIS_TX_QUEUE_SIZE                   CONFIG_ESP_HOSTED_HOST_USB_RNDIS_TX_Q_SIZE
+  #define EH_HOST_PORT_USB_RNDIS_TX_TASK_STACK                   CONFIG_ESP_HOSTED_HOST_USB_RNDIS_TX_TASK_STACK
+  #define EH_HOST_PORT_USB_RNDIS_TX_TASK_PRIO                    CONFIG_ESP_HOSTED_HOST_USB_RNDIS_TX_TASK_PRIO
+#endif
+
+  #define EH_HOST_PORT_TRANSPORT_QUEUE_SIZE                      0
+#else
+  #define EH_HOST_PORT_USB_HOST_TRANSPORT 0
+#endif
+
 /* Linux user-space: not consumed; reconfigure is a no-op there. */
 #ifdef CONFIG_ESP_HOSTED_HOST_RESET_GPIO
   #define EH_HOST_PORT_GPIO_PIN_RESET                           CONFIG_ESP_HOSTED_HOST_RESET_GPIO
@@ -876,21 +982,6 @@
   #define EH_HOST_PORT_GPIO_PIN_RESET                           0
 #endif
 #define EH_HOST_PORT_GPIO_PORT_RESET                            NULL
-
-/* EN pin → active high; RST pin → active low. */
-#ifdef CONFIG_ESP_HOSTED_HOST_RESET_ACTIVE_LOW
-  #define EH_HOST_PORT_RESET_ACTIVE_HIGH                        0
-#else
-  #define EH_HOST_PORT_RESET_ACTIVE_HIGH                        1
-#endif
-
-#if EH_HOST_PORT_RESET_ACTIVE_HIGH
-  #define EH_HOST_PORT_RESET_VAL_ACTIVE                         EH_GPIO_HIGH
-  #define EH_HOST_PORT_RESET_VAL_INACTIVE                       EH_GPIO_LOW
-#else
-  #define EH_HOST_PORT_RESET_VAL_ACTIVE                         EH_GPIO_LOW
-  #define EH_HOST_PORT_RESET_VAL_INACTIVE                       EH_GPIO_HIGH
-#endif
 
 /* Co-processor connection */
 

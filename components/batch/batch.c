@@ -5401,6 +5401,58 @@ static void shell_execute_for_f_loop(const char *set_str, const char *do_command
     }
 }
 
+#define SHELL_FOR_SET_TOKENS 32
+
+/**
+ * Split a classic `for` set into tokens DOS-style: whitespace separates,
+ * double quotes group one token (so a quoted name may contain spaces) and are
+ * removed. The function writes NULs into @p text and the token pointers alias
+ * it, so the caller must keep @p text alive while iterating.
+ *
+ * Returns the number of tokens (bounded by @p max).
+ */
+static int shell_for_set_tokens(char *text, char **tokens, int max)
+{
+    int count = 0;
+    char *p = text;
+
+    while (*p != '\0' && count < max) {
+        char *out;
+        char sep;
+
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+        tokens[count++] = p;
+        out = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t') {
+            if (*p == '"') {
+                p++;                    /* drop the grouping quote */
+                while (*p != '\0' && *p != '"') {
+                    *out++ = *p++;
+                }
+                if (*p == '"') {
+                    p++;
+                }
+            } else {
+                *out++ = *p++;
+            }
+        }
+        /* Removing quotes only shrinks the token, so out <= p. Save the
+         * separator before terminating the token, because out == p would
+         * overwrite it. */
+        sep = *p;
+        *out = '\0';
+        if (sep != '\0') {
+            p++;
+        }
+    }
+    return count;
+}
+
 /* Helper: execute a for loop command */
 static void shell_execute_for_loop(shell_batch_frame_t *frame, char *command_line)
 {
@@ -5769,47 +5821,42 @@ static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *comman
         return;
     }
 
-    /* Wildcard set: if the set contains `*` or `?`, expand it against the
-     * filesystem and iterate over matching paths. Otherwise fall through to
-     * the classic in-line token set. */
-    if (strchr(set_str, '*') != NULL || strchr(set_str, '?') != NULL) {
-        char **tokens = NULL;
-        int count = 0;
-        esp_err_t error = storage_expand_wildcard(set_str, &tokens, &count);
-
-        if (error != ESP_OK) {
-            shell_print_warning("for: could not expand %s (%s)", set_str, esp_err_to_name(error));
-            shell_record_warningf("for", "Wildcard expansion failed for %s", set_str);
-            free(set_str);
-            return;
-        }
-
-        for (int i = 0; i < count; i++) {
-            shell_for_substitute_and_run(do_command, var_name, tokens[i]);
-            if (for_check_break() || for_check_continue()) {
-                break;
-            }
-        }
-
-        storage_free_wildcard_expansion(tokens, count);
-        free(set_str);
-        return;
-    }
-
-    /* Now iterate over the set */
+    /* Classic set: whitespace-separated tokens, with double quotes grouping a
+     * token (the quotes are removed). A token that carries `*` or `?` is
+     * expanded on its own, so `("*.TXT" "*.BAT")` yields both file lists
+     * instead of failing to match the quotes as part of one pattern. */
     {
-        char *save_ptr = NULL;
-        char *token = strtok_r(set_str, " \t", &save_ptr);
+        char *tokens[SHELL_FOR_SET_TOKENS];
+        int count = shell_for_set_tokens(set_str, tokens,
+                                         SHELL_FOR_SET_TOKENS);
+        bool stopped = false;
 
-        while (token != NULL) {
-            shell_for_substitute_and_run(do_command, var_name, token);
+        for (int t = 0; t < count && !stopped; t++) {
+            if (strchr(tokens[t], '*') != NULL ||
+                strchr(tokens[t], '?') != NULL) {
+                char **matches = NULL;
+                int match_count = 0;
 
-            /* Check for goto/exit conditions that end the loop early */
-            if (for_check_break() || for_check_continue()) {
-                break;
+                if (storage_expand_wildcard(tokens[t], &matches,
+                                            &match_count) == ESP_OK) {
+                    for (int i = 0; i < match_count; i++) {
+                        shell_for_substitute_and_run(do_command, var_name,
+                                                     matches[i]);
+                        if (for_check_break() || for_check_continue()) {
+                            stopped = true;
+                            break;
+                        }
+                    }
+                    storage_free_wildcard_expansion(matches, match_count);
+                } else {
+                    shell_print_warning("for: could not expand %s", tokens[t]);
+                }
+            } else {
+                shell_for_substitute_and_run(do_command, var_name, tokens[t]);
+                if (for_check_break() || for_check_continue()) {
+                    stopped = true;
+                }
             }
-
-            token = strtok_r(NULL, " \t", &save_ptr);
         }
     }
 

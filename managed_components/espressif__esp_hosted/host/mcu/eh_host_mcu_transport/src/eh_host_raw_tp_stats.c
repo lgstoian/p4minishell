@@ -15,6 +15,7 @@
 #include "eh_host_mcu_transport_send_caps.h"
 
 #include "eh_host_raw_tp_stats.h"
+#include "eh_raw_tp_seq.h"
 
 #if EH_HOST_PORT_TEST_RAW_TP
 
@@ -33,6 +34,8 @@ static uint8_t s_tx_buf[EH_HOST_PORT_RAW_TP_PKT_LEN];
 /* Runtime direction (ESP_TEST_RAW_TP__* bits). The engine is compiled in but
  * stays idle until the host CLI selects a mode at runtime. */
 static volatile uint8_t s_raw_tp_dir = EH_HOST_PORT_TEST_RAW_TP_DIR;
+static eh_raw_tp_seq_t s_rx_seq;
+static uint32_t s_tx_seq;
 
 static void raw_tp_timer_func(void *arg)
 {
@@ -47,6 +50,10 @@ static void raw_tp_timer_func(void *arg)
              (unsigned long)(s_raw_tp_timer_count + EH_HOST_PORT_RAW_TP_REPORT_INTERVAL),
              (unsigned long)(actual_bandwidth_tx / div),
              (unsigned long)(actual_bandwidth_rx / div));
+    /* Totals since boot: lost = gaps in the CP's frame counter. */
+    ESP_LOGI(TAG, "raw_tp seq: rx frames=%lu lost=%lu restarts=%lu tx frames=%lu",
+             (unsigned long)s_rx_seq.frames, (unsigned long)s_rx_seq.lost,
+             (unsigned long)s_rx_seq.restarts, (unsigned long)s_tx_seq);
 
     s_raw_tp_timer_count += EH_HOST_PORT_RAW_TP_REPORT_INTERVAL;
     s_test_raw_tx_len = 0;
@@ -75,9 +82,18 @@ static void raw_tp_tx_task(void *arg)
             continue;
         }
 
+        eh_raw_tp_seq_put(s_tx_buf, s_tx_seq);
         if (eh_host_transport_tx(ESP_TEST_IF, 0, s_tx_buf,
                                  EH_HOST_PORT_RAW_TP_PKT_LEN, 0) == ESP_OK) {
             s_test_raw_tx_len += EH_HOST_PORT_RAW_TP_PKT_LEN;
+            s_tx_seq++;
+        } else {
+            /* Back off when the wire cannot take it (e.g. SDIO out of slave
+             * credits). Retrying with no delay busy-spins this task at the
+             * default priority and starves its peers - including the console,
+             * so `raw_tp stop` can never be serviced. A fast wire almost never
+             * takes this path, which is why it only shows on a slow one. */
+            eh_host_port_task_delay_ms(1);
         }
     }
     s_tx_task_running = 0;
@@ -156,10 +172,11 @@ void eh_host_raw_tp_process_test_capabilities(uint8_t cap)
     }
 }
 
-void eh_host_raw_tp_update_rx_len(uint16_t payload_len)
+void eh_host_raw_tp_update_rx_len(const uint8_t *payload, uint16_t payload_len)
 {
     /* Payload only — identical numbers to the Linux kmod's counter. */
     s_test_raw_rx_len += payload_len;
+    eh_raw_tp_seq_check(&s_rx_seq, payload, payload_len);
 }
 
 void eh_host_raw_tp_deinit(void)
@@ -175,7 +192,7 @@ void eh_host_raw_tp_deinit(void)
  * accepts it at any time (start/stop its flood); then drive our side. */
 static int raw_tp_send_dir_to_cp(uint8_t dir)
 {
-    uint8_t caps_pkt[20];
+    uint8_t caps_pkt[EH_HOST_CAPS_PKT_MAX_SIZE];
     int n = eh_host_transport_build_host_caps_pkt(
                 caps_pkt, sizeof(caps_pkt),
                 0, eh_host_mcu_transport_get_chip_id(), dir,
@@ -211,8 +228,9 @@ void eh_host_raw_tp_process_test_capabilities(uint8_t cap)
     (void)cap;
 }
 
-void eh_host_raw_tp_update_rx_len(uint16_t payload_len)
+void eh_host_raw_tp_update_rx_len(const uint8_t *payload, uint16_t payload_len)
 {
+    (void)payload;
     (void)payload_len;
 }
 

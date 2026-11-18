@@ -898,27 +898,32 @@ def _companion_deep(dev, c):
         out = _run(dev, c, "config ROTATE /b", "config ROTATE /b", timeout=15)
         c.expect("rotation persisted %s" % value, value, out)
 
-    # Quick settings form: accept the prefilled values, then keep answering
-    # modals until the SHELL owns the input. Three things can be in the way and
-    # each swallows one line: the form, the "Quick settings applied." dialog,
-    # and the SET menu itself (its `config HEADER` may also have closed the
-    # app). `ok` dismisses a dialog, `13` leaves the menu; the echo is the
-    # only truth about who owns the worker.
-    set_stage = "quick settings"
-    tail = _press(s, "14", "[M-SET-QUICK]", settle=3.0)
-    quick_ok = b"[M-SET-QUICK]" in tail
+    # Quick settings form: re-enter SET (the rotate walk above exited it),
+    # accept the prefilled values, dismiss the "Quick settings applied."
+    # dialog, then leave the menu so the shell owns the worker again. The
+    # probe must NOT be sent while a field is focused: a line typed into the
+    # form replaces a prefilled value. Each dialog swallows exactly one line,
+    # and the `config ROTATE 0` inside the app may rebuild the header, so the
+    # app's back marker is checked first and the shell echo is the fallback.
+    set_stage = "quick settings open"
+    s.reset_input()
+    s.write_line("call SET.BAT::main")
+    quick_ok = _wait(s, "[M-SET]", 40)
     if quick_ok:
-        quick_ok = False
-        for _attempt in range(8):
-            if _shell_echo(dev):
-                quick_ok = True
-                break
-            s.write_line("ok")
-            if _shell_echo(dev):
-                quick_ok = True
-                break
-            s.write_line("13")
-        set_stage = "quick settings (shell never came back)"
+        s.read_for(4.0)
+        tail = _press(s, "14", "[M-SET-QUICK]", settle=3.0)
+        quick_ok = b"[M-SET-QUICK]" in tail
+    if quick_ok:
+        set_stage = "quick settings form"
+        s.read_for(3.0)
+        s.write_line("ok")          # submit the prefilled form
+        set_stage = "quick settings applied dialog"
+        s.read_for(4.0)
+        s.write_line("ok")          # dismiss "Quick settings applied."
+        set_stage = "quick settings exit"
+        s.read_for(3.0)
+        tail = _press(s, "13", "[M-SET-BACK]", settle=3.0, timeout=20.0)
+        quick_ok = b"[M-SET-BACK]" in tail or _shell_echo(dev)
     c.check("SET quick settings form", quick_ok,
             "" if quick_ok else set_stage)
     if quick_ok:

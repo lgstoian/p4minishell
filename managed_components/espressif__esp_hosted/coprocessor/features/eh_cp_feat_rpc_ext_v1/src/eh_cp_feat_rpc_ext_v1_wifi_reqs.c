@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -21,7 +21,7 @@
 
 static const char* TAG = "rpc_linux_802_3_wifi_req";
 
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)
+#if EH_CP_WIFI_DUALBAND
 // 5G band support only available in ESP-IDF 5.4 or later
 
 #if CONFIG_SOC_WIFI_SUPPORT_5G || CONFIG_SOC_WIFI_HE_SUPPORT_5G
@@ -49,6 +49,18 @@ static const char* TAG = "rpc_linux_802_3_wifi_req";
 #define MAX_COUNTRY_CODE_LEN        (3)
 
 #define BSSID_STR_LEN               (18)
+
+/* IDF's ssid[32]/password[64] hold the maximum value with no terminator, so
+ * strlcpy() (which always reserves one) drops the last character. Copies at
+ * most cap bytes and returns how many, for callers that must also set a len. */
+static inline size_t eh_v1_copy_full(uint8_t *dst, size_t cap, const char *src)
+{
+	size_t n = src ? strnlen(src, cap) : 0;
+	memset(dst, 0, cap);
+	if (n)
+		memcpy(dst, src, n);
+	return n;
+}
 
 #define SSID_LENGTH                 (33)
 #define PASSWORD_LENGTH             (64)
@@ -105,17 +117,19 @@ typedef struct {
 /* Function converts mac string to byte stream */
 static esp_err_t convert_mac_to_bytes(uint8_t *out, char *s)
 {
-	uint8_t mac[MAC_NUM_BYTES] = {0};
+	unsigned int mac[MAC_NUM_BYTES] = {0};
 	int num_bytes = 0;
 	if (!s || (strlen(s) < MAC_STR_LEN))  {
 		return ESP_FAIL;
 	}
-	num_bytes =  sscanf(s, "%2hhx:%2hhx:%2hhx:%2hhx:%2hhx:%2hhx",
+	num_bytes =  sscanf(s, "%2x:%2x:%2x:%2x:%2x:%2x",
 			&mac[0],&mac[1], &mac[2], &mac[3], &mac[4], &mac[5]);
 	if (num_bytes < MAC_NUM_BYTES) {
 		return ESP_FAIL;
 	}
-	memcpy(out, mac, MAC_NUM_BYTES);
+	for (int i = 0; i < MAC_NUM_BYTES; i++) {
+		out[i] = (uint8_t)mac[i];
+	}
 	return ESP_OK;
 }
 
@@ -256,14 +270,6 @@ esp_err_t req_set_wifi_mode_handler (const CtrlMsg *req,
 		return ESP_OK;
 	}
 
-	if (mode != WIFI_MODE_STA && eh_cp_feat_wifi_is_station_connected()) {
-		/* Station is connected to AP, and the user is trying to change
-		 * mode to either AP or APSTA, we must disconnect the station from AP, to initiate new mode
-		 */
-		ESP_LOGI(TAG,"Station connected, disconnecting it before reconfiguring WiFi");
-		eh_cp_feat_wifi_request_disconnect(false);
-	}
-
 	ret = esp_wifi_set_mode(mode);
 	if (ret) {
 		ESP_LOGE(TAG, "Failed to set WiFi mode %d", ret);
@@ -324,12 +330,12 @@ esp_err_t req_connect_ap_handler (const CtrlMsg *req,
 	wifi_cfg->sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
 	/* Fill wifi_cfg with new request parameters */
 	if (req->req_connect_ap->ssid) {
-		strlcpy((char *)wifi_cfg->sta.ssid, req->req_connect_ap->ssid,
-				sizeof(wifi_cfg->sta.ssid));
+		eh_v1_copy_full(wifi_cfg->sta.ssid, sizeof(wifi_cfg->sta.ssid),
+				req->req_connect_ap->ssid);
 	}
 	if (req->req_connect_ap->pwd) {
-		strlcpy((char *)wifi_cfg->sta.password, req->req_connect_ap->pwd,
-				sizeof(wifi_cfg->sta.password));
+		eh_v1_copy_full(wifi_cfg->sta.password, sizeof(wifi_cfg->sta.password),
+				req->req_connect_ap->pwd);
 	}
 	if ((req->req_connect_ap->bssid) &&
 			(strlen((char *)req->req_connect_ap->bssid))) {
@@ -540,7 +546,7 @@ esp_err_t req_disconnect_ap_handler (const CtrlMsg *req,
 		goto err;
 	}
 
-	ret = eh_cp_feat_wifi_request_disconnect(false);
+	ret = eh_cp_feat_wifi_request_disconnect();
 	if (ret) {
 		ESP_LOGE(TAG,"Failed to disconnect");
 		goto err;
@@ -605,13 +611,17 @@ esp_err_t req_get_softap_config_handler (const CtrlMsg *req,
 	}
 #endif
 
-	if (strlen((char *)get_conf.ap.ssid)) {
-		strlcpy((char *)credentials.ssid,(char *)&get_conf.ap.ssid,
-				sizeof(credentials.ssid));
+	/* credentials.ssid/pwd are one byte wider than the IDF arrays, so the
+	 * bounded read below always leaves room for the terminator memset in. */
+	if (strnlen((char *)get_conf.ap.ssid, sizeof(get_conf.ap.ssid))) {
+		memset(credentials.ssid, 0, sizeof(credentials.ssid));
+		memcpy(credentials.ssid, get_conf.ap.ssid,
+				strnlen((char *)get_conf.ap.ssid, sizeof(get_conf.ap.ssid)));
 	}
-	if (strlen((char *)get_conf.ap.password)) {
-		strlcpy((char *)credentials.pwd,(char *)&get_conf.ap.password,
-				sizeof(credentials.pwd));
+	if (strnlen((char *)get_conf.ap.password, sizeof(get_conf.ap.password))) {
+		memset(credentials.pwd, 0, sizeof(credentials.pwd));
+		memcpy(credentials.pwd, get_conf.ap.password,
+				strnlen((char *)get_conf.ap.password, sizeof(get_conf.ap.password)));
 	}
 	credentials.chnl = get_conf.ap.channel;
 	credentials.max_conn = get_conf.ap.max_connection;
@@ -725,7 +735,10 @@ esp_err_t req_start_softap_handler (const CtrlMsg *req,
 		goto err;
 	}
 
-	if (eh_cp_feat_wifi_is_station_connected()) {
+	/* Keep a station the app runs (connected or not): a mode with STA stays APSTA. */
+	wifi_mode_t cur_mode = WIFI_MODE_NULL;
+
+	if (esp_wifi_get_mode(&cur_mode) == ESP_OK && (cur_mode & WIFI_MODE_STA)) {
 		ret = esp_wifi_set_mode(WIFI_MODE_APSTA);
 		ESP_LOGI(TAG,"station+softap mode set");
 	} else {
@@ -740,16 +753,18 @@ esp_err_t req_start_softap_handler (const CtrlMsg *req,
 	wifi_config->ap.authmode = req->req_start_softap->sec_prot;
 	if (wifi_config->ap.authmode != WIFI_AUTH_OPEN) {
 		if (req->req_start_softap->pwd) {
-			strlcpy((char *)wifi_config->ap.password,
-					req->req_start_softap->pwd,
-					sizeof(wifi_config->ap.password));
+			eh_v1_copy_full(wifi_config->ap.password,
+					sizeof(wifi_config->ap.password),
+					req->req_start_softap->pwd);
 		}
 	}
 	if (req->req_start_softap->ssid) {
-		strlcpy((char *)wifi_config->ap.ssid,
-				req->req_start_softap->ssid,
-				sizeof(wifi_config->ap.ssid));
-		wifi_config->ap.ssid_len = strlen(req->req_start_softap->ssid);
+		/* ssid_len must be what was copied: strlcpy stored 31 of a 32-byte SSID
+		 * while strlen() reported 32, so IDF read the terminator as a character. */
+		wifi_config->ap.ssid_len =
+			eh_v1_copy_full(wifi_config->ap.ssid,
+					sizeof(wifi_config->ap.ssid),
+					req->req_start_softap->ssid);
 	}
 
 	wifi_config->ap.channel = req->req_start_softap->chnl;
@@ -830,7 +845,7 @@ esp_err_t req_start_softap_handler (const CtrlMsg *req,
 			wifi_config->ap.ssid,
 			wifi_config->ap.authmode, wifi_config->ap.ssid_hidden,
 			wifi_config->ap.max_connection,wifi_config->ap.channel);
-	ESP_LOGI(TAG,"ESP32 SoftAP is avaliable ");
+	ESP_LOGI(TAG,"ESP32 SoftAP is available ");
 #if WIFI_DUALBAND_SUPPORT
 	resp_payload->band_mode = band_mode;
 #endif
@@ -987,7 +1002,7 @@ esp_err_t req_get_ap_scan_list_handler (const CtrlMsg *req,
 
 		credentials.ecn = ap_info[i].authmode;
 		results[i]->sec_prot = credentials.ecn;
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+#if EH_CP_IDF_V5_API
 		ESP_LOGI(TAG, "SSID      \t\t%s\nRSSI      \t\t%ld\nChannel   \t\t%lu\nBSSID     \t\t%s\nAuth mode \t\t%d\n",
 #else
 		ESP_LOGI(TAG,"\nSSID      \t\t%s\nRSSI      \t\t%d\nChannel   \t\t%d\nBSSID     \t\t%s\nAuth mode \t\t%d\n",
@@ -1096,11 +1111,11 @@ esp_err_t req_get_connected_sta_list_handler (const CtrlMsg *req,
 	}
 
 	if ((mode == WIFI_MODE_STA) || (mode == WIFI_MODE_NULL)) {
-		ESP_LOGE(TAG,"Currnet mode is %d", mode);
+		ESP_LOGE(TAG,"Current mode is %d", mode);
 		goto err;
 	}
 	if (!eh_cp_feat_wifi_is_softap_started()) {
-		ESP_LOGE(TAG,"softap is not started, cant get connected stations List");
+		ESP_LOGE(TAG,"softap is not started, can't get connected stations List");
 		goto err;
 	}
 
