@@ -143,6 +143,7 @@ table. `set NAME` prints one value. Undefined `%VAR%` expands to empty (so
 |------|---------|
 | `%VAR%` | Environment value (empty when undefined). |
 | `%APPDRIVE%` `%APPROOT%` `%APPNAME%` | Published by the shell for the running `.bat`: `sd:`/`usb:`, the script's directory, and its stem. Set for a top-level script, restored when it returns; library routines keep the app's values. Apps use `%APPDRIVE%` so the same file runs from SD or USB. |
+| `%TUICOLS%` `%TUIROWS%` | The live logical grid to lay out against: 80 columns on every panel, 25 rows landscape, 97 on a 720x1280 portrait panel. Set per frame and restored when the script returns. `apps/APPLIB.BAT` derives every frame from them. |
 | `%0` `%1`..`%9` `%*` | Script name / caller args / all args from `%1`. |
 | `%%` | Literal `%`. |
 | `%ERRORLEVEL%` | Current errorlevel as decimal. |

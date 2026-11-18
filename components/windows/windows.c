@@ -1629,6 +1629,38 @@ static bool windows_transcript_cell(void *vctx, int row, int col,
     return sel_utf8_glyph(c->buf + c->byte, out, out_size) > 0;
 }
 
+/** True when a row carries no printable text (only blanks and ANSI escapes).
+ *  The row stream ends with a newline, so the last row is normally a blank
+ *  one; a drag into the empty area below the text should not select it. */
+static bool windows_transcript_row_blank(uint32_t row)
+{
+    const char *p;
+    size_t n;
+
+    if (row >= s_transcript_row_count || s_transcript_staged == NULL) {
+        return true;
+    }
+    p = s_transcript_staged + s_transcript_rows[row].off;
+    n = s_transcript_rows[row].len;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)p[i];
+
+        if (c == 0x1b) {                    /* skip an ANSI CSI sequence */
+            if (i + 1 < n && p[i + 1] == '[') {
+                i += 2;
+                while (i < n && (p[i] < 0x40 || p[i] > 0x7e)) {
+                    i++;
+                }
+            }
+            continue;
+        }
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\n') {
+            return false;
+        }
+    }
+    return true;
+}
+
 /** Scrollback row (1-based) under a screen point, clamped to the visible band
  *  so a drag that leaves the transcript selects only what can be seen. */
 static bool windows_transcript_row_at(lv_point_t point, int *row_out)
@@ -1663,6 +1695,11 @@ static bool windows_transcript_row_at(lv_point_t point, int *row_out)
     if (row >= s_transcript_row_count) {
         row = s_transcript_row_count - 1;
     } else if (row > 0 && s_transcript_prefix[row] > y) {
+        row--;
+    }
+    /* Empty space below the text clamps to the last row that carries text,
+     * not to the trailing blank line every stream ends with. */
+    while (row > 0 && windows_transcript_row_blank(row)) {
         row--;
     }
     *row_out = (int)row + 1;

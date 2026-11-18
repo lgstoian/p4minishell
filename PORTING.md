@@ -175,7 +175,7 @@ board, so the toolchain and target carry over; the deltas:
 ### Co-processor (C6) firmware
 
 The Tab5 ships with an ESP-Hosted **factory v2.3.0** C6 image that is not wire
-compatible with the host `esp_hosted` 3.0.6, so `c6ota` refuses it and an
+compatible with the host `esp_hosted` 3.1.0, so `c6ota` refuses it and an
 SD-sourced OTA wedges the shared SDMMC bus. Upgrade the C6 once with a
 standalone P4 flasher that carries the slave image in P4 flash (no SD, no
 Wi-Fi). The one-time procedure (a throwaway project, not part of the normal
@@ -200,7 +200,7 @@ build):
 
 M5Stack's own [M5Tab5-UserDemo](https://github.com/m5stack/M5Tab5-UserDemo)
 uses a different Wi-Fi/BT stack (`esp_hosted` 1.4.0 + `esp_wifi_remote` 0.8.5
-and its `wifi_c6_fw` binary). This project keeps the project-wide 3.0.6 stack
+and its `wifi_c6_fw` binary). This project keeps the project-wide 3.1.0 stack
 so a single `components/networking/` drives both boards; the board wiring
 (WLAN/USB power and the external-antenna switch through the PI4IOE5V6408
 expanders) is identical and already lives in the vendored BSP. Adopting the

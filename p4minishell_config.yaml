@@ -732,7 +732,7 @@ tui:
   page_rows:
     value: 2000
     type: int
-    description: "Rows a rendered page holds in PSRAM (the browser/html page buffer). The visible grid stays 25 rows; touch/wheel scrolling walks this buffer, and 2000 rows covers a full Wikipedia article."
+    description: "Rows a rendered page holds in PSRAM (the browser/html page buffer). The visible grid is the live resolved grid (80 columns; 25 rows landscape, 97 on the 720x1280 portrait panel); touch/wheel scrolling walks this buffer, and 2000 rows covers a full Wikipedia article."
     range: "200..4000"
   list_max_items:
     value: 64

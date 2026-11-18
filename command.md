@@ -219,6 +219,7 @@ script serves both drives:
 | `%APPDRIVE%` | `sd:` or `usb:` — the drive the running script is on |
 | `%APPROOT%` | the script's directory in shell form (e.g. `usb:/APPS`) |
 | `%APPNAME%` | the script's stem (e.g. `NOTES`) |
+| `%TUICOLS%` `%TUIROWS%` | the live logical TUI grid the app surface lays out against (80x25 landscape, 80x97 on the 720x1280 portrait panel); restored when the script returns |
 
 The reference apps write their data through `%APPDRIVE%`, which is why the
 identical bundle works from SD and USB (`apps/push_apps.py --drive usb:`).
@@ -485,7 +486,7 @@ characters can be typed directly. Use the `1#` / `abc` mode buttons to switch
 between text and symbols. The shell input row also has a `Tab` button that runs
 the same completion as the USB `Tab` key.
 
-### ui tap|longpress|swipe|press|move|release|key|target|targets|hit|state
+### ui tap|longpress|swipe|press|move|release|key|target|targets|hit|state|links|link|selection
 Synthetic touch automation and UI inspection (firmware `components/uitest/` +
 `components/command/ui_commands.c`). A second LVGL pointer indev is driven by
 the command, so `ui` taps go through the normal hit-testing/event path — the
@@ -498,10 +499,18 @@ same code a finger exercises.
 - `ui key <label> [ms]` — tap an on-screen-keyboard key by its label.
 - `ui targets [/b] [/v:NAME]` — list every tappable widget as
   `id x y w h name` (buttonmatrices expand to one row per key, `kbd:<label>`).
+  A textarea is always named `textarea`, never by its document text.
   A trailing ` [C]` marks a clipped widget that extends outside an ancestor's
   bounds (e.g. an off-view scroll-list row) and therefore is not visible or
   tappable where reported.
 - `ui target <id>` — activate a listed target (its own click/value event).
+- `ui selection copy|clear` — the serial face of the
+  shared text selection: `copy` copies the current selection (the open
+  modal pager's character range, or the transcript's row range) to the
+  shell clipboard and prints `ui.selection: copied|none`; `clear` drops
+  it on both surfaces. It works while a modal blocks the worker (the
+  console reader claims it, like `ui tap`), which is how a script
+  drives the pager selection.
 - `ui hit <x> <y> [/v:NAME]` — report the target id under a point.
 - `ui links` — list transcript link/anchor regions as `id label -> command`
   (dense indices for `ui link`). `ui links /clear` drops every region and any
@@ -5431,7 +5440,7 @@ Sources:
 3. Validate ESP-IDF app header (magic 0xE9 + chip ID 0x000D)
 4. Prompt: WARNING: This will reboot the C6. Type YES to continue
 5. Stop Wi-Fi, keep hosted transport alive
-6. Transfer in 1500-byte chunks over SDIO
+6. Transfer in 1200-byte chunks over SDIO
 7. Progress: C6 OTA: XX% (YYYY KB / ZZZZ KB) every 5%
 8. Success: C6 OTA completed successfully! Type reboot to activate new firmware.
 9. Restore Wi-Fi on failure, request post-OTA restore on success

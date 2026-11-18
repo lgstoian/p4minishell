@@ -1081,7 +1081,7 @@ int shell_command_browser(int argc, char **argv) {
 
     browser_cache_init();
     if (argc < 2) {
-        shell_print_usage("browser <url|file> | browser back | browser forward | browser js <id> | browser css | browser bookmark [add|del|list]");
+        shell_print_usage("browser <url|file> | browser back | browser forward | browser swipe <back|forward> | browser links | browser link <n> | browser js <id> | browser css | browser bookmark [add|del|list]");
         return 2;
     }
     if (strcmp(argv[1], "css") == 0) {

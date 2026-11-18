@@ -51,7 +51,8 @@ It provides the parts such devices share:
 - an **application model** where a `.bat` file *is* an app, plus a **native C
   SDK** (`applib`) for the polished surfaces batch cannot draw;
 - shared **UI surfaces**: modals (`dialog`, `list`, `ask`, `browse`, `view`,
-  `hexview`), an `edit` text editor, an 80x25 TUI cell buffer, and an RGB565
+  `hexview`), an `edit` text editor, an 80-column TUI cell buffer (25 rows
+  landscape, more rows on a portrait panel), and an RGB565
   `gfx` canvas with docs, sprites, and a plot/graph layer;
 - **data and state** primitives: a Palm-OS-style record store (`db`), CSV/JSON
   handling, INI settings, alarms/calendar, encryption, and backups;
@@ -202,12 +203,14 @@ the host regression runners are green. See
 > `type` stdin, pipe spools under `sd:/tmp`). The tour below describes them;
 > both boards pass the full regression sweep and dogfood run on this release.
 
-Reference apps that ship in `apps/`: `companion` (a pure-batch system helper),
-`tcmd` (dual-pane commander), `snake`, `elite`, `adventure`, `notes`, `mood`,
-`gfxdemo` (`BOUNCE`, `GFXTOOL`, `PLOT`), `pics`, `taskmgr` (batch task
-manager: pool jobs, priorities, services, events), `diag` (system health,
-capability and frame-rate diagnostics), `chat` (board-to-board messaging), and
-`web` (the browser showcase). `APPLIB.BAT` is the shared routine library; every
+Reference apps that ship in `apps/` include `companion` (a pure-batch system
+helper with the SYS/FILES/NET/FUN/SET sub-apps), `tcmd` (dual-pane commander),
+`snake`, `elite`, `adventure`, `notes`, `mood` and `moodsvc`, `gfxdemo`
+(`BOUNCE`, `GFXTOOL`, `PLOT`), `pics`, `taskmgr` (batch task manager: pool
+jobs, priorities, services, events), `diag` (system health, capability and
+frame-rate diagnostics), `chat`, `web` (the browser showcase), `writer` (the
+writer deck, including EPUB export), `palmtop`, `fun`, `files`, `net`, `set`,
+`sys`, `agenda`, `hybrid`, `controlflow`, `uitest`, `pkgtest` and `svc`. `APPLIB.BAT` is the shared routine library; every
 entry app calls its opt-in `probe` when `P4_APP_FEATURES=1`, which the
 regression suite uses to exercise the locale, JS, browser and cookie surfaces
 from every app.
@@ -440,7 +443,8 @@ lane is a **pre-gate only**: hardware sign-off still comes from
 ### Display, TUI, and graphics
 
 - **`draw`** TUI verbs (box/line/fill/text/bar/table/list/window/cursor/hold/
-  fullscreen/flip) over an 80x25 cell grid that maps to the live transcript region.
+  fullscreen/flip) over an 80-column cell grid (25 rows landscape, more in
+  portrait) that maps to the live transcript region.
 - **`gfx`** — an RGB565 canvas with pixel/line/rect/circle/polygon/fill/text,
   BMP load/save, 8 sprite slots (up to 64x64) for batch games with bulk
   `blitmany` formation stamps, and firmware-measured frame pacing
@@ -527,7 +531,7 @@ ESP-IDF v5.5.5. Full bring-up checklist in [`PORTING.md`](PORTING.md).
 | Component | JC1060P470C (reference) | M5Stack Tab5 |
 |-----------|-------------------------|--------------|
 | **Host MCU** | ESP32-P4 (rev 1, dual core) | ESP32-P4NRW32 (rev 1, dual core) |
-| **Co-processor** | ESP32-C6 over ESP-Hosted SDIO 3.0.6 | ESP32-C6-MINI-1U over ESP-Hosted SDIO 3.0.6 |
+| **Co-processor** | ESP32-C6 over ESP-Hosted SDIO 3.1.0 | ESP32-C6-MINI-1U over ESP-Hosted SDIO 3.1.0 |
 | **Display** | JD9165 1024x600 MIPI-DSI, rotation 0 | 1280x720 MIPI-DSI (native 720x1280, rotation 90), runtime auto-detect ILI9881C / ST7123 / ST7121 (`BOARD_CFG_LCD_FORCE_VERSION` pins it) |
 | **Touch** | GT911 via I2C (GPIO7/8) | GT911 on ILI9881C units, integrated Sitronix TDDI otherwise (INT GPIO23) |
 | **Audio** | ES8311 codec via I2S + GPIO20 amp; no headphone jack | ES8388 codec + ES7210 front end via I2S (amp on IO expander, gated to the playback window only so idle is silent); 3.5 mm jack with detect (0x43 P7), speaker auto-mutes on insert (`audio output auto`); `mic level`/`mic selftest` hiss probe |

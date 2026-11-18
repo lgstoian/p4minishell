@@ -359,7 +359,7 @@ static bool c6ota_reliable_supported(const esp_hosted_coprocessor_fwver_t *versi
 
 static uint8_t *c6ota_alloc_transfer_buffer(void)
 {
-    /* 1500 B control-size buffer used DURING C6 OTA when PSRAM can be
+    /* 1200 B control-size buffer used DURING C6 OTA when PSRAM can be
      * unavailable: general allocator (PSRAM-first, internal fallback). */
     return p4heap_alloc_any(C6OTA_TRANSFER_CHUNK_BYTES);
 }

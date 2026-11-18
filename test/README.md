@@ -10,7 +10,7 @@ the Unity framework (included in ESP-IDF) and run in two places:
 
 Current baseline: **687 tests, 0 failures, 2 ignored** on COM3 and COM6
 (v1.4.3, after the late browser/EPUB/grid/for cases), and the host lane is
-**285/285** green (last run). The static case count is **745** (what
+**285/285** green (last run). The static case count is **757** (what
 `tools/green_guard.py` sees in
 `test/main/test_*.c`); the difference is cases that only compile for the
 target. The runner completes cleanly with `=== All tests completed ===` and no

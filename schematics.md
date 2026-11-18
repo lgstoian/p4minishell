@@ -56,7 +56,7 @@
   non-connectable advertising, and as a **BLE central/HID host** for external
   BLE keyboards/mice (`bluetooth connect`). No board pin or external component
   is involved beyond the shared C6 SDIO link above.
-- **Wireless stack:** `espressif/esp_hosted` 3.0.6 + `espressif/esp_wifi_remote`
+- **Wireless stack:** `espressif/esp_hosted` 3.1.0 + `espressif/esp_wifi_remote`
   1.6.2 (only the official path is permitted). The vendor M5Tab5 demo uses
   `esp_hosted` 1.4.0 + `esp_wifi_remote` 0.8.5 — a different pair (see F6).
 - **Storage:** microSD on SDMMC slot 0, 4-bit, mount `/sdcard`; SPIFFS

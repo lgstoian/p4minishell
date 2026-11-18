@@ -682,7 +682,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         # A release gate stops everything at the first red board.
         rc, _report = run_boards(tokens, mods, quick=quick,
-                                 fail_fast=fail_fast or len(tokens) > 1,
+                                 fail_fast=fail_fast or (len(tokens) > 1 and not args.keep_going),
                                  retry=args.retry,
                                  baseline=_load_baseline(args.baseline))
         if args.write_baseline and _report:

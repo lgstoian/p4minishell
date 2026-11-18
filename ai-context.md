@@ -2231,10 +2231,10 @@ the raster core + 8x8 font are `components/gfx/`
 - Lives in components/c6ota with stable public API
 - Exact confirmation: WARNING: This will reboot the C6. Type YES to continue
 - Validates ESP-IDF app magic 0xE9 + ESP32-C6 chip ID 0x000D
-- 1500-byte chunks, progress every 5%
+- 1200-byte chunks, progress every 5%
 - Wi-Fi stopped before transfer, kept alive during (no esp_hosted_deinit())
 - A **factory v2.3.0** C6 (as shipped on the M5Stack Tab5) is not wire-compatible with the
-  host `esp_hosted` 3.0.6: `c6ota` refuses it and an SD-sourced transfer wedges the shared
+  host `esp_hosted` 3.1.0: `c6ota` refuses it and an SD-sourced transfer wedges the shared
   SDMMC bus. Such a C6 needs a one-time standalone flasher first — a small P4 app that carries
   the slave image in a raw P4 partition (no SD, no Wi-Fi) and streams it over
   `esp_hosted_slave_ota_*`. Build `coprocessor/esp32c6_slave` for `esp32c6`; once the C6 runs

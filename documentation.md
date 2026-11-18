@@ -1475,7 +1475,7 @@ Owns the full ESP32-C6 firmware update workflow:
 - **Image validation**: ESP-IDF app magic `0xE9` + ESP32-C6 chip ID `0x000D`
 - **Factory warning**: C6 firmware `v2.3.0` requires one-time standalone tool first
 - **Confirmation flow**: Exact prompt `WARNING: This will reboot the C6. Type YES to continue`
-- **Transfer**: 1500-byte chunks over ESP-Hosted SDIO in Wi-Fi-off mode
+- **Transfer**: 1200-byte chunks over ESP-Hosted SDIO in Wi-Fi-off mode
 - **Progress**: `C6 OTA: XX% (YYYY KB / ZZZZ KB)` every 5%
 - **Wi-Fi management**: Stop before transfer, restore on failure, request post-OTA restore on success
 - **Hosted transport**: Kept alive during transfer (no `esp_hosted_deinit()` to avoid assert)

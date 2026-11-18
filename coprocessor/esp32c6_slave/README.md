@@ -2,8 +2,8 @@
 
 This project builds the ESP-Hosted co-processor firmware for the ESP32-C6 that
 pairs with the P4MiniShell host firmware. It tracks the same ESP-Hosted release
-line as the host dependency: the slave allows any compatible `^3.0.6` (see
-`main/idf_component.yml`) while the host pins the exact `3.0.6` (see
+line as the host dependency: the slave allows any compatible `^3.1.0` (see
+`main/idf_component.yml`) while the host pins the exact `3.1.0` (see
 `main/idf_component.yml`) — the two must stay on the same release line (the
 must-match-host rule; the host enforces a version gate at boot).
 

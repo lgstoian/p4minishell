@@ -484,20 +484,24 @@ def run(dev, ctx):
         def drag(x0, y0, x1, y1):
             """Long-press at (x0,y0), drag to (x1,y1), release.
 
-            The press must outlast LVGL's long-press time (400 ms) with no
+            Sent without a marker sync on purpose: the `ui` verbs are claimed
+            by the console reader while a blocking modal owns the worker, so a
+            `dev.run` echo would never be executed and every call would time
+            out. The press must outlast LVGL's long-press time (400 ms) with no
             movement, otherwise the drag pages/scans instead of selecting.
             """
-            dev.run("ui press %d %d" % (x0, y0), timeout=20)
-            time.sleep(0.9)
-            dev.run("ui move %d %d" % (x1, y1), timeout=20)
+            dev.session.write_line("ui press %d %d" % (x0, y0))
+            time.sleep(1.0)
+            dev.session.write_line("ui move %d %d" % (x1, y1))
             time.sleep(0.25)
-            dev.run("ui move %d %d" % (x1, y1 + 6), timeout=20)
+            dev.session.write_line("ui move %d %d" % (x1, y1 + 6))
             time.sleep(0.25)
-            dev.run("ui release", timeout=20)
-            time.sleep(0.4)
+            dev.session.write_line("ui release")
+            time.sleep(0.5)
 
         def textarea_target():
-            targets = parse_targets(_console(dev, "ui targets", 2.0))
+            # The full target dump is ~58 lines with the keyboard open.
+            targets = parse_targets(_console(dev, "ui targets", 3.0))
             for t in targets:
                 if t["name"] == "textarea":
                     return t
@@ -506,48 +510,52 @@ def run(dev, ctx):
         dev.session.write_line("view %s" % sel_file)
         st = _wait_modal(dev, "viewer", timeout=10)
         c.check("viewer opened for selection", st == "viewer", "modal=%r" % st)
+        # Let the panel finish its open transition before reading geometry.
+        time.sleep(1.0)
         ta = textarea_target() if st == "viewer" else None
         c.check("viewer textarea target found", ta is not None)
         if ta is not None:
             x_left = ta["x"] + 6
             y_top = ta["y"] + 6
             y_past = ta["y"] + ta["h"] // 2   # below the last of three lines
-            # Whole document: long-press on the first cell, drag past the end.
-            drag(x_left, y_top, x_left, y_past)
+            # Character-accurate, not row-based: start the drag a few glyphs
+            # into line 1, so the copied range must begin with a suffix of that
+            # line (a row copy would start at the line's first glyph).
+            x_in = ta["x"] + 32
+            drag(x_in, y_top, x_left, y_past)
             out = _console(dev, "ui selection copy", 1.0)
             c.expect("view selection copied", "ui.selection: copied", out)
             dev.send("q", 1.0)
             c.check("viewer closed after selection",
                     _wait_modal(dev, "none", timeout=8) == "none")
             clip_txt = dev.run("clip", timeout=20)
-            for marker in ("P4SELM-HEAD", "P4SELM-ALPHA", "P4SELM-BETA"):
-                c.expect("view selection holds %s" % marker, marker, clip_txt)
+            c.expect("view selection starts mid-line", "SELM-HEAD", clip_txt)
+            c.check("view selection excludes the skipped glyphs",
+                    "P4SELM-HEAD" not in clip_txt, clip_txt[-160:])
+            c.expect("view selection keeps line 2", "P4SELM-ALPHA", clip_txt)
+            c.expect("view selection keeps line 3", "P4SELM-BETA", clip_txt)
 
-            # Character-accurate, not row-based: a drag that starts at the END
-            # of line 1 (the middle of the textarea is past that short line)
-            # must exclude line 1 entirely while keeping lines 2-3.
+            # A tap INSIDE the persisted selection copies it (the pointer path,
+            # not the serial verb). The selection covers from the document start
+            # to past line 2, so a point near the top-left is inside it.
             dev.session.write_line("view %s" % sel_file)
             st = _wait_modal(dev, "viewer", timeout=10)
+            time.sleep(1.0)
             ta = textarea_target() if st == "viewer" else None
             if ta is not None:
-                x_mid = ta["x"] + ta["w"] // 2
-                y_top = ta["y"] + 6
-                drag(x_mid, y_top, ta["x"] + 6, ta["y"] + ta["h"] // 2)
-                # A tap INSIDE the persisted selection copies it (the pointer
-                # path, not the serial verb).
-                dev.run("ui tap %d %d 90" % (x_mid, y_top), timeout=20)
-                time.sleep(0.4)
+                drag(ta["x"] + 6, ta["y"] + 6,
+                     ta["x"] + 6, ta["y"] + ta["h"] // 2)
+                dev.session.write_line("ui tap %d %d 90"
+                                       % (ta["x"] + 20, ta["y"] + 12))
+                time.sleep(1.2)
                 dev.send("q", 1.0)
                 _wait_modal(dev, "none", timeout=8)
                 clip_txt = dev.run("clip", timeout=20)
-                c.expect("mid-line selection keeps line 2", "P4SELM-ALPHA",
+                c.expect("tap inside the selection copies it", "P4SELM-BETA",
                          clip_txt)
-                c.expect("mid-line selection keeps line 3", "P4SELM-BETA",
-                         clip_txt)
-                c.check("mid-line selection excludes line 1",
-                        "P4SELM-HEAD" not in clip_txt, clip_txt[-160:])
+                c.expect("tap copy keeps line 2", "P4SELM-ALPHA", clip_txt)
             else:
-                c.check("viewer reopened for mid-line selection", False)
+                c.check("viewer reopened for the tap copy", False)
 
         c.note("text selection: transcript scrollback")
         dev.run("ui selection clear", timeout=20)
@@ -563,23 +571,38 @@ def run(dev, ctx):
         if tt is not None:
             x = tt["x"] + 24
             y_bottom = tt["y"] + tt["h"] - 6
-            # The scrollback holds four short rows at the top, so a drag from
-            # the bottom row up to the middle clamps to that last row: this is
-            # a row-range copy, not the whole transcript.
-            drag(x, y_bottom, x, tt["y"] + tt["h"] // 2)
+            # Every `ui` line is echoed into the transcript before it runs, so
+            # the anchor row of this drag is the `ui press` echo itself (the
+            # echoes are the newest rows). A drag that stays inside that row
+            # copies it and nothing older; a drag to the top of the viewport
+            # adds the rows above it. Both are asserted from the clipboard
+            # contents, not from text that the dump may have scrolled away.
+            drag(x, y_bottom, x, y_bottom - 2)
             out = dev.run("ui selection copy", timeout=20)
             c.expect("transcript selection copied", "ui.selection: copied", out)
             clip_txt = dev.run("clip", timeout=20)
-            c.expect("transcript selection holds BETA", "P4SELT-BETA", clip_txt)
+            # The anchor row is whichever `ui` echo was newest when the
+            # long-press fired (the echo of the press or of the first move);
+            # either way the drag's own rows are what got selected.
+            c.expect("transcript selection holds a drag row", "ui move",
+                     clip_txt)
             c.check("transcript selection is row-scoped",
                     "P4SELT-ALPHA" not in clip_txt, clip_txt[-160:])
+            single_lines = [ln for ln in clip_txt.splitlines()
+                            if ln.strip() and "clipboard:" not in ln]
 
-            # A drag across the whole visible area copies every visible row.
+            # A drag across the visible area adds the rows above the anchor.
             drag(x, y_bottom, x, tt["y"] + 4)
             dev.run("ui selection copy", timeout=20)
             clip_txt = dev.run("clip", timeout=20)
-            c.expect("multi-row selection holds ALPHA", "P4SELT-ALPHA", clip_txt)
-            c.expect("multi-row selection holds BETA", "P4SELT-BETA", clip_txt)
+            multi_lines = [ln for ln in clip_txt.splitlines()
+                           if ln.strip() and "clipboard:" not in ln]
+            c.check("multi-row selection spans rows",
+                    len(multi_lines) >= 3,
+                    "single=%d multi=%d" % (len(single_lines),
+                                            len(multi_lines)))
+            c.expect("multi-row selection includes a drag row", "ui move",
+                     clip_txt)
             dev.run("ui selection clear", timeout=20)
 
     finally:

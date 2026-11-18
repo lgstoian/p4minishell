@@ -135,7 +135,7 @@ SPECS = [
     # ---- canvas apps: use the BMP the app saves off its frame loop ------
     dict(app="bounce", cmd="launch BOUNCE", start="[M-BOUNCE]",
          done="[M-BOUNCE-DONE]", shot=("file", "BOUNCE.BMP")),
-    dict(app="gfx", cmd="launch GFXTOOL", start="[M-GFXTOOL]",
+    dict(app="gfxtool", cmd="launch GFXTOOL", start="[M-GFXTOOL]",
          done="[M-GFXTOOL-DONE]", shot=("file", "GFXTOOL_SCREEN.BMP")),
     dict(app="plot", cmd="launch PLOT", start="[M-PLOT]",
          done="[M-PLOT-DONE]", shot=("file", "PLOT_SCREEN.BMP")),

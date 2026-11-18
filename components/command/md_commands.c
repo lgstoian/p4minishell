@@ -38,7 +38,7 @@ static void shell_command_markdown_usage(void)
     shell_transcript_appendf_ansi("  <file>  - render a Markdown file (fences, tables, lists)\n");
     shell_transcript_appendf_ansi("  -e      - render inline text\n");
     shell_transcript_appendf_ansi("  on|off  - auto-render echo/type output (default on; echo /raw bypasses)\n");
-    shell_transcript_appendf_ansi("  export  - write <src> to <out> as plain text, HTML, or a paginated print layout (atomic)\n");
+    shell_transcript_appendf_ansi("  export  - write <src> to <out> as plain text, HTML, a paginated print layout, or a one-chapter EPUB (atomic)\n");
 }
 
 /** Basename of @p path without one trailing extension (export title). */

@@ -160,6 +160,13 @@ static void ui_target_label(lv_obj_t *obj, char *out, size_t out_size)
             return;
         }
     }
+    /* A textarea is identified by its type: its label child holds the whole
+     * document, and naming the widget after that text made it impossible to
+     * find by type (the `ui selection` automation needs its rect). */
+    if (lv_obj_check_type(obj, &lv_textarea_class)) {
+        snprintf(out, out_size, "textarea");
+        return;
+    }
     count = (int32_t)lv_obj_get_child_count(obj);
     for (i = 0; i < count; i++) {
         lv_obj_t *child = lv_obj_get_child(obj, i);
@@ -179,8 +186,6 @@ static void ui_target_label(lv_obj_t *obj, char *out, size_t out_size)
         /* Automation anchor for the scrollback (text selection drags need its
          * live rect, which is not derivable from the display size). */
         snprintf(out, out_size, "transcript");
-    } else if (lv_obj_check_type(obj, &lv_textarea_class)) {
-        snprintf(out, out_size, "textarea");
     } else if (lv_obj_check_type(obj, &lv_slider_class)) {
         snprintf(out, out_size, "slider");
     } else if (lv_obj_check_type(obj, &lv_switch_class)) {

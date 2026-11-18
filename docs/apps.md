@@ -5,8 +5,9 @@ Every screenshot below is captured live from the device by
 (JC1060P470C, 1024x600). The apps are batch-first and run from SD or USB;
 metadata comes from each app's `APPINFO`.
 
-The feature matrix in [`readme.md`](../readme.md) lists which v1.4.3
-surface each app exercises (emoji, transparency, HTML, drive-aware data).
+The reference-app list in [`readme.md`](../readme.md) names the ship set; each
+section's title and description come from the app's `APPINFO` where one exists
+(the extra companion/library/service screens use their file name).
 
 ## ADVENTURE
 
