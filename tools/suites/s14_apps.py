@@ -915,8 +915,11 @@ def _companion_deep(dev, c):
             s.write_line("ok")
             quick_ok = _wait(s, "[M-SET]", 15)
     if quick_ok:
-        tail = _press(s, "13", "[M-SET-BACK]", settle=3.0)   # exit SET
-        quick_ok = b"[M-SET-BACK]" in tail
+        # Leave SET with Back. `config HEADER` may already have closed the
+        # foreground app (its rebuild), so the shell echo is the truth, not
+        # the app's back marker.
+        s.write_line("13")
+        quick_ok = _shell_echo(dev)
     if not quick_ok:
         set_stage = "quick settings (dialog not dismissed)"
     c.check("SET quick settings form", quick_ok, "")
