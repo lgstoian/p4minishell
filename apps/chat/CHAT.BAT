@@ -24,9 +24,15 @@ title "Chat"
 
 :menu
 draw clear screen
-draw box 1 1 80 3 double "P4 CHAT 🎵"
+rem Layout: the shell publishes the grid (80x25 landscape, 80x97 portrait).
+rem The menu panel takes the extra rows; the tip bar stays on the bottom rows
+rem (19..21) with its text inside it (row 21).
+if "%TUICOLS%"=="" set TUICOLS=80
+if "%TUIROWS%"=="" set TUIROWS=25
+set /a TY=%TUIROWS%-4 > NUL
+gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "P4 CHAT 🎵"
 draw text 24 2 "Board-to-board chat over the local link" 14
-draw box 1 5 80 13 single "Menu"
+gosub %APPROOT%/APPLIB.BAT::panel 5 13 single "Menu"
 draw text 5 7 "1  Host      start/stop the SoftAP host"
 draw text 5 8 "2  Join      join the host AP"
 draw text 5 9 "3  Send      send a message"
@@ -36,8 +42,8 @@ draw text 5 12 "6  Status    host/peer/sequence state"
 draw text 5 13 "7  Clear     clear inbox and log"
 draw text 5 14 "8  Help      command reference"
 draw text 5 15 "9  Quit"
-draw box 1 19 80 3 single
-draw text 5 21 "Tip: the host prints 192.168.4.1; the peer joins that address."
+gosub %APPROOT%/APPLIB.BAT::footer 19 3 single
+draw text 5 %TY% "Tip: the host prints 192.168.4.1; the peer joins that address."
 draw refresh
 list "P4 Chat" "Host" "Join" "Send" "Poll" "Log" "Status" "Clear" "Help" "Quit"
 on %errorlevel%+1 goto :host,:peer,:send,:poll,:log,:status,:clear,:help,:quit
@@ -98,7 +104,7 @@ goto :menu
 
 :help
 draw clear screen
-draw box 1 1 80 3 single "Chat help"
+gosub %APPROOT%/APPLIB.BAT::page single "Chat help"
 draw text 3 5 "chat host [ssid]      start the SoftAP (default P4MiniShell-Chat)"
 draw text 3 6 "chat host off         stop it, restore STA-only mode"
 draw text 3 7 "chat peer <ip>        join the host AP"

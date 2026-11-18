@@ -27,11 +27,10 @@ is claimed by the console-local hook even while the app's ``choice`` owns the
 serial input. Compatibility choice: the visible grid keeps the documented 80
 columns (8x12 on the 720 px portrait panel) so the 80-wide commander frame and
 its right pane are never clipped; the extra portrait height becomes more rows
-(80x102 while TCMD is full-screen). TCMD itself only draws 25 rows, so its own
-ink still covers the top ~22% of the portrait panel - enlarging that would
-require editing the app (apps/** is out of scope). What this suite pins is that
-the surface is 80 columns/12 px rows, the frame reaches its right edge, and the
-app keeps running and repainting across both directions.
+(80x102 while TCMD is full-screen). The app itself lays its page out against
+the shell-published grid (``%TUICOLS%``/``%TUIROWS%`` via the APPLIB layout
+helpers), so its frame fills those rows; this suite pins the surface mapping,
+and ``s27_apps_layout.py`` pins the app geometry.
 
 Screenshots land in ``screenshots/portrait/`` (with the pre-fix captures from
 the same bug) and the numbers are printed in the notes.

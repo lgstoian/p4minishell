@@ -317,6 +317,38 @@ void tui_grid_resolve(int w, int h, int *cols_out, int *rows_out,
     if (cell_h_out != NULL) *cell_h_out = tui_font_cells[pick].cell_h;
 }
 
+void tui_app_grid(int *cols_out, int *rows_out, int *cell_w_out,
+                  int *cell_h_out)
+{
+    int cols = P4_CONFIG_TUI_COLS;
+    int rows = P4_CONFIG_TUI_ROWS;
+    int cell_w = 0;
+    int cell_h = 0;
+
+    if (s_active && s_bound_cell != NULL) {
+        /* A surface is up (a sub-app launched from a running app): report the
+         * grid it is drawing into, not a re-resolution of the region. */
+        cols = s_cols;
+        rows = s_rows;
+        cell_w = s_bound_cell->cell_w;
+        cell_h = s_bound_cell->cell_h;
+    } else if (tui_font_cell_count > 0) {
+        /* The grid the next app surface resolves to: the app viewport with
+         * the header and the input row reclaimed (TUI mode hides the keyboard
+         * and the header/input row are not part of an app surface). */
+        window_rect_t app = windows_get_app_viewport();
+        int app_h = windows_get_display_height()
+            - windows_get_rect(WINDOW_REGION_HEADER).height
+            - windows_get_rect(WINDOW_REGION_INPUT_ROW).height;
+
+        tui_grid_resolve(app.width, app_h, &cols, &rows, &cell_w, &cell_h);
+    }
+    if (cols_out != NULL) *cols_out = cols;
+    if (rows_out != NULL) *rows_out = rows;
+    if (cell_w_out != NULL) *cell_w_out = cell_w;
+    if (cell_h_out != NULL) *cell_h_out = cell_h;
+}
+
 int tui_get_cols(void)
 {
     return s_cols;

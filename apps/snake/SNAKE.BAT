@@ -24,7 +24,16 @@ if errorlevel 1 goto nogfx
 rem Full screen: reclaim the header and on-screen keyboard rows so the whole
 rem 44x22 playfield and the score panel are visible (TCMD does the same).
 draw fullscreen on
-draw box 1 2 44 22 double "SNAKE ★"
+rem Layout: the shell publishes the grid (80x25 landscape, 80x97 portrait).
+rem The frame spans the grid and grows into the extra rows; the playfield
+rem itself keeps its authored 44x22 cells (x 3..42, y 4..21) because the game
+rem logic - packed y*64+x coordinates, wall checks and food ranges - is bound
+rem to them.
+if "%TUICOLS%"=="" set TUICOLS=80
+if "%TUIROWS%"=="" set TUIROWS=25
+set /a SH=%TUIROWS%-3 > NUL
+if %SH% LSS 22 set SH=22
+draw box 1 2 %TUICOLS% %SH% double "SNAKE ★"
 if errorlevel 1 goto nogfx
 set hh=596
 set dir=1
@@ -54,7 +63,7 @@ goto frame
 
 :frame
 draw clear
-draw box 1 2 44 22 double "SNAKE ★"
+draw box 1 2 %TUICOLS% %SH% double "SNAKE ★"
 draw text 48 4 "Score %score%"
 draw text 48 6 "Length %len%"
 draw text 48 8 "wasd move"

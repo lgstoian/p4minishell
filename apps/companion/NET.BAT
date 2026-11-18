@@ -10,13 +10,18 @@ rem =====================================================================
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 title "Network Tools"
 echo [M-NET]
+rem Layout: the shell publishes the grid (80x25 landscape, 80x97 portrait).
+rem The Tools panel takes the extra rows; Status stays on the bottom rows.
+if "%TUICOLS%"=="" set TUICOLS=80
+if "%TUIROWS%"=="" set TUIROWS=25
+set /a SY=%TUIROWS%-8 > NUL
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::bar 1 3 single
 draw text 32 2 "NETWORK TOOLS ★" 14
-draw box 1 4 80 10 single "Tools"
+gosub %APPROOT%/APPLIB.BAT::panel 4 10 single "Tools"
 draw text 5 6 "Wi-Fi status, connect, ping, dns, fetch"
-draw box 1 15 80 8 single "Status"
-draw text 5 17 "Offline handling: all ops degrade gracefully"
+gosub %APPROOT%/APPLIB.BAT::footer 15 8 single "Status"
+draw text 5 %SY% "Offline handling: all ops degrade gracefully"
 list "Network Tools" "Wi-Fi status (TUI)" "Connect Wi-Fi" "Pick known network" "Ping (TUI)" "DNS lookup" "Fetch a joke" "Messaging (MQTT)" "Back"
 on %errorlevel%+1 goto :status,:connect,:known,:ping,:dns,:joke,:msg,:back
 goto :back
@@ -24,7 +29,7 @@ goto :back
 :status
 tui fullscreen on
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 32 2 "WI-FI STATUS" 14
 wifi status > %APPDRIVE%/_net.txt
 view %APPDRIVE%/_net.txt
@@ -37,7 +42,7 @@ draw clear screen
 goto main
 
 :connect
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 35 2 "CONNECT WI-FI" 14
 ask /v:ssid "SSID"
 if errorlevel 1 goto main
@@ -64,7 +69,7 @@ if errorlevel 1 dialog "Wi-Fi" "Connection failed." "OK"
 goto main
 
 :ping
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 38 2 "PING" 14
 ask /v:host "Host to ping" "1.1.1.1"
 if errorlevel 1 goto main
@@ -75,7 +80,7 @@ del /p %APPDRIVE%/_ping.txt > NUL
 goto main
 
 :dns
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 37 2 "DNS LOOKUP" 14
 ask /v:host "Hostname" "example.com"
 if errorlevel 1 goto main
@@ -99,7 +104,7 @@ goto :joke_go
 del /p %APPDRIVE%/funurl.txt > NUL
 set funurl=https://icanhazdadjoke.com/
 :joke_go
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 35 2 "FETCH JOKE" 14
 draw text 5 10 "Fetching: %funurl%" 14
 httpget %funurl% %APPDRIVE%/_joke.txt
@@ -122,11 +127,11 @@ rem  when offline. Publishers journal to the SD outbox and flush on connect.
 :msg
 echo [M-NET-MSG]
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::bar 1 3 single
 draw text 31 2 "MESSAGING (MQTT)" 14
-draw box 1 4 80 8 single "Service"
+gosub %APPROOT%/APPLIB.BAT::bar 4 8 single "Service"
 net status
-draw box 1 13 80 10 single "Try it"
+gosub %APPROOT%/APPLIB.BAT::panel 13 10 single "Try it"
 draw text 5 15 "net broker <host> [port] [user]   set the broker"
 draw text 5 16 "net password                       set credentials"
 draw text 5 17 "net connect | net disconnect       control the session"

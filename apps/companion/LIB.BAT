@@ -16,17 +16,22 @@ ansi 1;36m ============================================================
 goto :eof
 
 rem ---- tui banner (draw fullscreen box with title) --------------------
+rem TUICOLS/TUIROWS are the shell-published layout grid (the 80x25 fallback
+rem keeps a headless call working). Horizontal text stays on the authored
+rem 80-column positions: the grid keeps 80 columns on every supported panel.
 :tui_banner
+if "%TUICOLS%"=="" set TUICOLS=80
 draw clear screen
-draw box 1 1 80 3 single
+draw box 1 1 %TUICOLS% 3 single
 draw text 2 2 "P4 COMPANION - Pure-batch helper for P4MiniShell" 14
 goto :eof
 
 rem ---- tui header with title ------------------------------------------
 :tui_header
 rem %1 = title
+if "%TUICOLS%"=="" set TUICOLS=80
 draw clear screen
-draw box 1 1 80 3 single
+draw box 1 1 %TUICOLS% 3 single
 draw text 30 2 "%~1" 14
 goto :eof
 
@@ -37,7 +42,8 @@ goto :eof
 
 rem ---- tui rule -------------------------------------------------------
 :tui_hr
-draw line 1 4 80 4
+if "%TUICOLS%"=="" set TUICOLS=80
+draw line 1 4 %TUICOLS% 4
 goto :eof
 
 rem ---- settings restore ----------------------------------------------
@@ -54,10 +60,14 @@ pause
 goto :eof
 
 rem ---- draw status bar ------------------------------------------------
+rem %1 = left, %2 = right. Both ride the grid's bottom row, the right label
+rem on the last 20 columns (col 60 on the 80-column grid).
 :status
-rem %1 = left, %2 = right
-draw text 1 25 "%~1" 7
-draw text 60 25 "%~2" 7
+if "%TUICOLS%"=="" set TUICOLS=80
+if "%TUIROWS%"=="" set TUIROWS=25
+set /a SX=%TUICOLS%-20 > NUL
+draw text 1 %TUIROWS% "%~1" 7
+draw text %SX% %TUIROWS% "%~2" 7
 goto :eof
 
 rem ---- selftest: %~ modifiers -------------------------------------------

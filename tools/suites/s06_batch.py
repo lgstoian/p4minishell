@@ -34,12 +34,20 @@ P4BTEST = r"""@echo off
 echo P4BATCH: start %~nx0
 echo P4BATCH: arg1 %1 arg2 %2
 echo P4BATCH: all %*
+rem The shell publishes the layout grid for every .bat it starts; the apps
+rem size their frames from it (see apps/APPLIB.BAT).
+echo P4BATCH: grid %TUICOLS%x%TUIROWS%
 set P4V=hello
 echo P4BATCH: set %P4V%
 set /a P4N=6*7
 echo P4BATCH: seta %P4N%
 set /a P4C=100/7
 echo P4BATCH: seta-div %P4C%
+rem Silent arithmetic: the layout helpers in apps/APPLIB.BAT do their grid maths
+rem with `set /a ... > NUL` so a page never leaks "VAR=value" lines into the
+rem transcript. The value must still be assigned.
+set /a P4Q=2+3 > NUL
+echo P4BATCH: seta-quiet %P4Q%
 write P4BTIN.TXT P4INPUT
 set /p P4P=< P4BTIN.TXT
 echo P4BATCH: setp %P4P%
@@ -399,11 +407,22 @@ def run(dev, ctx):
     c.expect("batch start marker", "P4BATCH: start %s" % BATCH, out)
     c.expect("batch %1 argument", "P4BATCH: arg1 argone", out)
     c.expect("batch %* all arguments", "P4BATCH: all argone argtwo", out)
+    grid = re.search(r"P4BATCH: grid (\d+)x(\d+)", out)
+    c.check("launch publishes the layout grid to the script", grid is not None,
+            "TUICOLS/TUIROWS missing from the app environment: %r" % out[:200])
+    if grid is not None:
+        gcols, grows = int(grid.group(1)), int(grid.group(2))
+        c.check("published grid is a usable DOS grid",
+                gcols >= 40 and grows >= 25,
+                "grid=%dx%d" % (gcols, grows))
 
     # ---- set / set /a / set /p ---------------------------------------
     c.expect("set stores value", "P4BATCH: set hello", out)
     c.expect("set /a multiplies", "P4BATCH: seta 42", out)
     c.expect("set /a integer divide", "P4BATCH: seta-div 14", out)
+    c.expect("set /a assigns through a > NUL redirect", "P4BATCH: seta-quiet 5", out)
+    c.check("set /a with > NUL prints nothing", "P4Q=" not in out,
+            "transcript leaked the set /a echo: %r" % out[-200:])
     c.expect("set /p reads redirection", "P4BATCH: setp P4INPUT", out)
 
     # ---- calc --------------------------------------------------------

@@ -1691,11 +1691,9 @@ void shell_command_tui(int argc, char **argv)
         /* Two different regions, labelled apart: the transcript rect above is
          * the scrollable output area (it still contains the input row), while
          * the grid is resolved against the app viewport - the same rect with
-         * the horizontal screen pad removed and the keyboard reclaimed (TUI
-         * mode hides it). Printing the raw transcript height next to a grid
-         * fit resolved from the taller viewport read as an inconsistency, so
-         * the grid line now names the rect it actually used. Printed even
-         * while TUI is inactive so the mapping is diagnosable without an app. */
+         * the horizontal screen pad removed and the keyboard reclaimed.
+         * `tui_app_grid()` is the same helper the live layout and the
+         * %TUICOLS%/%TUIROWS% launch env use, so all three agree. */
         {
             int app_h = windows_get_display_height()
                 - windows_get_rect(WINDOW_REGION_HEADER).height
@@ -1704,7 +1702,7 @@ void shell_command_tui(int argc, char **argv)
 
             shell_print_field("app viewport", "%dx%d at %d,%d (grid target)",
                               app.width, app_h, app.x, app.y);
-            tui_grid_resolve(app.width, app_h, &fit_cols, &fit_rows, &fit_cw, &fit_ch);
+            tui_app_grid(&fit_cols, &fit_rows, &fit_cw, &fit_ch);
             shell_print_field("grid fit", "%dx%d -> %d x %d, cell %dx%d",
                               app.width, app_h, fit_cols, fit_rows, fit_cw, fit_ch);
         }

@@ -16,7 +16,7 @@ goto menu
 
 :menu
 draw clear screen
-draw box 1 1 80 3 double "PALMTOP ★"
+gosub %APPROOT%/APPLIB.BAT::page double "PALMTOP ★"
 draw text 5 2 "palmtop-parity primitives demo  (%APPNAME% on %APPDRIVE%)" 14
 draw text 45 2 "local %TIME%" 7
 list "PalmTop" "Calculator + conversions" "Stopwatch" "CSV sheet (=EXPR)" "Encrypt a note" "Bind an F-key" "TCP probe" "Back"
@@ -25,7 +25,7 @@ goto back
 
 :calc_demo
 draw clear screen
-draw box 1 1 80 3 double "CALCULATOR"
+gosub %APPROOT%/APPLIB.BAT::page double "CALCULATOR"
 ask "Value to convert (number)" 100
 set v=%ASK_RESULT%
 calc F=c2f(%v%)
@@ -45,7 +45,7 @@ goto menu
 
 :timer
 draw clear screen
-draw box 1 1 80 3 double "STOPWATCH"
+gosub %APPROOT%/APPLIB.BAT::page double "STOPWATCH"
 timer start demo
 draw text 5 5 "Counting 2 s, then a lap..." 14
 delay 2000
@@ -68,7 +68,7 @@ append %APPDRIVE%/_palm.csv pear,10,=R3C2*R2C3
 append %APPDRIVE%/_palm.csv total,,=R2C3+R3C3
 echo [M-PALM-CSV]
 draw clear screen
-draw box 1 1 80 3 double "CSV"
+gosub %APPROOT%/APPLIB.BAT::page double "CSV"
 csv eval %APPDRIVE%/_palm.csv
 draw text 5 15 "Press any key..." 7
 pause
@@ -81,7 +81,7 @@ crypt lock %APPDRIVE%/_palm_note.txt %APPDRIVE%/_palm_note.enc /p:open123
 crypt unlock %APPDRIVE%/_palm_note.enc %APPDRIVE%/_palm_note.out /p:open123
 echo [M-PALM-CRYPT]
 draw clear screen
-draw box 1 1 80 3 double "CRYPT"
+gosub %APPROOT%/APPLIB.BAT::page double "CRYPT"
 draw text 5 5 "Locked then unlocked _palm_note.txt" 14
 type < %APPDRIVE%/_palm_note.out > %APPDRIVE%/_palm_view.txt
 draw text 5 7 "Plaintext recovered:" 7
@@ -94,7 +94,7 @@ goto menu
 
 :bind
 draw clear screen
-draw box 1 1 80 3 double "BIND"
+gosub %APPROOT%/APPLIB.BAT::page double "BIND"
 bind F9 sysinfo
 bind F10 dir
 bind
@@ -107,7 +107,7 @@ goto menu
 
 :tcp
 draw clear screen
-draw box 1 1 80 3 double "TCP"
+gosub %APPROOT%/APPLIB.BAT::page double "TCP"
 draw text 5 5 "Probing the on-board httpd on loopback..." 14
 rem Offline (no Wi-Fi/httpd) the connect is refused cleanly; ERRORLEVEL 1.
 tcpterm 127.0.0.1 80 /t:6 GET / HTTP/1.0\r\n\r\n

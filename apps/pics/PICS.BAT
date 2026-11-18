@@ -16,7 +16,8 @@ goto menu
 
 :menu
 draw clear screen
-draw box 1 1 80 3 double "PICS ★"
+rem Layout: the shell publishes the grid (80x25 landscape, 80x97 portrait).
+gosub %APPROOT%/APPLIB.BAT::page double "PICS ★"
 draw text 5 2 "BMP image support  (%APPNAME% on %APPDRIVE%)" 14
 list "Pictures" "View PHOTO.BMP (full color)" "Draw into TUI (16 color)" "Blit to gfx canvas" "Image info" "Back"
 on %errorlevel%+1 goto :view,:tui,:canvas,:info,:back
@@ -29,8 +30,15 @@ goto menu
 
 :tui
 draw clear screen
-draw box 1 1 80 25 single "TUI IMAGE"
-draw image %APPDRIVE%/PHOTO.BMP 4 3 72 20
+rem The image page frames the whole grid and scales the 16-colour draw to the
+rem panel: 72x20 cells on the classic 25-row grid (the authored size), more
+rem rows on a portrait panel.
+if "%TUICOLS%"=="" set TUICOLS=80
+if "%TUIROWS%"=="" set TUIROWS=25
+set /a IW=%TUICOLS%-8 > NUL
+set /a IH=%TUIROWS%-5 > NUL
+gosub %APPROOT%/APPLIB.BAT::box single "TUI IMAGE"
+draw image %APPDRIVE%/PHOTO.BMP 4 3 %IW% %IH%
 list "TUI" "PHOTO.BMP drawn as 16-color blocks" "Back"
 goto menu
 

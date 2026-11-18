@@ -39,6 +39,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "p4heap.h"
+#include "tui.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <ctype.h>
@@ -4123,6 +4124,8 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
     char prev_drive[8] = { 0 };
     char prev_root[128] = { 0 };
     char prev_name[64] = { 0 };
+    char prev_cols[8] = { 0 };
+    char prev_rows[8] = { 0 };
     bool app_env_saved = false;
 
     depth = (s_active_batch_frame != NULL) ? s_active_batch_frame->depth + 1 : 1;
@@ -4218,10 +4221,40 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
         snprintf(prev_root, sizeof(prev_root), "%s", old ? old : "");
         old = shell_env_get("APPNAME");
         snprintf(prev_name, sizeof(prev_name), "%s", old ? old : "");
+        old = shell_env_get("TUICOLS");
+        snprintf(prev_cols, sizeof(prev_cols), "%s", old ? old : "");
+        old = shell_env_get("TUIROWS");
+        snprintf(prev_rows, sizeof(prev_rows), "%s", old ? old : "");
         app_env_saved = true;
         (void)shell_env_set("APPDRIVE", drive);
         (void)shell_env_set("APPROOT", root);
         (void)shell_env_set("APPNAME", name);
+        /* Publish the logical grid the app surface lays out against, in the
+         * same %APPDRIVE%-style envelope: 80x25 on the landscape reference
+         * board, the extra rows of a portrait panel (80x97 on 720x1280).
+         * Resolved by tui_app_grid(), so the reference app scripts size their
+         * frame to the live grid instead of a hard-coded 80x25.
+         *
+         * Apps keep the documented 25-row DOS frame whenever the grid is
+         * landscape-shaped: an app launched from a full-screen parent (a
+         * sub-app of COMPANION) sees 30 rows there, and growing its authored
+         * 25-row screens would move every classic landscape layout. A tall
+         * (portrait) grid keeps all of its rows. */
+        {
+            int cols = 0;
+            int rows = 0;
+            char cols_text[8];
+            char rows_text[8];
+
+            tui_app_grid(&cols, &rows, NULL, NULL);
+            if (rows <= cols && rows > P4_CONFIG_TUI_ROWS) {
+                rows = P4_CONFIG_TUI_ROWS;
+            }
+            snprintf(cols_text, sizeof(cols_text), "%d", cols);
+            snprintf(rows_text, sizeof(rows_text), "%d", rows);
+            (void)shell_env_set("TUICOLS", cols_text);
+            (void)shell_env_set("TUIROWS", rows_text);
+        }
     }
 
     /* Load the whole file into RAM when it fits, so the line loop and every
@@ -4499,6 +4532,8 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
         (void)shell_env_set("APPDRIVE", prev_drive);
         (void)shell_env_set("APPROOT", prev_root);
         (void)shell_env_set("APPNAME", prev_name);
+        (void)shell_env_set("TUICOLS", prev_cols);
+        (void)shell_env_set("TUIROWS", prev_rows);
     }
     free(frame);
     free(line);

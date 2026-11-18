@@ -30,7 +30,7 @@ dialog "Notes" "Created the zettel store." "OK"
 
 :menu
 draw clear screen
-draw box 1 1 80 3 double "ZETTELKASTEN ★"
+gosub %APPROOT%/APPLIB.BAT::page double "ZETTELKASTEN ★"
 draw text 5 2 "linked notes on the db store" 14
 echo [M-NOTE-MENU]
 list "Zettelkasten" "New note" "List notes" "View note" "Search" "Delete note" "Export" "Import" "Back"
@@ -75,7 +75,7 @@ rem No temp file: `db find /b` feeds the for /f pipe source directly, so a
 rem slow-SD unlink never stalls the listing (see bugs.md O6).
 db find zettel /b | for /f "eol= tokens=1-3 delims=|" %%r in () do echo %%r. [%%s] %%t
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 35 2 "ALL NOTES" 14
 pause
 goto menu

@@ -30,7 +30,7 @@ switch %room% hall:room_hall library:room_library tower:room_tower cellar:room_c
 :room_courtyard
 set room=courtyard
 draw clear screen
-draw box 1 1 80 3 double "COURTYARD ⚔"
+gosub %APPROOT%/APPLIB.BAT::page double "COURTYARD ⚔"
 draw text 5 5 "A quiet stone courtyard. A hall lies north, a garden east." 15
 draw text 5 6 "Exits: n e    (%APPNAME% on %APPDRIVE%)"
 goto prompt
@@ -38,7 +38,7 @@ goto prompt
 :room_hall
 set room=hall
 draw clear screen
-draw box 1 1 80 3 double "GREAT HALL ⚔"
+gosub %APPROOT%/APPLIB.BAT::page double "GREAT HALL ⚔"
 draw text 5 5 "A torch-lit hall. Doors west and east, stairs up, south out." 15
 draw text 5 6 "Exits: s w e u"
 goto prompt
@@ -46,7 +46,7 @@ goto prompt
 :room_library
 set room=library
 draw clear screen
-draw box 1 1 80 3 double "LIBRARY ⚔"
+gosub %APPROOT%/APPLIB.BAT::page double "LIBRARY ⚔"
 rem Keep multi-word prose out of the if-group: this engine's group parser
 rem takes only the first token of a quoted string inside `( ... )`.
 if "!ITEM[key]!"=="0" (set desc=Dusty shelves. A brass key hangs on a hook.) else (set desc=Dusty shelves. The key hook stands empty.)
@@ -57,7 +57,7 @@ goto prompt
 :room_tower
 set room=tower
 draw clear screen
-draw box 1 1 80 3 double "TOWER ⚔"
+gosub %APPROOT%/APPLIB.BAT::page double "TOWER ⚔"
 if "!ITEM[amulet]!"=="0" (set desc=Windy rooftop. A glowing amulet rests on a pedestal.) else (set desc=Windy rooftop. The pedestal is empty.)
 draw text 5 5 "%desc%" 15
 draw text 5 6 "Exits: d"
@@ -67,7 +67,7 @@ goto prompt
 if not "!ITEM[lantern]!"=="1" goto cellar_dark
 set room=cellar
 draw clear screen
-draw box 1 1 80 3 double "CELLAR ⚔"
+gosub %APPROOT%/APPLIB.BAT::page double "CELLAR ⚔"
 draw text 5 5 "Your lantern lights a wine cellar. An iron chest sits here." 15
 draw text 5 6 "Exits: w"
 goto prompt
@@ -80,7 +80,7 @@ goto room_hall
 :room_garden
 set room=garden
 draw clear screen
-draw box 1 1 80 3 double "GARDEN ⚔"
+gosub %APPROOT%/APPLIB.BAT::page double "GARDEN ⚔"
 if "!ITEM[lantern]!"=="0" (set desc=Moonlit garden. A lantern hangs by the gate.) else (set desc=Moonlit garden. The lantern post is bare.)
 draw text 5 5 "%desc%" 15
 draw text 5 6 "Exits: w"
@@ -182,7 +182,7 @@ echo Score: %score% in %moves% moves.
 goto prompt
 
 :help
-draw box 1 10 80 9 single "Help"
+gosub %APPROOT%/APPLIB.BAT::panel 10 9 single "Help"
 draw text 5 12 "move: n s e w u d    look    inv    score"
 draw text 5 13 "take key/lantern/amulet    use key/lantern/amulet"
 draw text 5 14 "save    load    quit"
@@ -228,8 +228,13 @@ goto prompt
 set /a score+=50
 echo [M-ADV-WIN]
 draw clear screen
-draw box 1 8 80 5 double "VICTORY"
-draw text 20 10 "The chest opens: gold! Score %score% in %moves% moves." 14
+rem The victory panel keeps its authored 5 rows and centres itself on the live
+rem grid (rows 8..12 / text 10 on the classic 25-row grid).
+if "%TUIROWS%"=="" set TUIROWS=25
+set /a VY=%TUIROWS%/2-4 > NUL
+set /a VT=%VY%+2 > NUL
+gosub %APPROOT%/APPLIB.BAT::bar %VY% 5 double "VICTORY"
+draw text 20 %VT% "The chest opens: gold! Score %score% in %moves% moves." 14
 tone 784 150
 tone 1046 300
 pause

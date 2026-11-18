@@ -91,6 +91,21 @@ int tui_get_rows(void);
 void tui_grid_resolve(int w, int h, int *cols_out, int *rows_out,
                       int *cell_w_out, int *cell_h_out);
 
+/**
+ * The logical grid an app surface lays out against, resolved the same way the
+ * live layout resolves it:
+ *   - while TUI mode is up, the committed grid (an app launched from another
+ *     app draws into the surface that is already there);
+ *   - otherwise the app viewport (panel minus the header and input row) run
+ *     through tui_grid_resolve().
+ * This is what the shell publishes to `launch`ed batch apps as %TUICOLS% /
+ * %TUIROWS%, so an app can size its frame before it enters TUI/fullscreen.
+ * Pure reads (no LVGL, no allocation), headless-safe: without a display the
+ * configured 80x25 grid is reported. Out-pointers are all optional.
+ */
+void tui_app_grid(int *cols_out, int *rows_out, int *cell_w_out,
+                  int *cell_h_out);
+
 /** Clear entire grid (ED 2J) with default colors. */
 void tui_clear(void);
 

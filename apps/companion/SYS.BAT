@@ -11,12 +11,21 @@ rem =====================================================================
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 title "Live System"
 echo [M-SYS]
+rem Layout: the shell publishes the grid (80x25 landscape, 80x97 portrait).
+rem The System panel grows into the extra rows; the Memory/Tasks pair stays
+rem on the bottom rows (15..24), split at the grid's middle column.
+if "%TUICOLS%"=="" set TUICOLS=80
+if "%TUIROWS%"=="" set TUIROWS=25
+set /a BM=%TUIROWS%-10 > NUL
+set /a LW=%TUICOLS%/2 > NUL
+set /a RX=%LW%+1 > NUL
+set /a RW=%TUICOLS%-%RX%+1 > NUL
 tui fullscreen on
 draw clear screen
-draw box 1 1 80 3 double "LIVE SYSTEM DASHBOARD ★"
-draw box 1 4 80 10 single "System - View opens the local HTML guide"
-draw box 1 15 40 10 single "Memory (heap + PSRAM)"
-draw box 41 15 40 10 single "Tasks"
+gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "LIVE SYSTEM DASHBOARD ★"
+gosub %APPROOT%/APPLIB.BAT::panel 4 10 single "System - View opens the local HTML guide"
+draw box 1 %BM% %LW% 10 single "Memory (heap + PSRAM)"
+draw box %RX% %BM% %RW% 10 single "Tasks"
 draw text 5 6 "System dashboard ready"
 draw text 5 7 "Use View for the HTML guide"
 draw text 5 8 "Use Save to keep a snapshot on the app drive"
@@ -26,10 +35,10 @@ on %errorlevel%+1 goto :do_refresh,:view_details,:save,:services,:packages,:back
 goto :back
 :do_refresh
 draw clear screen
-draw box 1 1 80 3 double "LIVE SYSTEM DASHBOARD"
-draw box 1 4 80 10 single "System - Refreshed"
-draw box 1 15 40 10 single "Memory (heap + PSRAM)"
-draw box 41 15 40 10 single "Tasks"
+gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "LIVE SYSTEM DASHBOARD"
+gosub %APPROOT%/APPLIB.BAT::panel 4 10 single "System - Refreshed"
+draw box 1 %BM% %LW% 10 single "Memory (heap + PSRAM)"
+draw box %RX% %BM% %RW% 10 single "Tasks"
 draw text 5 6 "Refreshed at %TIME%"
 goto refresh
 :view_details

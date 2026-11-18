@@ -17,7 +17,7 @@ goto menu
 
 :menu
 draw clear screen
-draw box 1 1 80 3 double "MOOD 💖"
+gosub %APPROOT%/APPLIB.BAT::page double "MOOD 💖"
 draw text 5 2 "board mood from live heap (mem includes PSRAM)" 14
 draw text 45 2 "local %TIME%" 7
 list "Mood" "Live mood (5 samples)" "RGB demo" "Tone demo" "Snapshot" "Service sampler" "Back"
@@ -36,7 +36,7 @@ call :live_tick
 goto :live_loop
 :live_trend
 draw clear screen
-draw box 1 1 80 3 double "MOOD TREND"
+gosub %APPROOT%/APPLIB.BAT::page double "MOOD TREND"
 draw text 5 2 "heap free percent per sample" 14
 for /A %%k in (SAMPLE) do call :barline %%k %%l
 draw refresh
@@ -71,7 +71,7 @@ set SAMPLE[%round%]=%pct%
 echo [M-MOOD-SAMPLE]
 echo heap %heapf%/%heapt% pct %pct%
 draw clear screen
-draw box 1 1 80 3 double "MOOD SAMPLE"
+gosub %APPROOT%/APPLIB.BAT::page double "MOOD SAMPLE"
 draw text 5 5 "heap free %heapf% / %heapt% bytes = %pct pct%" 14
 rem %DATE%/%TIME% are the auto-synced local clock (SNTP + detected timezone).
 draw text 5 6 "local %DATE% %TIME%" 7
@@ -146,7 +146,7 @@ rem `service install moodsampler "MOODSVC" /restart`) keeps sd:/MOODLAST.INI
 rem fresh; that file is the SD-only service store by design, while the app's
 rem own scratch files use %APPDRIVE%. Files are the IPC (no shared handles).
 draw clear screen
-draw box 1 1 80 3 double "MOOD SERVICE"
+gosub %APPROOT%/APPLIB.BAT::page double "MOOD SERVICE"
 if not exist sd:/MOODLAST.INI goto svcnone
 set svcf=0
 set svct=1

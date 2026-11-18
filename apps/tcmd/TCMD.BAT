@@ -24,6 +24,22 @@ set LCUR=1
 set RCUR=1
 set PA=L
 set ST=ready
+rem Layout (TCMD is full-screen): the panes split the live grid and the two
+rem info lines keep the bottom rows. The shell publishes the grid as
+rem %TUICOLS%/%TUIROWS% (80x25 on the landscape reference board, 80x97 on a
+rem portrait panel), so the pane height/width are derived, never 80x25.
+rem LH pane height (17 on the 25-row grid), LW/RX/RW the two pane columns
+rem (1..39 / 41..79), SY/HY the status and hint rows (21/23), HX the
+rem right-hand shortcut column.
+if "%TUICOLS%"=="" set TUICOLS=80
+if "%TUIROWS%"=="" set TUIROWS=25
+set /a LH=%TUIROWS%-8 > NUL
+set /a LW=(%TUICOLS%-2)/2 > NUL
+set /a RX=%LW%+2 > NUL
+set /a RW=%TUICOLS%-%RX% > NUL
+set /a SY=%TUIROWS%-4 > NUL
+set /a HY=%TUIROWS%-2 > NUL
+set /a HX=%TUICOLS%-25 > NUL
 draw hold on
 if errorlevel 1 goto nogfx
 rem Full screen: reclaim the header and on-screen keyboard rows so the
@@ -41,12 +57,12 @@ if "%LD%"=="%LDONE%" goto ldone
 dir /o:gn /b %APPDRIVE%%LD% > %APPDRIVE%/tmp/_LT.txt
 rem Line counts via draw list's /count (a for-loop counter would flood:
 rem this shell's `set /a` echoes its result).
-draw list 1 4 39 17 %APPDRIVE%/tmp/_LT.txt /count:LN /countonly
+draw list 1 4 %LW% %LH% %APPDRIVE%/tmp/_LT.txt /count:LN /countonly
 set LDONE=%LD%
 :ldone
 if "%RD%"=="%RDONE%" goto rdone
 dir /o:gn /b %APPDRIVE%%RD% > %APPDRIVE%/tmp/_RT.txt
-draw list 41 4 39 17 %APPDRIVE%/tmp/_RT.txt /count:RN /countonly
+draw list %RX% 4 %RW% %LH% %APPDRIVE%/tmp/_RT.txt /count:RN /countonly
 set RDONE=%RD%
 :rdone
 draw clear
@@ -58,9 +74,9 @@ if %RCUR% LSS 1 set RCUR=1
 if %RCUR% GTR %RN% set RCUR=%RN%
 if %RN% EQU 0 set RCUR=1
 rem Scroll offsets keep the cursor inside the visible page (h-2 rows).
-set /a LTOP=%LCUR% - 14
+set /a LTOP=%LCUR% - %LH% + 3 > NUL
 if %LTOP% LSS 1 set LTOP=1
-set /a RTOP=%RCUR% - 14
+set /a RTOP=%RCUR% - %LH% + 3 > NUL
 if %RTOP% LSS 1 set RTOP=1
 rem Active pane gets the bright list; inactive is dim.
 set LAC=7
@@ -68,13 +84,13 @@ set RAC=7
 if %PA%==L set LAC=15
 if %PA%==R set RAC=15
 rem Frame.
-draw box 1 1 80 3 double "Commander ★"
+gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "Commander ★"
 draw text 3 2 "dual-pane commander  (%APPNAME% on %APPDRIVE%)"
-draw text 55 2 "1:/ 2:/APPS"
-draw list 1 4 39 17 %APPDRIVE%/tmp/_LT.txt %LAC% 16 /top:%LTOP% /cursor:%LCUR% /title:%LD%
-draw list 41 4 39 17 %APPDRIVE%/tmp/_RT.txt %RAC% 16 /top:%RTOP% /cursor:%RCUR% /title:%RD%
-draw text 2 21 "pane %PA%  left=%LN% right=%RN%   status: %ST%"
-draw text 1 23 "j/k move  t pane  o open  x menu  s swap  1/2 root  p snap  q quit"
+draw text %HX% 2 "1:/ 2:/APPS"
+draw list 1 4 %LW% %LH% %APPDRIVE%/tmp/_LT.txt %LAC% 16 /top:%LTOP% /cursor:%LCUR% /title:%LD%
+draw list %RX% 4 %RW% %LH% %APPDRIVE%/tmp/_RT.txt %RAC% 16 /top:%RTOP% /cursor:%RCUR% /title:%RD%
+draw text 2 %SY% "pane %PA%  left=%LN% right=%RN%   status: %ST%"
+draw text 1 %HY% "j/k move  t pane  o open  x menu  s swap  1/2 root  p snap  q quit"
 draw refresh
 echo [M-TCMD-R]
 choice /C:jktosx12qzp /N /T:z,30 key?

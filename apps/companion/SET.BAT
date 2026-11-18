@@ -22,16 +22,17 @@ if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 title "Settings"
 echo [M-SET]
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::bar 1 3 single
 draw text 34 2 "PREFERENCES ★" 14
-draw box 1 4 80 16 single "Options"
+rem The Options panel takes the extra panel rows (4..19 on the classic grid).
+gosub %APPROOT%/APPLIB.BAT::panel 4 16 single "Options"
 draw text 5 6 "Settings persist in CONFIG.SYS"
 list "Preferences" "Brightness" "Volume" "Rotate" "Idle timeout" "Header" "Theme" "Fonts" "Cursor" "Keyboard page" "System" "Security" "Show settings" "Back" "Quick settings"
 on %errorlevel%+1 goto :brightness,:volume,:rotate,:idle,:header,:theme,:fonts,:cursor,:keyboard,:system,:security,:show_all,:back,:quick
 goto :back
 
 :brightness
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 33 2 "BRIGHTNESS" 14
 ask /v:val "Brightness (0-100)"
 if errorlevel 1 goto :main
@@ -42,7 +43,7 @@ dialog "Preferences" "Saved brightness=%val%." "OK"
 goto :main
 
 :volume
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 35 2 "VOLUME" 14
 ask /v:val "Volume (0-100)"
 if errorlevel 1 goto :main
@@ -55,7 +56,7 @@ goto :main
 :rotate
 echo [M-SET-ROTATE]
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 34 2 "ROTATE" 14
 list "Rotate" "0" "90" "180" "270" "Back"
 if %errorlevel% GEQ 4 goto :main
@@ -66,7 +67,7 @@ dialog "Preferences" "Rotation saved." "OK"
 goto :main
 
 :idle
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 31 2 "IDLE TIMEOUT" 14
 ask /v:val "Display-off after N secs (0 = off)"
 if errorlevel 1 goto :main
@@ -78,7 +79,7 @@ goto :main
 
 :header
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 35 2 "HEADER" 14
 list "Header" "Show" "Hide" "Mode AUTO" "Mode FULL" "Mode COMPACT" "Back"
 if errorlevel 255 goto :main
@@ -95,7 +96,7 @@ goto :main
 :theme
 echo [M-SET-THEME]
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 36 2 "THEME" 14
 list "Theme" "default" "amber" "ice" "mono" "Show" "Back"
 if errorlevel 255 goto :main
@@ -120,7 +121,7 @@ goto :theme
 :fonts
 echo [M-SET-FONT]
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 36 2 "FONTS" 14
 draw text 5 5 "Terminal is monospace-only; UI takes any font."
 list "Fonts" "Terminal font" "UI font" "Terminal size" "UI size" "Show fonts" "Defaults" "Back"
@@ -189,7 +190,7 @@ goto :fonts
 
 :cursor
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 35 2 "CURSOR" 14
 list "Cursor" "Block" "Bar" "Blink on" "Blink off" "Back"
 if errorlevel 255 goto :main
@@ -204,7 +205,7 @@ goto :main
 
 :keyboard
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 32 2 "KEYBOARD PAGE" 14
 list "Keyboard" "text_lower" "text_upper" "number" "symbols" "nav" "nav2" "Back"
 if errorlevel 255 goto :main
@@ -221,7 +222,7 @@ goto :main
 
 :system
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 35 2 "SYSTEM" 14
 list "System" "Set prompt" "Launch app at boot" "Wi-Fi autoconnect on" "Wi-Fi autoconnect off" "Back"
 if errorlevel 255 goto :main
@@ -245,7 +246,7 @@ goto :main
 :security
 echo [M-SET-SEC]
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 34 2 "SECURITY" 14
 draw text 5 5 "Owner info, passcode lock, private records."
 list "Security" "Owner info" "Conceal: show" "Conceal: mask" "Conceal: hide" "Boot lock on" "Boot lock off" "Set passcode" "Clear passcode" "Lock now" "Back"
@@ -276,7 +277,7 @@ goto :security
 
 :show_all
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 33 2 "ALL SETTINGS" 14
 config /b > %APPDRIVE%/_set.txt
 view %APPDRIVE%/_set.txt

@@ -11,14 +11,20 @@ if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 :files_menu
 title "File Tools"
 echo [M-FILES]
+rem Layout: the shell publishes the grid (80x25 landscape, 80x97 portrait).
+rem The Tools panel grows into the extra rows; the Status panel stays on the
+rem bottom (rows 17..24 of the classic grid).
+if "%TUICOLS%"=="" set TUICOLS=80
+if "%TUIROWS%"=="" set TUIROWS=25
+set /a SY=%TUIROWS%-6 > NUL
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::bar 1 3 single
 draw text 35 2 "FILE TOOLS ★" 14
-draw box 1 4 80 12 single "Tools"
+gosub %APPROOT%/APPLIB.BAT::panel 4 12 single "Tools"
 draw text 5 6 "Browse the app drive with the full TUI file browser"
 draw text 5 7 "Quick dir, search, trash, clipboard, notes"
-draw box 1 17 80 8 single "Status"
-draw text 5 19 "Use Browse for full-screen file picker  (%APPDRIVE%)"
+gosub %APPROOT%/APPLIB.BAT::footer 17 8 single "Status"
+draw text 5 %SY% "Use Browse for full-screen file picker  (%APPDRIVE%)"
 list "File Tools" "Browse SD (TUI)" "Quick dir" "Search files" "Trash browser" "Clipboard" "Note pad" "Hexview demo" "Commander" "Back"
 on %errorlevel%+1 goto :browse,:dir,:search,:trash,:clipboard,:notes,:hex_demo,:tcmd,:back
 goto :back
@@ -27,7 +33,7 @@ goto :back
 tui fullscreen on
 browse /v:BROWSE_RESULT
 if errorlevel 1 goto :browse_done
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 30 2 "SELECTED FILE" 14
 echo Selected: %BROWSE_RESULT%
 list "Open" "View (TUI)" "Hexview" "Back"
@@ -51,7 +57,7 @@ goto files_menu
 
 :hex_demo
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 32 2 "HEXVIEW DEMO" 14
 ask /v:hexfile "File for hexview"
 if errorlevel 1 goto files_menu
@@ -59,7 +65,7 @@ hexview %hexfile%
 goto files_menu
 
 :dir
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 35 2 "DIRECTORY" 14
 dir /a > %APPDRIVE%/_dir.txt
 view %APPDRIVE%/_dir.txt
@@ -89,7 +95,7 @@ goto files_menu
 
 :clipboard
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 35 2 "CLIPBOARD" 14
 clip
 echo.
@@ -118,7 +124,7 @@ goto clipboard
 :notes
 echo [M-FILES-NOTES]
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 35 2 "NOTE PAD" 14
 draw text 5 5 "Notes stored in %APPDRIVE%/NOTES"
 if not exist %APPDRIVE%/NOTES md %APPDRIVE%/NOTES > NUL

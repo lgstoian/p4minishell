@@ -10,10 +10,17 @@ rem =====================================================================
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 title "Fun & Demos"
 echo [M-FUN]
+rem Layout: the shell publishes the grid (80x25 landscape, 80x97 portrait).
+rem Panels take the extra rows; the inset demo boxes keep their authored
+rem columns (5..74) and grow downward on a taller panel.
+if "%TUICOLS%"=="" set TUICOLS=80
+if "%TUIROWS%"=="" set TUIROWS=25
+set /a BW=%TUICOLS%-10 > NUL
+set /a EH=%TUIROWS%-15 > NUL
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::bar 1 3 single
 draw text 35 2 "FUN / DEMOS 😀" 14
-draw box 1 4 80 10 single "Demos"
+gosub %APPROOT%/APPLIB.BAT::panel 4 10 single "Demos"
 draw text 5 6 "Melody, RGB, guessing, calc, snake, elite trader"
 list "Fun / Demos" "Melody (TUI)" "RGB effects" "Number guessing" "Calc playground" "Browse demo file" "TUI Demo" "Snake" "Elite Trader" "Back"
 on %errorlevel%+1 goto :melody,:rgb,:guess,:calc,:browse_demo,:tui_demo,:snake,:elite,:back
@@ -22,16 +29,19 @@ goto :back
 :tui_demo
 tui fullscreen on
 draw clear screen
-draw box 1 1 80 3 double "TUI DEMO"
-draw box 1 4 80 10 single "Boxes"
+gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "TUI DEMO"
+gosub %APPROOT%/APPLIB.BAT::panel 4 10 single "Boxes"
 draw box 5 6 20 6 single "Single"
 draw box 30 6 20 6 double "Double"
 draw box 55 6 20 6 rounded "Rounded"
-draw text 5 15 "Colors: PowerShell palette via ANSI"
+set /a FY1=%TUIROWS%-10 > NUL
+set /a FY2=%TUIROWS%-7 > NUL
+set /a FY3=%TUIROWS%-5 > NUL
+draw text 5 %FY1% "Colors: PowerShell palette via ANSI"
 ansi 1;31m Red  ansi 1;32m Green  ansi 1;33m Yellow
 ansi 1;34m Blue  ansi 1;35m Magenta  ansi 1;36m Cyan
-draw text 5 18 "Box chars: single double rounded + symbols"
-draw text 5 20 "Press any key..."
+draw text 5 %FY2% "Box chars: single double rounded + symbols"
+draw text 5 %FY3% "Press any key..."
 pause
 tui fullscreen off
 draw clear screen
@@ -40,9 +50,9 @@ goto main
 :melody
 tui fullscreen on
 draw clear screen
-draw box 1 1 80 3 double "MELODY"
+gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "MELODY"
 draw text 30 2 "Playing a little tune..." 14
-draw box 5 5 70 10 single "Notes"
+draw box 5 5 %BW% %EH% single "Notes"
 tone 523 180
 draw text 10 7 "C5 (523Hz)" 11
 delay 450
@@ -70,7 +80,7 @@ goto main
 
 :rgb
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::page single
 draw text 35 2 "RGB LED (WS2812)" 14
 list "RGB LED" "Rainbow" "Breath" "Solid red" "Solid blue" "Off" "Back"
 if errorlevel 255 goto main
@@ -82,13 +92,15 @@ if errorlevel 1 goto rgb_breath
 if errorlevel 0 goto rgb_rainbow
 goto main
 :rgb_rainbow
-draw text 5 10 "Rainbow effect..." 14
+set /a RY=%TUIROWS%-15 > NUL
+draw text 5 %RY% "Rainbow effect..." 14
 rgb rainbow 4
 if errorlevel 1 dialog "RGB" "LED unavailable." "OK"
 pause
 goto main
 :rgb_breath
-draw text 5 10 "Breath effect..." 14
+set /a RY=%TUIROWS%-15 > NUL
+draw text 5 %RY% "Breath effect..." 14
 rgb breath 3
 if errorlevel 1 dialog "RGB" "LED unavailable." "OK"
 pause
@@ -96,14 +108,18 @@ goto main
 :rgb_red
 rgb 255 0 0
 if errorlevel 1 dialog "RGB" "LED unavailable." "OK"
-draw box 10 10 20 5 single
-draw text 12 12 "RED" 12
+set /a RY=%TUIROWS%/2-2 > NUL
+set /a RT=%RY%+2 > NUL
+draw box 10 %RY% 20 5 single
+draw text 12 %RT% "RED" 12
 pause
 goto main
 :rgb_blue
 rgb 0 0 255
-draw box 10 10 20 5 single
-draw text 12 12 "BLUE" 9
+set /a RY=%TUIROWS%/2-2 > NUL
+set /a RT=%RY%+2 > NUL
+draw box 10 %RY% 20 5 single
+draw text 12 %RT% "BLUE" 9
 pause
 goto main
 :rgb_off
@@ -114,13 +130,13 @@ goto main
 :guess
 tui fullscreen on
 draw clear screen
-draw box 1 1 80 3 double "NUMBER GUESSING"
+gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "NUMBER GUESSING"
 draw text 20 2 "I am thinking of a number 1..100." 14
 calc secret = INT(RAN# * 100) + 1
 set tries=0
 :guess_loop
 set /a tries+=1
-draw box 5 5 70 5 single "Guess"
+draw box 5 5 %BW% 5 single "Guess"
 ask /v:g "Guess (1..100)"
 if errorlevel 1 tui fullscreen off & dialog "Guess" "Cancelled." "OK" & goto main
 if %g% EQU %secret% goto guess_win
@@ -135,13 +151,13 @@ goto main
 
 :calc
 draw clear screen
-draw box 1 1 80 3 single
+gosub %APPROOT%/APPLIB.BAT::bar 1 3 single
 draw text 32 2 "CALC PLAYGROUND" 14
 ask /v:expr "Expression (e.g. 2^10, sin(30))"
 if errorlevel 1 goto main
 if "%expr%"=="" goto main
 calc %expr% > %APPDRIVE%/_calc.txt
-draw box 5 5 70 10 single "Result"
+draw box 5 5 %BW% %EH% single "Result"
 view %APPDRIVE%/_calc.txt
 del /p %APPDRIVE%/_calc.txt > NUL
 goto main

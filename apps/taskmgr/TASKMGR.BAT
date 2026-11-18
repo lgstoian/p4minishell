@@ -20,7 +20,7 @@ echo [M-TMGR]
 tui fullscreen on
 :refresh
 draw clear screen
-draw box 1 1 80 3 double "TASK MANAGER ★"
+gosub %APPROOT%/APPLIB.BAT::page double "TASK MANAGER ★"
 draw text 5 5 "Jobs, services and events (mem reports heap + PSRAM). Pick an action:"
 start
 ps /O:C
