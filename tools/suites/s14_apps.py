@@ -898,25 +898,26 @@ def _companion_deep(dev, c):
         out = _run(dev, c, "config ROTATE /b", "config ROTATE /b", timeout=15)
         c.expect("rotation persisted %s" % value, value, out)
 
-    # Quick settings form: accept the prefilled values, dismiss the
-    # "Quick settings applied." dialog the app shows next, then make sure the
-    # shell (not the app menu) is the active owner. Each of the form and the
-    # dialog is a modal: it swallows the next line, so both need their own
-    # answer. The `config HEADER` change may also have closed the foreground
-    # app during its rebuild, so the app's back marker is not guaranteed.
+    # Quick settings form: accept the prefilled values, then keep answering
+    # modals until the SHELL owns the input. Three things can be in the way and
+    # each swallows one line: the form, the "Quick settings applied." dialog,
+    # and the SET menu itself (its `config HEADER` may also have closed the
+    # app). `ok` dismisses a dialog, `13` leaves the menu; the echo is the
+    # only truth about who owns the worker.
     set_stage = "quick settings"
     tail = _press(s, "14", "[M-SET-QUICK]", settle=3.0)
     quick_ok = b"[M-SET-QUICK]" in tail
     if quick_ok:
-        s.read_for(2.0)
-        s.write_line("ok")              # accept the prefilled form
-        s.read_for(2.0)
-        s.write_line("ok")              # dismiss "Quick settings applied."
-        quick_ok = _shell_echo(dev)
-        if not quick_ok:
-            s.write_line("13")          # still in SET: Back to the shell
-            quick_ok = _shell_echo(dev)
-    if not quick_ok:
+        quick_ok = False
+        for _attempt in range(8):
+            if _shell_echo(dev):
+                quick_ok = True
+                break
+            s.write_line("ok")
+            if _shell_echo(dev):
+                quick_ok = True
+                break
+            s.write_line("13")
         set_stage = "quick settings (shell never came back)"
     c.check("SET quick settings form", quick_ok,
             "" if quick_ok else set_stage)
