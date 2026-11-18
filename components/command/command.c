@@ -4847,6 +4847,7 @@ static void shell_command_hostname(int argc, char **argv)
 
 bool shell_execute_command_core(char *command)
 {
+
     char *argv[SHELL_ARGV_MAX];
     int argc;
     char *trimmed;
@@ -6795,6 +6796,7 @@ static bool shell_execute_command_segment(char *command)
 
 void shell_execute_command(char *command)
 {
+
     shell_chain_segment_t segments[SHELL_CHAIN_SEGMENT_MAX];
     /* The chain buffer must hold a full command line (up to
      * P4_CONFIG_COMMAND_BYTES); batch lines are a separate, smaller surface. */

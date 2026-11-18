@@ -5734,77 +5734,51 @@ static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *comman
         return;
     }
 
-    /* Classic set: whitespace-separated tokens. A token may be wrapped in
-     * quotes (a path with spaces, or the `("*.TXT")` form cmd.exe accepts) and
-     * every token carrying `*`/`?` is expanded against the filesystem. One
-     * token expands at a time, so `("*.TXT" "*.BAT")` yields both lists - the
-     * old whole-set expansion matched neither. */
-    {
-        const char *cursor = set_str;
+    /* Wildcard set: if the set contains `*` or `?`, expand it against the
+     * filesystem and iterate over matching paths. Otherwise fall through to
+     * the classic in-line token set. */
+    if (strchr(set_str, '*') != NULL || strchr(set_str, '?') != NULL) {
+        char **tokens = NULL;
+        int count = 0;
+        esp_err_t error = storage_expand_wildcard(set_str, &tokens, &count);
 
-        while (*cursor != '\0') {
-            char token[SHELL_SD_PATH_BYTES];
-            size_t used = 0;
-            char quote = 0;
-            char **matches = NULL;
-            int count = 0;
-            bool stop = false;
+        if (error != ESP_OK) {
+            shell_print_warning("for: could not expand %s (%s)", set_str, esp_err_to_name(error));
+            shell_record_warningf("for", "Wildcard expansion failed for %s", set_str);
+            free(set_str);
+            return;
+        }
 
-            while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
-                cursor++;
-            }
-            if (*cursor == '\0') {
-                break;
-            }
-            if (*cursor == '"' || *cursor == '\'') {
-                quote = *cursor++;
-            }
-            while (*cursor != '\0') {
-                if (quote != 0 && *cursor == quote) {
-                    cursor++;
-                    break;
-                }
-                if (quote == 0 && isspace((unsigned char)*cursor)) {
-                    break;
-                }
-                if (used + 1 < sizeof(token)) {
-                    token[used++] = *cursor;
-                }
-                cursor++;
-            }
-            token[used] = '\0';
-            if (used == 0) {
-                continue;
-            }
-            if (strchr(token, '*') != NULL || strchr(token, '?') != NULL) {
-                esp_err_t error = storage_expand_wildcard(token, &matches, &count);
-
-                if (error != ESP_OK) {
-                    shell_print_warning("for: could not expand %s (%s)", token,
-                                        esp_err_to_name(error));
-                    shell_record_warningf("for", "Wildcard expansion failed for %s",
-                                          token);
-                }
-                for (int i = 0; i < count; i++) {
-                    shell_for_substitute_and_run(do_command, var_name, matches[i]);
-                    if (for_check_break() || for_check_continue()) {
-                        stop = true;
-                        break;
-                    }
-                }
-                storage_free_wildcard_expansion(matches, count);
-            } else {
-                shell_for_substitute_and_run(do_command, var_name, token);
-                stop = for_check_break() || for_check_continue();
-            }
-            if (stop) {
+        for (int i = 0; i < count; i++) {
+            shell_for_substitute_and_run(do_command, var_name, tokens[i]);
+            if (for_check_break() || for_check_continue()) {
                 break;
             }
         }
+
+        storage_free_wildcard_expansion(tokens, count);
         free(set_str);
         return;
     }
 
+    /* Now iterate over the set */
+    {
+        char *save_ptr = NULL;
+        char *token = strtok_r(set_str, " \t", &save_ptr);
+
+        while (token != NULL) {
+            shell_for_substitute_and_run(do_command, var_name, token);
+
+            /* Check for goto/exit conditions that end the loop early */
+            if (for_check_break() || for_check_continue()) {
+                break;
+            }
+
+            token = strtok_r(NULL, " \t", &save_ptr);
+        }
+    }
+
+    free(set_str);
 }
 
 /**
