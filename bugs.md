@@ -19,7 +19,7 @@ Fixed entries are removed at each reset (their history lives in
 > is only closed when the fix is verified on hardware.
 
 **v1.4.3 round (2026-11-17):** firmware and `test/` build clean on both board
-profiles; on-board unit suite **687/0/2 on COM3 and COM6**; host lane 285/285
+profiles; on-board unit suite **699/0/2 on COM3 and COM6**; host lane 285/285
 (last run); fast suite tier green on both boards. Release suites: `s14_apps` 127/127,
 `s19_app_features` 37/37, `s20_website` 7/7, `s21_wikipedia` 13/13,
 `s22_canvas` 13/13, `s23_apps_usb` 9/9 (ADATA stick on COM6),

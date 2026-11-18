@@ -70,6 +70,23 @@ static uint8_t s_scrim_alpha = 0;
 static lv_obj_t *s_active_panel = NULL;
 static lv_obj_t *s_active_scrim = NULL;
 
+/**
+ * Forget the active panel when its surface deletes it.
+ *
+ * surf_reflow() re-applies that panel after a rotation, so the pointer must
+ * never outlive the object: a rotation landing between one surface's close
+ * (which deletes the panel) and the next surface's open used to make reflow
+ * test freed memory with lv_obj_is_valid(), faulting inside
+ * lv_obj_is_in_widget_tree (the Tab5 `dialog` + rotate crash).
+ */
+static void surf_panel_closed(lv_obj_t *panel)
+{
+    if (panel != NULL && panel == s_active_panel) {
+        s_active_panel = NULL;
+        s_active_scrim = NULL;
+    }
+}
+
 void modal_surf_set_alpha(uint8_t panel_alpha, uint8_t scrim_alpha)
 {
     s_panel_alpha = panel_alpha;
@@ -677,7 +694,7 @@ static void dialog_surface_close(void *ctx_ptr)
     dialog_ctx_t *ctx = (dialog_ctx_t *)ctx_ptr;
     if (ctx->timer) { xTimerStop(ctx->timer, 0); xTimerDelete(ctx->timer, 0); ctx->timer = NULL; }
     lvgl_port_lock(0);
-    if (ctx->panel) { lv_obj_del(ctx->panel); ctx->panel = NULL; }
+    if (ctx->panel) { surf_panel_closed(ctx->panel); lv_obj_del(ctx->panel); ctx->panel = NULL; }
     windows_exit_editor_mode();
     lvgl_port_unlock();
     s_dialog_active = NULL;
@@ -834,7 +851,7 @@ static void list_surface_close(void *ctx_ptr)
     list_ctx_t *ctx = (list_ctx_t *)ctx_ptr;
     if (ctx->timer) { xTimerStop(ctx->timer, 0); xTimerDelete(ctx->timer, 0); ctx->timer = NULL; }
     lvgl_port_lock(0);
-    if (ctx->panel) { lv_obj_del(ctx->panel); ctx->panel = NULL; }
+    if (ctx->panel) { surf_panel_closed(ctx->panel); lv_obj_del(ctx->panel); ctx->panel = NULL; }
     windows_exit_editor_mode();
     lvgl_port_unlock();
     s_list_active = NULL;
@@ -982,7 +999,7 @@ static void ask_surface_close(void *ctx_ptr)
         lvgl_port_unlock();
     }
     lvgl_port_lock(0);
-    if (ctx->panel) { lv_obj_del(ctx->panel); ctx->panel = NULL; ctx->ta = NULL; }
+    if (ctx->panel) { surf_panel_closed(ctx->panel); lv_obj_del(ctx->panel); ctx->panel = NULL; ctx->ta = NULL; }
     windows_exit_editor_mode();
     lvgl_port_unlock();
     s_ask_active = NULL;
@@ -1256,7 +1273,7 @@ static void fb_surface_close(void *ctx_ptr)
     /* Drop any row selection before the list objects disappear. */
     surf_text_sel_detach();
     lvgl_port_lock(0);
-    if (ctx->panel) { lv_obj_del(ctx->panel); ctx->panel = NULL; ctx->list = NULL; ctx->path_label = NULL; }
+    if (ctx->panel) { surf_panel_closed(ctx->panel); lv_obj_del(ctx->panel); ctx->panel = NULL; ctx->list = NULL; ctx->path_label = NULL; }
     windows_exit_editor_mode();
     lvgl_port_unlock();
     s_fb_active = NULL;
@@ -1500,7 +1517,7 @@ static void viewer_surface_close(void *ctx_ptr)
     if (ctx->content) { free(ctx->content); ctx->content=NULL; }
     surf_text_sel_detach();
     lvgl_port_lock(0);
-    if (ctx->panel) { lv_obj_del(ctx->panel); ctx->panel=NULL; ctx->ta=NULL; }
+    if (ctx->panel) { surf_panel_closed(ctx->panel); lv_obj_del(ctx->panel); ctx->panel=NULL; ctx->ta=NULL; }
     windows_exit_editor_mode();
     lvgl_port_unlock();
     s_viewer_active=NULL;
@@ -1793,7 +1810,7 @@ static void image_surface_close(void *ctx_ptr)
     }
     lvgl_port_lock(0);
     if (ctx->panel) {
-        lv_obj_del(ctx->panel); /* deletes the canvas node first */
+        surf_panel_closed(ctx->panel); lv_obj_del(ctx->panel); /* deletes the canvas node first */
         ctx->panel = NULL;
     }
     windows_exit_editor_mode();
@@ -2014,7 +2031,7 @@ static void hex_surface_close(void *ctx_ptr)
     if (ctx->content) { free(ctx->content); ctx->content=NULL; }
     surf_text_sel_detach();
     lvgl_port_lock(0);
-    if (ctx->panel) { lv_obj_del(ctx->panel); ctx->panel=NULL; ctx->ta=NULL; }
+    if (ctx->panel) { surf_panel_closed(ctx->panel); lv_obj_del(ctx->panel); ctx->panel=NULL; ctx->ta=NULL; }
     windows_exit_editor_mode();
     lvgl_port_unlock();
     s_hex_active=NULL;
@@ -2302,7 +2319,7 @@ static void form_surface_close(void *ctx_ptr)
             }
         }
     }
-    if (ctx->panel) { lv_obj_del(ctx->panel); ctx->panel = NULL; }
+    if (ctx->panel) { surf_panel_closed(ctx->panel); lv_obj_del(ctx->panel); ctx->panel = NULL; }
     windows_exit_editor_mode();
     lvgl_port_unlock();
     s_form_active = NULL;

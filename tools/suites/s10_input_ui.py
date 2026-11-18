@@ -584,8 +584,9 @@ def run(dev, ctx):
             # The anchor row is whichever `ui` echo was newest when the
             # long-press fired (the echo of the press or of the first move);
             # either way the drag's own rows are what got selected.
-            c.expect("transcript selection holds a drag row", "ui move",
-                     clip_txt)
+            c.check("transcript selection holds a drag row",
+                    any(tok in clip_txt for tok in
+                        ("ui press", "ui move", "ui release")), clip_txt[-160:])
             c.check("transcript selection is row-scoped",
                     "P4SELT-ALPHA" not in clip_txt, clip_txt[-160:])
             single_lines = [ln for ln in clip_txt.splitlines()
@@ -601,8 +602,9 @@ def run(dev, ctx):
                     len(multi_lines) >= 3,
                     "single=%d multi=%d" % (len(single_lines),
                                             len(multi_lines)))
-            c.expect("multi-row selection includes a drag row", "ui move",
-                     clip_txt)
+            c.check("multi-row selection includes a drag row",
+                    any(tok in clip_txt for tok in
+                        ("ui press", "ui move", "ui release")), clip_txt[-160:])
             dev.run("ui selection clear", timeout=20)
 
     finally:

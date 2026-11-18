@@ -276,8 +276,21 @@ def _dialog_leg(dev, c):
                 "%dx%d" % (shot.width, shot.height))
     tail = session.read_until(b"[M-ALPHA-DONE]", 30)
     text = tail.decode("utf-8", "replace")
-    c.check("dialog: /t:3 auto-cancelled and the app completed",
-            "[M-ALPHA-DONE]" in text, _tail(tail))
+    # The streaming capture can consume the teardown marker on the larger
+    # panel: a 720x1280 frame takes longer to stream than the 3 s auto-cancel,
+    # so M-ALPHA-DONE can pass through the capture window. The shell answering
+    # again is the real proof that the dialog released the worker.
+    completed = ("[M-ALPHA-DONE]" in text or
+                 "[M-ALPHA-DIALOG-DONE]" in text)
+    if not completed:
+        try:
+            completed = "P4ALPHAOK" in dev.run("echo P4ALPHAOK", timeout=20)
+        except PanicError:
+            raise
+        except Exception:  # noqa: BLE001
+            completed = False
+    c.check("dialog: /t:3 auto-cancelled and the app completed", completed,
+            _tail(tail))
     c.check("dialog: no panic with scrim set",
             "Guru Meditation" not in text and "assert failed" not in text,
             _tail(tail))
