@@ -898,35 +898,27 @@ def _companion_deep(dev, c):
         out = _run(dev, c, "config ROTATE /b", "config ROTATE /b", timeout=15)
         c.expect("rotation persisted %s" % value, value, out)
 
-    # Quick settings form: accept the prefilled values and verify they applied.
-    # Accepting runs `config HEADER ON`, which schedules a UI rebuild that by
-    # design closes the foreground TUI app, so wait for the shell rather than
-    # for a SET marker.
-    def _shell_alive(timeout=6):
-        try:
-            return "P4QOK" in dev.run("echo P4QOK", timeout=timeout)
-        except PanicError:
-            raise
-        except Exception:  # noqa: BLE001
-            return False
-
-    s.reset_input()
-    s.write_line("call SET.BAT::main")
-    quick_ok = _wait(s, "[M-SET]", 40)
+    # Quick settings form: accept the prefilled values, dismiss the
+    # "Quick settings applied." dialog the app shows next, then leave SET.
+    # The dialog is a real modal: it swallows shell lines until it is answered
+    # (the old code only waited for the shell, so it never dismissed it and
+    # every later step was eaten by the modal).
+    set_stage = "quick settings"
+    tail = _press(s, "14", "[M-SET-QUICK]", settle=3.0)
+    quick_ok = b"[M-SET-QUICK]" in tail
     if quick_ok:
-        s.read_for(4.0)
-        tail = _press(s, "14", "[M-SET-QUICK]", settle=3.0)
-        quick_ok = b"[M-SET-QUICK]" in tail
-        if quick_ok:
-            s.read_for(2.0)
-            s.write_line("ok")          # accept the prefilled form
-            quick_ok = False
-            for _ in range(10):
-                s.read_for(2.0)
-                if _shell_alive():
-                    quick_ok = True
-                    break
-                s.write_line("13")
+        s.read_for(2.0)
+        s.write_line("ok")              # accept the prefilled form
+        quick_ok = _wait(s, "[M-SET]", 15)
+        if not quick_ok:
+            # The dialog may have raced the form; answer it explicitly.
+            s.write_line("ok")
+            quick_ok = _wait(s, "[M-SET]", 15)
+    if quick_ok:
+        tail = _press(s, "13", "[M-SET-BACK]", settle=3.0)   # exit SET
+        quick_ok = b"[M-SET-BACK]" in tail
+    if not quick_ok:
+        set_stage = "quick settings (dialog not dismissed)"
     c.check("SET quick settings form", quick_ok, "")
     if quick_ok:
         out = _run(dev, c, "quick brightness", "config BRIGHTNESS /b", timeout=15)

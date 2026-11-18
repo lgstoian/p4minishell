@@ -2887,6 +2887,7 @@ static void shell_uart_console_task(void *arg)
                  * own tokens and never app input. */
                 bool worker_busy = shell_is_command_busy();
 
+
                 if ((modal_active || worker_busy) &&
                     shell_core_command_ops.modal_console_command != NULL &&
                     shell_core_command_ops.modal_console_command(trimmed)) {
