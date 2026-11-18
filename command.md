@@ -577,7 +577,7 @@ thin bar, plus blink period (`off`/0 = steady). Blink also retimes an open
 editor. Defaults from `P4_CONFIG_CURSOR_BLINK_MS` (shared with the editor
 timer). USB keyboard: arrows move, Ctrl+arrows word-jump, Home/End jump.
 
-### markdown <file> | markdown -e <text> | markdown on | off | markdown export <src> <out> [text|html|print]
+### markdown <file> | markdown -e <text> | markdown on | off | markdown export <src> <out> [text|html|print|epub]
 Render Markdown (CommonMark-ish subset: headings, nested lists, quotes,
 fences, GFM tables with alignment, task lists, bold/italic/strike/code,
 links as `text (url)`) through the ANSI SGR pipeline, so spans style it on
@@ -591,7 +591,7 @@ invocation. Batch scripts with literal `#`/`*` lines should use `/raw`.
 `markdown` command, which buffers full tables). Tables measure display width
 (ASCII 1, CJK 2) so CJK columns align.
 
-**`markdown export <src> <out> [text|html|print]`** writes `src` to `out` as a
+**`markdown export <src> <out> [text|html|print|epub]`** writes `src` to `out` as a
 portable document (writerdeck): `text` renders then strips SGR (the same
 plain-text bridge the viewer uses); `html` writes a standalone
 `<!DOCTYPE html>` reader page (embedded CSS, `<title>` from the source
@@ -600,11 +600,17 @@ links, escaped text) for sharing without extra assets; `print` lays the text
  out in fixed pages
  (`P4_CONFIG_PRINT_COLUMNS` x `P4_CONFIG_PRINT_ROWS`, default 80x60) with a
  `title   Page N` header and a form feed between pages — a PDF-less document for
- printing. Sources past 64 KB are refused, not truncated
- (`markdown export: ... is larger than 64 KB - not exported`); output that
+ printing. `epub` writes a one-chapter EPUB 3 book (`mimetype` first and
+ stored, `META-INF/container.xml`, OPF, nav, NCX, and one XHTML chapter
+ rendered by the same Markdown-to-HTML writer) that `epub open` reads on the
+ device and any EPUB reader can open elsewhere; there is one ZIP writer for
+ it (`zip_writer`), not a second packager. Sources past 64 KB are refused, not
+ truncated (`markdown export: ... is larger than 64 KB - not exported`);
+ output that
  would expand past `P4_CONFIG_MD_EXPORT_MAX_BYTES` (256 KB) is likewise
- refused unwritten. The write is atomic (`storage_write_text_file`). Pass
- exactly one format (`text|html|print`); naming two is a usage error. An
+ refused unwritten. The write is atomic (`storage_write_text_file`); an EPUB
+ write that fails part-way removes the partial archive. Pass
+ exactly one format (`text|html|print|epub`); naming two is a usage error. An
   exported `.html` serves over `httpd`
   (`httpd start`, then `http://<ip>/<name>.HTML`), and its images are
   relative-path references, so keep the page beside its image files (or serve
@@ -1399,10 +1405,14 @@ write error, invalid path), 2 on usage error (too many arguments).
 Report the emoji renderer or rescan the pack. The built-in **retro DOS
 fallback** is always active: every emoji codepoint maps deterministically to
 a CP437 glyph (smileys, hearts, marks, media, weather, food, transport,
-files, status symbols), so text never shows tofu and the same page renders
-identically every time. An optional third-party pack is read from
-`EMOJI/EMOJI.INI` on SD (then USB) and renders as **colour** glyphs: a real
-RGB565 image in LVGL labels and a representative colour per cell in the TUI.
+files, status symbols), and the TUI page, the browser and the HTML modal draw
+that glyph directly. LVGL chrome (labels, menus, app titles) can only draw a
+glyph the TUI font's cmap covers, so without a colour pack a symbol with no
+mapped glyph falls back to a box; reference apps keep titles/menus ASCII and
+put their glyph in a `draw box` header. An optional third-party pack is read
+from `EMOJI/EMOJI.INI` on SD (then USB) and renders as **colour** glyphs: a
+real RGB565 image in LVGL labels and a representative colour per cell in the
+TUI.
 A project-authored MIT sample pack ships in `apps/emoji/` (deploy with
 `python apps/push_apps.py <COM>`):
 
@@ -1674,7 +1684,7 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | goto <label> | Jump to a `:label` in the running batch file |
 | goto :eof | Jump to the end of the current batch file, unwinding its open setlocal scopes |
 | for %%v in (set) do cmd | Loop over literal tokens or a wildcard pattern |
-| for /f "opts" %%v in (file-set) do cmd | Loop over the lines of a file (or the active `< file`/pipe input); options: `eol=c` (default `;`, empty disables), `skip=n`, `delims=xyz`, `tokens=a,b,m-n,*`; a single-quoted set `in ('command')` iterates command output |
+| for /f "opts" %%v in (file-set) do cmd | Loop over the lines of a file (or the active `< file`/pipe input); options: `eol=c` (default `;`, empty disables), `skip=n` (empty skips nothing), `delims=xyz`, `tokens=a,b,m-n,*`; a single-quoted set `in ('command')` iterates command output |
 | for /L %%v in (start,step,end) do cmd | Count inclusively (negative step counts down; cap `P4_CONFIG_FORL_ITER_MAX`) |
 | for /A %%k in (PREFIX) do cmd | Iterate one `PREFIX[...]` array: `%%k` binds the index, the next letter the live value |
 | for /D %%v in (set) do cmd | Loop over directory names (wildcards match dirs; literals pass through) |
@@ -2626,7 +2636,7 @@ literal caret, not a continuation.
   (`P4_CONFIG_BATCH_LABEL_MAX` / `P4_CONFIG_BATCH_LABEL_BYTES`); extra labels
   are ignored with a `batch: too many labels` warning, so keep big apps under
   the cap.
-- `for %%var in (set) do command` loops over literal tokens or a single wildcard pattern (for example `for %%F in (*.txt) do echo %%F`)
+- `for %%var in (set) do command` loops over literal tokens or wildcard patterns (for example `for %%F in (*.txt) do echo %%F`)
 - `for /L %%v in (start,step,end) do command` numeric loops (negative step counts down; cap `P4_CONFIG_FORL_ITER_MAX`)
 - `for /A %%k in (PREFIX) do command` iterates one `PREFIX[...]` array (`%%k` = index, next letter = live value)
 - `for /D %%v in (set) do command` directory loops; `for /R [path] %%v in (set) do command` recursive file loops
@@ -2638,17 +2648,24 @@ literal caret, not a continuation.
 
 ### for — loops (interactive and batch)
 `for %var in (set) do command` runs `command` once per element of `set`, with
-`%var` substituted. `set` is a whitespace-separated token list or a single
-wildcard pattern expanded against the current directory:
+`%var` substituted. `set` is a whitespace-separated token list or a wildcard
+pattern expanded against the current directory:
 
 - `for %i in (a b c) do echo ITEM %i` — prints `ITEM a`, `ITEM b`, `ITEM c`
 - `for %f in (*.txt) do echo F %f` — runs once per matching `.txt` file
+- `for %f in ("*.TXT" "*.BAT") do echo F %f` — a quoted element is one token,
+  and each token carrying `*`/`?` is expanded on its own, so both file lists
+  are iterated (give each quoted wildcard its own quotes)
 - `for %i in (1 2 3) do set /a total=total+%i` — nested commands re-enter the
   pipeline, so pipes/redirection/variables work per-iteration
 
 At the interactive prompt the variable is written `%var`; inside batch files it
-is `%%var` (the batch-file escape for a literal `%`). The body may not contain
-the chain/pipe operators that the shell splits on before `for` runs.
+is `%%var` (the batch-file escape for a literal `%`). Variable expansion knows
+the difference: a `%...%` token is only treated as a reference when it is
+name-shaped (no whitespace, quotes, parentheses or `=`), so an interactive
+`for %f in (A.TXT) do echo %f` keeps its `%f` instead of pairing the two `%`
+and deleting the loop variable. The body may not contain the chain/pipe
+operators that the shell splits on before `for` runs.
 
 ### for /L — numeric loops
 
@@ -2747,7 +2764,10 @@ for /f "tokens=1,*" %%k in (pairs.txt) do echo KEY=%%k VAL=%%l
 Option values are space-separated, so a space cannot appear inside a custom
 `delims=` list (it terminates the value — rely on the default space+tab by
 omitting `delims`, or split on other characters; e.g. `mem` output parses
-with `delims==,b` + a label compare, see `apps/mood/MOOD.BAT`).
+with `delims==,b` + a label compare, see `apps/mood/MOOD.BAT`). An empty value
+is accepted where it is meaningful: `eol=` disables the terminator and
+`skip=` skips nothing (TCMD writes exactly that with the pane cursor at the
+top).
 
 The file-set may be an explicit filename, a wildcard (`(*.txt)` processes every
 matching file's lines), or empty `()` when a `< file` redirection / pipe stage
@@ -3131,7 +3151,7 @@ A literal `#` in cell text (e.g. bar `#` fills) is recolor-escaped by
 
 | Form | Meaning |
 |------|---------|
-| `tui status` | Show transcript rect, cols/rows (`80x25`), fullscreen state, header visibility, and the bound cell font (`cell font WxH (slot N of M)` or `(unbound)` when no grid is allocated). The pixel cell is chosen from the committed cell fonts (`components/tui/tui_fonts.c`, generated by `tools/gen_tui_font.py`) to fit the live transcript region. |
+| `tui status` | Show the transcript rect, the app viewport the grid is resolved against (keyboard reclaimed), cols/rows, fullscreen state, and the bound cell font (`cell font WxH (slot N of M)` or `(unbound)` when no grid is allocated). `grid fit` resolves the same app viewport it prints. The pixel cell is chosen from the committed cell fonts (`components/tui/tui_fonts.c`, generated by `tools/gen_tui_font.py`) to fit that viewport. |
 | `tui stats` | Print TUI frame pacing (see below), machine-readable. |
 | `tui stats reset` | Clear the TUI frame stats and reset the target frame rate to `P4_CONFIG_TUI_TARGET_FPS`. |
 | `tui stats target <fps\|off>` | Set the target frame rate used to count dropped frames. |
@@ -4719,7 +4739,7 @@ httpget /cookie clear
 
 ERRORLEVEL: 0 on HTTP 2xx, 1 on a network/HTTP failure, 2 on usage.
 
-### browser [<url> | back | forward | swipe <back|forward> | js <id> | css | cache [clear] | bookmark <add|list|del> ...]
+### browser [<url> | back | forward | swipe <back|forward> | links | link <n> | js <id> | css | cache [clear] | bookmark <add|list|del> ...]
 
 The on-device browser. `browser <url>` fetches an `http(s)` page (same
 HTTP/TLS/auth policy as `httpget`, including `user:pass@` Basic auth);
@@ -4740,7 +4760,10 @@ links, inline emphasis, and images. Images are fetched/read, decoded through the
 and drawn as a luminance-ramp ASCII grid (`P4_CONFIG_BROWSER_IMAGES`):
 each pixel becomes one shade glyph from the shared `ANSI_IMAGE_RAMP` (which never
 contains the LVGL recolor delimiter `#`, so no cell can lose its colour), coloured
-with the nearest DOS palette entry; alt text is the fallback. A centered element
+with the nearest DOS palette entry; alt text is the fallback. Images nested
+deeper than the render fetch cap (8 block levels) draw their alt text rather
+than running the network stack inside the recursion - article figures sit near
+the top and still load. A centered element
 (`text-align: center`, inherited from `body`) shifts its whole block into the
 page's content column.
 
@@ -4798,6 +4821,13 @@ bindings are `document.getElementById`/`body`/`title`/`write`, element
 `onclick` registers a tappable link that runs `browser js x`.
 
 `browser js <id>` dispatches that element's click handler and re-renders.
+`browser links` lists every tappable region on the rendered page, numbered in
+page order from 0 (each line is the command a tap would run). `browser link <n>`
+follows region `n` synchronously: it resolves a relative `href` against the
+current page and runs the resulting `browser ...` command, so a batch script
+can read a page and follow a link on the next line. A tap on the glass uses the
+same resolver. `#fragment`, `javascript:` and `mailto:` targets have no
+navigable page and report an error (`browser: link n has no navigable target`).
 `browser css` prints the parsed rules and the computed body/h1/th styles (a
 diagnostic). The first render enters TUI mode so the page is visible;
 `draw close` (or `tui fullscreen off`) returns to the transcript. After
@@ -4808,6 +4838,9 @@ runs used by the suites.
 Caching (both in PSRAM, `components/browser/`):
 - **Image cache** — the decoded cell grid per source URL. A hit skips both the
   network fetch and the PNG/JPEG decode, so re-renders and back/forward are cheap.
+  A URL that could not be decoded (GIF, broken file, oversized photo) goes into
+  a negative cache, so the same spacer image referenced dozens of times is not
+  re-fetched per reference.
 - **Page cache** — a whole rendered page (cells, link regions, address bar) per
   URL. A hit restores it by `memcpy`: no fetch, no parse, no render. This is what
   makes `browser back` / `browser forward` instant.
@@ -4819,6 +4852,8 @@ Caching (both in PSRAM, `components/browser/`):
 browser http://example.com/
 browser http://user:pass@host/private.html
 browser sd:/WEB/INDEX.HTML
+browser links           # numbered tappable regions
+browser link 3          # follow region 3 (relative href resolved here)
 browser back
 browser forward
 browser swipe back      # gesture entry point (also `browser swipe forward`)
@@ -4998,9 +5033,19 @@ epub extract <n> <file>   Extract resource (image, CSS, font) by manifest index
 
 Navigation:
 - Chapters follow the OPF spine order (linear reading order).
-- TOC entries (from NCX or nav.xhtml) provide hierarchical navigation.
-- `epub goto <n>` moves by spine index; `epub toc <n>` jumps by TOC entry.
-- `epub next`/`prev` move sequentially through the spine.
+- TOC entries (from NCX or nav.xhtml) provide hierarchical navigation; a book
+  without a TOC reports `epub: no table of contents` instead of failing.
+- `epub goto <n>` moves by spine index; `epub toc <n>` jumps by the 0-based
+  TOC entry number printed by `epub toc`. Each TOC entry is matched to its
+  spine document when the book opens, so the jump lands on the chapter that
+  contains it. TOC entries that do not resolve to a spine item are still
+  listed but refuse the jump.
+- `epub open` selects chapter 1 (spine index 0), so `epub read` works
+  immediately after opening; `epub next`/`prev` move sequentially.
+- The reader extracts into the card's shared temp directory
+  (`storage_temp_dir()/epub`), not a hard-coded `/sd` path, so it works on
+  either board and when the card is mounted elsewhere. The command worker
+  stack is not used for the chapter/TOC tables.
 
 Examples:
 ```

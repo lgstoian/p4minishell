@@ -29,6 +29,9 @@ ad-hoc PASS/FAIL bookkeeping. Import it; do not reimplement.
   (`px`/`region_mean`/`count_near`/`to_image`/`save_png`, `diff_ratio`).
 - `p4test/sdbridge.py` — `push_file`/`push_local`/`pull_file` over the
   firmware `receive`/`send` channels (CRC-checked).
+- `p4test/sdbridge_selftest.py` — board-free exercise of the receive reply
+  parser (partial ACKs, split replies, a >1 MB push, CRC failure); run
+  `python tools/p4test/sdbridge_selftest.py` after touching the protocol.
 - `p4test/perf.py` — `parse_perf_report` (the `gfx stats`/`tui stats` line),
   `FrameStats` + smoothness score, `measure_markers`.
 - `p4test/device.py` — `Device` facade (boot/run/screenshot/deploy, and the
@@ -332,7 +335,8 @@ holder per port.
 - `make_release.py` — assemble the artifacts a public release ships (the
   host-side counterpart to `release.md`): `bins` merges bootloader + partition
   table + app from a build dir into one flashable image (esptool `merge_bin`),
-  `srczip` archives the committed tree (`git archive`), `push <COMx>` sequences
+  `srczip` archives the committed tree (`git archive`) without the refetchable
+  `managed_components/` and adds `RESTORE.md`, `push <COMx>` sequences
   the SD pushers (companion → apps → assets → templates → dicts → fonts →
   pkgs), and `manifest` writes `release/SHA256SUMS`. `all` runs bins + srczip +
   manifest; `--dry-run` on any subcommand prints the actions. It never flashes

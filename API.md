@@ -1105,7 +1105,7 @@ int tui_selftest_check(const char **fail_out);    /* aggregate: palette + covera
 ```
 
 - `tui_draw_box`/`tui_draw_line` honor style and title via `tui_cell_set` (`components/tui/tui.c:129`) with full UTF-8 `SH_BOX_*`; `tui_flush` (`components/tui/tui.c:620`) renders fg/bg via `lv_label` recolor `#RRGGBB` per fg run using `ansi_get_palette_color`.
-- `tui status` (command layer) reports `transcript rect`, `cols/rows`, `fullscreen`, and `cell font WxH (slot N of M)` or `(unbound)`, `tui clear`/`tui fullscreen on|off`/`tui refresh`/`tui selftest` dispatch here.
+- `tui status` (command layer) reports `transcript rect`, the `app viewport` the grid is resolved against, `cols/rows`, `fullscreen`, `grid fit`, and `cell font WxH (slot N of M)` or `(unbound)`, `tui clear`/`tui fullscreen on|off`/`tui refresh`/`tui selftest` dispatch here.
 - `draw` batch verb (`components/command/command.c`) auto-enters TUI via `tui_init` when no TUI/modal surface is active, otherwise reuses the active buffer; batch verbs `draw box`/`line`/`fill`/`text`/`clear`/`window`/`fullscreen` map directly to these primitives.
 - Prompt fixed: `main.c:112` input line and `modal_surf.c:412` `ask` placeholder use `shell_prompt_render_plain()` (`components/shell/shell.c:412`); screenshot debug loop `grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py` crops to transcript rect for pixel-perfect verification.
 

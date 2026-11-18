@@ -22,7 +22,12 @@ open bugs see [`bugs.md`](bugs.md).
   (`components/font/emoji_core.c`) decides what is emoji and maps it to a
   CP437-style DOS glyph from a curated table (smileys, hearts, marks, media,
   weather, food, transport, files, status symbols) with deterministic range
-  defaults, so text can never show tofu. The built-in map is the default pack:
+  defaults. The TUI page, the browser and the HTML modal draw the retro glyph
+  itself, so a mapped symbol always renders there. LVGL chrome (labels, menus,
+  app titles) can only draw a glyph the TUI font covers: without a colour pack,
+  a symbol with no mapped glyph in that font falls back to a box. Reference
+  apps therefore keep titles and menus ASCII and put the retro glyph in a
+  `draw box` header. The built-in map is the default pack:
   authored here, MIT, bundled with the firmware - `licence.md` records it.
   `components/emoji/` adds optional third-party packs from
   `EMOJI/EMOJI.INI` on SD or USB (`HEXCODEPOINT=FILE.BMP|PNG`, optional
@@ -107,6 +112,31 @@ open bugs see [`bugs.md`](bugs.md).
   store (Parsoid's `data-mw` JSON on Wikipedia) used to leak its tail into the
   document as text (`{{cite web ...}}`); the scanner now consumes the rest of
   an over-long name/value safely.
+- **Tappable links the scripts can drive.** The page's link registry - the one
+  the touch overlay already used - now has a serial face: `browser links`
+  lists every tappable region with the command a tap would run, and
+  `browser link <n>` resolves a relative `href` against the current page and
+  follows it synchronously, so a batch script can read the page and follow a
+  link on the next line. A tap on the glass uses the same resolver, so a
+  relative link works there too; `#fragment`, `javascript:` and `mailto:`
+  targets are recognised and refused instead of being executed as a path.
+- **EPUB export from the writerdeck.** `markdown export <src> <out> epub`
+  packages a document as a one-chapter EPUB 3 book that this device's own
+  reader opens: `mimetype` first and stored, container, OPF, a nav document,
+  an NCX and one XHTML chapter rendered by the existing Markdown-to-HTML
+  writer. A new stored-entry `zip_writer` is the *one* ZIP write path (the
+  reader stays the one read path); a failed write removes the partial file,
+  and sources/output keep the writerdeck 64 KB / 256 KB caps.
+- **A grid that follows the panel.** The logical TUI grid is no longer a
+  hard-coded 80x25: `tui_grid_resolve()` keeps the documented 80 columns
+  whenever a committed cell still fits them (so app frames authored for 80
+  columns never clip) and turns the extra height into more rows (a 720x1168
+  app viewport on a 720x1280 panel becomes 80x97 on the 8x12 cell); only a
+  panel too narrow for 80 columns falls back to an aspect grid. Rotation and
+  fullscreen reflow the live grid in place - cell, alt-screen and page buffers
+  move together and the overlapping content is copied - so a running app keeps
+  its drawing instead of being restarted. The resolver is pure and unit-tested
+  for portrait, landscape and a tiny viewport.
 
 ### Changed
 
@@ -128,14 +158,58 @@ open bugs see [`bugs.md`](bugs.md).
 - New `s23_apps_usb` suite proves drive-aware apps end-to-end (USB fixture,
   SD fixture, HYBRID from USB); `test_css_color.c` and `test_emoji.c` cover
   the shared colour parser and emoji core on the board and host lanes.
+- `tui status` now prints an `app viewport` line (the rect the grid is resolved
+  against, with the keyboard reclaimed) next to `transcript rect`, and
+  `grid fit` reports that same viewport. The two regions used to be printed as
+  if they were one, which made their heights look contradictory in tests.
+
+### Fixed
+
+- **Browser markup and renderer safety.** An unquoted attribute value is no
+  longer truncated at `/` (`src=/s.js` used to become `src=` and leak the rest
+  into the document), and `href`/`src` now decode character references
+  (`&amp;`) before they are stored, so fetches use the real URL. Inline
+  recursion is capped at 24 levels: `render_inline_node` frames are about
+  670 bytes and a real news discussion page overflowed the command worker's
+  stack there; past the cap the subtree is emitted as flat text. Images nested
+  deeper than the image-fetch cap (8 block levels) draw their alt text instead
+  of running the network stack inside the render recursion. A negative image
+  cache records undecodable URLs, so a page that references the same broken or
+  unsupported image dozens of times does not refetch it per reference.
+- **ZIP CRC verification.** The extraction paths seeded CRC-32 with 0 and
+  compared the raw accumulator with the entry's stored CRC; a ZIP CRC is
+  seeded with `0xFFFFFFFF` and inverted at the end, so the check rejected every
+  spec-compliant archive - and every EPUB, because an EPUB is a ZIP. Both the
+  stored and the deflated path now match zlib's CRC-32, and a mismatch is still
+  a hard failure.
+- **The EPUB reader works on a real card.** `epub open` extracted into a
+  hard-coded `/sd/tmp/...` mount point the firmware never creates, so every
+  open failed; it now asks `storage_temp_dir()` and creates an `epub/`
+  subdirectory there. The command layer's chapter (16 spine items) and TOC
+  (64 entries) arrays moved off the command worker's stack, where they
+  overflowed it on entry; `epub toc` no longer reboots a bookless shell, and
+  the `%*s` transcript format that could wedge the worker is built explicitly.
+  NCX (EPUB2) and nav.xhtml (EPUB3) are actually parsed now, TOC entries are
+  linked to their spine index, so `epub toc <n>` (unreachable before because a
+  duplicate command-table entry always listed instead) jumps to the right
+  chapter, and a book opens on chapter 1 so `epub read` works right after
+  `epub open`.
+- **Batch loop parsing.** An interactive `for %v in (...) do ...` no longer
+  loses its loop variable to variable expansion: a `%...%` token that contains
+  whitespace, quotes, parentheses or `=` is not a name-shaped reference and
+  stays literal. A quoted set element is one token and each token carrying
+  `*`/`?` is expanded on its own, so `("*.TXT" "*.BAT")` yields both file
+  lists. `for /f "skip="` with an empty value now means skip nothing instead
+  of a malformed option (TCMD writes it with the pane cursor at the top), just
+  as an empty `eol=` disables the line terminator.
 
 ### Verified
 
-- Firmware builds clean on both profiles (JC1060P470C, M5Stack Tab5) and the
+- Firmware builds on both profiles (JC1060P470C, M5Stack Tab5) and the
   standalone `test/` project builds for both; the on-board unit suite is
-  **682/0/2 on COM3 and COM6** (the 16 new colour/emoji/alpha cases included);
-  the host lane is **284/284**; `green_guard` (740), `comment_index` and
-  `breadcrumbs` pass; `tools/harness/verify.py` is green.
+  **687/0/2 on COM3 and COM6** (the late v1.4.3 browser/grid/for cases
+  included); the host lane is **285/285 (last run)**; `green_guard` (745),
+  `comment_index` and `breadcrumbs` pass; `tools/harness/verify.py` is green.
 - COM3/COM6 hardware: `version` reports v1.4.3; `emoji list/check/path` and a
   real colour pack render in the transcript (LVGL) and the TUI; `html`
   blocks and closes on Esc and `html /no` stays non-blocking. Suites:
@@ -147,6 +221,13 @@ open bugs see [`bugs.md`](bugs.md).
   USB-installed apps were invisible to `launch`.
 - Static DIRAM dropped from 396,950 to 315,022 bytes used (48,442 -> 130,370
   free) with the image size unchanged.
+- The late v1.4.3 browser/EPUB/UI round was verified without a board: the
+  M5Stack Tab5 profile builds (its only compiler warnings are the pre-existing Expat
+  `XML_GetCurrentLineNumber` deprecation notes in `epub.c`/`epub_ncx.c`), the
+  counts above include the new `tui_grid_resolve` and interactive-`for` cases,
+  and `tools/p4test/sdbridge_selftest.py` exercises the receive reply parser
+  (including a 2.5 MB transfer). Link taps on glass and a >1 MB `push_file`
+  over a real cable still need a board pass.
 
 ---
 

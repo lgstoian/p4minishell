@@ -9,16 +9,93 @@ suite call these instead of re-implementing ACK pacing or SDFX framing.
 from __future__ import annotations
 
 import os
+import re
 import struct
 import time
 import zlib
-from typing import Optional
+from typing import Optional, Tuple
 
 from .session import DeviceSession, P4Error
 
 CHUNK = 4096
 READY = b"=== RX READY ==="
 DONE = b"=== RX DONE ==="
+# Success line the device prints *after* DONE. Accepting it as a second proof
+# matters for a large transfer: the footer and the transcript's success line
+# are queued behind ~1 MB of ACKs, and a busy console can deliver the line
+# after the reply window that held DONE has expired.
+WROTE_RE = re.compile(rb"receive: wrote (\d+) bytes")
+ANSI_RE = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]")
+# Error text the receive engine prints on a real failure (the device removes
+# the partial destination and never writes DONE). The transfer must still be
+# reported as a failure, and the device's own reason is the useful one.
+ERROR_WORDS = (
+    b"fail", b"incomplete", b"mismatch", b"timed out", b"cannot",
+    b"not present", b"out of memory", b"invalid",
+)
+
+
+def _parse_ack(reply: bytes) -> Tuple[Optional[int], bool]:
+    """Parse one reply chunk into ``(cumulative, done)``.
+
+    The device answers every accepted chunk with ``RX <cumulative>\\n``. A
+    console under load can merge that line with transcript/log text and can
+    coalesce several ACKs, so the *last* complete ``RX <n>`` line in the chunk
+    wins and non-ACK lines are ignored. ``DONE`` anywhere means the exchange
+    ended (the caller decides whether that was expected yet).
+    """
+    clean = reply.replace(b"\r", b"")
+    cumulative = None
+    for line in clean.split(b"\n"):
+        line = line.strip()
+        if not line.startswith(b"RX "):
+            continue
+        try:
+            cumulative = int(line[3:].split()[0])
+        except (IndexError, ValueError):
+            continue
+    return cumulative, DONE in clean
+
+
+def _reply_error(reply: bytes) -> Optional[str]:
+    """The device's ``receive:`` error line from @p reply, if it carries one."""
+    clean = ANSI_RE.sub(b"", reply.replace(b"\r", b""))
+    for line in clean.split(b"\n"):
+        line = line.strip()
+        if b"receive:" not in line:
+            continue
+        lowered = line.lower()
+        if any(word in lowered for word in ERROR_WORDS):
+            return line.decode("utf-8", "replace")
+    return None
+
+
+def _wrote_size(reply: bytes) -> Optional[int]:
+    """Byte count from the device's success line in @p reply, if present."""
+    match = WROTE_RE.search(ANSI_RE.sub(b"", reply))
+    return int(match.group(1)) if match is not None else None
+
+
+def _read_reply_line(dev: DeviceSession, timeout: float) -> Optional[bytes]:
+    """Read one newline-terminated reply line, or None on timeout.
+
+    ``DeviceSession.read_until`` returns through the first newline; when its
+    window expires first it returns the partial bytes *and* pushes them back
+    into the session buffer. So this only accepts a complete line and otherwise
+    retries: a split ``RX 1...`` must not be parsed as a much smaller count,
+    and must not be concatenated with its own pushed-back copy.
+    """
+    end = time.time() + timeout
+
+    while True:
+        remaining = end - time.time()
+        if remaining <= 0:
+            return None
+        chunk = dev.read_until(b"\n", remaining)
+        if not chunk:
+            return None
+        if chunk.endswith(b"\n"):
+            return chunk
 
 
 def push_file(dev: DeviceSession, remote: str, data: bytes,
@@ -61,37 +138,71 @@ def _push_file_once(dev: DeviceSession, remote: str, data: bytes,
         raise P4Error("receive %s: no READY (%r)" % (remote, ready[-120:]))
     dev.read_until(b"\n", 2.0)  # drop the newline after READY
 
+    # ACK pacing: keep ONE chunk in flight. The device's count is how many
+    # bytes it has written, and its USB ring can hold a remainder of the last
+    # write; writing the next chunk before that remainder is acknowledged
+    # either overruns the ring (which drops bytes under a burst) or appends
+    # data after a queued tail. So write only when `acked == sent`, and let a
+    # partial ACK drain through the replies that follow.
     sent = 0
-    dev.write(data[:CHUNK])
-    sent = min(CHUNK, size)
-    ack_deadline = time.time() + 30.0
-    while True:
-        ack = dev.read_until(b"\n", timeout)
-        if not ack:
-            raise P4Error("receive %s: no ACK" % remote)
-        ack = ack.replace(b"\r", b"")
-        if DONE in ack:
-            return
-        lines = [ln for ln in ack.split(b"\n") if ln.strip().startswith(b"RX ")]
-        if not lines:
+    acked = 0
+    if size > 0:
+        nxt = min(CHUNK, size)
+        dev.write(data[0:nxt])
+        sent = nxt
+    stall_deadline = time.time() + timeout
+    while acked < size:
+        reply = _read_reply_line(dev, max(1.0, stall_deadline - time.time()))
+        if reply is None:
+            raise P4Error("receive %s: no ACK at %d/%d bytes"
+                          % (remote, acked, size))
+        cumulative, done = _parse_ack(reply)
+        if done:
+            # A footer before every byte was acknowledged means the exchange
+            # ended early; do not report a truncated file as success.
+            raise P4Error("receive %s: DONE at %d/%d bytes"
+                          % (remote, acked, size))
+        if cumulative is None:
+            error = _reply_error(reply)
+            if error is not None:
+                raise P4Error("receive %s: %s" % (remote, error))
             # Interleaved log text (Wi-Fi chatter etc.) is not an ACK: skip it
-            # and keep reading instead of failing the transfer.
-            if time.time() > ack_deadline:
-                raise P4Error("receive %s: bad ACK %r" % (remote, ack[-80:]))
+            # and keep reading. The stall deadline is only refreshed by an ACK
+            # that moves the count, so a wedged device cannot loop forever.
+            if time.time() > stall_deadline:
+                raise P4Error("receive %s: bad ACK %r" % (remote, reply[-80:]))
             continue
-        cum = int(lines[-1].strip()[3:])
-        if cum >= size:
-            break
-        if sent < size:
+        if cumulative > sent:
+            raise P4Error("receive %s: ACK %d beyond %d bytes sent"
+                          % (remote, cumulative, sent))
+        if cumulative > acked:
+            acked = cumulative
+            stall_deadline = time.time() + timeout
+        if acked >= sent and sent < size:
             nxt = min(sent + CHUNK, size)
             dev.write(data[sent:nxt])
             sent = nxt
 
     crc = zlib.crc32(data) & 0xFFFFFFFF
     dev.write(struct.pack("<I", crc))
-    done = dev.read_until(DONE, 15.0)
-    if DONE not in done:
-        raise P4Error("receive %s: no DONE (%r)" % (remote, done[-120:]))
+    # The CRC/rename/footer is the part that used to be given only 15 s. A
+    # large book can spend longer in that tail than the data ACKs did, so this
+    # window is the transfer timeout (90 s by default) and DONE *or* the
+    # device's own "receive: wrote <n> bytes" line proves the file landed.
+    deadline = time.time() + timeout
+    while True:
+        reply = _read_reply_line(dev, max(1.0, deadline - time.time()))
+        if reply is None:
+            raise P4Error("receive %s: no DONE after CRC (%d bytes sent)"
+                          % (remote, size))
+        if DONE in reply or _wrote_size(reply) == size:
+            return
+        error = _reply_error(reply)
+        if error is not None:
+            raise P4Error("receive %s: %s" % (remote, error))
+        if time.time() > deadline:
+            raise P4Error("receive %s: no DONE (last reply %r)"
+                          % (remote, reply[-80:]))
 
 
 def push_local(dev: DeviceSession, local: str, remote: Optional[str] = None,

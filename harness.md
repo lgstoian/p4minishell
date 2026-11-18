@@ -111,7 +111,7 @@ python3 tools/host_unit_run.py --static   # manifest/orphan/case-count gates
 python3 tools/host_gen_runner.py --check  # generated runner is up to date
 ```
 
-- **Coverage today: 285 cases** - the leaf components with no board
+- **Coverage today: 285 cases** (last run) - the leaf components with no board
   dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`, plus the
   `strutil`/`p4heap` helpers they use), the hardware-free halves of the shell
   (`shell_core.c`: text helpers, statement scanner, history store, abort/busy,
@@ -153,9 +153,10 @@ python3 tools/host_gen_runner.py --check  # generated runner is up to date
 ## 3. Layer 1 — on-target unit tests (Unity)
 
 Pure/headless logic runs on the P4 in `test/` (Unity; the static case count is
-**685** after the browser-cache round, which added the 6 `test_browser_cache.c`
-cases - refresh the hardware count with `tools/unit_run.py`; includes the software
-AES-256-GCM vectors in `test_sw_gcm.c`).
+**745** after the v1.4.3 rounds - the browser-cache, grid-resolve and
+interactive-`for` cases included - refresh the hardware count with
+`tools/unit_run.py`; includes the software AES-256-GCM vectors in
+`test_sw_gcm.c`).
 
 ```powershell
 cd test

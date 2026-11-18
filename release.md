@@ -54,9 +54,10 @@ last campaign:
 ## 1. Preflight
 
 1. **Working tree** — everything intended is committed and the tree is clean
-   (`git status`). Generated files (`build*/`, `sdkconfig.*`, `managed_components/`,
-   `release/`, `screenshots/`, `assets_out/`) are git-ignored and must not be
-   staged.
+   (`git status`). Generated files (`build*/`, `sdkconfig.*`, `release/`,
+   `screenshots/`, `assets_out/`) are git-ignored and must not be staged.
+   (`managed_components/` is tracked and intentionally stays tracked; only the
+   source zip omits it.)
 2. **Static gates** — no `// AI:` comments, the machine-readable tags are
    valid, the breadcrumb map is current, and no test is vacuous (see
    [`ai-context.md`](ai-context.md) §Audit and Hardening Rules and
@@ -147,7 +148,7 @@ python tools/make_release.py bins --board m5stack_tab5 --build-dir build-tab5 --
 # Per-board ESP32-C6 co-processor app images (staged from the C6 build dirs)
 python tools/make_release.py c6
 
-# Clean source zip (tracked files only) + SHA256SUMS
+# Source zip (tracked files, refetchable managed_components/ omitted) + SHA256SUMS
 python tools/make_release.py srczip
 python tools/make_release.py manifest
 ```
@@ -159,7 +160,7 @@ Artifacts produced under `release/`:
 | `p4minishell-<board>.bin` | bootloader + partition table + app, merged, flash at `0x0` | `make_release.py bins` |
 | `p4minishell-tests-<board>.bin` | unit-test app image (when `--test-bin` given) | build + `bins --test-bin` |
 | `esp32c6_hosted_slave-<board>.bin` | ESP32-C6 co-processor app image (per board) | `make_release.py c6` |
-| `p4minishell-src.zip` | committed source tree (`git archive`) | `make_release.py srczip` |
+| `p4minishell-src.zip` | committed source tree minus `managed_components/`, plus `RESTORE.md` (`git archive`) | `make_release.py srczip` |
 | `SHA256SUMS` | checksums of the above | `make_release.py manifest` |
 
 Flash the merged image with a single `esptool write_flash 0x0` (or `idf.py
@@ -230,13 +231,16 @@ the archive tool, not a golden image.
 
 - **Source zip clean** — `git archive` ships tracked files only; confirm the zip
   has no `build*/`, `sdkconfig.*`, `release/`, logs, or screenshots. The vendored
-  `managed_components/` **is** included on purpose (the reference-board BSP and
-  the pinned ESP-Hosted/LVGL/esp_h264 trees are committed so a clone builds
-  without network fetches).
+  `managed_components/` (430 MB of the 480 MB tree) is **omitted** to keep the
+  download small: `dependencies.lock` pins it and the archive's `RESTORE.md`
+  tells the recipient to run `idf.py reconfigure` and then re-apply
+  `tools/managed_patches.patch`. The repo still tracks the directory; only this
+  artifact leaves it out.
 - **Licenses present** — `LICENSE` + [`licence.md`](licence.md) (MIT + the
-  third-party table) ship with the source; vendored component `LICENSE`s
-  (`managed_components/`, `boards/m5stack_tab5/board_bsp/` under Apache-2.0,
-  `assets/fonts/` DejaVu/OFL) are preserved. Keep `icon/icon.png` (70 MB master)
+  third-party table) ship with the source; component `LICENSE`s stay with the
+  full tracked tree and arrive again with the components `idf.py reconfigure`
+  fetches (`boards/m5stack_tab5/board_bsp/` under Apache-2.0,
+  `assets/fonts/` DejaVu/OFL are committed in the zip). Keep `icon/icon.png` (70 MB master)
   out of any bundle — only the derivatives are committed.
 - **No secrets** — no keys, tokens, Wi-Fi credentials, or `.priv.pem` files in
   the tree or the zip. `pkg` signing keys stay with the distributor.

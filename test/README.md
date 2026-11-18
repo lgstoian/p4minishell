@@ -1,4 +1,4 @@
-# P4MiniShell Unit Tests (firmware v1.4.1)
+# P4MiniShell Unit Tests (firmware v1.4.3)
 
 This directory contains the unit tests for the P4MiniShell components. They use
 the Unity framework (included in ESP-IDF) and run in two places:
@@ -8,9 +8,10 @@ the Unity framework (included in ESP-IDF) and run in two places:
   ESP-IDF `linux` target, 285 cases at v1.4.3). See `harness.md` 2.2 and
   section "Host suite" below.
 
-Current baseline: **683 tests, 0 failures, 2 ignored** on COM3 and COM6
-(v1.4.3, after the 16 new colour/emoji/alpha cases), and the host lane is
-**285/285** green. The static case count is **741** (what `tools/green_guard.py` sees in
+Current baseline: **687 tests, 0 failures, 2 ignored** on COM3 and COM6
+(v1.4.3, after the late browser/EPUB/grid/for cases), and the host lane is
+**285/285** green (last run). The static case count is **745** (what
+`tools/green_guard.py` sees in
 `test/main/test_*.c`); the difference is cases that only compile for the
 target. The runner completes cleanly with `=== All tests completed ===` and no
 reboot; if the board is reset-looping, check for a newly added test that calls
@@ -132,7 +133,7 @@ python ..\tools\unit_run.py COM3 COM6
 
 The same sources also build natively with ESP-IDF's preview `linux` target
 (`test/host/`), so the pure-logic cases run on the host and in CI without a
-board. Coverage today is **285 cases** - the leaf components with no board
+board. Coverage today is **285 cases** (last run) - the leaf components with no board
 dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`), the
 hardware-free halves of the shell (`shell_core.c` for text/scanning/history/
 abort/help, `shell_transcript.c` for the transcript model behind an optional

@@ -298,8 +298,12 @@ for %%v in (a b c) do <cmd>        :: literal token list
 for %%F in (*.txt) do <cmd>        :: wildcard expanded via storage
 ```
 
-The set is one pattern when it holds `*`/`?`, else a space-separated token
-list. `%%v`/`%v` substitutes textually per iteration.
+The set is tokenised on whitespace; a quoted element is one token, and each
+token that holds `*`/`?` is expanded against the filesystem on its own, so
+`("*.TXT" "*.BAT")` yields both lists. `%%v`/`%v` substitutes textually per
+iteration. At the prompt, `%v` is the loop variable, not a variable reference:
+only a name-shaped `%NAME%` token expands (no whitespace, quotes, parentheses
+or `=`), so `for %f in (A.TXT) do echo %f` keeps its `%f`.
 
 ### 10.2 Numeric `for /L` (cmd.exe parity)
 
@@ -336,7 +340,8 @@ for /f "eol=c skip=n delims=xyz tokens=a,b,m-n" %%v in (file-set) do <cmd>
 Iterates file lines (or the active `< file` / pipe source when the set is
 empty, or a command's captured output with `in ('command')`). Options:
 `eol=` (comment marker, default `;` like cmd.exe — an explicit empty `eol=`
-disables the filter), `skip=` (leading lines), `delims=` (default space +
+disables the filter), `skip=` (leading lines; an empty `skip=` skips nothing),
+`delims=` (default space +
 tab; empty `delims=` = whole line one token), `tokens=` (1-based indices
 bound to consecutive letters `%%a %%b ...`; `*` captures the rest).
 The mechanism behind BASIC `READ`/`DATA`/`INPUT#` verbs.

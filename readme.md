@@ -19,8 +19,9 @@ display/TUI/GFX stack you can build on.
 
 **The browser, rendering a real website on the device.** `browser` parses HTML
 and CSS, lays out headings, lists, links, tables, images and in-page JavaScript
-into an 80-column page that holds 2000 rows in PSRAM (25 visible, with touch/
-wheel scrolling), and can read the page from SD with no network at all. CSS
+into an 80-column page that holds 2000 rows in PSRAM (25 visible on the
+landscape panel, more rows in portrait, with touch/wheel scrolling), and can
+read the page from SD with no network at all. CSS
 colours and `background-image` backdrops, block-glyph images (BMP/PNG/JPEG
 through the one decoder) and JS `onload`/`onclick` handlers are live on the
 device - the live Wikipedia article is fetched and rendered whole. The showcase dashboard ships in
@@ -170,13 +171,16 @@ the host regression runners are green. See
   `python apps/push_dicts.py <COM_PORT>`), a learnable user dictionary
   (`spell learn`, editor `AddWord` key), dirty-buffer autosave with `recover`,
   and
-  `markdown export <src> <out> [text|html|print]` (plain text, a standalone
-  HTML reader page, or a paginated print layout) for sharing over `httpd`, and
+  `markdown export <src> <out> [text|html|print|epub]` (plain text, a standalone
+  HTML reader page, a paginated print layout, or a one-chapter EPUB 3 book)
+  for sharing over `httpd`, and
   on-device reading/editing of `.html`/`.htm` (`view`/`open`/`type` render
   them; `edit` highlights the markup) alongside Markdown.
 - **EPUB Reader:** `epub open|read|next|prev|goto|toc` for `.epub` files —
   ZIP-based EPUB archives with OPF/NCX/nav parsing, chapter rendering via
-  HTML-to-ANSI, spine/TOC navigation, and resource extraction.
+  HTML-to-ANSI, spine/TOC navigation (`epub toc <n>` jumps by TOC entry),
+  opening on chapter 1, and resource extraction; `markdown export ... epub`
+  is the matching write side.
 - **RSS / Atom / JSON Feed reader (`components/rss`):** `rss_parse()` handles
   all three feed formats (XML through Expat, JSON Feed through the shared
   `components/json` reader) and `rss_fetch()` performs conditional GET

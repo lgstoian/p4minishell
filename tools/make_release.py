@@ -14,7 +14,9 @@ Subcommands:
              via esptool, from an existing `idf.py` build directory.
     c6       Stage the per-board ESP32-C6 slave app images (esp32c6_hosted_slave-<board>.bin)
              from the coprocessor build dirs.
-    srczip   `git archive` the committed tree into a clean source zip.
+    srczip   `git archive` the committed tree into a clean source zip, leaving
+             out the 430 MB refetchable managed_components/ (RESTORE.md says
+             how to get them back from dependencies.lock).
     push     Run the SD pushers in order against a board (system apps, apps,
              assets, templates, dictionaries, fonts, the C6 image, packages).
     manifest Write release/SHA256SUMS over the artifacts in the output dir.
@@ -38,8 +40,57 @@ import os
 import shutil
 import subprocess
 import sys
+import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Included at the archive root because the source zip leaves managed_components/
+# out: the component manager refetches the pinned set, and the post-fetch
+# patches are part of the source tree, not of the vendored drop.
+RESTORE_MD = """# Restoring the ESP-IDF managed components
+
+This source archive is the committed tree **without `managed_components/`**.
+That directory is 430 MB of the ~480 MB checkout (about 10,700 files) and is
+reproducible from `dependencies.lock`, so shipping it in every source zip only
+makes the download more than five times larger (178 MB to about 29 MB).
+
+`dependencies.lock` (kept at the repository root) pins every component name,
+version and registry source. With an ESP-IDF 5.5.x environment active
+(`export.ps1` on Windows, `. export.sh` elsewhere), run this from the directory
+that contains this file:
+
+    idf.py reconfigure
+
+(or just `idf.py build`). The component manager downloads the pinned revisions
+into `managed_components/`. Network access to components.espressif.com is
+required for this step; later builds use the fetched copy.
+
+A lock cut on a developer machine can contain `type: local` entries with an
+absolute `path` (the archive keeps the lock byte-for-byte). If reconfigure
+reports one of those paths as missing, remove that component's `source:` block
+from `dependencies.lock` and rerun, or run `idf.py update-dependencies`;
+`main/idf_component.yml` pins the same versions, so the manager fetches the
+same releases from the registry.
+
+The repository also carries small hand-authored patches on top of some fetched
+components (LVGL async/PSRAM hardening, the button-matrix getter used by the
+TUI touch verbs, the board BSP and esp_hosted fixes). Re-apply them after the
+fetch:
+
+    patch -p1 < tools/managed_patches.patch
+
+(or `git apply tools/managed_patches.patch` in a checkout). On Windows,
+`powershell -File tools/reapply_managed_patches.ps1` does the same and also
+restores the extended `lv_font_unscii_16.c`; that font is a tracked file under
+`managed_components/` in the full repository, so it is not in this archive.
+Without it the fetched stock LVGL font is used, which still builds and runs but
+draws a box in LVGL chrome for symbols outside its ranges. Copy it from the
+source repository at the same tag if you need the extended glyph set.
+
+Everything else - the board BSPs under `boards/`, the C6 co-processor project,
+the Unity tests, `assets/fonts/`, and every host tool - is a committed file and
+is present in this archive.
+"""
 
 # SD pushers, in the order content must land (system apps, then apps, then the
 # asset manifests that describe them, then docs/fonts, then install bundles).
@@ -149,9 +200,32 @@ def cmd_srczip(args):
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, "p4minishell-src.zip")
     # git archive ships exactly the tracked tree (build/, sdkconfig, generated
-    # files are git-ignored, so the zip is already clean).
-    return run(["git", "archive", "--format=zip",
-                "--prefix=p4minishell/", "-o", out, "HEAD"], args.dry_run)
+    # files are git-ignored, so the zip is already clean). managed_components/
+    # is tracked but refetchable from dependencies.lock: it is 430 MB of the
+    # 480 MB tree, so the source zip leaves it out instead of tripling the
+    # download (the repo still tracks it; only this artifact omits it).
+    rc = run(["git", "archive", "--format=zip",
+              "--prefix=p4minishell/", "-o", out, "HEAD",
+              ":(exclude)managed_components"], args.dry_run)
+    if rc != 0:
+        return rc
+
+    # git archive only writes committed blobs, so RESTORE.md is added to the
+    # archive (not to the working tree) as the one file that explains the
+    # omission. Appending rewrites the central directory, which zipfile does;
+    # the earlier entries stay byte-for-byte as git wrote them.
+    dest = "p4minishell/RESTORE.md"
+    if args.dry_run:
+        log("DRY-RUN: add %s to %s" % (dest, out))
+        return 0
+    try:
+        with zipfile.ZipFile(out, "a", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(dest, RESTORE_MD)
+    except (OSError, zipfile.BadZipFile) as exc:
+        log("could not add %s: %s" % (dest, exc))
+        return 1
+    log("wrote %s (managed_components/ excluded, %s added)" % (out, dest))
+    return 0
 
 
 def cmd_push(args):
