@@ -187,7 +187,12 @@ bool shell_forf_parse_options(const char *text, size_t len, shell_forf_options_t
                 return false;
             }
         } else if (klen == 4 && strncasecmp(text + start, "skip", 4) == 0) {
-            if (!shell_forf_parse_num(value, vlen, &opts->skip)) {
+            /* `skip=` with no value means skip nothing (TCMD writes it when the
+             * pane cursor is at the top). Like the empty `eol=` above, it is
+             * accepted rather than reported as a malformed option. */
+            if (vlen == 0) {
+                opts->skip = 0;
+            } else if (!shell_forf_parse_num(value, vlen, &opts->skip)) {
                 return false;
             }
         } else if (klen == 3 && strncasecmp(text + start, "eol", 3) == 0) {
