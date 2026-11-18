@@ -899,30 +899,27 @@ def _companion_deep(dev, c):
         c.expect("rotation persisted %s" % value, value, out)
 
     # Quick settings form: accept the prefilled values, dismiss the
-    # "Quick settings applied." dialog the app shows next, then leave SET.
-    # The dialog is a real modal: it swallows shell lines until it is answered
-    # (the old code only waited for the shell, so it never dismissed it and
-    # every later step was eaten by the modal).
+    # "Quick settings applied." dialog the app shows next, then make sure the
+    # shell (not the app menu) is the active owner. Each of the form and the
+    # dialog is a modal: it swallows the next line, so both need their own
+    # answer. The `config HEADER` change may also have closed the foreground
+    # app during its rebuild, so the app's back marker is not guaranteed.
     set_stage = "quick settings"
     tail = _press(s, "14", "[M-SET-QUICK]", settle=3.0)
     quick_ok = b"[M-SET-QUICK]" in tail
     if quick_ok:
         s.read_for(2.0)
         s.write_line("ok")              # accept the prefilled form
-        quick_ok = _wait(s, "[M-SET]", 15)
-        if not quick_ok:
-            # The dialog may have raced the form; answer it explicitly.
-            s.write_line("ok")
-            quick_ok = _wait(s, "[M-SET]", 15)
-    if quick_ok:
-        # Leave SET with Back. `config HEADER` may already have closed the
-        # foreground app (its rebuild), so the shell echo is the truth, not
-        # the app's back marker.
-        s.write_line("13")
+        s.read_for(2.0)
+        s.write_line("ok")              # dismiss "Quick settings applied."
         quick_ok = _shell_echo(dev)
+        if not quick_ok:
+            s.write_line("13")          # still in SET: Back to the shell
+            quick_ok = _shell_echo(dev)
     if not quick_ok:
-        set_stage = "quick settings (dialog not dismissed)"
-    c.check("SET quick settings form", quick_ok, "")
+        set_stage = "quick settings (shell never came back)"
+    c.check("SET quick settings form", quick_ok,
+            "" if quick_ok else set_stage)
     if quick_ok:
         out = _run(dev, c, "quick brightness", "config BRIGHTNESS /b", timeout=15)
         c.expect("quick brightness 50", "50", out)

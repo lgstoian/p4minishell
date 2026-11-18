@@ -318,6 +318,21 @@ def _emoji_leg(dev, c):
     c.check("emoji: the page rendered its glyphs", text_ink > 100,
             "%d bright samples" % text_ink)
 
+    # The LVGL chrome (transcript), not the page: a symbol the cell font ships
+    # (U+2605) must not render as the same placeholder as a codepoint nothing
+    # has (U+E000, private use). Before the fallback was fixed both fell
+    # through to FontAwesome and drew the same box, so these two captures were
+    # pixel-identical.
+    dev.run("cls", timeout=20)
+    dev.run("echo CHROME \u2605 \u2605 \u2605 \u2605 \u2605", timeout=20)
+    star = dev.screenshot()
+    dev.run("cls", timeout=20)
+    dev.run("echo CHROME \ue000 \ue000 \ue000 \ue000 \ue000", timeout=20)
+    box = dev.screenshot()
+    moved = diff_ratio(star, box, tol=0)
+    c.check("emoji: a symbol renders in the transcript (not the placeholder)",
+            moved >= 0.0005, "%.5f of sampled pixels differ" % moved)
+
 
 def _compare(c, control, opaque, translucent):
     """Assert the transparency pair, using the control run as the noise floor."""

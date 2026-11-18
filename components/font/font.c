@@ -91,6 +91,10 @@ typedef struct {
 } emoji_font_dsc_t;
 
 static lv_font_t s_emoji_font[FONT_ROLE_COUNT];
+/* Retro symbol layer: the shipped cell font (unscii) owns U+2500-26FF. A
+ * transcript glyph the role font and the emoji map both miss (★ ♥ ♪) must
+ * resolve here, before FontAwesome, or the label draws a placeholder box. */
+static lv_font_t s_symbol_chain[FONT_ROLE_COUNT];
 static emoji_font_dsc_t s_emoji_dsc[FONT_ROLE_COUNT];
 
 /** Registered by the command layer (see font.h): pack images for LVGL. */
@@ -133,8 +137,18 @@ static bool emoji_font_get_glyph_dsc(const lv_font_t *font,
     const emoji_font_dsc_t *dsc = (const emoji_font_dsc_t *)font->dsc;
     uint32_t glyph;
 
-    if (dsc == NULL || dsc->base == NULL || !emoji_is_codepoint(letter) ||
-        emoji_is_modifier(letter)) {
+    if (dsc == NULL || dsc->base == NULL) {
+        return false;
+    }
+    /* A Unicode symbol that the emoji map does not own (★ U+2605, ♥ U+2665,
+     * ♪ U+266A, ...) still lives in the cell font. Resolve it from the base
+     * HERE, before LVGL walks to this wrapper's fallback: that fallback is
+     * FontAwesome, which has no such glyph, so the label used to draw a
+     * placeholder box even though the page font had the character. */
+    if (!emoji_is_codepoint(letter)) {
+        return lv_font_get_glyph_dsc(dsc->base, dsc_out, letter, letter_next);
+    }
+    if (emoji_is_modifier(letter)) {
         return false;   /* not ours: LVGL continues down the chain */
     }
     /* Colour pack first (v1.4.3): an image glyph sized to the role's line. */
@@ -156,10 +170,16 @@ static bool emoji_font_get_glyph_dsc(const lv_font_t *font,
     }
     /* No pack: the retro DOS/CP437 glyph from the base font. */
     glyph = emoji_dos_glyph(letter);
-    if (glyph == 0) {
-        return false;
+    if (glyph != 0 &&
+        lv_font_get_glyph_dsc(dsc->base, dsc_out, glyph, letter_next)) {
+        return true;
     }
-    return lv_font_get_glyph_dsc(dsc->base, dsc_out, glyph, letter_next);
+    /* The base may still carry the original codepoint (an emoji-looking
+     * symbol the cell font ships); try it before giving up. */
+    if (lv_font_get_glyph_dsc(dsc->base, dsc_out, letter, letter_next)) {
+        return true;
+    }
+    return false;
 }
 static bool s_fa_ready[FONT_ROLE_COUNT];
 static int s_cjk_slot[FONT_ROLE_COUNT];
@@ -216,7 +236,13 @@ static void font_rebuild_chain_locked(font_role_t role)
         s_emoji_font[role].get_glyph_dsc = emoji_font_get_glyph_dsc;
         s_emoji_font[role].get_glyph_bitmap = emoji_font_get_glyph_bitmap;
         s_emoji_font[role].dsc = &s_emoji_dsc[role];
+#if LV_FONT_UNSCII_16
+        s_symbol_chain[role] = lv_font_unscii_16;
+        s_symbol_chain[role].fallback = &s_fa_chain[role];
+        s_emoji_font[role].fallback = &s_symbol_chain[role];
+#else
         s_emoji_font[role].fallback = &s_fa_chain[role];
+#endif
 
         s_chain[role][inactive] = *s_font_role_primary[role];
         s_chain[role][inactive].fallback = &s_emoji_font[role];
