@@ -249,10 +249,12 @@ def run(dev, ctx):
 
     out = dev.run("epub open %s/doc2.epub" % DATA)
     c.expect("epub opens the device-written book", "Opened:", out)
-    c.expect("epub reads its own title", "Doc %s" % stamp, out)
+    # The exporter names the book after the source file (pandoc-style); the
+    # document's own H1 stays the chapter heading and is asserted on `read`.
     c.expect("epub reports one chapter", "Chapters: 1", out)
+    c.expect("epub metadata carries the source title", "Title: doc2", out)
     out = dev.run("epub toc")
-    c.expect("epub toc lists the chapter", "Doc %s" % stamp, out)
+    c.expect("epub toc lists the chapter", "doc2 @ chapter.xhtml", out)
     out = dev.run("epub read")
     c.expect("epub renders the chapter", "Doc %s" % stamp, out)
     out = dev.run("epub close")

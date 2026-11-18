@@ -136,8 +136,10 @@ the host regression runners are green. See
   (Wikipedia's article is fetched whole) and every supported image renders,
   including CSS `background-image` backdrops tiled behind the text.
 - **Pointer parity:** touch drag and the mouse wheel scroll the browser/TUI
-  page and the modal viewers; long-press then drag selects text on the page
-  (tap the selection to copy), and the editor keeps its drag selection.
+  page and the modal viewers; long-press then drag selects text on the page,
+  in the modal `view`/`hexview`/`browse` pagers and in the transcript
+  scrollback (tap the selection to copy, or `ui selection copy`), and the
+  editor keeps its drag selection. One selection core backs every surface.
 - **Runs from USB:** the shell publishes `%APPDRIVE%`/`%APPROOT%` per app,
   `launch` discovers `usb:/APPS`, and the reference apps keep their data on
   the drive they run from. `apps/push_apps.py --drive usb:` installs the same
