@@ -482,6 +482,19 @@ extern void test_clipboard_empty_and_null(void);
 extern void test_clipboard_file_flag(void);
 extern void test_clipboard_copy_transcript(void);
 
+extern void test_selection_range_normalize(void);
+extern void test_selection_assembly_joins_rows(void);
+extern void test_selection_assembly_trims_trailing_blanks(void);
+extern void test_selection_assembly_keeps_inner_blanks(void);
+extern void test_selection_copy_commits_once(void);
+extern void test_selection_copy_empty_is_not_committed(void);
+extern void test_selection_text_span_crosses_lines(void);
+extern void test_selection_text_span_trims_line_blanks(void);
+extern void test_selection_text_span_rejects_empty(void);
+extern void test_selection_text_span_from_range(void);
+extern void test_selection_row_col_roundtrip(void);
+extern void test_selection_utf8_indices(void);
+
 extern void test_history_file_roundtrip(void);
 extern void test_history_file_skips_blanks(void);
 extern void test_history_file_null_stream(void);
@@ -1351,6 +1364,23 @@ void app_main(void)
     RUN_TEST(test_clipboard_empty_and_null);
     RUN_TEST(test_clipboard_file_flag);
     RUN_TEST(test_clipboard_copy_transcript);
+    UNITY_END();
+
+    /* Shared selection core (components/selection): the range model, cell
+     * assembly and commit sink the TUI page, transcript and pagers share. */
+    UNITY_BEGIN();
+    RUN_TEST(test_selection_range_normalize);
+    RUN_TEST(test_selection_assembly_joins_rows);
+    RUN_TEST(test_selection_assembly_trims_trailing_blanks);
+    RUN_TEST(test_selection_assembly_keeps_inner_blanks);
+    RUN_TEST(test_selection_copy_commits_once);
+    RUN_TEST(test_selection_copy_empty_is_not_committed);
+    RUN_TEST(test_selection_text_span_crosses_lines);
+    RUN_TEST(test_selection_text_span_trims_line_blanks);
+    RUN_TEST(test_selection_text_span_rejects_empty);
+    RUN_TEST(test_selection_text_span_from_range);
+    RUN_TEST(test_selection_row_col_roundtrip);
+    RUN_TEST(test_selection_utf8_indices);
     UNITY_END();
 
     /* History file format (components/shell helpers). */

@@ -34,6 +34,7 @@
 #include "editor_view.h"
 #include "keyboard.h"
 #include "modal.h"
+#include "modal_surf.h"
 #include "windows.h"
 
 #include "esp_lvgl_port.h"
@@ -174,6 +175,10 @@ static void ui_target_label(lv_obj_t *obj, char *out, size_t out_size)
     /* No label: name by the (public) widget class. */
     if (lv_obj_check_type(obj, &lv_button_class)) {
         snprintf(out, out_size, "button");
+    } else if (obj == windows_get_transcript()) {
+        /* Automation anchor for the scrollback (text selection drags need its
+         * live rect, which is not derivable from the display size). */
+        snprintf(out, out_size, "transcript");
     } else if (lv_obj_check_type(obj, &lv_textarea_class)) {
         snprintf(out, out_size, "textarea");
     } else if (lv_obj_check_type(obj, &lv_slider_class)) {
@@ -466,7 +471,7 @@ static int ui_run(int argc, char **argv)
 
     if (argc < 2) {
         ui_out("Usage: ui <tap|longpress|swipe|press|move|release|target|key|"
-               "targets|hit|state|links|link> [...]\n");
+               "targets|hit|state|selection|links|link> [...]\n");
         return 2;
     }
     sub = argv[1];
@@ -493,6 +498,52 @@ static int ui_run(int argc, char **argv)
             return 2;
         }
         return ui_cmd_hit(atoi(argv[pos[0]]), atoi(argv[pos[1]]), var);
+    }
+    if (shell_text_equals_ignore_case(sub, "selection")) {
+        /* Text selection on the surface that owns the screen: the modal pager
+         * (view/hexview) when one is open, the transcript otherwise. This is
+         * the serial entry point for the same core the long-press drag and the
+         * tap use - claimed while a modal blocks the worker, like `ui tap`.
+         * The surfaces are LVGL objects, so both actions run under the port
+         * lock (the same discipline ui_cmd_state uses). */
+        bool copied = false;
+        bool clear_it = false;
+        bool modal;
+
+        if (npos < 1) {
+            ui_out("Usage: ui selection <copy|clear>\n");
+            return 2;
+        }
+        copied = shell_text_equals_ignore_case(argv[pos[0]], "copy");
+        clear_it = shell_text_equals_ignore_case(argv[pos[0]], "clear");
+        if (!copied && !clear_it) {
+            ui_out("Usage: ui selection <copy|clear>\n");
+            return 2;
+        }
+        /* Query the modal runtime BEFORE taking the LVGL lock: the runtime
+         * holds its own mutex while a surface handler may take the port lock,
+         * so port-outer-here would invert that order. A modal opening between
+         * the two lines only makes the copy answer "none". */
+        modal = modal_runtime_is_active();
+        if (!lvgl_port_lock(3000)) {
+            ui_out("ui.selection: busy\n");
+            return 1;
+        }
+        if (clear_it) {
+            (void)modal_surf_selection_clear();
+            windows_transcript_selection_clear();
+        } else if (modal) {
+            copied = modal_surf_selection_copy();
+        } else {
+            copied = windows_transcript_selection_copy();
+        }
+        lvgl_port_unlock();
+        if (clear_it) {
+            ui_out("ui.selection: cleared\n");
+            return 0;
+        }
+        ui_out("ui.selection: %s\n", copied ? "copied" : "none");
+        return copied ? 0 : 1;
     }
     if (shell_text_equals_ignore_case(sub, "tap")) {
         uint32_t ms = (npos >= 3) ? (uint32_t)atoi(argv[pos[2]]) : 80;

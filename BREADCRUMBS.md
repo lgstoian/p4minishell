@@ -82,6 +82,7 @@ invert the only upward edges. Never add a trampoline.
 | portal | leaf | net | first-run captive portal | [t](test/main/test_portal.c) | `ai-context.md#module-layering-rules` | `components/portal` |
 | power_monitor | leaf | platform | battery ADC, charge state, pack-present policy | [t](test/main/test_power.c), [t](test/main/test_hardware.c) | `ai-context.md#module-layering-rules` | `components/power_monitor` |
 | rss | leaf | net | RSS/JSON-Feed reader over the shared JSON core | [t](test/main/test_rss_store.c) | `ai-context.md#module-layering-rules` | `components/rss` |
+| selection | leaf | ui | one drag-range model, cell/row text assembly, the single | [t](test/main/test_selection.c) | `ai-context.md#module-layering-rules` | `components/selection` |
 | shell | shell | core | transcript, prompt, key queue, history, debug log, UART console | [t](test/main/test_shell_parser.c), [t](test/main/test_shell_history.c), [t](test/main/test_shell_prompt.c) | `ai-context.md#shell-core-rules` | `components/shell` |
 | state_machine | leaf | core | generic finite state machine helper | - | `ai-context.md#module-layering-rules` | `components/state_machine` |
 | storage | storage | fs | guarded SD sessions, path resolution, file helpers, redirection | [t](test/main/test_storage_format.c), [t](test/main/test_storage_volumes.c), [t](test/main/test_csv.c) | `ai-context.md#module-layering-rules` | `components/storage` |
@@ -394,6 +395,9 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/rss/src/rss_opml.c` :: module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules
 - `components/rss/src/rss_parser.c` :: module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules
 - `components/rss/src/rss_store.c` :: module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules
+- `components/selection/include/selection.h` :: module=selection :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_selection.c :: rules=ai-context.md#module-layering-rules
+- `components/selection/selection.c` :: module=selection :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_selection.c :: rules=ai-context.md#module-layering-rules
+- `components/selection/selection_ui.c` :: module=selection :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_selection.c :: rules=ai-context.md#module-layering-rules
 - `components/shell/locale.c` :: module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules
 - `components/shell/locale.h` :: module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules
 - `components/shell/shell.c` :: module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules

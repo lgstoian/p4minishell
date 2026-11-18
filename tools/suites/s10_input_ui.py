@@ -3,11 +3,17 @@
 """Input/UI suite: on-screen keyboard, synthetic touch, and UI inspection.
 
 Covers the ``keyboard`` page registry and visibility, the ``ui`` verbs
-(``state``/``targets``/``hit``/``tap``/``key``/``target``), and the modal
-activation path. Semantic ``ui target <id>`` is used for modal panels (a
-coordinate tap into the auto-scrolling transcript is racy), while ``ui tap``
-is exercised against a stable header target. Screenshots bracket the keyboard
-show/hide transition.
+(``state``/``targets``/``hit``/``tap``/``key``/``target``), the modal
+activation path, and text selection. Semantic ``ui target <id>`` is used for
+modal panels (a coordinate tap into the auto-scrolling transcript is racy),
+while ``ui tap`` is exercised against a stable header target. Screenshots
+bracket the keyboard show/hide transition.
+
+Text selection is driven through the shared core (components/selection) on the
+two surfaces that added it: the ``view`` pager (character range) and the
+transcript scrollback (row range). Both checks long-press, drag, release, then
+read the one shell clipboard with ``clip``; the pager also uses the
+``ui selection copy`` claimed verb and a tap inside the selection.
 """
 import os
 import re
@@ -86,7 +92,7 @@ def _console(dev, line, settle=1.0):
         else:
             text = buf.decode("utf-8", "replace")
             has_reply = ("ui.state:" in text) or ("ui.target" in text) or \
-                        ("ui.hit:" in text)
+                        ("ui.hit:" in text) or ("ui.selection:" in text)
             if has_reply and quiet_since is None:
                 quiet_since = time.time()
             elif quiet_since is not None and time.time() - quiet_since > settle:
@@ -462,6 +468,119 @@ def run(dev, ctx):
         dev.run("usb mouse click off", timeout=20)
         c.expect("cursor move refuses while off", "refused",
                  dev.cursor_move(10, 10))
+
+        # =================================================================
+        # 8. Text selection: modal pager (`view`) and the transcript
+        # =================================================================
+        # The same shared core (components/selection) serves both surfaces, so
+        # both checks drive the real gesture (long press, drag, release) and
+        # then read the ONE shell clipboard with `clip`.
+        c.note("text selection: view pager")
+        sel_file = "s10_sel.txt"
+        dev.run("echo P4SELM-HEAD > %s" % sel_file, timeout=20)
+        dev.run("echo P4SELM-ALPHA >> %s" % sel_file, timeout=20)
+        dev.run("echo P4SELM-BETA >> %s" % sel_file, timeout=20)
+
+        def drag(x0, y0, x1, y1):
+            """Long-press at (x0,y0), drag to (x1,y1), release.
+
+            The press must outlast LVGL's long-press time (400 ms) with no
+            movement, otherwise the drag pages/scans instead of selecting.
+            """
+            dev.run("ui press %d %d" % (x0, y0), timeout=20)
+            time.sleep(0.9)
+            dev.run("ui move %d %d" % (x1, y1), timeout=20)
+            time.sleep(0.25)
+            dev.run("ui move %d %d" % (x1, y1 + 6), timeout=20)
+            time.sleep(0.25)
+            dev.run("ui release", timeout=20)
+            time.sleep(0.4)
+
+        def textarea_target():
+            targets = parse_targets(_console(dev, "ui targets", 2.0))
+            for t in targets:
+                if t["name"] == "textarea":
+                    return t
+            return None
+
+        dev.session.write_line("view %s" % sel_file)
+        st = _wait_modal(dev, "viewer", timeout=10)
+        c.check("viewer opened for selection", st == "viewer", "modal=%r" % st)
+        ta = textarea_target() if st == "viewer" else None
+        c.check("viewer textarea target found", ta is not None)
+        if ta is not None:
+            x_left = ta["x"] + 6
+            y_top = ta["y"] + 6
+            y_past = ta["y"] + ta["h"] // 2   # below the last of three lines
+            # Whole document: long-press on the first cell, drag past the end.
+            drag(x_left, y_top, x_left, y_past)
+            out = _console(dev, "ui selection copy", 1.0)
+            c.expect("view selection copied", "ui.selection: copied", out)
+            dev.send("q", 1.0)
+            c.check("viewer closed after selection",
+                    _wait_modal(dev, "none", timeout=8) == "none")
+            clip_txt = dev.run("clip", timeout=20)
+            for marker in ("P4SELM-HEAD", "P4SELM-ALPHA", "P4SELM-BETA"):
+                c.expect("view selection holds %s" % marker, marker, clip_txt)
+
+            # Character-accurate, not row-based: a drag that starts at the END
+            # of line 1 (the middle of the textarea is past that short line)
+            # must exclude line 1 entirely while keeping lines 2-3.
+            dev.session.write_line("view %s" % sel_file)
+            st = _wait_modal(dev, "viewer", timeout=10)
+            ta = textarea_target() if st == "viewer" else None
+            if ta is not None:
+                x_mid = ta["x"] + ta["w"] // 2
+                y_top = ta["y"] + 6
+                drag(x_mid, y_top, ta["x"] + 6, ta["y"] + ta["h"] // 2)
+                # A tap INSIDE the persisted selection copies it (the pointer
+                # path, not the serial verb).
+                dev.run("ui tap %d %d 90" % (x_mid, y_top), timeout=20)
+                time.sleep(0.4)
+                dev.send("q", 1.0)
+                _wait_modal(dev, "none", timeout=8)
+                clip_txt = dev.run("clip", timeout=20)
+                c.expect("mid-line selection keeps line 2", "P4SELM-ALPHA",
+                         clip_txt)
+                c.expect("mid-line selection keeps line 3", "P4SELM-BETA",
+                         clip_txt)
+                c.check("mid-line selection excludes line 1",
+                        "P4SELM-HEAD" not in clip_txt, clip_txt[-160:])
+            else:
+                c.check("viewer reopened for mid-line selection", False)
+
+        c.note("text selection: transcript scrollback")
+        dev.run("ui selection clear", timeout=20)
+        dev.run("cls", timeout=20)
+        dev.run("echo P4SELT-ALPHA", timeout=20)
+        dev.run("echo P4SELT-BETA", timeout=20)
+        tt = None
+        for t in parse_targets(dev.run("ui targets", timeout=20)):
+            if t["name"] == "transcript":
+                tt = t
+                break
+        c.check("transcript target found", tt is not None)
+        if tt is not None:
+            x = tt["x"] + 24
+            y_bottom = tt["y"] + tt["h"] - 6
+            # The scrollback holds four short rows at the top, so a drag from
+            # the bottom row up to the middle clamps to that last row: this is
+            # a row-range copy, not the whole transcript.
+            drag(x, y_bottom, x, tt["y"] + tt["h"] // 2)
+            out = dev.run("ui selection copy", timeout=20)
+            c.expect("transcript selection copied", "ui.selection: copied", out)
+            clip_txt = dev.run("clip", timeout=20)
+            c.expect("transcript selection holds BETA", "P4SELT-BETA", clip_txt)
+            c.check("transcript selection is row-scoped",
+                    "P4SELT-ALPHA" not in clip_txt, clip_txt[-160:])
+
+            # A drag across the whole visible area copies every visible row.
+            drag(x, y_bottom, x, tt["y"] + 4)
+            dev.run("ui selection copy", timeout=20)
+            clip_txt = dev.run("clip", timeout=20)
+            c.expect("multi-row selection holds ALPHA", "P4SELT-ALPHA", clip_txt)
+            c.expect("multi-row selection holds BETA", "P4SELT-BETA", clip_txt)
+            dev.run("ui selection clear", timeout=20)
 
     finally:
         # Make sure no modal is left owning the screen, then restore the

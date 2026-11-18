@@ -888,6 +888,7 @@
         "esp_common",
         "log",
         "shell",
+        "selection",
         "storage",
         "windows",
         "keyboard",
@@ -1050,6 +1051,24 @@
         "test/main/test_rss_store.c"
       ]
     },
+    "selection": {
+      "domain": "ui",
+      "header": "components/selection/include/selection.h",
+      "layer": "leaf",
+      "path": "components/selection",
+      "provides": "one drag-range model, cell/row text assembly, the single",
+      "requires": [
+        "lvgl__lvgl",
+        "p4heap"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_selection.c"
+      ]
+    },
     "shell": {
       "domain": "core",
       "header": "components/shell/shell.h",
@@ -1060,6 +1079,7 @@
         "ansi",
         "display",
         "header",
+        "selection",
         "keyboard",
         "clock",
         "windows",
@@ -1185,6 +1205,7 @@
         "shell",
         "header",
         "windows",
+        "selection",
         "ansi",
         "emoji",
         "display",
@@ -1256,6 +1277,7 @@
         "header",
         "keyboard",
         "ansi",
+        "selection",
         "p4heap",
         "board_bsp",
         "espressif__esp_lvgl_port",

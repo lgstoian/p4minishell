@@ -42,6 +42,7 @@ idf_component_register(
         test_gfind.c
         test_tui.c
         test_clipboard.c
+        test_selection.c
         test_history_file.c
         test_completion.c
         test_history_search.c

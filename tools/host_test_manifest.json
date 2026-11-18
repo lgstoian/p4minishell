@@ -106,6 +106,7 @@
     "test_rss_store.c": "networking/radio: REQUIRES ESP-Hosted C6 transport (no emulated radio)",
     "test_rss_opml.c": "networking/radio: REQUIRES ESP-Hosted C6 transport (no emulated radio)",
     "test_screen.c": "command layer: components/command REQUIRES shell, storage, USB and display",
+    "test_selection.c": "selection: the shared core links LVGL for its highlight paints (components/selection/selection_ui.c)",
     "test_serial.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_shell_history.c": "shell core: shell.c is coupled to display/LVGL, USB-Serial-JTAG and the board BSP",
     "test_shell_pipeline.c": "shell core: shell.c is coupled to display/LVGL, USB-Serial-JTAG and the board BSP",

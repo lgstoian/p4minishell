@@ -51,6 +51,7 @@ PRIMARY_HEADER = {
     "portal": "include/portal.h",
     "power_monitor": "include/power_monitor.h",
     "rss": "include/rss.h",
+    "selection": "include/selection.h",
     "state_machine": "include/state_machine.h",
     "strutil": "include/strutil.h",
     "swgcm": "include/sw_gcm.h",

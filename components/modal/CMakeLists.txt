@@ -8,6 +8,7 @@ idf_component_register(
         esp_common
         log
         shell
+        selection
         storage
         windows
         keyboard

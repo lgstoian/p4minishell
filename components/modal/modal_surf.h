@@ -124,6 +124,19 @@ int modal_image_run(const char *title, const char *file_path,
 void modal_surf_set_alpha(uint8_t panel_alpha, uint8_t scrim_alpha);
 void modal_surf_get_alpha(uint8_t *panel_alpha, uint8_t *scrim_alpha);
 
+/* -------------------------------------------------------------------------
+ * TEXT SELECTION (the pager surfaces)
+ * -------------------------------------------------------------------------
+ * `view` and `hexview` are monospace text pagers: long-press + drag selects a
+ * character range, the highlight stays after the finger lifts, a tap inside
+ * copies it and a tap outside clears it. Both go through the shared selection
+ * core, so the text lands in the shell clipboard (`clip`/`paste`). The verbs
+ * below are the serial entry points for those same two actions (`ui selection
+ * copy|clear`), so a suite can drive the core without a pointer. LVGL task.
+ */
+bool modal_surf_selection_copy(void);
+bool modal_surf_selection_clear(void);
+
 #ifdef __cplusplus
 }
 #endif

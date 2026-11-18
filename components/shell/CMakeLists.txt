@@ -7,6 +7,7 @@ idf_component_register(
         ansi
         display
         header
+        selection
         keyboard
         clock
         windows

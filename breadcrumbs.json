@@ -296,6 +296,9 @@
     "components/rss/src/rss_opml.c": "module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules",
     "components/rss/src/rss_parser.c": "module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules",
     "components/rss/src/rss_store.c": "module=rss :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_rss_store.c :: rules=ai-context.md#module-layering-rules",
+    "components/selection/include/selection.h": "module=selection :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_selection.c :: rules=ai-context.md#module-layering-rules",
+    "components/selection/selection.c": "module=selection :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_selection.c :: rules=ai-context.md#module-layering-rules",
+    "components/selection/selection_ui.c": "module=selection :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_selection.c :: rules=ai-context.md#module-layering-rules",
     "components/shell/locale.c": "module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules",
     "components/shell/locale.h": "module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules",
     "components/shell/shell.c": "module=shell :: layer=shell :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_shell_history.c,test/main/test_shell_prompt.c :: rules=ai-context.md#shell-core-rules",
@@ -1277,6 +1280,7 @@
         "esp_common",
         "log",
         "shell",
+        "selection",
         "storage",
         "windows",
         "keyboard",
@@ -1439,6 +1443,24 @@
         "test/main/test_rss_store.c"
       ]
     },
+    "selection": {
+      "domain": "ui",
+      "header": "components/selection/include/selection.h",
+      "layer": "leaf",
+      "path": "components/selection",
+      "provides": "one drag-range model, cell/row text assembly, the single",
+      "requires": [
+        "lvgl__lvgl",
+        "p4heap"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_selection.c"
+      ]
+    },
     "shell": {
       "domain": "core",
       "header": "components/shell/shell.h",
@@ -1449,6 +1471,7 @@
         "ansi",
         "display",
         "header",
+        "selection",
         "keyboard",
         "clock",
         "windows",
@@ -1574,6 +1597,7 @@
         "shell",
         "header",
         "windows",
+        "selection",
         "ansi",
         "emoji",
         "display",
@@ -1645,6 +1669,7 @@
         "header",
         "keyboard",
         "ansi",
+        "selection",
         "p4heap",
         "board_bsp",
         "espressif__esp_lvgl_port",

@@ -25,6 +25,7 @@
 #include "header.h"
 #include "keyboard.h"
 #include "ansi.h"
+#include "selection.h"
 
 extern void tui_hide_for_modal(void);
 extern void tui_show_after_modal(void);
@@ -151,6 +152,7 @@ static uint32_t s_layout_generation = 1;
 
 static void windows_create_header(void);
 static void windows_create_transcript(void);
+static void windows_transcript_selection_init(void);
 static void windows_create_input_row(void);
 static void windows_apply_screen_style(void);
 
@@ -500,6 +502,10 @@ static void windows_create_transcript(void)
     lv_obj_set_style_border_width(s_windows.transcript_measure, 0, 0);
     lv_obj_set_style_pad_all(s_windows.transcript_measure, 0, 0);
     lv_obj_set_style_text_font(s_windows.transcript_measure, font, 0);
+
+    /* Long-press + drag selection: highlight layer plus the gesture handlers.
+     * Defined with the selection code below (it needs the row model). */
+    windows_transcript_selection_init();
 
     /* Shift the materialized row window as the visible range scrolls. */
     lv_obj_add_event_cb(s_windows.transcript, windows_transcript_scroll_event_cb,
@@ -1153,6 +1159,8 @@ static void windows_transcript_rows_add(const char *data, size_t len,
                           : 0;
         size_t drop = s_transcript_row_count - keep;
 
+        /* Evicted rows shift every later index: drop any live selection. */
+        windows_transcript_selection_clear();
         if (drop < s_transcript_row_count && keep > 0) {
             memmove(s_transcript_rows, s_transcript_rows + drop,
                     keep * sizeof(windows_transcript_row_t));
@@ -1215,6 +1223,9 @@ static void windows_transcript_rows_add(const char *data, size_t len,
  */
 static void windows_transcript_rows_reset(void)
 {
+    /* Row indices are about to become meaningless: a selection held in row
+     * coordinates must not survive into a different scrollback. */
+    windows_transcript_selection_clear();
     s_transcript_row_count = 0;
     s_transcript_tail_open = false;
     s_transcript_render_first = 0;
@@ -1458,11 +1469,427 @@ static void windows_transcript_render_window(bool pin_bottom, bool force)
     }
 }
 
+/* ---- Transcript text selection (long-press + drag) ----------------------
+ *
+ * The visible transcript is the rendered window of the row table above, so a
+ * selection here is a ROW range: whole rows, which is exactly the text the
+ * user dragged over. Character-accurate selection inside a row is not
+ * available without a second text model, because the rows are laid out by
+ * LVGL's own word wrapping (a logical row can occupy several visual lines, and
+ * only the label knows where each line breaks). Whole rows therefore are the
+ * honest granularity, and they still copy exactly the text the highlight
+ * covers.
+ *
+ * The range model, the text assembly and the highlight paint come from
+ * components/selection, the same core the TUI page and the modal pagers use.
+ * This file supplies the row provider - reading the same row table the
+ * renderer draws, ANSI-stripped on demand, never a second copy of the text -
+ * and the geometry.
+ *
+ * The highlight lives in an ignore-layout layer that is a child of the
+ * transcript container, so its rectangles are in the scrollback's own content
+ * coordinates and scroll with the rows they mark. It is created after the span
+ * group (so it paints on top) and is not clickable (so touches still reach the
+ * transcript).
+ */
+static lv_obj_t *s_transcript_sel_layer = NULL;
+static sel_range_t s_transcript_sel;
+static bool s_transcript_selecting = false;
+static bool s_transcript_sel_suppress_click = false;
+static lv_obj_t *s_transcript_sel_press_obj = NULL;
+static void windows_transcript_selection_event_cb(lv_event_t *event);
+static void windows_transcript_selection_clear_rects(void);
+
+/**
+ * Create the highlight layer and register the gesture handlers. Called once
+ * from windows_create_transcript() (LVGL task).
+ */
+static void windows_transcript_selection_init(void)
+{
+    if (s_windows.transcript == NULL || s_windows.transcript_spans == NULL) {
+        return;
+    }
+    /* Highlight layer: an ignore-layout child of the container, so its
+     * rectangles live in the scrollback's content coordinates and scroll with
+     * the rows they mark. Created after the span group so it paints on top;
+     * not clickable, so touches still reach the transcript. */
+    s_transcript_sel_layer = lv_obj_create(s_windows.transcript);
+    if (s_transcript_sel_layer != NULL) {
+        lv_obj_remove_style_all(s_transcript_sel_layer);
+        lv_obj_add_flag(s_transcript_sel_layer, LV_OBJ_FLAG_IGNORE_LAYOUT);
+        lv_obj_clear_flag(s_transcript_sel_layer,
+                          LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_pos(s_transcript_sel_layer, 0, 0);
+        lv_obj_set_size(s_transcript_sel_layer, 0, 0);
+    }
+    /* The same handler serves the text (the span group is the pressed object)
+     * and the padding / empty space (the container is the pressed object). */
+    lv_obj_add_event_cb(s_windows.transcript_spans,
+                        windows_transcript_selection_event_cb,
+                        LV_EVENT_ALL, NULL);
+    lv_obj_add_event_cb(s_windows.transcript,
+                        windows_transcript_selection_event_cb,
+                        LV_EVENT_ALL, NULL);
+}
+
+/** One stripped scrollback row, cached for the cell provider below. */
+typedef struct {
+    char *buf;       /**< ANSI-stripped text of @ref row (PSRAM scratch). */
+    size_t cap;
+    int row;         /**< Row currently in @ref buf (-1 = none). */
+    int chars;       /**< Glyphs in @ref buf. */
+    size_t byte;     /**< Byte offset of the glyph at @ref cursor_col. */
+    int cursor_col;
+} windows_sel_ctx_t;
+
+/** Strip scrollback row @p row into the provider cache. Rows are stored in the
+ *  same ANSI form the renderer consumes (that is what the row table indexes),
+ *  so the escapes are removed here with the shared ANSI stripper rather than
+ *  by keeping a parallel plain-text table. */
+static bool windows_sel_row_load(windows_sel_ctx_t *c, int row)
+{
+    const windows_transcript_row_t *r;
+    size_t len;
+    char glyph[8];
+
+    if (c == NULL) {
+        return false;
+    }
+    if (row == c->row) {
+        return true;
+    }
+    c->row = -1;
+    c->chars = 0;
+    c->byte = 0;
+    c->cursor_col = 1;
+    if (row < 0 || row >= (int)s_transcript_row_count || s_transcript_rows == NULL) {
+        return false;
+    }
+    r = &s_transcript_rows[row];
+    len = r->len;
+    if (len >= c->cap) {
+        len = c->cap - 1;
+    }
+    windows_stage_lock();
+    if (s_transcript_staged != NULL && len > 0) {
+        memcpy(c->buf, s_transcript_staged + r->off, len);
+    } else {
+        len = 0;
+    }
+    windows_stage_unlock();
+    c->buf[len] = '\0';
+    /* In-place strip is safe: the write cursor never passes the read cursor. */
+    ansi_strip_to_plain(c->buf, c->cap, c->buf);
+    len = strlen(c->buf);
+    while (len > 0 && (c->buf[len - 1] == '\n' || c->buf[len - 1] == '\r')) {
+        c->buf[--len] = '\0';
+    }
+    for (size_t i = 0; i < len; ) {
+        size_t used = sel_utf8_glyph(c->buf + i, glyph, sizeof(glyph));
+
+        if (used == 0) {
+            break;
+        }
+        i += used;
+        c->chars++;
+    }
+    c->row = row;
+    return true;
+}
+
+/** Cell provider: the glyph at 1-based char column @p col of scrollback row
+ *  @p row. Answers false past the end of the row. */
+static bool windows_transcript_cell(void *vctx, int row, int col,
+                                    char *out, size_t out_size)
+{
+    windows_sel_ctx_t *c = (windows_sel_ctx_t *)vctx;
+    char glyph[8];
+
+    if (c == NULL || out == NULL || out_size < 2 || col < 1) {
+        return false;
+    }
+    if (!windows_sel_row_load(c, row)) {
+        return false;
+    }
+    if (col > c->chars) {
+        return false;
+    }
+    if (col < c->cursor_col) {
+        c->cursor_col = 1;
+        c->byte = 0;
+    }
+    while (c->cursor_col < col) {
+        size_t used = sel_utf8_glyph(c->buf + c->byte, glyph, sizeof(glyph));
+
+        if (used == 0) {
+            return false;
+        }
+        c->byte += used;
+        c->cursor_col++;
+    }
+    return sel_utf8_glyph(c->buf + c->byte, out, out_size) > 0;
+}
+
+/** Scrollback row (1-based) under a screen point, clamped to the visible band
+ *  so a drag that leaves the transcript selects only what can be seen. */
+static bool windows_transcript_row_at(lv_point_t point, int *row_out)
+{
+    lv_obj_t *container = s_windows.transcript;
+    lv_obj_t *spans = s_windows.transcript_spans;
+    lv_area_t ca;
+    lv_area_t sa;
+    int32_t base;
+    int32_t y;
+    uint32_t row;
+
+    if (row_out == NULL || container == NULL || spans == NULL ||
+        s_transcript_row_count == 0 ||
+        s_transcript_render_first >= s_transcript_row_count) {
+        return false;
+    }
+    lv_obj_get_content_coords(container, &ca);
+    lv_obj_get_coords(spans, &sa);
+    /* Everything in the scrollback's own pixel space: prefix[render_first] is
+     * where the materialized window starts, and the span group's screen top is
+     * that same row, so the offset between them converts screen -> scrollback. */
+    base = (int32_t)s_transcript_prefix[s_transcript_render_first] - (int32_t)sa.y1;
+    y = (int32_t)point.y + base;
+    if (y < (int32_t)ca.y1 + base) {
+        y = (int32_t)ca.y1 + base;
+    }
+    if (y > (int32_t)ca.y2 + base) {
+        y = (int32_t)ca.y2 + base;
+    }
+    row = windows_transcript_start_row(y);
+    if (row >= s_transcript_row_count) {
+        row = s_transcript_row_count - 1;
+    } else if (row > 0 && s_transcript_prefix[row] > y) {
+        row--;
+    }
+    *row_out = (int)row + 1;
+    return true;
+}
+
+/** Repaint the selection rectangles (or clear them). */
+static void windows_transcript_sel_paint(void)
+{
+    sel_bounds_t bounds;
+    lv_obj_t *container = s_windows.transcript;
+    lv_coord_t width;
+
+    if (s_transcript_sel_layer == NULL || container == NULL) {
+        return;
+    }
+    if (!s_transcript_selecting || s_transcript_row_count == 0) {
+        windows_transcript_selection_clear_rects();
+        return;
+    }
+    sel_range_bounds(&s_transcript_sel, &bounds);
+    width = lv_obj_get_content_width(container);
+    lv_obj_set_size(s_transcript_sel_layer, width,
+                    s_transcript_prefix[s_transcript_row_count]);
+    lv_obj_clean(s_transcript_sel_layer);
+    for (int r = bounds.r0; r <= bounds.r1; r++) {
+        if (r < 1 || r > (int)s_transcript_row_count) {
+            continue;
+        }
+        sel_paint_rect(s_transcript_sel_layer, 0,
+                       s_transcript_prefix[r - 1],
+                       width,
+                       s_transcript_prefix[r] - s_transcript_prefix[r - 1]);
+    }
+}
+
+static void windows_transcript_selection_clear_rects(void)
+{
+    if (s_transcript_sel_layer != NULL) {
+        lv_obj_clean(s_transcript_sel_layer);
+    }
+}
+
+void windows_transcript_selection_clear(void)
+{
+    s_transcript_selecting = false;
+    s_transcript_sel_suppress_click = false;
+    if (s_transcript_sel_press_obj != NULL) {
+        lv_obj_remove_flag(s_transcript_sel_press_obj, LV_OBJ_FLAG_PRESS_LOCK);
+        s_transcript_sel_press_obj = NULL;
+    }
+    if (s_windows.transcript != NULL) {
+        lv_obj_add_flag(s_windows.transcript, LV_OBJ_FLAG_SCROLLABLE);
+    }
+    windows_transcript_selection_clear_rects();
+}
+
+bool windows_transcript_selection_copy(void)
+{
+    sel_bounds_t bounds;
+    windows_sel_ctx_t ctx;
+    const windows_transcript_row_t *longest = NULL;
+    bool copied;
+
+    if (!s_transcript_selecting || s_transcript_row_count == 0 ||
+        s_transcript_rows == NULL) {
+        return false;
+    }
+    sel_range_bounds(&s_transcript_sel, &bounds);
+    if (bounds.r0 < 1) {
+        bounds.r0 = 1;
+    }
+    if (bounds.r1 > (int)s_transcript_row_count) {
+        bounds.r1 = (int)s_transcript_row_count;
+    }
+    if (bounds.r1 < bounds.r0) {
+        return false;
+    }
+    for (int r = bounds.r0; r <= bounds.r1; r++) {
+        const windows_transcript_row_t *row = &s_transcript_rows[r - 1];
+
+        if (longest == NULL || row->len > longest->len) {
+            longest = row;
+        }
+    }
+    if (longest == NULL || longest->len == 0) {
+        return false;
+    }
+    /* Rows are selected whole: widen the column range to the longest selected
+     * row (bytes are an upper bound on glyphs) so the copy covers every
+     * character the highlight covers. */
+    bounds.c0 = 1;
+    bounds.c1 = (int)longest->len;
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.cap = longest->len + 1;
+    ctx.row = -1;
+    ctx.buf = p4heap_alloc_psram(ctx.cap);
+    if (ctx.buf == NULL) {
+        return false;
+    }
+    copied = sel_copy_cells(windows_transcript_cell, &ctx, &bounds);
+    heap_caps_free(ctx.buf);
+    if (copied) {
+        windows_transcript_selection_clear();
+    }
+    return copied;
+}
+
+bool windows_transcript_selection_tap(lv_coord_t x, lv_coord_t y)
+{
+    lv_point_t point = { x, y };
+    sel_bounds_t bounds;
+    int row = 0;
+
+    if (!s_transcript_selecting) {
+        return false;
+    }
+    sel_range_bounds(&s_transcript_sel, &bounds);
+    if (!windows_transcript_row_at(point, &row)) {
+        return false;
+    }
+    if (sel_bounds_contains(&bounds, row, 1)) {
+        return windows_transcript_selection_copy();
+    }
+    windows_transcript_selection_clear();
+    return true;
+}
+
+/**
+ * Long-press + drag selection on the transcript.
+ *
+ * Registered on the transcript container and on the span group: the container
+ * is the pressed object over the padding and empty space, the span group is
+ * the pressed object over the text itself (a label is not clickable, a span
+ * group is). A quick drag never reaches the long press - LVGL starts scrolling
+ * first - so panning keeps working unchanged; once the selection is armed the
+ * container's SCROLLABLE flag and the pressed object's PRESS_LOCK keep the
+ * gesture from panning or switching targets.
+ *
+ * The release that ends a drag also produces LV_EVENT_CLICKED (nothing
+ * scrolled), so the first click after a real drag is swallowed and the
+ * selection stays highlighted; a later tap inside it copies, a tap outside
+ * clears. CLICKED is claimed with lv_event_stop_processing so the shell
+ * transcript's own tap behaviour (keyboard summon) does not also fire.
+ */
+static void windows_transcript_selection_event_cb(lv_event_t *event)
+{
+    lv_event_code_t code = lv_event_get_code(event);
+    lv_obj_t *target = lv_event_get_current_target(event);
+    lv_indev_t *indev = lv_indev_get_act();
+    lv_point_t point = { 0, 0 };
+    int row = 0;
+
+    /* Only the plain shell transcript is selectable: while a modal, the TUI
+     * page or an app surface owns the container, a press belongs to it (the
+     * same guard the scroll handler uses). */
+    if (s_windows.editor_mode || s_windows.tui_mode ||
+        s_windows.app_surface_active) {
+        return;
+    }
+    if (indev != NULL) {
+        lv_indev_get_point(indev, &point);
+    }
+
+    switch (code) {
+    case LV_EVENT_LONG_PRESSED:
+        if (!windows_transcript_row_at(point, &row)) {
+            break;
+        }
+        sel_range_init(&s_transcript_sel, row, 1);
+        s_transcript_selecting = true;
+        s_transcript_sel_suppress_click = false;
+        s_transcript_sel_press_obj = target;
+        if (s_windows.transcript != NULL) {
+            lv_obj_clear_flag(s_windows.transcript, LV_OBJ_FLAG_SCROLLABLE);
+        }
+        lv_obj_add_flag(target, LV_OBJ_FLAG_PRESS_LOCK);
+        windows_transcript_sel_paint();
+        break;
+    case LV_EVENT_PRESSING:
+        if (!s_transcript_selecting || !windows_transcript_row_at(point, &row)) {
+            break;
+        }
+        if (row != s_transcript_sel.fr) {
+            sel_range_focus(&s_transcript_sel, row, 1);
+            windows_transcript_sel_paint();
+        }
+        break;
+    case LV_EVENT_RELEASED:
+        if (s_transcript_selecting) {
+            /* The release that ends a drag also raises CLICKED (nothing
+             * scrolled): that one closes the gesture, it is not a tap on the
+             * selection, and the highlight stays up for the next tap. */
+            s_transcript_sel_suppress_click = true;
+        }
+        if (s_transcript_sel_press_obj != NULL) {
+            lv_obj_remove_flag(s_transcript_sel_press_obj, LV_OBJ_FLAG_PRESS_LOCK);
+            s_transcript_sel_press_obj = NULL;
+        }
+        if (s_windows.transcript != NULL) {
+            lv_obj_add_flag(s_windows.transcript, LV_OBJ_FLAG_SCROLLABLE);
+        }
+        break;
+    case LV_EVENT_CLICKED:
+        if (!s_transcript_selecting) {
+            break;
+        }
+        if (s_transcript_sel_suppress_click) {
+            s_transcript_sel_suppress_click = false;
+            lv_event_stop_processing(event);
+            break;
+        }
+        if (windows_transcript_selection_tap(point.x, point.y)) {
+            lv_event_stop_processing(event);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 /** Container scroll (touch drag, mouse wheel, arrow keys, scroll buttons):
  *  shift the materialized row window as the visible range moves out of it. */
 static void windows_transcript_scroll_event_cb(lv_event_t *event)
-{
-    (void)event;
+{    (void)event;
     if (s_transcript_render_busy || s_windows.shell_spans_hidden ||
         s_windows.editor_mode || s_windows.app_surface_active ||
         s_windows.tui_mode || s_windows.transcript == NULL ||
@@ -2111,7 +2538,7 @@ void windows_deinit(void)
     }
 
     /* Deinitialize the header and keyboard before cleaning the screen
-     * so they can be re-initialized fresh ΓÇö needed for display rotation
+     * so they can be re-initialized fresh Î“Ã‡Ã¶ needed for display rotation
      * support. */
     header_deinit();
     keyboard_deinit();
@@ -2141,6 +2568,12 @@ void windows_deinit(void)
     s_windows.transcript_spans = NULL;
     s_windows.transcript_spacer = NULL;
     s_windows.transcript_measure = NULL;
+    /* The highlight layer was a child of the transcript container (freed by
+     * the screen clean above); drop the dangling handle with the surface. */
+    s_transcript_sel_layer = NULL;
+    s_transcript_selecting = false;
+    s_transcript_sel_suppress_click = false;
+    s_transcript_sel_press_obj = NULL;
     s_windows.input_row = NULL;
     s_windows.input_line = NULL;
     s_windows.prev_button = NULL;
@@ -2216,7 +2649,7 @@ void windows_notify_keyboard_visibility(bool visible)
 
     /* The screen is a flex column; the header, transcript, input row and
      * keyboard are already positioned by flex in creation order. Do NOT set
-     * manual y coordinates on any flex child ΓÇö that fights the flex layout
+     * manual y coordinates on any flex child Î“Ã‡Ã¶ that fights the flex layout
      * and throws the keyboard to the top with a black void below. The only
      * region that needs re-bounding when the keyboard shows/hides is the
      * transcript, whose height is explicit (not flex-grow), so it must be
@@ -2294,8 +2727,8 @@ void windows_debug_editor_layout(void)
     lv_coord_t kb_h = keyboard_is_visible() ? keyboard_get_height() : 0;
 
     /* A healthy layout is the normal case and must not spam the serial log
-     * (the firmware logs at WARN by default). Only a collapsed surface ΓÇö the
-     * real failure this guards against ΓÇö is worth a warning; the full geometry
+     * (the firmware logs at WARN by default). Only a collapsed surface Î“Ã‡Ã¶ the
+     * real failure this guards against Î“Ã‡Ã¶ is worth a warning; the full geometry
      * is available at debug level. */
     if (surface_h < region.height) {
         ESP_LOGW(WINDOWS_TAG,
@@ -2687,7 +3120,7 @@ void windows_set_editor_focus(bool focus)
     /* Writerdeck focus mode: hide the header + on-screen keyboard and give the
      * space to the editor surface, mirroring windows_set_fullscreen() but
      * keeping the input row (the editor status bar with the word count) and
-     * WITHOUT a full UI rebuild ΓÇö a rebuild would tear down the open editor. */
+     * WITHOUT a full UI rebuild Î“Ã‡Ã¶ a rebuild would tear down the open editor. */
     header_set_visible(!focus);
     if (focus) {
         keyboard_hide();

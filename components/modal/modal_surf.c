@@ -15,6 +15,7 @@
 #include "modal_surf.h"
 #include "modal.h"
 #include "windows.h"
+#include "selection.h"
 #include "markdown.h"
 #include "html.h"
 #include "filetype.h"
@@ -273,6 +274,337 @@ static void surf_style_textarea(lv_obj_t *ta)
     lv_obj_set_style_border_color(ta, lv_color_hex(th->modal_panel_border), 0);
     lv_obj_set_style_border_width(ta, 1, 0);
     lv_obj_set_style_radius(ta, 0, 0);
+}
+
+/* ========================================================================
+ * TEXT SELECTION (the pager surfaces: viewer, hexview)
+ * ========================================================================
+ * Both pagers are an lv_textarea holding the whole document, so the text model
+ * is the label's text and the geometry is LVGL's: lv_label_get_letter_on()
+ * turns a touch point into a character index (wrap, alignment and font metrics
+ * included) and the label's own text selection paints the highlight. Copying
+ * goes through the shared selection core (components/selection), so a pager
+ * selection lands in the same clipboard as a TUI page or transcript selection.
+ *
+ * Gesture, matching the other surfaces: long-press arms a character range,
+ * dragging extends it (the pager does not scroll while selecting), the
+ * highlight stays after the finger lifts, a tap inside copies it and a tap
+ * outside clears it.
+ */
+
+typedef struct {
+    lv_obj_t *ta;        /**< The textarea hosting the text (NULL = detached). */
+    lv_obj_t *label;     /**< Its label: the text model and highlight owner. */
+    sel_range_t range;   /**< Anchor/focus cell of the drag. */
+    bool active;         /**< A selection exists (armed or committed). */
+    bool suppress_click; /**< The next CLICKED ends the drag (not a tap). */
+} surf_text_sel_t;
+
+static surf_text_sel_t s_text_sel;
+
+static void surf_text_sel_detach(void);
+static void surf_row_sel_event_cb(lv_event_t *event);
+
+/** The pager's text (LVGL owns it; stable while the surface is open). */
+static const char *surf_text_sel_text(void)
+{
+    if (s_text_sel.label == NULL) {
+        return NULL;
+    }
+    return lv_label_get_text(s_text_sel.label);
+}
+
+/** Character span [first, last) the current range covers. */
+static bool surf_text_sel_span(int *first_out, int *last_out)
+{
+    const char *text = surf_text_sel_text();
+
+    if (text == NULL || first_out == NULL || last_out == NULL) {
+        return false;
+    }
+    /* Linear reading-order span: text has no columns to line up, so a drag
+     * from mid-line 2 to the end of line 5 covers line 2's tail, every line
+     * between, and line 5's head. */
+    return sel_text_span_from_range(text, &s_text_sel.range, first_out,
+                                    last_out);
+}
+
+static void surf_text_sel_paint(void)
+{
+    int first = 0;
+    int last = 0;
+
+    if (s_text_sel.label == NULL) {
+        return;
+    }
+    if (!s_text_sel.active || !surf_text_sel_span(&first, &last)) {
+        sel_paint_label_clear(s_text_sel.label);
+        return;
+    }
+    sel_paint_label(s_text_sel.label, first, last);
+}
+
+/** Character index under a screen point (clamped to the text). */
+static bool surf_text_sel_index_at(lv_point_t point, int *index_out)
+{
+    const char *text = surf_text_sel_text();
+    lv_area_t area;
+    lv_point_t rel;
+    uint32_t index;
+    int count;
+
+    if (s_text_sel.label == NULL || text == NULL || index_out == NULL) {
+        return false;
+    }
+    count = sel_char_count(text);
+    if (count <= 0) {
+        return false;
+    }
+    lv_obj_get_coords(s_text_sel.label, &area);
+    rel.x = point.x - area.x1;
+    rel.y = point.y - area.y1;
+    index = lv_label_get_letter_on(s_text_sel.label, &rel, true);
+    if (index >= (uint32_t)count) {
+        index = (uint32_t)count - 1;   /* a point past the text clamps to the end */
+    }
+    *index_out = (int)index;
+    return true;
+}
+
+/** Cell (row/column) under a screen point, for the shared range model. */
+static bool surf_text_sel_cell_at(lv_point_t point, int *row_out, int *col_out)
+{
+    const char *text = surf_text_sel_text();
+    int index = 0;
+
+    if (text == NULL || !surf_text_sel_index_at(point, &index)) {
+        return false;
+    }
+    return sel_index_to_row_col(text, index, row_out, col_out);
+}
+
+bool modal_surf_selection_copy(void)
+{
+    const char *text = surf_text_sel_text();
+    int first = 0;
+    int last = 0;
+
+    if (!s_text_sel.active || text == NULL ||
+        !surf_text_sel_span(&first, &last)) {
+        return false;
+    }
+    if (!sel_copy_text_span(text, first, last)) {
+        return false;
+    }
+    modal_surf_selection_clear();
+    return true;
+}
+
+bool modal_surf_selection_clear(void)
+{
+    if (s_text_sel.label == NULL) {
+        s_text_sel.active = false;
+        s_text_sel.suppress_click = false;
+        return false;
+    }
+    s_text_sel.active = false;
+    s_text_sel.suppress_click = false;
+    sel_paint_label_clear(s_text_sel.label);
+    return true;
+}
+
+/** Tap at (@p x, @p y): copy a selection the tap lands in, clear one it does
+ *  not. @return true when a selection consumed the tap. */
+static bool surf_text_sel_tap(lv_coord_t x, lv_coord_t y)
+{
+    lv_point_t point = { x, y };
+    const char *text = surf_text_sel_text();
+    int index = 0;
+
+    if (!s_text_sel.active || text == NULL) {
+        return false;
+    }
+    if (!surf_text_sel_index_at(point, &index)) {
+        return false;
+    }
+    if (sel_text_range_contains(text, &s_text_sel.range, index)) {
+        return modal_surf_selection_copy();
+    }
+    modal_surf_selection_clear();
+    return true;
+}
+
+static void surf_text_sel_event_cb(lv_event_t *event)
+{
+    lv_event_code_t code = lv_event_get_code(event);
+    lv_indev_t *indev = lv_indev_get_act();
+    lv_point_t point = { 0, 0 };
+    int row = 0;
+    int col = 0;
+
+    if (indev != NULL) {
+        lv_indev_get_point(indev, &point);
+    }
+
+    switch (code) {
+    case LV_EVENT_LONG_PRESSED:
+        if (!surf_text_sel_cell_at(point, &row, &col)) {
+            break;
+        }
+        sel_range_init(&s_text_sel.range, row, col);
+        s_text_sel.active = true;
+        s_text_sel.suppress_click = false;
+        /* Selecting must not page/scroll the textarea for this gesture, nor
+         * hand the drag to an ancestor's scroll (the transcript container
+         * behind the modal panel). */
+        if (s_text_sel.ta != NULL) {
+            lv_obj_clear_flag(s_text_sel.ta, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_clear_flag(s_text_sel.ta, LV_OBJ_FLAG_SCROLL_CHAIN_HOR |
+                                           LV_OBJ_FLAG_SCROLL_CHAIN_VER);
+            lv_obj_add_flag(s_text_sel.ta, LV_OBJ_FLAG_PRESS_LOCK);
+        }
+        surf_text_sel_paint();
+        break;
+    case LV_EVENT_PRESSING:
+        if (!s_text_sel.active ||
+            !surf_text_sel_cell_at(point, &row, &col)) {
+            break;
+        }
+        if (row != s_text_sel.range.fr || col != s_text_sel.range.fc) {
+            sel_range_focus(&s_text_sel.range, row, col);
+            surf_text_sel_paint();
+        }
+        break;
+    case LV_EVENT_RELEASED:
+        if (s_text_sel.active) {
+            /* The release that ends a drag also raises CLICKED (nothing
+             * scrolled): that one closes the gesture, it is not a tap on the
+             * selection, and the highlight stays up for the next tap. */
+            s_text_sel.suppress_click = true;
+        }
+        if (s_text_sel.ta != NULL) {
+            lv_obj_add_flag(s_text_sel.ta, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_flag(s_text_sel.ta, LV_OBJ_FLAG_SCROLL_CHAIN_HOR |
+                                          LV_OBJ_FLAG_SCROLL_CHAIN_VER);
+            lv_obj_remove_flag(s_text_sel.ta, LV_OBJ_FLAG_PRESS_LOCK);
+        }
+        break;
+    case LV_EVENT_CLICKED:
+        if (!s_text_sel.active) {
+            break;
+        }
+        if (s_text_sel.suppress_click) {
+            s_text_sel.suppress_click = false;
+            lv_event_stop_processing(event);
+            break;
+        }
+        if (surf_text_sel_tap(point.x, point.y)) {
+            lv_event_stop_processing(event);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+/** Arm text selection on a pager textarea (its label is the text model). */
+static void surf_text_sel_attach(lv_obj_t *ta)
+{
+    lv_obj_t *label;
+
+    if (ta == NULL) {
+        return;
+    }
+    label = lv_obj_get_child(ta, 0);
+    if (label == NULL || !lv_obj_check_type(label, &lv_label_class)) {
+        return;
+    }
+    surf_text_sel_detach();
+    s_text_sel.ta = ta;
+    s_text_sel.label = label;
+    s_text_sel.active = false;
+    s_text_sel.suppress_click = false;
+    lv_obj_add_event_cb(ta, surf_text_sel_event_cb, LV_EVENT_ALL, NULL);
+}
+
+/**
+ * Arm row selection on a list row (the file browser): the row's label text
+ * after its fixed 4-character marker ("[D] " for directories, four spaces for
+ * files) is the selectable range, so a long press highlights the entry name
+ * and a tap copies exactly that name. Rows are recreated when the directory
+ * changes, so the surface clears this selection before cleaning its list.
+ */
+static void surf_row_sel_attach(lv_obj_t *row, lv_obj_t *label)
+{
+    if (row == NULL || label == NULL) {
+        return;
+    }
+    lv_obj_set_user_data(row, label);
+    lv_obj_add_event_cb(row, surf_row_sel_event_cb, LV_EVENT_ALL, NULL);
+}
+
+/** Fixed marker width of a file-browser row label ("[D] " or four spaces). */
+#define SURF_ROW_PREFIX_CHARS   4
+
+/** Long-press selects a list row's name; a tap inside copies it. */
+static void surf_row_sel_event_cb(lv_event_t *event)
+{
+    lv_event_code_t code = lv_event_get_code(event);
+    lv_obj_t *row = lv_event_get_current_target(event);
+    lv_obj_t *label = (lv_obj_t *)lv_obj_get_user_data(row);
+    lv_indev_t *indev = lv_indev_get_act();
+    lv_point_t point = { 0, 0 };
+    const char *text;
+    int count;
+
+    if (indev != NULL) {
+        lv_indev_get_point(indev, &point);
+    }
+    switch (code) {
+    case LV_EVENT_LONG_PRESSED:
+        text = (label != NULL) ? lv_label_get_text(label) : NULL;
+        count = (text != NULL) ? sel_char_count(text) : 0;
+        if (count <= SURF_ROW_PREFIX_CHARS) {
+            break;
+        }
+        s_text_sel.ta = NULL;   /* row selection: nothing to scroll */
+        s_text_sel.label = label;
+        sel_range_init(&s_text_sel.range, 1, SURF_ROW_PREFIX_CHARS + 1);
+        sel_range_focus(&s_text_sel.range, 1, count);
+        s_text_sel.active = true;
+        s_text_sel.suppress_click = false;
+        surf_text_sel_paint();
+        break;
+    case LV_EVENT_RELEASED:
+        if (s_text_sel.active) {
+            s_text_sel.suppress_click = true;
+        }
+        break;
+    case LV_EVENT_CLICKED:
+        if (!s_text_sel.active || label == NULL || s_text_sel.label != label) {
+            break;
+        }
+        if (s_text_sel.suppress_click) {
+            s_text_sel.suppress_click = false;
+            lv_event_stop_processing(event);
+            break;
+        }
+        if (surf_text_sel_tap(point.x, point.y)) {
+            lv_event_stop_processing(event);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+/** Forget the pager textarea (the surface is closing). */
+static void surf_text_sel_detach(void)
+{
+    s_text_sel.ta = NULL;
+    s_text_sel.label = NULL;
+    s_text_sel.active = false;
+    s_text_sel.suppress_click = false;
 }
 
 /* ========================================================================
@@ -790,6 +1122,9 @@ static void fb_refresh_list(fb_ctx_t *ctx)
 {
     fb_free_entries(ctx);
     lvgl_port_lock(0);
+    /* Rows are about to be recreated: a selection holding one of their labels
+     * must not survive into the new list. */
+    (void)modal_surf_selection_clear();
     if (ctx->list) lv_obj_clean(ctx->list);
     if (ctx->path_label) lv_label_set_text(ctx->path_label, ctx->current_path);
     lvgl_port_unlock();
@@ -843,6 +1178,10 @@ static void fb_refresh_list(fb_ctx_t *ctx)
         lv_obj_set_width(btn, LV_PCT(100));
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, label);
+        /* Long-press selects the entry name and a tap on the selection copies
+         * it; registering first means that tap can consume the click before
+         * the row's own "open this entry" handler runs. */
+        surf_row_sel_attach(btn, lbl);
         lv_obj_add_event_cb(btn, fb_entry_cb, LV_EVENT_CLICKED, (void *)(intptr_t)ctx->entry_count);
         ctx->entries[ctx->entry_count] = paths[i];
         ctx->is_dir[ctx->entry_count] = isdir[i];
@@ -914,6 +1253,8 @@ static void fb_surface_close(void *ctx_ptr)
     fb_ctx_t *ctx = (fb_ctx_t *)ctx_ptr;
     if (ctx->timer) { xTimerStop(ctx->timer, 0); xTimerDelete(ctx->timer, 0); ctx->timer = NULL; }
     fb_free_entries(ctx);
+    /* Drop any row selection before the list objects disappear. */
+    surf_text_sel_detach();
     lvgl_port_lock(0);
     if (ctx->panel) { lv_obj_del(ctx->panel); ctx->panel = NULL; ctx->list = NULL; ctx->path_label = NULL; }
     windows_exit_editor_mode();
@@ -1130,6 +1471,9 @@ static bool viewer_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
                                          P4_CONFIG_READING_LINE_SPACING, 0);
     }
     lv_textarea_set_cursor_click_pos(ctx->ta, false);
+    /* Long-press + drag text selection on the pager body (same core as the
+     * TUI page and the transcript). */
+    surf_text_sel_attach(ctx->ta);
     lv_obj_t *row = lv_obj_create(ctx->panel);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
@@ -1154,6 +1498,7 @@ static void viewer_surface_close(void *ctx_ptr)
     viewer_ctx_t *ctx = (viewer_ctx_t *)ctx_ptr;
     if (ctx->timer) { xTimerStop(ctx->timer,0); xTimerDelete(ctx->timer,0); ctx->timer=NULL; }
     if (ctx->content) { free(ctx->content); ctx->content=NULL; }
+    surf_text_sel_detach();
     lvgl_port_lock(0);
     if (ctx->panel) { lv_obj_del(ctx->panel); ctx->panel=NULL; ctx->ta=NULL; }
     windows_exit_editor_mode();
@@ -1640,6 +1985,9 @@ static bool hex_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     lv_obj_set_size(ctx->ta, LV_PCT(100), LV_PCT(100));
     lv_textarea_set_text(ctx->ta, ctx->content ? ctx->content : "");
     lv_obj_set_style_text_font(ctx->ta, windows_get_terminal_font(), 0);
+    /* Hex rows are a fixed-width grid: the same character selection as the
+     * text pager, on the same shared core. */
+    surf_text_sel_attach(ctx->ta);
     lv_obj_t *row = lv_obj_create(ctx->panel);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
@@ -1664,6 +2012,7 @@ static void hex_surface_close(void *ctx_ptr)
     hex_ctx_t *ctx = (hex_ctx_t *)ctx_ptr;
     if (ctx->timer) { xTimerStop(ctx->timer,0); xTimerDelete(ctx->timer,0); ctx->timer=NULL; }
     if (ctx->content) { free(ctx->content); ctx->content=NULL; }
+    surf_text_sel_detach();
     lvgl_port_lock(0);
     if (ctx->panel) { lv_obj_del(ctx->panel); ctx->panel=NULL; ctx->ta=NULL; }
     windows_exit_editor_mode();

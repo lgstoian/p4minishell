@@ -36,6 +36,7 @@
 #include "header_refresh.h"
 #include "keyboard.h"
 #include "windows.h"
+#include "selection.h"
 #include "clock.h"
 #include "p4minishell_config.h"
 #include "board_config.h"
@@ -5310,6 +5311,23 @@ static void shell_mouse_secondary(void *ctx)
     shell_usb_keyboard_input(0x29u, 0u, true);
 }
 
+/**
+ * The selection core's commit sink: one clipboard for every text surface.
+ *
+ * The TUI page, the transcript scrollback and the modal pagers all assemble
+ * their selection through components/selection, so they all land here and thus
+ * in the same buffer `clip`/`paste` use. There is no second clipboard and no
+ * second "copied" notice.
+ */
+static void shell_selection_commit(const char *text)
+{
+    if (text == NULL || text[0] == '\0') {
+        return;
+    }
+    shell_clipboard_set(text);
+    header_notify(HEADER_NOTIFY_INFO, "selection copied", 1500);
+}
+
 void shell_init(void)
 {
     if (s_initialized) {
@@ -5352,6 +5370,11 @@ void shell_init(void)
         return;
     }
     shell_transcript_set_sink(&s_transcript_sink, NULL);
+
+    /* Point the shared selection core at this shell's clipboard: a selection
+     * made on the TUI page, the transcript or a modal pager is committed here
+     * (shell_clipboard_set + the header notice). */
+    sel_set_commit(shell_selection_commit);
 
     /* Interactive keypress queue used by pause, choice, and more. Created
      * before any input source starts so no keystroke can be lost. */

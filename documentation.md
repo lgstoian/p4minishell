@@ -194,6 +194,31 @@ being large: BMP/PNG/JPEG all render as cell art, and a CSS `background-image`
 is tiled behind the text (coalesced into a few rectangles, so a solid or banded
 backdrop covers the whole page).
 
+**Text selection everywhere (v1.4.3).** Selection is one shared core
+(`components/selection`): a drag range (anchor cell + focus cell), a
+copy-from-provider step that asks the surface for one cell of its own text (so
+no surface keeps a second copy), one clipboard commit sink installed by the
+shell (`shell_clipboard_set` + the "selection copied" notice), and the
+highlight paints. The gesture is the same everywhere - long press arms the
+range, dragging extends it, a tap inside copies, a tap outside clears - and the
+serial equivalent is `ui selection copy|clear` (claimed while a modal owns the
+screen, like `ui tap`).
+
+Granularity follows each surface's text model:
+
+- the TUI/browser page selects a cell range of its grid (highlight rectangles
+  over the glyphs) - unchanged behaviour, now on the shared core;
+- the transcript scrollback selects whole visible rows (its rows are laid out
+  by LVGL word wrapping, so a character inside a wrapped row has no stable
+  address without a second text model); the text comes from the same row table
+  the renderer draws, ANSI-stripped on demand;
+- the `view` / `hexview` pagers select an exact character range: the touch
+  point resolves through LVGL's own label metrics, so the copy and the
+  highlight are character-accurate even for the proportional reading font;
+- `browse` rows select their entry name (a list has rows, not columns).
+
+The editor keeps its own drag/keyboard selection.
+
 ## Configuration system
 
 All tunable values are centralized in `p4minishell_config.h`, organized by

@@ -10,6 +10,7 @@
 #include "tui.h"
 #include "tui_page_shot_internal.h"
 #include "windows.h"
+#include "selection.h"
 #include "ansi.h"
 #include "ansi_palette.h"
 #include "emoji_core.h"
@@ -458,11 +459,16 @@ void tui_page_bg_rect(int col, int row, int w, int h, uint8_t bg,
  *   - tap inside a selection -> copy it to the shell clipboard
  * A tall invisible spacer gives the overlay a scroll range so LVGL emits
  * SCROLL for both touch and wheel; the overlay's own position never moves.
+ *
+ * The selection itself (range model, copy-from-provider, highlight paint) is
+ * the shared core in components/selection - the same one the transcript and
+ * the modal pagers use. This file only supplies the page-cell provider and the
+ * grid geometry.
  */
 static lv_obj_t *s_touch;
 static lv_obj_t *s_sel_layer;
 static bool s_selecting;
-static int s_sel_ar = 1, s_sel_ac = 1, s_sel_fr = 1, s_sel_fc = 1;
+static sel_range_t s_sel;
 static void (*s_link_cb)(const char *url);
 static lv_coord_t s_last_scroll;
 static lv_coord_t s_press_y;
@@ -481,42 +487,14 @@ static void tui_sel_rects_clear(void)
 
 static void tui_sel_rects_draw(void)
 {
-    int r0, r1, c0, c1;
-    int cw, ch;
+    sel_bounds_t bounds;
 
     if (!s_selecting || s_sel_layer == NULL || s_bound_cell == NULL) {
         return;
     }
-    tui_sel_rects_clear();
-    r0 = s_sel_ar < s_sel_fr ? s_sel_ar : s_sel_fr;
-    r1 = s_sel_ar > s_sel_fr ? s_sel_ar : s_sel_fr;
-    c0 = s_sel_ac < s_sel_fc ? s_sel_ac : s_sel_fc;
-    c1 = s_sel_ac > s_sel_fc ? s_sel_ac : s_sel_fc;
-    cw = s_bound_cell->cell_w;
-    ch = s_bound_cell->cell_h;
-    for (int r = r0; r <= r1; r++) {
-        int row_start = (r == r0) ? c0 : 1;
-        int row_end = (r == r1) ? c1 : s_cols;
-        int x = (row_start - 1) * cw;
-        int w = (row_end - row_start + 1) * cw;
-
-        if (w <= 0) {
-            continue;
-        }
-        lv_obj_t *box = lv_obj_create(s_sel_layer);
-
-        if (box == NULL) {
-            break;
-        }
-        lv_obj_remove_style_all(box);
-        lv_obj_set_pos(box, x, (r - 1) * ch);
-        lv_obj_set_size(box, w, ch);
-        lv_obj_set_style_bg_color(box, lv_color_hex(0x2D7FF9), 0);
-        lv_obj_set_style_bg_opa(box, LV_OPA_50, 0);
-        lv_obj_set_style_border_color(box, lv_color_hex(0x7FB2FF), 0);
-        lv_obj_set_style_border_width(box, 1, 0);
-        lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-    }
+    sel_range_bounds(&s_sel, &bounds);
+    sel_paint_cells(s_sel_layer, 0, 0, s_bound_cell->cell_w,
+                    s_bound_cell->cell_h, s_cols, &bounds);
 }
 
 /** Point (screen coords) -> 1-based cell in the grid. */
@@ -592,8 +570,7 @@ static void tui_touch_event_cb(lv_event_t *event)
         break;
     case LV_EVENT_LONG_PRESSED:
         tui_point_to_cell(p, &row, &col);
-        s_sel_ar = s_sel_fr = row;
-        s_sel_ac = s_sel_fc = col;
+        sel_range_init(&s_sel, row, col);
         s_selecting = true;
         lv_obj_clear_flag(s_touch, LV_OBJ_FLAG_SCROLLABLE);
         tui_sel_rects_draw();
@@ -601,9 +578,8 @@ static void tui_touch_event_cb(lv_event_t *event)
     case LV_EVENT_PRESSING:
         if (s_selecting) {
             tui_point_to_cell(p, &row, &col);
-            if (row != s_sel_fr || col != s_sel_fc) {
-                s_sel_fr = row;
-                s_sel_fc = col;
+            if (row != s_sel.fr || col != s_sel.fc) {
+                sel_range_focus(&s_sel, row, col);
                 tui_sel_rects_draw();
             }
             break;
@@ -630,13 +606,11 @@ static void tui_touch_event_cb(lv_event_t *event)
         break;
     case LV_EVENT_CLICKED:
         if (s_selecting) {
-            int r0 = s_sel_ar < s_sel_fr ? s_sel_ar : s_sel_fr;
-            int r1 = s_sel_ar > s_sel_fr ? s_sel_ar : s_sel_fr;
-            int c0 = s_sel_ac < s_sel_fc ? s_sel_ac : s_sel_fc;
-            int c1 = s_sel_ac > s_sel_fc ? s_sel_ac : s_sel_fc;
+            sel_bounds_t bounds;
 
+            sel_range_bounds(&s_sel, &bounds);
             tui_point_to_cell(p, &row, &col);
-            if (row >= r0 && row <= r1 && col >= c0 && col <= c1) {
+            if (sel_bounds_contains(&bounds, row, col)) {
                 (void)tui_selection_copy();
             } else {
                 tui_selection_clear();
@@ -2118,68 +2092,43 @@ void tui_page_clear(void)
     s_link_count = 0;
     memset(s_links, 0, sizeof(s_links));
 }
+/** Page-cell provider for the shared selection core: one rune of the live page
+ *  at screen cell (row, col). Out-of-page cells answer blank, exactly as the
+ *  old inline copy did. */
+static bool tui_selection_cell(void *ctx, int row, int col,
+                               char *out, size_t out_size)
+{
+    uint8_t fg = 0;
+    uint8_t bg = 0;
+    uint8_t attr = 0;
+
+    (void)ctx;
+    if (out == NULL || out_size < 2) {
+        return false;
+    }
+    if (!tui_page_get_cell(col, s_scroll_offset + row, out, out_size,
+                           &fg, &bg, &attr)) {
+        return false;
+    }
+    if (out[0] == '\0') {
+        out[0] = ' ';
+        out[1] = '\0';
+    }
+    return true;
+}
+
 bool tui_selection_copy(void)
 {
-    int r0, r1, c0, c1;
-    size_t cap;
-    char *out;
-    size_t pos = 0;
+    sel_bounds_t bounds;
 
     if (!s_selecting || s_tui_label == NULL) {
         return false;
     }
-    r0 = s_sel_ar < s_sel_fr ? s_sel_ar : s_sel_fr;
-    r1 = s_sel_ar > s_sel_fr ? s_sel_ar : s_sel_fr;
-    c0 = s_sel_ac < s_sel_fc ? s_sel_ac : s_sel_fc;
-    c1 = s_sel_ac > s_sel_fc ? s_sel_ac : s_sel_fc;
-    cap = (size_t)(c1 - c0 + 2) * (size_t)(r1 - r0 + 1) * 5u + 1u;
-    out = p4heap_alloc_psram(cap);
-    if (out == NULL) {
-        return false;
-    }
-    for (int r = r0; r <= r1; r++) {
-        size_t line = pos;
-        size_t line_end;
-
-        for (int c = c0; c <= c1; c++) {
-            char utf8[5] = { 0 };
-            uint8_t fg = 0, bg = 0, attr = 0;
-
-            if (!tui_page_get_cell(c, s_scroll_offset + r, utf8, sizeof(utf8),
-                                   &fg, &bg, &attr)) {
-                continue;
-            }
-            if (utf8[0] == '\0') {
-                utf8[0] = ' ';
-                utf8[1] = '\0';
-            }
-            for (size_t i = 0; utf8[i] != '\0' && pos + 1 < cap; i++) {
-                out[pos++] = utf8[i];
-            }
-        }
-        /* Trim trailing blanks on the copied line. */
-        line_end = pos;
-        while (line_end > line && (out[line_end - 1] == ' ' ||
-                                   out[line_end - 1] == '\t')) {
-            line_end--;
-        }
-        pos = line_end;
-        if (pos + 1 < cap) {
-            out[pos++] = '\n';
-        }
-    }
-    if (pos > 0 && out[pos - 1] == '\n') {
-        pos--;
-    }
-    out[pos] = '\0';
-    if (pos == 0) {
-        p4heap_free(out);
+    sel_range_bounds(&s_sel, &bounds);
+    if (!sel_copy_cells(tui_selection_cell, NULL, &bounds)) {
         tui_selection_clear();
         return false;
     }
-    shell_clipboard_set(out);
-    p4heap_free(out);
-    header_notify(HEADER_NOTIFY_INFO, "selection copied", 1500);
     tui_selection_clear();
     return true;
 }

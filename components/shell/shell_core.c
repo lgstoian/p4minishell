@@ -1075,7 +1075,7 @@ const shell_help_entry_t shell_core_help_entries[] = {
     { "display",  "display info | resolution | refresh | power <on|sleep|off>" },
     { "keyboard", "keyboard show | hide | toggle | status - on-screen keyboard" },
     { "windows",  "windows info - window layout state" },
-    { "ui",       "ui tap|longpress|swipe|press|move|release|key|target|targets|hit|state - synthetic touch automation" },
+    { "ui",       "ui tap|longpress|swipe|press|move|release|key|target|targets|hit|state|selection - synthetic touch automation + text-selection copy/clear" },
     { "dialog",   "dialog [/t:secs] \"title\" \"message\" [button1] [button2] - message box (ERRORLEVEL 0/1/255)" },
     { "list",     "list [/t:secs] [/v:NAME] \"title\" item... - scrollable selector (ERRORLEVEL = 0-based index)" },
     { "ask",      "ask [/t:secs] [/v:NAME] [/p] \"prompt\" [default] - text input to ASK_RESULT (ERRORLEVEL 0/1)" },

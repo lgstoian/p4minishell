@@ -117,6 +117,30 @@ lv_obj_t *windows_get_transcript(void);
  *  The editor hides it while its own surface owns the container. */
 lv_obj_t *windows_get_transcript_spans(void);
 
+/* ========================================================================
+ * TRANSCRIPT TEXT SELECTION
+ * ========================================================================
+ * Long-press + drag on the transcript selects the visible rows it covers
+ * (whole rows: the row table is laid out by LVGL's wrapping, so a row is the
+ * model's honest text unit). The highlight is drawn in the scrollback's own
+ * coordinates, a tap inside the selection copies it to the shell clipboard
+ * through the shared selection core, and a tap outside clears it. A quick drag
+ * still pans: LVGL starts scrolling before the long press arms the selection.
+ */
+
+/** Copy the transcript selection to the clipboard (the same call the tap and
+ *  the `ui selection copy` verb use). @return true when text was copied.
+ *  LVGL task. */
+bool windows_transcript_selection_copy(void);
+
+/** Drop the transcript selection and its highlight. LVGL task. */
+void windows_transcript_selection_clear(void);
+
+/** Handle a tap at (@p x, @p y): copy a selection the tap lands in, clear one
+ *  it does not. @return true when a selection consumed the tap.
+ *  LVGL task. */
+bool windows_transcript_selection_tap(lv_coord_t x, lv_coord_t y);
+
 /**
  * Set the transcript text, converting ANSI SGR escape sequences to LVGL
  * recolor markup for coloured rendering on the label. The whole content is

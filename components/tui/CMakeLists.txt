@@ -7,6 +7,7 @@ idf_component_register(
         shell
         header
         windows
+        selection
         ansi
         emoji
         display
