@@ -366,11 +366,12 @@ bool shell_command_gfx(int argc, char **argv)
                 int32_t bw;
                 int32_t bh;
 
-                /* Ask LVGL for the area the scaled image actually covers on
-                 * screen, then map the changed canvas box proportionally into
-                 * it. Doing the pivot/scale maths by hand used the image's
-                 * untransformed box, so the invalidation landed beside the
-                 * ball and its previous pixels were never repainted. */
+                /* lv_obj_get_transformed_area() transforms the area you pass
+                 * in (it does not fetch the object's own box), so seed it with
+                 * the object's coordinates first: with an uninitialised box it
+                 * produced a garbage rectangle and the canvas never repainted
+                 * (the ball froze). */
+                lv_obj_get_coords(s_gfx_canvas, &box);
                 lv_obj_get_transformed_area(s_gfx_canvas, &box,
                                             LV_OBJ_POINT_TRANSFORM_FLAG_NONE);
                 bw = box.x2 - box.x1 + 1;
