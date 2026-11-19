@@ -54,6 +54,17 @@ def _push(dev, name, remote):
         dev.push_file(remote, fh.read())
 
 
+def _count_red_family(bmp, step=3):
+    """Count strongly red pixels (any quantisation of the canvas red)."""
+    n = 0
+    for y in range(0, bmp.height, step):
+        for x in range(0, bmp.width, step):
+            r, g, b = bmp.px(x, y)
+            if r >= 180 and g <= 140 and b <= 140:
+                n += 1
+    return n
+
+
 def _count_near(bmp, rgb, tol=10, step=3):
     """Sample pixels and count those within @p tol of @p rgb (pure Python, so
     the suite does not depend on numpy being importable on the host)."""
@@ -119,6 +130,10 @@ def run(dev, ctx):
         ("canvas cyan", CANVAS_CYAN, 12),
     ):
         n = _count_near(bmp, rgb)
+        if label.endswith("red"):
+            # The canvas red arrives through several quantisations
+            # (DOS cell red, RGB565 red); any strong red is the canvas.
+            n = max(n, _count_red_family(bmp))
         c.check("%s pixels visible" % label, n >= minimum, "%d samples" % n)
 
     # CSS background-image + an inline PNG. Regression: LVGL's vendored
