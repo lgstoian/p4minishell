@@ -39,6 +39,10 @@ goto end
 echo BOUNCE needs the foreground display (no gfx in background jobs)
 :end
 endlocal
+rem Stop here: a label body that follows is still reachable by fall-through,
+rem and running :frame with the ended scope's variables printed 'set: unexpected
+rem character' / 'gfx: no canvas' after [M-BOUNCE-DONE].
+goto :eof
 
 :frame
 set /a n+=1

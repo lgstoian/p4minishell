@@ -298,12 +298,29 @@ void shell_command_screenshot(int argc, char **argv)
             return;
         }
 
-        /* Convert RGB565 to RGB888 row-by-row, bottom-up (BMP convention).
-         * Allocate a row buffer on heap to avoid stack pressure. */
+        /* Convert RGB565 to RGB888 bottom-up (BMP convention), but write in
+         * large chunks. One `fwrite` per 3 KB row costs several milliseconds
+         * on the card, so a full 1024x600 capture used to spend 4.5-6 s in
+         * the filesystem - past the 5 s task watchdog, which is what reset
+         * the board (and showed the panel's blue field) after an app's final
+         * screenshot. A ~64 KB staging buffer cuts the transaction count by
+         * ~20x, and a tick between chunks keeps the idle task (the watchdog
+         * subscriber) running even on a slow card. */
         uint32_t row_bytes = width * 3;
-        uint8_t *row_buf = p4heap_alloc_psram(row_bytes);
-        if (row_buf == NULL) {
-            shell_print_error("screenshot: out of memory for row buffer");
+        size_t chunk_rows = (64u * 1024u) / (row_bytes ? row_bytes : 1u);
+        size_t chunk_size;
+        uint8_t *chunk;
+
+        if (chunk_rows == 0) {
+            chunk_rows = 1;
+        }
+        if (chunk_rows > (size_t)height) {
+            chunk_rows = (size_t)height;
+        }
+        chunk_size = chunk_rows * row_bytes;
+        chunk = p4heap_alloc_psram(chunk_size);
+        if (chunk == NULL) {
+            shell_print_error("screenshot: out of memory for the row chunk");
             fclose(f);
             remove(resolved);
             shell_sd_end(&session, "screenshot");
@@ -314,18 +331,29 @@ void shell_command_screenshot(int argc, char **argv)
         }
 
         bool write_ok = true;
-        int32_t y;
-        for (y = height - 1; y >= 0; y--) {
-            const uint16_t *row = (const uint16_t *)((const uint8_t *)draw_buf->data +
-                                                       (uint32_t)y * draw_buf->header.stride);
-            rgb565_to_bmp_row(row_buf, row, width);
-            if (fwrite(row_buf, 1, row_bytes, f) != row_bytes) {
-                write_ok = false;
-                break;
+        int32_t y = (int32_t)height - 1;
+        while (y >= 0 && write_ok) {
+            size_t rows = 0;
+            size_t bytes;
+
+            while (rows < chunk_rows && y >= 0) {
+                const uint16_t *row = (const uint16_t *)(
+                    (const uint8_t *)draw_buf->data +
+                    (uint32_t)y * draw_buf->header.stride);
+                rgb565_to_bmp_row(chunk + rows * row_bytes, row, width);
+                rows++;
+                y--;
             }
+            bytes = rows * row_bytes;
+            if (fwrite(chunk, 1, bytes, f) != bytes) {
+                write_ok = false;
+            }
+            /* Feed the idle task (the task-watchdog subscriber) between SD
+             * bursts so a slow card can never look like a hung CPU. */
+            vTaskDelay(1);
         }
 
-        free(row_buf);
+        free(chunk);
         fclose(f);
         shell_sd_end(&session, "screenshot");
 
