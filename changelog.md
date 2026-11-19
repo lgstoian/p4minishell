@@ -245,6 +245,14 @@ open bugs see [`bugs.md`](bugs.md).
   upstream. Verified with 20/20 cold boots, three Wi-Fi + HTTPS + SD cycles
   and a full `c6ota` transfer (1,361,856 bytes) on the Tab5, and the JC1060
   image is built from the same tree.
+- **The TUI cell fonts were horizontally squeezed.** `tools/gen_tui_font.py`
+  rendered each glyph at `max(w, h*0.8)` and then resampled it to the cell, so
+  every size except the 8x8 fallback was squeezed horizontally (19 px -> 12 px
+  on the 12x24 cell) and stretched vertically: soft, distorted text, worst on
+  the low-DPI reference panel at large sizes. The generator now renders at the
+  cell *width* and stretches only vertically (the crisp DOS "tall" shape),
+  finds the LVGL 9.6 asset path (`scripts/generators/built_in_font/`), and
+  regenerates all five cells.
 - **The PNG backdrop showcase was invisible.** Its tile (`PIX.PNG`) is a
   solid #FF5555 used for both the CSS background *and* the inline `<img>`, so
   the inline image drew red glyphs on the same red backdrop: the framed box

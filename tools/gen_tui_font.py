@@ -26,8 +26,16 @@ import os
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TTF = os.path.join(ROOT, "managed_components", "lvgl__lvgl", "scripts",
-                   "built_in_font", "unscii-8.ttf")
+# LVGL 9.6 moved the generator assets under scripts/generators/; keep the
+# older path as a fallback so this tool works on either vendored layout.
+_TTF_CANDIDATES = (
+    os.path.join(ROOT, "managed_components", "lvgl__lvgl", "scripts",
+                 "generators", "built_in_font", "unscii-8.ttf"),
+    os.path.join(ROOT, "managed_components", "lvgl__lvgl", "scripts",
+                 "built_in_font", "unscii-8.ttf"),
+)
+TTF = next((path for path in _TTF_CANDIDATES if os.path.exists(path)),
+           _TTF_CANDIDATES[0])
 OUT_C = os.path.join(ROOT, "components", "tui", "tui_fonts.c")
 OUT_H = os.path.join(ROOT, "components", "tui", "tui_fonts.h")
 
@@ -50,8 +58,18 @@ RANGES = [
 
 
 def render_cell(font, code, w, h):
-    """Render one glyph into a w x h 1-bit bitmap (PIL), glyph scaled to cell."""
-    src = max(w, int(h * 0.8))
+    """Render one glyph into a w x h bitmap, keeping its horizontal shape.
+
+    The cell is deliberately taller than it is wide (continuous box borders),
+    but the source face is square. Rendering at max(w, h*0.8) and resampling
+    to (w, h) squeezed every glyph horizontally (19px -> 12px on the 12x24
+    cell) and stretched it vertically, which is the soft, distorted look on
+    the low-DPI panel. Render at the cell WIDTH (so the glyph keeps its
+    correct advance and stroke weight) and stretch only vertically; the
+    LANCZOS down/up + threshold then gives the crisp DOS "tall" look.
+    """
+    del font  # the per-cell face is derived from the cell here, on purpose
+    src = w
     f = ImageFont.truetype(TTF, src)
     im = Image.new("L", (src, src), 0)
     ImageDraw.Draw(im).text((0, 0), chr(code), fill=255, font=f)
@@ -79,7 +97,7 @@ def pack_bits(im, w, h):
 
 
 def emit_font(lines, ident, w, h):
-    font = ImageFont.truetype(TTF, max(w, int(h * 0.8)))
+    font = ImageFont.truetype(TTF, w)
     glyphs = []
     data = bytearray()
     offsets = []
