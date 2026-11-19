@@ -60,5 +60,7 @@ gfx clear 1
 gfx blitmany 0 %bx% %by% transparent
 gfx show
 echo [M-BOUNCE-FRAME] %n%
-delay 33
+rem ~24 ms + the present (~9 ms of draw/present work after the dirty-rect
+rem invalidation) lands the loop on its 30 fps target; 33 ms overshot it.
+delay 24
 return

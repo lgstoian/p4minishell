@@ -40,6 +40,13 @@
 
 static gfx_surface_t s_gfx = {NULL, 0, 0};
 static lv_obj_t *s_gfx_canvas = NULL;
+/* Last presented canvas pixels. `gfx show` is the present point: an app that
+ * clears and redraws the whole canvas every frame still only changes the
+ * moving sprite's pixels, so diffing against this shadow turns the present
+ * from a full scaled-canvas repaint (the 15 fps, tearing BOUNCE) into a small
+ * rectangle invalidation. PSRAM, one sample size, freed on teardown. */
+static uint16_t *s_gfx_shadow = NULL;
+static size_t s_gfx_shadow_bytes = 0;
 /** Fullscreen state saved on `gfx init`, restored on `gfx close` (F25-C). */
 static bool s_gfx_fullscreen_saved;
 
@@ -124,6 +131,16 @@ gfx_surface_t *gfx_canvas_surface(void)
 }
 
 /** Tear down the canvas and sprites and unhide the transcript. Idempotent. */
+/** Drop the presented-frame shadow (canvas closed / reinitialised). */
+static void gfx_shadow_free(void)
+{
+    if (s_gfx_shadow != NULL) {
+        p4heap_free(s_gfx_shadow);
+        s_gfx_shadow = NULL;
+    }
+    s_gfx_shadow_bytes = 0;
+}
+
 static void gfx_teardown(void)
 {
     if (lvgl_port_lock(0)) {
@@ -144,6 +161,7 @@ static void gfx_teardown(void)
         shell_transcript_appendf_ansi(SH_WARN "gfx: LVGL lock failed, display object leaked\n" SH_RST);
     }
     gfx_surface_free(&s_gfx);
+    gfx_shadow_free();
     gfx_sprites_free_all();
 }
 
@@ -248,6 +266,9 @@ bool shell_command_gfx(int argc, char **argv)
             batch_set_errorlevel(1);
             return false;
         }
+        gfx_shadow_free();
+        s_gfx_shadow_bytes = (size_t)s_gfx.w * (size_t)s_gfx.h * sizeof(uint16_t);
+        s_gfx_shadow = p4heap_alloc_psram(s_gfx_shadow_bytes);
         s_gfx_canvas = lv_canvas_create(parent);
         lv_canvas_set_buffer(s_gfx_canvas, s_gfx.px, s_gfx.w, s_gfx.h,
                              LV_COLOR_FORMAT_RGB565);
@@ -303,7 +324,70 @@ bool shell_command_gfx(int argc, char **argv)
             batch_set_errorlevel(1);
             return false;
         }
-        lv_obj_invalidate(s_gfx_canvas);
+        /* Present only what changed since the last show: the ball's old and
+         * new pixels, not the whole scaled canvas. A full-canvas invalidation
+         * here forced LVGL to re-render the ~690k-pixel scaled image every
+         * frame (BOUNCE measured 64 ms/frame, 15 fps, and the long flush
+         * tore). The diff is content-based, so a `clear` + redraw does not
+         * dirty anything that did not actually change. */
+        if (s_gfx_shadow != NULL && s_gfx_shadow_bytes ==
+                (size_t)s_gfx.w * (size_t)s_gfx.h * sizeof(uint16_t)) {
+            int x0 = s_gfx.w;
+            int y0 = s_gfx.h;
+            int x1 = -1;
+            int y1 = -1;
+
+            for (int y = 0; y < s_gfx.h; y++) {
+                const uint16_t *row = s_gfx.px + (size_t)y * (size_t)s_gfx.w;
+                const uint16_t *old = s_gfx_shadow + (size_t)y * (size_t)s_gfx.w;
+                int first = -1;
+                int last = -1;
+
+                for (int x = 0; x < s_gfx.w; x++) {
+                    if (row[x] != old[x]) {
+                        if (first < 0) {
+                            first = x;
+                        }
+                        last = x;
+                    }
+                }
+                if (first >= 0) {
+                    if (y < y0) y0 = y;
+                    if (y > y1) y1 = y;
+                    if (first < x0) x0 = first;
+                    if (last > x1) x1 = last;
+                }
+            }
+            memcpy(s_gfx_shadow, s_gfx.px, s_gfx_shadow_bytes);
+
+            if (x1 >= x0 && y1 >= y0) {
+                lv_area_t box;
+                lv_area_t inv;
+                int32_t bw;
+                int32_t bh;
+
+                /* Ask LVGL for the area the scaled image actually covers on
+                 * screen, then map the changed canvas box proportionally into
+                 * it. Doing the pivot/scale maths by hand used the image's
+                 * untransformed box, so the invalidation landed beside the
+                 * ball and its previous pixels were never repainted. */
+                lv_obj_get_transformed_area(s_gfx_canvas, &box,
+                                            LV_OBJ_POINT_TRANSFORM_FLAG_NONE);
+                bw = box.x2 - box.x1 + 1;
+                bh = box.y2 - box.y1 + 1;
+                if (bw <= 0 || bh <= 0) {
+                    lv_obj_invalidate(s_gfx_canvas);
+                } else {
+                    inv.x1 = box.x1 + (int32_t)x0 * bw / s_gfx.w - 2;
+                    inv.y1 = box.y1 + (int32_t)y0 * bh / s_gfx.h - 2;
+                    inv.x2 = box.x1 + (int32_t)(x1 + 1) * bw / s_gfx.w + 2;
+                    inv.y2 = box.y1 + (int32_t)(y1 + 1) * bh / s_gfx.h + 2;
+                    lv_obj_invalidate_area(s_gfx_canvas, &inv);
+                }
+            }
+        } else {
+            lv_obj_invalidate(s_gfx_canvas);
+        }
         /* Wake the LVGL port task so the frame presents now. An invalidation
          * alone does not wake it: the port sleeps up to task_max_sleep_ms
          * (500 ms) between timers, so a 20 fps animation loop would only be
