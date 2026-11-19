@@ -245,6 +245,16 @@ open bugs see [`bugs.md`](bugs.md).
   upstream. Verified with 20/20 cold boots, three Wi-Fi + HTTPS + SD cycles
   and a full `c6ota` transfer (1,361,856 bytes) on the Tab5, and the JC1060
   image is built from the same tree.
+- **`gfx` animation was slow and tore because every show repainted the
+  whole canvas.** `gfx show` invalidated the entire scaled canvas each frame,
+  so LVGL re-rendered ~690k pixels per present: BOUNCE measured 64 ms/frame
+  (15 fps) with 238 of 240 frames dropped, and the long flushes visibly tore
+  across the ball. `gfx show` now keeps a shadow of the last presented frame,
+  diffs the canvas against it and invalidates only the changed screen
+  rectangle (mapped through `lv_obj_get_transformed_area()`), so a clear +
+  redraw animation presents just the sprite's old/new pixels. BOUNCE now runs
+  at a locked 30 fps: 33.0 ms average, 0.22 ms jitter, **0 dropped frames**.
+  Its 33 ms delay was also retuned to 24 ms for the new present cost.
 - **The TUI cell fonts were horizontally squeezed.** `tools/gen_tui_font.py`
   rendered each glyph at `max(w, h*0.8)` and then resampled it to the cell, so
   every size except the 8x8 fallback was squeezed horizontally (19 px -> 12 px
