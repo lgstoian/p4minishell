@@ -245,6 +245,15 @@ open bugs see [`bugs.md`](bugs.md).
   upstream. Verified with 20/20 cold boots, three Wi-Fi + HTTPS + SD cycles
   and a full `c6ota` transfer (1,361,856 bytes) on the Tab5, and the JC1060
   image is built from the same tree.
+- **Touch and mouse now switch automatically.** A finger press takes the
+  pointer: it clears any stale HID mouse button (a lost button-up report, or
+  the mouse's first report after attach) and hides the cursor; mouse motion,
+  a click or a scroll takes the pointer back and shows the cursor. The mouse's
+  cursor scheduling also runs under the LVGL port mutex now: the HID task was
+  calling `lv_async_call()` unlocked, racing the LVGL task's dispatch, which is
+  what made the touchscreen stop responding as soon as a physical mouse was
+  attached on the reference board. A press with no report for two seconds is
+  released, so an unplugged mouse cannot hold the gesture state either.
 - **`gfx` animation was slow and tore because every show repainted the
   whole canvas.** `gfx show` invalidated the entire scaled canvas each frame,
   so LVGL re-rendered ~690k pixels per present: BOUNCE measured 64 ms/frame

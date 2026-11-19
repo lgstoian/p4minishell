@@ -74,6 +74,8 @@ static struct {
  * lock. */
 static struct {
     bool cursor_enabled;
+    bool from_touch;              /* last input came from the touchscreen */
+    uint32_t last_report_ms;      /* tick of the last HID report */
     bool click_enabled;
     int32_t x;
     int32_t y;
@@ -119,6 +121,8 @@ static esp_err_t display_acquire_touch_handle(void);
 static void display_update_touch_rotation(display_rotation_t rotation);
 static void display_async_rebuild_ui(void *user_data);
 static esp_err_t display_mouse_indev_sync(bool want);
+static void display_mouse_lock_init(void);
+static void display_touch_input_cb(lv_event_t *event);
 
 /* ========================================================================
  * ROTATION CONVERSION HELPERS
@@ -748,6 +752,18 @@ esp_err_t display_init(void)
      * "BSOD" underrun): the DSI DMA is live now, so the DW-GDMA master is up. */
     display_apply_axi_icm_qos();
 
+    /* Automatic input-source switching: a touch press takes the pointer (and
+     * releases any stale mouse button), mouse motion/click takes it back. */
+    {
+        lv_indev_t *touch = bsp_display_get_input_dev();
+
+        if (touch != NULL && lvgl_port_lock(0)) {
+            lv_indev_add_event_cb(touch, display_touch_input_cb, LV_EVENT_ALL,
+                                  NULL);
+            lvgl_port_unlock();
+        }
+    }
+
     /* The board profile requests the default orientation. The Tab5 panel is
      * natively portrait and is mounted landscape, so it asks for a 90-degree
      * software rotation; the reference board is already landscape (0). */
@@ -906,6 +922,32 @@ void display_schedule_ui_rebuild(void)
  *  click delivery is on (a disabled click releases mid-press cleanly).
  *  Non-blocking take: on the rare contention it replays the previous
  *  sample instead of stalling the render task. */
+/** Touchscreen activity: the finger is the pointer until the mouse moves or
+ * clicks again. A stale HID button (a lost release report, or the mouse's
+ * first report after attach) must never hold LVGL's gesture state against a
+ * touch, which is why a finger press also clears the tracked mouse button. */
+static void display_touch_input_cb(lv_event_t *event)
+{
+    lv_event_code_t code = lv_event_get_code(event);
+
+    if (code != LV_EVENT_PRESSED && code != LV_EVENT_PRESSING) {
+        return;
+    }
+    display_mouse_lock_init();
+    if (s_mouse_mutex != NULL &&
+        xSemaphoreTake(s_mouse_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        bool changed = !s_mouse.from_touch;
+
+        s_mouse.from_touch = true;
+        s_mouse.pressed = false;
+        xSemaphoreGive(s_mouse_mutex);
+        if (changed && s_mouse.cursor_obj != NULL) {
+            /* Runs on the LVGL task: a plain hide is safe here. */
+            lv_obj_set_hidden(s_mouse.cursor_obj, true);
+        }
+    }
+}
+
 static void display_mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
     static int32_t last_x = 0;
@@ -917,7 +959,17 @@ static void display_mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
         xSemaphoreTake(s_mouse_mutex, 0) == pdTRUE) {
         last_x = s_mouse.x;
         last_y = s_mouse.y;
-        last_pressed = s_mouse.pressed && s_mouse.click_enabled;
+        last_pressed = s_mouse.pressed && s_mouse.click_enabled &&
+                       !s_mouse.from_touch;
+        if (last_pressed) {
+            uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            /* No report for two seconds means the button-up was lost (a
+             * yanked cable, a parser miss): release it so a stale press
+             * cannot hold LVGL's gesture state against the touchscreen. */
+            if ((uint32_t)(now - s_mouse.last_report_ms) > 2000u) {
+                last_pressed = false;
+            }
+        }
         xSemaphoreGive(s_mouse_mutex);
     }
     data->point.x = last_x;
@@ -961,16 +1013,24 @@ static void display_mouse_move_cb(void *user_data)
     lv_obj_set_pos(s_mouse.cursor_obj, point.x, point.y);
 }
 
-/** Queue one cursor move (coalesced: at most one pending async). */
+/** Queue one cursor move (coalesced: at most one pending async).
+ *
+ * This runs on the USB HID driver task, and lv_async_call() mutates LVGL's
+ * async list, which the LVGL task owns. Without the port mutex a 1 kHz mouse
+ * stream raced the LVGL task's dispatch; the corrupted input state is what
+ * made the touchscreen stop responding as soon as a physical mouse was
+ * attached (the synthetic command path never hit the race). */
 static void display_mouse_move_async(void)
 {
-    if (s_mouse_move_pending) {
-        return;
+    if (!lvgl_port_lock(10)) {
+        return;     /* a dropped motion sample is invisible */
     }
-    s_mouse_move_pending = true;
-    if (lv_async_call(display_mouse_move_cb, NULL) != LV_RESULT_OK) {
-        s_mouse_move_pending = false;
+    if (!s_mouse_move_pending) {
+        if (lv_async_call(display_mouse_move_cb, NULL) == LV_RESULT_OK) {
+            s_mouse_move_pending = true;
+        }
     }
+    lvgl_port_unlock();
 }
 
 /** Place the cursor box now (caller holds the port mutex). */
@@ -1169,6 +1229,16 @@ void display_mouse_report(int dx, int dy, uint8_t buttons)
     }
     fire_secondary = right && !s_mouse.secondary;
     s_mouse.secondary = right;
+    /* Any motion or button switches the source to the mouse and brings the
+     * cursor back; a wheel report arrives as motion too. */
+    if ((dx != 0 || dy != 0 || buttons != 0) && s_mouse.from_touch) {
+        s_mouse.from_touch = false;
+        if (s_mouse.cursor_enabled && s_mouse.cursor_obj != NULL &&
+            lvgl_port_lock(10)) {
+            lv_obj_remove_flag(s_mouse.cursor_obj, LV_OBJ_FLAG_HIDDEN);
+            lvgl_port_unlock();
+        }
+    }
     if (s_mouse.cursor_enabled || s_mouse.click_enabled) {
         native = display_get_native_resolution();
         s_mouse.x += (int32_t)dx;
@@ -1184,10 +1254,13 @@ void display_mouse_report(int dx, int dy, uint8_t buttons)
             s_mouse.y = native.native_height - 1;
         }
         s_mouse.pressed = (buttons & 0x01u) != 0;
+        s_mouse.last_report_ms = (uint32_t)(xTaskGetTickCount() *
+                                            portTICK_PERIOD_MS);
     }
     xSemaphoreGive(s_mouse_mutex);
-    if (fire_secondary) {
+    if (fire_secondary && lvgl_port_lock(10)) {
         (void)lv_async_call(display_mouse_secondary_async, NULL);
+        lvgl_port_unlock();
     }
     /* The box follows motion reports; without a mouse nothing moves and
      * nothing is scheduled. */

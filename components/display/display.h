@@ -290,7 +290,8 @@ void display_schedule_ui_rebuild(void);
  * transform itself, exactly like the touch controller (which stays native).
  * Motion only tracks and clicks only press while their switches are on —
  * both default off, so attached mice keep the historical scroll-only
- * behavior until the user opts in (`usb mouse cursor|click on`). The click
+ * behavior automatically when a USB/BLE mouse attaches (the switches below
+ * can still turn either one off for the session). The click
  * is a tap at the tracked position (modal buttons, lists, transcript
  * anchors all behave like touch). The parsers own no state: everything
  * lives here, so USB and BLE share one cursor, one position, one indev. */
