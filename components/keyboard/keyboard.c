@@ -352,6 +352,52 @@ keyboard_nav_key_state_t keyboard_nav_key_state(void)
                                      : KEYBOARD_NAV_KEY_DISABLED;
 }
 
+/**
+ * Style the keyboard's keys from the active theme.
+ *
+ * The widget-level background was always themed, but the button-matrix ITEMS
+ * were left to LVGL's default theme, which paints them the light card colour
+ * with the theme primary for the pressed state. That is why the on-screen
+ * keyboard stayed bright white on a dark shell, and any key that changed
+ * state could flash the default blue. One helper keeps the keys, the pressed
+ * state, the caps-lock CHECKED state and a `theme set` refresh in step.
+ */
+static void keyboard_style_items(void)
+{
+    const theme_t *th = theme_current();
+    lv_color_t key_bg = lv_color_lighten(lv_color_hex(th->bg_keyboard), 30);
+
+    if (s_keyboard.widget == NULL) {
+        return;
+    }
+    lv_obj_set_style_bg_color(s_keyboard.widget, key_bg, LV_PART_ITEMS);
+    lv_obj_set_style_bg_opa(s_keyboard.widget, LV_OPA_COVER, LV_PART_ITEMS);
+    lv_obj_set_style_text_color(s_keyboard.widget, lv_color_hex(th->text),
+                                LV_PART_ITEMS);
+    lv_obj_set_style_radius(s_keyboard.widget, 4, LV_PART_ITEMS);
+    lv_obj_set_style_border_width(s_keyboard.widget, 0, LV_PART_ITEMS);
+    lv_obj_set_style_shadow_width(s_keyboard.widget, 0, LV_PART_ITEMS);
+    /* Pressed / latched (caps, ABC mode): a clear accent, not a darker hole. */
+    lv_obj_set_style_bg_color(s_keyboard.widget,
+                              lv_color_mix(key_bg, lv_color_hex(th->text), 80),
+                              LV_PART_ITEMS | LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(s_keyboard.widget,
+                              lv_color_mix(key_bg, lv_color_hex(th->text), 60),
+                              LV_PART_ITEMS | LV_STATE_CHECKED);
+    lv_obj_set_style_text_color(s_keyboard.widget, lv_color_hex(th->text),
+                                LV_PART_ITEMS | LV_STATE_PRESSED);
+    lv_obj_set_style_text_color(s_keyboard.widget,
+                                lv_color_hex(th->bg_transcript),
+                                LV_PART_ITEMS | LV_STATE_CHECKED);
+    /* Unavailable capability keys: readable, just dimmer than an active key.
+     * The theme's muted colour is far too dark on a key. */
+    lv_obj_set_style_text_color(s_keyboard.widget,
+                                lv_color_mix(lv_color_hex(th->text), key_bg, 200),
+                                LV_PART_ITEMS | LV_STATE_DISABLED);
+    lv_obj_set_style_bg_opa(s_keyboard.widget, LV_OPA_90,
+                            LV_PART_ITEMS | LV_STATE_DISABLED);
+}
+
 /* ========================================================================
  * LIFECYCLE
  * ======================================================================== */
@@ -404,13 +450,8 @@ lv_obj_t *keyboard_init(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(s_keyboard.widget, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_keyboard.widget, 0, 0);
 
-    /* Capability-governed keys that are unavailable are greyed out (muted
-     * text, dimmed background) so a context-less key never looks usable. */
-    lv_obj_set_style_text_color(s_keyboard.widget,
-                                lv_color_hex(theme_current()->text_muted),
-                                LV_PART_ITEMS | LV_STATE_DISABLED);
-    lv_obj_set_style_bg_opa(s_keyboard.widget, LV_OPA_30,
-                            LV_PART_ITEMS | LV_STATE_DISABLED);
+    /* Every key, not just the disabled ones (see keyboard_style_items). */
+    keyboard_style_items();
 
     s_keyboard.initialized = true;
     s_keyboard.visible = true;
@@ -449,12 +490,7 @@ void keyboard_refresh_theme(void)
     }
     lv_obj_set_style_bg_color(s_keyboard.widget,
                               lv_color_hex(theme_current()->bg_keyboard), 0);
-    /* Re-resolve the greyed-out style for the new theme's muted colour. */
-    lv_obj_set_style_text_color(s_keyboard.widget,
-                                lv_color_hex(theme_current()->text_muted),
-                                LV_PART_ITEMS | LV_STATE_DISABLED);
-    lv_obj_set_style_bg_opa(s_keyboard.widget, LV_OPA_30,
-                            LV_PART_ITEMS | LV_STATE_DISABLED);
+    keyboard_style_items();
     lvgl_port_unlock();
 }
 

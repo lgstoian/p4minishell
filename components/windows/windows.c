@@ -155,6 +155,7 @@ static void windows_create_transcript(void);
 static void windows_transcript_selection_init(void);
 static void windows_create_input_row(void);
 static void windows_apply_screen_style(void);
+static void windows_style_chrome_button(lv_obj_t *btn);
 
 /* ========================================================================
  * SCALING HELPERS
@@ -357,6 +358,12 @@ void windows_refresh_theme(void)
     if (s_windows.input_row != NULL) {
         lv_obj_set_style_bg_color(s_windows.input_row,
                                   windows_get_color(WINDOWS_COLOR_BG_INPUT_ROW), 0);
+        windows_style_chrome_button(s_windows.prev_button);
+        windows_style_chrome_button(s_windows.next_button);
+        windows_style_chrome_button(s_windows.scroll_up_button);
+        windows_style_chrome_button(s_windows.scroll_down_button);
+        windows_style_chrome_button(s_windows.tab_button);
+        windows_style_chrome_button(s_windows.stop_button);
     }
     lvgl_port_unlock();
 }
@@ -513,7 +520,33 @@ static void windows_create_transcript(void)
     s_windows.shell_spans_hidden = false;
 }
 
-static void windows_create_input_row(void)
+/**
+ * Style one shell input-row button from the active theme.
+ *
+ * A bare `lv_button_create()` takes LVGL's default-theme look, whose primary
+ * colour is #2196F3 after the 9.6 upgrade. These six buttons are hidden in
+ * app/editor/modal mode, so every close brought the row back as a bright blue
+ * band - the user-visible "light blue flash". One helper keeps all of them
+ * (and a later `theme set` refresh) on the same palette.
+ */
+static void windows_style_chrome_button(lv_obj_t *btn)
+{
+    if (btn == NULL) {
+        return;
+    }
+    lv_obj_set_style_bg_color(btn,
+                              windows_get_color(WINDOWS_COLOR_BG_KEYBOARD), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn,
+                              windows_get_color(WINDOWS_COLOR_BG_INPUT_ROW),
+                              LV_STATE_PRESSED);
+    lv_obj_set_style_text_color(btn, windows_get_color(WINDOWS_COLOR_TEXT), 0);
+    lv_obj_set_style_radius(btn, 4, 0);
+    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+}
+
+static void windows_create_input_row(void)
 {
     lv_obj_t *screen = s_windows.screen;
     lv_coord_t row_h = windows_scale_height_percent(P4_CONFIG_WINDOW_INPUT_ROW_HEIGHT_PCT,
@@ -535,6 +568,7 @@ static void windows_create_input_row(void)
 
     /* Previous history button */
     s_windows.prev_button = lv_button_create(s_windows.input_row);
+    windows_style_chrome_button(s_windows.prev_button);
     lv_obj_set_size(s_windows.prev_button, 82, LV_PCT(100));
     lv_obj_t *prev_label = lv_label_create(s_windows.prev_button);
     lv_label_set_text(prev_label, "Prev");
@@ -544,6 +578,7 @@ static void windows_create_input_row(void)
 
     /* Next history button */
     s_windows.next_button = lv_button_create(s_windows.input_row);
+    windows_style_chrome_button(s_windows.next_button);
     lv_obj_set_size(s_windows.next_button, 82, LV_PCT(100));
     lv_obj_t *next_label = lv_label_create(s_windows.next_button);
     lv_label_set_text(next_label, "Next");
@@ -555,6 +590,7 @@ static void windows_create_input_row(void)
      * on-screen keyboard) for touch paging. LV_SYMBOL_UP/DOWN resolve via
      * the chained UI font's Montserrat fallback. */
     s_windows.scroll_up_button = lv_button_create(s_windows.input_row);
+    windows_style_chrome_button(s_windows.scroll_up_button);
     lv_obj_set_size(s_windows.scroll_up_button,
                     P4_CONFIG_WINDOW_SCROLL_BUTTON_WIDTH, LV_PCT(100));
     lv_obj_t *up_label = lv_label_create(s_windows.scroll_up_button);
@@ -564,6 +600,7 @@ static void windows_create_input_row(void)
     s_windows.up_label = up_label;
 
     s_windows.scroll_down_button = lv_button_create(s_windows.input_row);
+    windows_style_chrome_button(s_windows.scroll_down_button);
     lv_obj_set_size(s_windows.scroll_down_button,
                     P4_CONFIG_WINDOW_SCROLL_BUTTON_WIDTH, LV_PCT(100));
     lv_obj_t *down_label = lv_label_create(s_windows.scroll_down_button);
@@ -575,6 +612,7 @@ static void windows_create_input_row(void)
     /* Tab completion button. A touch affordance for the completion the USB
      * keyboard reaches with Tab; shares shell_input_line_tab_complete(). */
     s_windows.tab_button = lv_button_create(s_windows.input_row);
+    windows_style_chrome_button(s_windows.tab_button);
     lv_obj_set_size(s_windows.tab_button,
                     P4_CONFIG_WINDOW_SCROLL_BUTTON_WIDTH, LV_PCT(100));
     lv_obj_t *tab_label = lv_label_create(s_windows.tab_button);
@@ -589,6 +627,7 @@ static void windows_create_input_row(void)
      * siblings. Placed before the input line so it never steals typing
      * width when hidden (flex skips hidden children). */
     s_windows.stop_button = lv_button_create(s_windows.input_row);
+    windows_style_chrome_button(s_windows.stop_button);
     lv_obj_set_size(s_windows.stop_button,
                     P4_CONFIG_WINDOW_SCROLL_BUTTON_WIDTH, LV_PCT(100));
     lv_obj_t *stop_label = lv_label_create(s_windows.stop_button);

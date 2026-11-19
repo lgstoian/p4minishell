@@ -27,6 +27,7 @@ from .asserts import Checklist
 from .device import Device
 from .session import P4Error, PanicError
 from . import screenshot as p4shot
+from . import theme_guard
 
 # ---------------- anomaly model ----------------
 
@@ -180,6 +181,14 @@ class DogfoodAgent:
             if self._whole_screen_blue(bmp):
                 self.anomaly("CRITICAL", "bsod",
                              "whole-screen blue (mean B-R=%.1f)" % (mean[2] - mean[0]))
+            # An unstyled widget takes LVGL's default-theme primary, which is
+            # never part of this UI. The shell input-row buttons used to leak
+            # it as a blue flash on every app/modal close; a sized blob here
+            # means another widget lost its theme style.
+            hits = theme_guard.scan_bmp(bmp, min_pixels=48)
+            if hits:
+                self.anomaly("HIGH", "unstyled-widget",
+                             theme_guard.describe(hits))
             self._check_targets(bmp)
             if self.prev_bmp is not None and self.prev_bmp.width == bmp.width:
                 if p4shot.diff_ratio(self.prev_bmp, bmp) == 0.0:

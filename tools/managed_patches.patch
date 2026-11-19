@@ -1338,3 +1338,26 @@ index 8355f75d..766e1b86 100644
      HID_EXIT_CRITICAL();
  
      free(hid_device);
+diff --git a/managed_components/espressif__esp_lvgl_port/src/lvgl9/esp_lvgl_port_disp.c b/managed_components/espressif__esp_lvgl_port/src/lvgl9/esp_lvgl_port_disp.c
+index 764a468d..14d02b19 100644
+--- a/managed_components/espressif__esp_lvgl_port/src/lvgl9/esp_lvgl_port_disp.c
++++ b/managed_components/espressif__esp_lvgl_port/src/lvgl9/esp_lvgl_port_disp.c
+@@ -759,6 +759,18 @@ static void lvgl_port_flush_callback(lv_display_t *drv, const lv_area_t *area, u
+         esp_lcd_panel_draw_bitmap(disp_ctx->panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
+     }
+ 
++    /* P4MiniShell addition (tracked in tools/managed_patches.patch): pace a
++     * multi-chunk repaint. LVGL flushes every dirty chunk back-to-back in one
++     * refresh; a full-screen repaint (a closing app restoring the transcript)
++     * then writes PSRAM without a gap, and the MIPI-DSI framebuffer fetch can
++     * lose arbitration long enough for the panel to show its blue underrun
++     * field - a whole-screen flash. One tick between chunks lets the bridge
++     * refill; small updates (one chunk) never pay it. */
++    if (disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_DSI &&
++        !lv_disp_flush_is_last(drv)) {
++        vTaskDelay(1);
++    }
++
+     if (disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_RGB || (disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_DSI
+             && (disp_ctx->flags.direct_mode || disp_ctx->flags.full_refresh))) {
+         lv_disp_flush_ready(drv);

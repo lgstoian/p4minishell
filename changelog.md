@@ -127,6 +127,13 @@ open bugs see [`bugs.md`](bugs.md).
   writer. A new stored-entry `zip_writer` is the *one* ZIP write path (the
   reader stays the one read path); a failed write removes the partial file,
   and sources/output keep the writerdeck 64 KB / 256 KB caps.
+- **Visual regression guards for the shipped UI.** `tools/check_assets.py`
+  (wired into `tools/harness/verify.py`) fails if any committed UI capture
+  (`docs/assets/apps/*.png`, `shell-idle.png`) contains LVGL's default-theme
+  primary, `s25_apps_gallery` asserts it per app, and `dogfood.py` journals an
+  `unstyled-widget` anomaly when a live frame does. The default theme's blue is
+  never part of this UI, so a blob of it means a widget lost its style - the
+  class of defect that shipped the input-row blue flash.
 - **A grid that follows the panel.** The logical TUI grid is no longer a
   hard-coded 80x25: `tui_grid_resolve()` keeps the documented 80 columns
   whenever a committed cell still fits them (so app frames authored for 80
@@ -256,6 +263,25 @@ open bugs see [`bugs.md`](bugs.md).
   duplicate command-table entry always listed instead) jumps to the right
   chapter, and a book opens on chapter 1 so `epub read` works right after
   `epub open`.
+- **The shell chrome and the keyboard used LVGL's default theme.** The six
+  input-row buttons (Prev/Next/Up/Down/Tab/Stop) and every on-screen key were
+  plain widgets, so LVGL 9.6 painted them with its own primary blue
+  (#2196F3) and light card keys. The input row is hidden in app/editor/modal
+  mode, which turned every close into a bright blue band; the keys stayed
+  white on every dark theme. Both now take the palette (one helper each, also
+  re-applied by `theme set`), and the label selection highlight uses the
+  shared selection accent instead of the theme primary.
+- **Nested batch frames now inherit the caller's echo state.** A
+  `gosub APPLIB.BAT::page` starts at the label, so the library's own
+  `@echo off` never ran and the frame defaulted to echo-on: every page change
+  and close dumped the helper source lines into the transcript. That flood
+  also forced a full-screen transcript repaint at the close instant; the
+  transcript now shows just the app's own output.
+- **Large repaints are paced.** LVGL flushes every dirty chunk back-to-back;
+  a full-screen repaint (a closing app restoring the transcript) wrote PSRAM
+  without a gap, which could starve the MIPI-DSI fetch long enough for the
+  panel to show its blue underrun field. The display port now yields one tick
+  between chunks of a multi-chunk DSI refresh (small updates never pay it).
 - **LVGL chrome draws the symbols the cell font ships.** The emoji font link
   consulted its emoji map and then FontAwesome; a Unicode symbol that is not
   an emoji (U+2605 star, U+2665 heart, U+266A note) missed both and drew the

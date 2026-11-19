@@ -4148,7 +4148,14 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
         return ESP_ERR_NO_MEM;
     }
 
-    frame->echo_enabled = s_default_echo;
+    /* A nested frame (a called script or a `file::routine` library call)
+     * inherits the caller's echo state. A library routine starts at its
+     * label, so its own `@echo off` is skipped; without this every helper
+     * line was echoed into the transcript, turning each app page change into
+     * a transcript flood (and a full-screen repaint). */
+    frame->echo_enabled = (s_active_batch_frame != NULL)
+                              ? s_active_batch_frame->echo_enabled
+                              : s_default_echo;
     /* Classic DOS: %0 is the script name (path as invoked), and the caller's
      * arguments begin at %1. Store the path in args[0] and shift the passed
      * arguments up by one slot so argv[0] -> args[1], etc. */

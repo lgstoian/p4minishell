@@ -208,6 +208,9 @@ holder per port.
 - `size_budget.py` - static DIRAM gate over the built ELF/map (fails above the
   recorded ceiling + 4 KB headroom); wired into `tools/harness/verify.py` when
   an ELF exists. Prints the measured bytes and ceiling.
+- `check_assets.py` - fails when a committed UI capture (`docs/assets/apps/*.png`,
+  `docs/assets/shell-idle.png`) contains LVGL's default-theme primary; a blob of
+  it means a widget lost its theme style (see `harness.md`, "Visual guards").
 
 
 ## Focused drivers (recent)

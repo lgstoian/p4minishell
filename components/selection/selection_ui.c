@@ -95,7 +95,15 @@ void sel_paint_label(lv_obj_t *label, int start_char, int end_char)
         end_char = start_char;
     }
     /* The label draws its own selection: exact for wrapped and proportional
-     * text, and no second highlight layer of ours to keep in sync. */
+     * text, and no second highlight layer of ours to keep in sync. LVGL takes
+     * the highlight colour from LV_PART_SELECTED, which the default theme
+     * paints its primary blue (#2196F3): a whole-document selection then reads
+     * as the LVGL "blue screen". Pin it to the shared selection colours. */
+    lv_obj_set_style_bg_color(label, lv_color_hex(SEL_FILL_COLOR),
+                              LV_PART_SELECTED);
+    lv_obj_set_style_bg_opa(label, LV_OPA_50, LV_PART_SELECTED);
+    lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF),
+                                LV_PART_SELECTED);
     lv_label_set_text_selection_start(label, (uint32_t)start_char);
     lv_label_set_text_selection_end(label, (uint32_t)end_char);
     lv_obj_invalidate(label);

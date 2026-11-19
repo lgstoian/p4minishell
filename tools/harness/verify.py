@@ -40,6 +40,10 @@ gates = [
     ('comment index', 'comment_index.py'),
     ('breadcrumbs', 'breadcrumbs.py'),
     ('green guard', 'green_guard.py'),
+    # The shipped UI captures must not contain LVGL's default-theme primary:
+    # a blob of it is an unstyled widget (the input-row buttons used to leak
+    # it as a blue flash). Scans docs/assets/apps + the shell idle shot.
+    ('ui colours', 'check_assets.py'),
 ]
 # The static-DRAM budget gate needs a firmware image; only run it when one has
 # been built, so a fresh checkout (no build/) never fails the host gate.

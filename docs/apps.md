@@ -5,9 +5,8 @@ Every screenshot below is captured live from the device by
 (JC1060P470C, 1024x600). The apps are batch-first and run from SD or USB;
 metadata comes from each app's `APPINFO`.
 
-The reference-app list in [`readme.md`](../readme.md) names the ship set; each
-section's title and description come from the app's `APPINFO` where one exists
-(the extra companion/library/service screens use their file name).
+The feature matrix in [`readme.md`](../readme.md) lists which v1.4.3
+surface each app exercises (emoji, transparency, HTML, drive-aware data).
 
 ## ADVENTURE
 
@@ -105,11 +104,13 @@ Melody, RGB effects, number guessing, calc, Snake and Elite Trader
 
 *Screenshot: `docs/assets/apps/fun.png`*
 
-## GFX
+## Gfx Toolkit
 
-![GFX](assets/apps/gfx.png)
+![Gfx Toolkit](assets/apps/gfxtool.png)
 
-*Screenshot: `docs/assets/apps/gfx.png`*
+Raster toolkit demo: triangle/ellipse/polygon/flood-fill/spans plus scaled on-canvas text
+
+*Screenshot: `docs/assets/apps/gfxtool.png`*
 
 ## Hybrid demo
 

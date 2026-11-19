@@ -48,6 +48,7 @@ import time
 from p4test.asserts import Checklist
 from p4test.session import PanicError
 from p4test.screenshot import parse_bmp
+from p4test import theme_guard
 
 NAME = "apps_gallery"
 TAGS = ["apps", "gallery", "slow"]
@@ -399,6 +400,12 @@ def _publish(dev, c, app, bmp, want, source):
     else:
         detail = ""
     c.check(check_name, ok, detail)
+    # The LVGL default-theme primary is never part of this UI: a sized blob of
+    # it is a widget we forgot to style. The input-row buttons used to leak
+    # exactly this, which read as a blue flash whenever they reappeared.
+    hits = theme_guard.scan_image(img)
+    c.check("%s: no unstyled default-theme widget" % app, not hits,
+            theme_guard.describe(hits))
     if ok:
         WRITTEN.add(app)
         c.note("%s: %dx%d, %.1f%% ink, %d colours" %

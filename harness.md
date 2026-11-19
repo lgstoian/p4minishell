@@ -313,6 +313,21 @@ logic (`tools/README.md` has the full list).
 | `tools/dogfood.py COM3 --minutes 15` | autonomous curious-user drive; screenshots every action, journals anomalies |
 | `tools/completion_test.py`, `editor_test.py`, `header_test.py`, `plot_test.py`, `theme_test.py` | focused subsystem drivers |
 
+### Visual guards (unstyled widgets)
+
+A capture may never contain LVGL's default-theme primary (`#2196F3`): this UI
+is the DOS/theme palette, and a sized blob of that blue means a widget was left
+unstyled (the shell's input-row buttons and the on-screen keys were, which read
+as a blue flash whenever the row reappeared). Three places enforce it:
+
+- `tools/check_assets.py` - scans the committed `docs/assets/apps/*.png` and
+  `shell-idle.png`; wired into `tools/harness/verify.py` as the `ui colours`
+  gate.
+- `s25_apps_gallery` - one check per app capture (live, so a regression fails
+  the suite before a PNG is published).
+- `dogfood.py` - journals a HIGH `unstyled-widget` anomaly (with the colour,
+  count and bbox) for any live frame; run it after UI changes.
+
 ## 6. Layer 4 — `tools/harness/` one-shots and static checks
 
 - **Static checks (no hardware):** `tools/harness/verify.py`,
