@@ -277,6 +277,16 @@ open bugs see [`bugs.md`](bugs.md).
   and close dumped the helper source lines into the transcript. That flood
   also forced a full-screen transcript repaint at the close instant; the
   transcript now shows just the app's own output.
+- **A full screenshot took longer than the task watchdog and reset the
+  board.** `screenshot <file.bmp>` converted the frame one row at a time and
+  did one `fwrite` per 3 KB row: 6.1 s for a 1024x600 panel and 10.2 s for the
+  720x1280 Tab5, past the 5 s task watchdog, which aborted and rebooted (the
+  baby-blue panel). The write now stages 256 KB per transaction and yields a
+  tick between chunks: 3.6 s on the JC1060, 6.9 s on the Tab5, no abort, and
+  three consecutive BOUNCE runs complete without a reset. BOUNCE also ends its
+  script at `:eof`, so the frame body no longer runs once after
+  `[M-BOUNCE-DONE]` with the ended scope's variables (`set: unexpected
+  character` / `gfx: no canvas`).
 - **Large repaints are paced.** LVGL flushes every dirty chunk back-to-back;
   a full-screen repaint (a closing app restoring the transcript) wrote PSRAM
   without a gap, which could starve the MIPI-DSI fetch long enough for the

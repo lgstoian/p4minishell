@@ -211,6 +211,34 @@ title, red event status, cyan table header).
 
 ## Fixed findings (2026-11-16 host lane, second round)
 
+### F62. A final `screenshot` froze the app, then reset the board (blue panel) - **FIXED (2026-11-19)**
+
+- **Severity:** HIGH (data loss: the board rebooted mid-app)
+- **Component:** `components/command/serial_commands.c` (`screenshot` to SD),
+  `apps/gfxdemo/BOUNCE.BAT`
+- **Board:** `jc1060p470c` (COM3), `m5stack_tab5` (COM6)
+- **Found on:** 2026-11-19, reported from a BOUNCE run: "the ball bounces for
+  a while and then gets stuck a few seconds, followed by a baby blue screen
+  and a reset".
+- **Symptom:** a gfx app's final `screenshot` blocked for several seconds and
+  then the board reset; the whole panel showed its blue field during the
+  reboot. A shell `screenshot` measured 6.1 s on COM3 and 10.2 s on COM6.
+- **Root cause:** the SD path converted the frame bottom-up and called
+  `fwrite` once per 3 KB row (600/1280 writes). On the card's small-write
+  throughput that exceeded the 5 s task watchdog (`CONFIG_ESP_TASK_WDT_PANIC`),
+  so the watchdog aborted and rebooted. `BOUNCE.BAT` also fell through from
+  `:end`/`endlocal` into its `:frame` body, printing `set: unexpected
+  character` / `gfx: no canvas` after the done marker.
+- **Fix:** stage 256 KB of converted rows per `fwrite` and yield one tick
+  between chunks (the idle task is the watchdog subscriber). Measured 3.6 s
+  (COM3) and 6.9 s (COM6) for a full panel, with no abort. BOUNCE now ends at
+  `:eof`.
+- **Verification:** three consecutive BOUNCE runs on COM3 (17.5/17.5/18.7 s)
+  and one on COM6 (22.4 s) completed with no watchdog, Guru or reset; PSRAM
+  free was unchanged before/after (30.95 MB).
+
+---
+
 ### F61. Hosted-SDIO card init failed under load, then asserted in `xQueueSemaphoreTake` - **FIXED by esp_hosted 3.1.0 (2026-11-18)**
 
 - **Severity:** HIGH (the board rebooted: a card-init error left a queue
