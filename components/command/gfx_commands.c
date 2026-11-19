@@ -185,21 +185,28 @@ static void gfx_relayout(void)
     if (vp.width <= 0 || vp.height <= 0) {
         return;
     }
-    /* Scale is in 1/256 units; >256 upscales. */
+    /* Scale is in 1/256 units; >256 upscales. Snap an upscale to a whole
+     * multiple and anchor the pivot at the top-left, so one canvas pixel is
+     * exactly `n` screen pixels at a known offset: the present's dirty box
+     * then maps with integer maths (no transform-space guessing, no
+     * fractional resampling). A downscale (canvas larger than the viewport)
+     * keeps the fitted scale and the present falls back to a full
+     * invalidation. */
     scale_x = (uint32_t)((int64_t)vp.width * 256 / s_gfx.w);
     scale_y = (uint32_t)((int64_t)vp.height * 256 / s_gfx.h);
     scale = (scale_x < scale_y) ? scale_x : scale_y;
-    if (scale < 1) {
+    if (scale >= 256) {
+        scale = (scale / 256) * 256;
+    } else if (scale < 1) {
         scale = 1;
     }
-    lv_image_set_pivot(s_gfx_canvas, s_gfx.w / 2, s_gfx.h / 2);
+    lv_image_set_pivot(s_gfx_canvas, 0, 0);
     lv_image_set_antialias(s_gfx_canvas, false);
     lv_image_set_scale(s_gfx_canvas, scale);
-    /* Position the NATIVE box centred; the scale is symmetric about its
-     * centre pivot, so the scaled image lands centred in the viewport. */
+    /* Centre the SCALED box in the viewport (integer pixels). */
     lv_obj_set_pos(s_gfx_canvas,
-                   (vp.width - s_gfx.w) / 2,
-                   (vp.height - s_gfx.h) / 2);
+                   (vp.width - (lv_coord_t)((int64_t)s_gfx.w * scale / 256)) / 2,
+                   (vp.height - (lv_coord_t)((int64_t)s_gfx.h * scale / 256)) / 2);
     lv_obj_invalidate(s_gfx_canvas);
 }
 
@@ -361,29 +368,24 @@ bool shell_command_gfx(int argc, char **argv)
             memcpy(s_gfx_shadow, s_gfx.px, s_gfx_shadow_bytes);
 
             if (x1 >= x0 && y1 >= y0) {
-                lv_area_t box;
-                lv_area_t inv;
-                int32_t bw;
-                int32_t bh;
+                lv_area_t obj;
+                int32_t sc = (int32_t)lv_image_get_scale(s_gfx_canvas);
 
-                /* lv_obj_get_transformed_area() transforms the area you pass
-                 * in (it does not fetch the object's own box), so seed it with
-                 * the object's coordinates first: with an uninitialised box it
-                 * produced a garbage rectangle and the canvas never repainted
-                 * (the ball froze). */
-                lv_obj_get_coords(s_gfx_canvas, &box);
-                lv_obj_get_transformed_area(s_gfx_canvas, &box,
-                                            LV_OBJ_POINT_TRANSFORM_FLAG_NONE);
-                bw = box.x2 - box.x1 + 1;
-                bh = box.y2 - box.y1 + 1;
-                if (bw <= 0 || bh <= 0) {
-                    lv_obj_invalidate(s_gfx_canvas);
-                } else {
-                    inv.x1 = box.x1 + (int32_t)x0 * bw / s_gfx.w - 2;
-                    inv.y1 = box.y1 + (int32_t)y0 * bh / s_gfx.h - 2;
-                    inv.x2 = box.x1 + (int32_t)(x1 + 1) * bw / s_gfx.w + 2;
-                    inv.y2 = box.y1 + (int32_t)(y1 + 1) * bh / s_gfx.h + 2;
+                /* Whole-multiple upscale: canvas (x,y) is exactly
+                 * obj + n*(x,y). Anything else (a downscale, an orphaned
+                 * object) takes the always-correct full invalidation. */
+                if (sc >= 256 && (sc % 256) == 0) {
+                    int32_t n = sc / 256;
+                    lv_area_t inv;
+
+                    lv_obj_get_coords(s_gfx_canvas, &obj);
+                    inv.x1 = obj.x1 + (lv_coord_t)(x0 * n) - 1;
+                    inv.y1 = obj.y1 + (lv_coord_t)(y0 * n) - 1;
+                    inv.x2 = obj.x1 + (lv_coord_t)((x1 + 1) * n) + 1;
+                    inv.y2 = obj.y1 + (lv_coord_t)((y1 + 1) * n) + 1;
                     lv_obj_invalidate_area(s_gfx_canvas, &inv);
+                } else {
+                    lv_obj_invalidate(s_gfx_canvas);
                 }
             }
         } else {
