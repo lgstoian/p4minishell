@@ -5037,6 +5037,7 @@ epub next                 Next chapter in reading order
 epub prev                 Previous chapter in reading order
 epub goto <n>             Go to chapter n (0-based spine index)
 epub toc <n>              Jump to TOC entry n
+epub manifest             List manifest entries with their extract index
 epub extract <n> <file>   Extract resource (image, CSS, font) by manifest index
 ```
 

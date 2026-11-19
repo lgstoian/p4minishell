@@ -683,6 +683,26 @@ int epub_get_spine_count(const epub_handle_t *handle)
     return (handle != NULL) ? handle->spine_count : 0;
 }
 
+int epub_get_manifest_count(const epub_handle_t *handle)
+{
+    return (handle != NULL) ? handle->manifest_count : 0;
+}
+
+esp_err_t epub_get_manifest_item(const epub_handle_t *handle, int index,
+                                 epub_manifest_item_t *out_item)
+{
+    if (handle == NULL || out_item == NULL ||
+        index < 0 || index >= handle->manifest_count) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    strlcpy(out_item->id, handle->manifest[index].id, sizeof(out_item->id));
+    strlcpy(out_item->href, handle->manifest[index].href,
+            sizeof(out_item->href));
+    strlcpy(out_item->media_type, handle->manifest[index].media_type,
+            sizeof(out_item->media_type));
+    return ESP_OK;
+}
+
 esp_err_t epub_next_chapter(epub_handle_t *handle)
 {
     if (!handle || handle->current_spine_index >= handle->spine_count - 1) return ESP_ERR_INVALID_STATE;

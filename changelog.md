@@ -256,6 +256,14 @@ open bugs see [`bugs.md`](bugs.md).
   frames with its echoes, 1 dropped**. `s14_apps` now asserts an animation's
   own `gfx stats` (average under 60 ms, fewer than 20 dropped), so a silent
   present slowdown fails the suite.
+- **`epub extract` now works, and `epub manifest` lists what it can take.**
+  The verb was registered and documented (`command.md`, `file_support.md`,
+  `SECURITY.md`) but its handler stopped at "extract not fully implemented":
+  every call failed. It now resolves the manifest index to a resource href and
+  extracts those bytes through `epub_extract_resource()`. `epub manifest`
+  prints the index, id and href of every item so the index is discoverable,
+  an out-of-range index is refused with the valid range, and `s07_data`
+  extracts the exported chapter and compares its bytes after `epub open`.
 - **Touch and mouse now switch automatically.** A finger press takes the
   pointer: it clears any stale HID mouse button (a lost button-up report, or
   the mouse's first report after attach) and hides the cursor; mouse motion,

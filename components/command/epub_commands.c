@@ -16,6 +16,7 @@
  *   epub prev              — previous chapter in spine
  *   epub goto <n>          — go to chapter n (spine index)
  *   epub toc <n>           — go to TOC entry n
+ *   epub manifest          — list manifest entries with their extract index
  *   epub extract <n> <file> — extract resource (image, CSS) by manifest index
  */
 
@@ -43,6 +44,7 @@ static esp_err_t epub_cmd_next(int argc, char *argv[]);
 static esp_err_t epub_cmd_prev(int argc, char *argv[]);
 static esp_err_t epub_cmd_goto(int argc, char *argv[]);
 static esp_err_t epub_cmd_toc_goto(int argc, char *argv[]);
+static esp_err_t epub_cmd_manifest(int argc, char *argv[]);
 static esp_err_t epub_cmd_extract(int argc, char *argv[]);
 
 /* ---- epub open ---- */
@@ -349,9 +351,68 @@ static esp_err_t epub_cmd_extract(int argc, char *argv[])
         return 2;
     }
 
-    /* TODO: implement manifest index lookup */
-    shell_print_error("epub: extract not fully implemented");
-    return 1;
+    int count = epub_get_manifest_count(s_epub_handle);
+    if (count <= 0) {
+        shell_print_error("epub: this book has no manifest");
+        return 1;
+    }
+    if (index >= count) {
+        shell_print_error("epub: manifest index %d out of range (0-%d)",
+                          index, count - 1);
+        return 2;
+    }
+
+    epub_manifest_item_t item;
+    esp_err_t err = epub_get_manifest_item(s_epub_handle, index, &item);
+    if (err != ESP_OK) {
+        shell_print_error("epub: manifest index %d (@y%s@R)", index,
+                          esp_err_to_name(err));
+        return 1;
+    }
+
+    char dest[P4_CONFIG_SD_PATH_BYTES];
+    if (shell_fs_resolve_path(argv[2], dest, sizeof(dest)) != ESP_OK) {
+        return 2;
+    }
+
+    err = epub_extract_resource(s_epub_handle, item.href, dest);
+    if (err != ESP_OK) {
+        shell_print_error("epub: cannot extract %s (@y%s@R)", item.href,
+                          esp_err_to_name(err));
+        return 1;
+    }
+
+    shell_print_muted("Extracted: %s -> %s", item.href, argv[2]);
+    return 0;
+}
+
+/* ---- epub manifest ---- */
+static esp_err_t epub_cmd_manifest(int argc, char *argv[])
+{
+    (void)argc;
+    (void)argv;
+
+    if (!s_epub_handle) {
+        shell_print_error("epub: no book open");
+        return 1;
+    }
+
+    int count = epub_get_manifest_count(s_epub_handle);
+    if (count <= 0) {
+        shell_print_error("epub: this book has no manifest");
+        return 1;
+    }
+
+    shell_print_muted("Manifest: %d item(s)", count);
+    for (int i = 0; i < count; i++) {
+        epub_manifest_item_t item;
+        if (epub_get_manifest_item(s_epub_handle, i, &item) != ESP_OK) {
+            continue;
+        }
+        printf("%3d  %-28s %s\n", i, item.id,
+               item.href[0] ? item.href : "(no href)");
+    }
+    return 0;
 }
 
 /* ---- Command table ---- */
@@ -365,6 +426,7 @@ static const shell_command_entry_t s_epub_commands[] = {
     { "prev",   epub_cmd_prev,   "epub prev — previous chapter" },
     { "goto",   epub_cmd_goto,   "epub goto <n> — go to chapter n" },
 
+    { "manifest", epub_cmd_manifest, "epub manifest — list resources with their extract index" },
     { "extract", epub_cmd_extract, "epub extract <n> <file> — extract resource" },
 };
 
@@ -377,7 +439,7 @@ const shell_command_entry_t *epub_commands_get_table(size_t *out_count)
 int shell_command_epub(int argc, char **argv)
 {
     if (argc < 2) {
-        shell_print_muted("epub open <file> | close | info | toc | read | next | prev | goto <n> | toc <n> | extract <n> <file>");
+        shell_print_muted("epub open <file> | close | info | toc | read | next | prev | goto <n> | toc <n> | manifest | extract <n> <file>");
         return 2;
     }
 
@@ -394,6 +456,6 @@ int shell_command_epub(int argc, char **argv)
     }
 
     shell_print_error("epub: unknown sub-command '%s'", argv[1]);
-    shell_print_muted("epub open <file> | close | info | toc | read | next | prev | goto <n> | toc <n> | extract <n> <file>");
+    shell_print_muted("epub open <file> | close | info | toc | read | next | prev | goto <n> | toc <n> | manifest | extract <n> <file>");
     return 2;
 }

@@ -56,6 +56,16 @@ TEST_CASE("epub manifest lookup by id", "[epub]")
     TEST_ASSERT_NULL(found);
 }
 
+/* --- Manifest accessors (`epub manifest` / `epub extract`) --- */
+TEST_CASE("epub manifest accessors refuse a missing handle", "[epub]")
+{
+    epub_manifest_item_t item;
+
+    TEST_ASSERT_EQUAL(0, epub_get_manifest_count(NULL));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      epub_get_manifest_item(NULL, 0, &item));
+}
+
 /* --- HREF resolution --- */
 TEST_CASE("epub href resolution relative", "[epub]")
 {

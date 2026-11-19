@@ -28,12 +28,35 @@ class Device:
 
     # -- lifecycle -------------------------------------------------------
     def boot(self, settle_ms: int = 8000) -> None:
-        """Wait for the prompt, then let boot chatter (Wi-Fi/C6) quiesce."""
+        """Wait for the prompt, then let boot chatter (Wi-Fi/C6) quiesce.
+
+        A board whose saved network is unreachable keeps the boot workflow
+        printing retry lines for ~30 s, and every one of them is queued on the
+        command worker ahead of ours. A fixed settle therefore saw suites start
+        while the shell was still chewing retries: commands went out but their
+        markers arrived tens of seconds later, which looked like a hang and
+        cascaded into unrelated failures. Wait for the console to go quiet, then
+        prove the worker is free with the deterministic `delay` marker.
+        """
         self.session.wait_prompt(timeout=25.0)
+        deadline = time.time() + 60.0
+        last = time.time()
+        while time.time() < deadline:
+            chunk = self.session.read_for(0.3)
+            if chunk:
+                last = time.time()
+            elif time.time() - last > 2.0:
+                break
         if settle_ms > 0:
-            # `delay` is a deterministic wait on the worker; its marker proves
-            # the boot workflow's immediate output has flushed.
-            self.session.run("delay %d" % settle_ms, timeout=settle_ms / 1000.0 + 15)
+            for attempt in range(5):
+                try:
+                    self.session.run("delay %d" % settle_ms,
+                                     timeout=settle_ms / 1000.0 + 25)
+                    break
+                except P4Error:
+                    if attempt == 4:
+                        raise
+                    time.sleep(2.0)
 
     def reboot(self, settle_ms: int = 8000) -> None:
         self.session.hard_reset()

@@ -12,6 +12,33 @@ See [`readme.md`](readme.md) for the feature tour and
 
 ---
 
+## Deferred to 1.4.4
+
+### Tear-free partial presents on the DSI panels
+
+v1.4.3 presents gfx animations by invalidating only the changed canvas
+rectangle (30 fps, 0 dropped frames on BOUNCE). On the reference board the
+panel scans a single DSI framebuffer, so a present writes memory the panel may
+be reading; a fast direction change (the ball hitting a wall) can be caught by
+one scan line and show a one-frame tear.
+
+The fix is to keep the partial present but stage the dirty rectangle in a back
+buffer and blit it into the scanned framebuffer during vertical blanking:
+
+1. Register an `on_vsync` callback on the DPI panel (the BSP already has the
+   callback plumbing used by the `avoid_tearing` path).
+2. On a present, copy the dirty rectangle's RGB565 pixels into a small
+   full-width back buffer (only the changed rows), then in the vsync callback
+   write those rows to the scan buffer with `esp_lcd_panel_draw_bitmap`.
+3. Keep the current dirty-rectangle invalidation and integer canvas scale, so
+   the render cost stays proportional to the sprite, not the screen.
+4. Extend `s22_canvas`'s present fixture: capture the panel twice across a
+   bounce and assert no stale pixels in the direction-change frame.
+
+This needs no full-frame refresh (which drops the reference board back to
+about 15 fps) and no second full framebuffer (2.4 MB on the JC1060, 3.7 MB on
+the Tab5); the staging buffer is `width * changed_rows * 2`.
+
 ## Part 1 — How we got here
 
 Grouped by milestone. Full per-version detail is in

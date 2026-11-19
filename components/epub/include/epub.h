@@ -271,6 +271,30 @@ typedef struct {
 } epub_manifest_item_t;
 
 /**
+ * Total manifest items parsed from the OPF package document.
+ *
+ * `epub extract` addresses resources by manifest index, so the command layer
+ * needs the count and the href behind each index; the manifest itself stays
+ * private to the component.
+ *
+ * @param handle  Handle returned by epub_open().
+ * @return Item count, or 0 for a NULL handle.
+ */
+int epub_get_manifest_count(const epub_handle_t *handle);
+
+/**
+ * Copy one manifest item (by index) into @p out_item.
+ *
+ * @param handle  Handle returned by epub_open().
+ * @param index   0-based manifest index (`epub manifest` prints the list).
+ * @param out_item  Filled on success (id, href, media_type).
+ * @return ESP_OK on success; ESP_ERR_INVALID_ARG for a NULL handle, a NULL
+ *         output or an index outside 0..count-1.
+ */
+esp_err_t epub_get_manifest_item(const epub_handle_t *handle, int index,
+                                 epub_manifest_item_t *out_item);
+
+/**
  * Parse OPF manifest into an array.
  * @param xml  OPF XML text.
  * @param len  Length of xml.

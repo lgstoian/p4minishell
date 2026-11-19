@@ -2145,10 +2145,29 @@ static void windows_transcript_apply_timer_cb(lv_timer_t *timer)
      * cost is paid per append. BOUNCE echoes its frame line every frame and
      * decayed from 33 ms to 400+ ms per frame as the transcript grew; the
      * same loop without echoes stayed at 30 fps. Keep the text staged and
-     * apply it once, on the first tick after the app exits. */
+     * apply it once, on the first tick after the app exits.
+     *
+     * The deferral is bounded: a surface flag left standing by an app that
+     * never exits (or a boot path that paints before the shell sets up) must
+     * not silence the console forever, so after TRANSCRIPT_APPLY_DEFER_MS the
+     * apply runs anyway. BOUNCE still gets its speed (its surface lives for
+     * well over a second, but a periodic catch-up apply is one frame's cost,
+     * not one per echo). */
+    #define TRANSCRIPT_APPLY_DEFER_MS 1500
+    static uint32_t deferred_since;
     if (s_windows.app_surface_active || s_windows.tui_mode) {
-        return;
+        if (deferred_since == 0) {
+            deferred_since = lv_tick_get();
+            if (deferred_since == 0) {
+                deferred_since = 1; /* 0 is the "not deferred" sentinel */
+            }
+            return;
+        }
+        if (lv_tick_elaps(deferred_since) < TRANSCRIPT_APPLY_DEFER_MS) {
+            return;
+        }
     }
+    deferred_since = 0;
     s_transcript_apply_pending = false;
     windows_transcript_apply();
 }

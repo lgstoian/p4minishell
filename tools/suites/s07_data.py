@@ -257,6 +257,29 @@ def run(dev, ctx):
     c.expect("epub toc lists the chapter", "doc2 @ chapter.xhtml", out)
     out = dev.run("epub read")
     c.expect("epub renders the chapter", "Doc %s" % stamp, out)
+    out = dev.run("epub manifest")
+    c.expect("epub manifest lists the chapter", "chapter.xhtml", out)
+    c.expect("epub manifest prints extract indexes", "Manifest:", out)
+    chapter_index = None
+    for line in out.splitlines():
+        if "chapter.xhtml" in line:
+            head = line.strip().split()
+            if head and head[0].isdigit():
+                chapter_index = int(head[0])
+                break
+    c.check("epub manifest exposes a numeric index",
+            chapter_index is not None, out[-200:])
+    if chapter_index is not None:
+        out = dev.run("epub extract %d %s/extracted.xhtml"
+                      % (chapter_index, DATA), timeout=30)
+        c.expect("epub extract reports the resource", "Extracted:", out)
+        got = dev.pull_file("%s/extracted.xhtml" % DATA)
+        c.check("epub extract wrote the chapter bytes",
+                ("Doc %s" % stamp).encode() in got and b"<html" in got,
+                "%d bytes" % len(got))
+    out = dev.run("epub extract 9999 %s/nope.xhtml" % DATA, timeout=30)
+    c.expect("epub extract rejects an out-of-range index",
+             "out of range", out)
     out = dev.run("epub close")
     c.expect("epub closes", "closed", out)
 
