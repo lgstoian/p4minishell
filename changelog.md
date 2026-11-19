@@ -245,6 +245,13 @@ open bugs see [`bugs.md`](bugs.md).
   upstream. Verified with 20/20 cold boots, three Wi-Fi + HTTPS + SD cycles
   and a full `c6ota` transfer (1,361,856 bytes) on the Tab5, and the JC1060
   image is built from the same tree.
+- **The PNG backdrop showcase was invisible.** Its tile (`PIX.PNG`) is a
+  solid #FF5555 used for both the CSS background *and* the inline `<img>`, so
+  the inline image drew red glyphs on the same red backdrop: the framed box
+  looked empty even though the decode and the blit were correct. The demo now
+  uses a distinct cyan/blue checker (`TILE.PNG`) for the inline image, and
+  `s22_canvas` asserts the inline image's own pixels (not just the backdrop
+  colour), so a blank inline image fails the suite.
 - **ZIP CRC verification.** The extraction paths seeded CRC-32 with 0 and
   compared the raw accumulator with the entry's stored CRC; a ZIP CRC is
   seeded with `0xFFFFFFFF` and inverted at the end, so the check rejected every

@@ -89,8 +89,11 @@ def run(dev, ctx):
     # CSS background-image + an inline PNG. Regression: LVGL's vendored
     # LodePNG returns an lv_draw_buf_t (not raw RGBA), so treating the pointer
     # as pixels turned every PNG white; a wrong channel order tinted a blue
-    # background orange. The fixture is 16x16 #ff5555 (DOS red 12).
+    # background orange. The backdrop fixture is 16x16 #ff5555 (DOS red 12);
+    # the inline fixture is a *different* tile (cyan/blue/white checker), so a
+    # missing or white-blended inline image cannot hide inside the backdrop.
     _push(dev, "PIX.PNG", "WEB/PIX.PNG")
+    _push(dev, "TILE.PNG", "WEB/TILE.PNG")
     _push(dev, "BGIMG.HTML", "WEB/BGIMG.HTML")
     dev.run("browser cache clear", timeout=20)
     out = dev.run("browser sd:/WEB/BGIMG.HTML", timeout=90, settle=2.0)
@@ -106,6 +109,14 @@ def run(dev, ctx):
     # mis-tinted decode would leave the whole page outside the red family.
     c.check("PNG background tiles the page", red >= 400,
             "%d red samples (tiled backdrop)" % red)
+    # The inline image is a second, distinct PNG: its cyan/blue checks must be
+    # on screen inside the framed box. A decode that returned nothing (the
+    # inline box stayed empty) or the same image as the backdrop fails here -
+    # the showcase used to render a solid red PNG on a red backdrop, which was
+    # correct code but an invisible example.
+    cyan = _count_near(bmp, (82, 255, 255))  # DOS bright cyan after cell quantisation
+    c.check("inline PNG renders its own pixels", cyan >= 60,
+            "%d cyan samples" % cyan)
 
     try:
         os.makedirs(SPIKES, exist_ok=True)
