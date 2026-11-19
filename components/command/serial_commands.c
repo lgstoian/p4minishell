@@ -303,11 +303,11 @@ void shell_command_screenshot(int argc, char **argv)
          * on the card, so a full 1024x600 capture used to spend 4.5-6 s in
          * the filesystem - past the 5 s task watchdog, which is what reset
          * the board (and showed the panel's blue field) after an app's final
-         * screenshot. A ~64 KB staging buffer cuts the transaction count by
+         * screenshot. A ~256 KB staging buffer cuts the transaction count by
          * ~20x, and a tick between chunks keeps the idle task (the watchdog
          * subscriber) running even on a slow card. */
         uint32_t row_bytes = width * 3;
-        size_t chunk_rows = (64u * 1024u) / (row_bytes ? row_bytes : 1u);
+        size_t chunk_rows = (256u * 1024u) / (row_bytes ? row_bytes : 1u);
         size_t chunk_size;
         uint8_t *chunk;
 
