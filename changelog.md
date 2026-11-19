@@ -245,6 +245,17 @@ open bugs see [`bugs.md`](bugs.md).
   upstream. Verified with 20/20 cold boots, three Wi-Fi + HTTPS + SD cycles
   and a full `c6ota` transfer (1,361,856 bytes) on the Tab5, and the JC1060
   image is built from the same tree.
+- **A gfx animation decayed to a crawl when the app printed per frame.** While
+  an app surface (gfx canvas or TUI page) owns the screen the transcript is
+  hidden, but its apply pump still rebuilt the transcript spans on every
+  append, and that work grew with the transcript. BOUNCE echoes a frame line
+  each frame and decayed from 33 ms to 416 ms per frame (154 of 239 frames
+  dropped) after a couple of seconds; the same loop without echoes stayed at
+  30 fps. The apply is now suspended while an app surface or TUI page owns the
+  screen and runs once on exit. BOUNCE holds **33.9 ms average over all 239
+  frames with its echoes, 1 dropped**. `s14_apps` now asserts an animation's
+  own `gfx stats` (average under 60 ms, fewer than 20 dropped), so a silent
+  present slowdown fails the suite.
 - **Touch and mouse now switch automatically.** A finger press takes the
   pointer: it clears any stale HID mouse button (a lost button-up report, or
   the mouse's first report after attach) and hides the cursor; mouse motion,

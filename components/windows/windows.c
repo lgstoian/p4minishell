@@ -2140,6 +2140,15 @@ static void windows_transcript_apply_timer_cb(lv_timer_t *timer)
     if (!s_transcript_apply_pending) {
         return;
     }
+    /* While an app surface (gfx canvas / TUI page) owns the screen the
+     * transcript is hidden, so rebuilding its spans is pure cost - and that
+     * cost is paid per append. BOUNCE echoes its frame line every frame and
+     * decayed from 33 ms to 400+ ms per frame as the transcript grew; the
+     * same loop without echoes stayed at 30 fps. Keep the text staged and
+     * apply it once, on the first tick after the app exits. */
+    if (s_windows.app_surface_active || s_windows.tui_mode) {
+        return;
+    }
     s_transcript_apply_pending = false;
     windows_transcript_apply();
 }

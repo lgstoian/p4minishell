@@ -19,6 +19,7 @@ saved BMPs/TXT are cleaned up.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -241,6 +242,28 @@ def _oneshot(dev, c, name, start, done, timeout, extra):
     c.expect("%s done marker" % name, done, out)
     for pat in extra:
         c.expect("%s extra %s" % (name, pat), pat, out)
+    return out
+
+
+def _check_gfx_pacing(c, name, out):
+    """An animation's own frame stats: a present that silently degrades is a
+    user-visible crawl even when every marker arrives. BOUNCE echoes a line
+    per frame and used to decay from 33 ms to 400+ ms as the hidden transcript
+    grew; the transcript apply is now suspended while an app owns the screen."""
+    stats = [line for line in out.splitlines() if "gfx stats" in line]
+    if not stats:
+        return
+    match = re.search(r"avg_us=(\d+)", stats[-1])
+    if match is None:
+        return
+    avg_ms = int(match.group(1)) / 1000.0
+    dropped = re.search(r"dropped=(\d+)", stats[-1])
+    c.check("%s frame pacing stays steady" % name, avg_ms < 60.0,
+            "avg %.1f ms/frame (%s)" % (avg_ms, stats[-1].strip()))
+    if dropped is not None:
+        c.check("%s dropped frames stay low" % name,
+                int(dropped.group(1)) < 20,
+                "%s dropped (%s)" % (dropped.group(1), stats[-1].strip()))
 
 
 def _drive(dev, c, name, start, exit_line, exit_marker, open_wait, shot):
@@ -1016,7 +1039,8 @@ def run(dev, ctx):
     c.expect("launch lists the companion", "COMPANION", listed)
 
     for name, start, done, timeout, extra in NONSTOP:
-        _oneshot(dev, c, name, start, done, timeout, extra)
+        out = _oneshot(dev, c, name, start, done, timeout, extra)
+        _check_gfx_pacing(c, name, out)
 
     # Hybrid model: every app launches through a .BAT shim, even when a
     # linked-in C entry does the work (see ABI.md).
