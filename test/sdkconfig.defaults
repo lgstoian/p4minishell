@@ -109,3 +109,10 @@ CONFIG_LV_USE_GESTURE_RECOGNITION=y
 
 CONFIG_ESP_TIMER_TASK_STACK_SIZE=4096
 
+# The on-target suite runs every case back-to-back on `main` while the C6
+# hosted bring-up is starting; a slow SDIO handshake can hold the CPU
+# without logging for long enough to trip the 5 s task watchdog and abort
+# an otherwise green run. This is a diagnostic image: keep the watchdog
+# (a true hang still prints and stops the suite) but give the bring-up
+# room. The shipped firmware keeps the strict 5 s value.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=20
