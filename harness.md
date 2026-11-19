@@ -313,6 +313,23 @@ logic (`tools/README.md` has the full list).
 | `tools/dogfood.py COM3 --minutes 15` | autonomous curious-user drive; screenshots every action, journals anomalies |
 | `tools/completion_test.py`, `editor_test.py`, `header_test.py`, `plot_test.py`, `theme_test.py` | focused subsystem drivers |
 
+### Present-level diagnostics (what the glass shows)
+
+`docs` screenshots and `screenshot <file>` re-render the LVGL object tree, so
+they CANNOT see a present bug: a sprite invalidated away, a stale pixel left on
+the panel, a tear. Two gfx presents shipped broken in this release while every
+model screenshot looked right. Use the panel view:
+
+- `screenshot /panel <file.bmp>` reads the MIPI-DSI frame buffer (the memory
+  the panel is scanning). It is native-oriented (rotated on the Tab5) and is
+  meant for analysis, not for docs.
+- `s22_canvas` presents two colour-coded frames and asserts, from the panel
+  captures, that each present landed and the second replaced the first (no
+  stale sprite). That is the check that catches a broken dirty-rectangle
+  present.
+- Panic backtraces in a suite failure are symbolized automatically from
+  `build/` (COM3) or `build-tab5/` (COM6) via `p4test/panic_symbols.py`.
+
 ### Visual guards (unstyled widgets)
 
 A capture may never contain LVGL's default-theme primary (`#2196F3`): this UI

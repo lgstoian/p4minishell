@@ -48,6 +48,7 @@ from .asserts import Checklist, SuiteResult
 from .device import Device
 from .local_config import wifi_credentials
 from .session import PANICS, P4Error, PanicError
+from . import panic_symbols
 
 # Fast tier: the per-area smoke subset that gates feature delivery in
 # minutes. Full tier (default) is every discovered suite and gates releases.
@@ -205,9 +206,14 @@ def _run_one_suite(mod, dev, ctx) -> Tuple[SuiteResult, List[str]]:
                             error="suite returned %r" % type(out)),
                 ["bad return %r" % type(out)])
     except PanicError as exc:
-        print("  [PANIC] %s" % exc)
+        # Attach symbols from the matching ELF: a raw backtrace otherwise
+        # costs a manual addr2line round before triage can start.
+        symbols = panic_symbols.symbolize(
+            str(exc), getattr(getattr(dev, "session", None), "port", None))
+        detail = "PANIC: %s%s" % (exc, ("\n" + symbols) if symbols else "")
+        print("  [PANIC] %s%s" % (exc, ("\n" + symbols) if symbols else ""))
         return (SuiteResult(name, 0, 1, duration=time.time() - started,
-                            error="PANIC: %s" % exc),
+                            error=detail),
                 ["panic"])
     except P4Error as exc:
         print("  [ERROR] %s" % exc)

@@ -19,6 +19,7 @@ subset, while the live Wikipedia suite remains the network gate.
 import os
 
 from p4test import Checklist
+from p4test.screenshot import diff_ratio, parse_bmp
 
 NAME = "canvas"
 TAGS = ["browser", "ui", "html5"]
@@ -32,6 +33,20 @@ BANNER_BG = (170, 0, 0)      # #aa0000 -> DOS 4
 CANVAS_RED = (255, 85, 85)   # #ff5555 -> DOS 12
 CANVAS_GREEN = (85, 255, 85) # #55ff55 -> DOS 10
 CANVAS_CYAN = (85, 255, 255) # #55ffff -> DOS 11
+
+
+def _read_until(session, marker, timeout=30.0):
+    got = session.read_until(marker.encode(), timeout)
+    return got if isinstance(got, bytes) else got.encode()
+
+
+def _pull_bmp(dev, c, remote):
+    """Pull an app-written BMP (a panel capture here) into the pixel model."""
+    try:
+        return parse_bmp(dev.pull_file(remote))
+    except Exception as exc:  # noqa: BLE001
+        c.check("pull %s" % remote, False, str(exc))
+        return None
 
 
 def _push(dev, name, remote):
@@ -51,6 +66,26 @@ def _count_near(bmp, rgb, tol=10, step=3):
                 n += 1
     return n
 
+
+PRESENT_BAT = r"""@echo off
+rem Present-time invariant fixture: each `gfx show` must reach the PANEL, and
+rem the second frame must replace the first (no stale sprite pixels).
+echo [M-PRESENT]
+gfx init 240 180
+if errorlevel 1 goto :done
+gfx clear 0
+gfx ellipse 50 45 30 25 0xFF0000 fill
+gfx show
+screenshot /panel %APPDRIVE%/P1.BMP
+delay 300
+gfx clear 0
+gfx ellipse 190 135 30 25 0x00FF00 fill
+gfx show
+screenshot /panel %APPDRIVE%/P2.BMP
+gfx close
+:done
+echo [M-PRESENT-DONE]
+"""
 
 def run(dev, ctx):
     c = Checklist(NAME)
@@ -117,6 +152,44 @@ def run(dev, ctx):
     cyan = _count_near(bmp, (82, 255, 255))  # DOS bright cyan after cell quantisation
     c.check("inline PNG renders its own pixels", cyan >= 60,
             "%d cyan samples" % cyan)
+
+    # ------------------------------------------------------------------
+    # Present invariant: what the GLASS shows, not the LVGL model.
+    # A model snapshot re-renders the object tree, so it cannot see a sprite
+    # that was invalidated away or a stale pixel left on the panel. Twice this
+    # release a gfx present was broken (trails, then the ball erased) while
+    # every model screenshot looked correct. `screenshot /panel` reads the
+    # MIPI-DSI frame buffer, and this fixture presents two colour-coded
+    # frames: red must be on the panel in P1 and gone in P2, green the
+    # reverse.
+    # ------------------------------------------------------------------
+    dev.run("draw close", timeout=20)
+    dev.push_file("PRESENT.BAT", PRESENT_BAT.encode())
+    s = dev.session
+    s.reset_input()
+    s.write_line("launch PRESENT.BAT")
+    got = _read_until(s, "[M-PRESENT-DONE]", 60.0)
+    c.check("present fixture completed", b"[M-PRESENT-DONE]" in got,
+            got[-200:].decode("utf-8", "replace"))
+    p1 = _pull_bmp(dev, c, "P1.BMP")
+    p2 = _pull_bmp(dev, c, "P2.BMP")
+    if p1 is not None and p2 is not None:
+        red1 = _count_near(p1, (255, 0, 0), tol=40, step=2)
+        green1 = _count_near(p1, (0, 255, 0), tol=40, step=2)
+        red2 = _count_near(p2, (255, 0, 0), tol=40, step=2)
+        green2 = _count_near(p2, (0, 255, 0), tol=40, step=2)
+        c.check("present 1 reached the panel", red1 >= 100,
+                "%d red panel samples" % red1)
+        c.check("present 2 reached the panel", green2 >= 100,
+                "%d green panel samples" % green2)
+        c.check("present 2 replaced present 1 (no stale sprite)", red2 < 40,
+                "%d stale red samples" % red2)
+        c.check("present 1 had no stale green", green1 < 40,
+                "%d stale green samples" % green1)
+        moved = diff_ratio(p1, p2, tol=0)
+        c.check("the two presents differ on the panel", moved >= 0.002,
+                "%.5f of sampled pixels differ" % moved)
+    dev.run("del /f P1.BMP & del /f P2.BMP", timeout=20)
 
     try:
         os.makedirs(SPIKES, exist_ok=True)

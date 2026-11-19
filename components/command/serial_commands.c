@@ -35,6 +35,7 @@
 #include "p4minishell_config.h"
 #include "p4heap.h"
 #include "esp_err.h"
+#include "esp_lcd_mipi_dsi.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_chip_info.h"
@@ -139,9 +140,21 @@ void shell_command_screenshot(int argc, char **argv)
     uint32_t width = 0;
     uint32_t height = 0;
     bool to_sd = (argc >= 2);
+    bool panel = false;
+    const char *out_name = (argc >= 2) ? argv[1] : NULL;
+    const uint8_t *src_base = NULL;
+    uint32_t src_stride = 0;
 
-    if (argc > 2) {
-        shell_print_usage("Usage: screenshot [filename.bmp]");
+    /* `screenshot /panel <file.bmp>` captures the MIPI-DSI panel's frame
+     * buffer - what the glass is actually scanning - instead of re-rendering
+     * the LVGL object model. A present bug (a sprite that was invalidated
+     * away, a stale pixel, a tear) only exists in the panel buffer, which is
+     * why the model snapshots could never catch it. */
+    if (argc == 3 && strcmp(argv[1], "/panel") == 0) {
+        panel = true;
+        out_name = argv[2];
+    } else if (argc > 2) {
+        shell_print_usage("Usage: screenshot [filename.bmp | /panel <filename.bmp>]");
         batch_set_errorlevel(2);
         return;
     }
@@ -173,6 +186,42 @@ void shell_command_screenshot(int argc, char **argv)
      * label over it and the capture would show the transcript instead. */
     if (!tui_is_active()) {
         shell_transcript_flush_now();
+    }
+
+    if (panel) {
+        /* The LVGL port's display context starts with disp_type then
+         * panel_handle (mirrored here, like the touch context above). */
+        typedef struct {
+            int disp_type;
+            void *io_handle;
+            esp_lcd_panel_handle_t panel_handle;
+        } port_disp_prefix_t;
+        lv_display_t *disp = lv_display_get_default();
+        port_disp_prefix_t *ctx = (disp == NULL)
+            ? NULL : (port_disp_prefix_t *)lv_display_get_driver_data(disp);
+        void *fb = NULL;
+        lv_display_rotation_t rot;
+
+        if (ctx == NULL || ctx->panel_handle == NULL ||
+            esp_lcd_dpi_panel_get_frame_buffer(ctx->panel_handle, 1, &fb) !=
+                ESP_OK || fb == NULL) {
+            lvgl_port_unlock();
+            shell_print_error("screenshot: no panel frame buffer");
+            batch_set_errorlevel(1);
+            return;
+        }
+        width = lv_display_get_horizontal_resolution(disp);
+        height = lv_display_get_vertical_resolution(disp);
+        rot = lv_display_get_rotation(disp);
+        if (rot == LV_DISPLAY_ROTATION_90 || rot == LV_DISPLAY_ROTATION_270) {
+            uint32_t tmp = width;
+            width = height;
+            height = tmp;
+        }
+        src_base = (const uint8_t *)fb;
+        src_stride = width * 2u;
+        lvgl_port_unlock();
+        goto pixels_ready;
     }
 
     screen = lv_screen_active();
@@ -235,6 +284,10 @@ void shell_command_screenshot(int argc, char **argv)
         batch_set_errorlevel(1);
         return;
     }
+    src_base = (const uint8_t *)draw_buf->data;
+    src_stride = (uint32_t)draw_buf->header.stride;
+
+pixels_ready:
 
     /* Success is quiet on the transcript: the header notification below is
      * the user-facing acknowledgement (errors stay on the transcript). */
@@ -244,8 +297,8 @@ void shell_command_screenshot(int argc, char **argv)
         char resolved[P4_CONFIG_SD_PATH_BYTES];
         shell_sd_session_t session;
 
-        if (shell_fs_resolve_path(argv[1], resolved, sizeof(resolved)) != ESP_OK) {
-            shell_print_error("screenshot: invalid path %s", argv[1]);
+        if (shell_fs_resolve_path(out_name, resolved, sizeof(resolved)) != ESP_OK) {
+            shell_print_error("screenshot: invalid path %s", out_name);
             free(pixel_data);
         free(draw_buf);
             batch_set_errorlevel(1);
@@ -338,8 +391,7 @@ void shell_command_screenshot(int argc, char **argv)
 
             while (rows < chunk_rows && y >= 0) {
                 const uint16_t *row = (const uint16_t *)(
-                    (const uint8_t *)draw_buf->data +
-                    (uint32_t)y * draw_buf->header.stride);
+                    src_base + (uint32_t)y * src_stride);
                 rgb565_to_bmp_row(chunk + rows * row_bytes, row, width);
                 rows++;
                 y--;
