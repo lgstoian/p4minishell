@@ -245,6 +245,14 @@ open bugs see [`bugs.md`](bugs.md).
   upstream. Verified with 20/20 cold boots, three Wi-Fi + HTTPS + SD cycles
   and a full `c6ota` transfer (1,361,856 bytes) on the Tab5, and the JC1060
   image is built from the same tree.
+- **A flapping saved network no longer keeps the board busy forever.** Every
+  disconnect respawned the Wi-Fi watchdog with a fresh 120 s budget, so an AP
+  that associated and dropped again produced an endless stream of retry lines:
+  the screen looked frozen and shell commands stalled behind the console
+  output. The auto-retry budget now spans watchdogs (six attempts, then one
+  "gave up" line); `wifi connect`, the portal or a profile switch clears it,
+  and any successful association resets it. The AP telemetry scan is also
+  throttled to one per minute instead of running on every status request.
 - **Rotating the panel now keeps a running app whole.** A TUI page reflowed
   to the new grid, but only the resized label was invalidated, so the glass kept
   the previous orientation's rows and a live app appeared cut in half; and the

@@ -164,6 +164,11 @@ static int64_t s_wifi_ap_cache_scanned_us;
 static TaskHandle_t s_wifi_watchdog_task;       /* NULL when not running */
 static int64_t s_wifi_watchdog_started_us;      /* when watchdog began */
 static int s_wifi_watchdog_retry_count;         /* for exponential backoff */
+/* Attempts across watchdog lifetimes. A disconnect respawns the watchdog with
+ * a fresh budget; without this a flapping AP retried forever, flooding the
+ * console (the shell looked frozen) and pinning the C6 link. */
+static int s_wifi_autoretry_attempts;
+#define WIFI_AUTORETRY_MAX_ATTEMPTS 6
 
 #if NETWORKING_WIFI_RUNTIME_ENABLED
 static esp_netif_t *s_wifi_sta_netif;
@@ -710,6 +715,12 @@ bool networking_wifi_connect_to(const char *ssid, const char *password)
     if (ssid == NULL || ssid[0] == '\0') {
         return false;
     }
+    /* A user-requested connect (command, portal, profile switch) clears the
+     * auto-retry budget: the watchdog gives up on a flapping AP, but an
+     * explicit request must always be tried. */
+    wifi_lock();
+    s_wifi_autoretry_attempts = 0;
+    wifi_unlock();
     return networking_wifi_begin_connect_request(ssid, password, false);
 }
 
@@ -4009,6 +4020,17 @@ static void networking_wifi_start_watchdog(void)
         wifi_unlock();
         return;
     }
+    if (s_wifi_autoretry_attempts >= WIFI_AUTORETRY_MAX_ATTEMPTS) {
+        wifi_unlock();
+        /* Said once, then silent: the AP is flapping or gone. `wifi connect`
+         * (or any successful association) resets the budget. */
+        if (s_wifi_autoretry_attempts == WIFI_AUTORETRY_MAX_ATTEMPTS) {
+            s_wifi_autoretry_attempts++;
+            networking_schedulef_ansi("@C[wifi]@R @Ywatchdog:@R @rgave up@R after @Z%d@R attempts; run @Wwifi connect@R to retry\n",
+                                      WIFI_AUTORETRY_MAX_ATTEMPTS);
+        }
+        return;
+    }
     wifi_unlock();
 
     s_wifi_watchdog_started_us = esp_timer_get_time();
@@ -4083,6 +4105,9 @@ static void networking_wifi_watchdog_task(void *arg)
         }
 
         s_wifi_watchdog_retry_count++;
+        wifi_lock();
+        s_wifi_autoretry_attempts++;
+        wifi_unlock();
 
         /* Exponential backoff with cap */
         delay_ms *= 2;
