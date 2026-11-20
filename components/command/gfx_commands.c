@@ -152,6 +152,7 @@ static void gfx_teardown(void)
         /* Restore the fullscreen state the app inherited, so a global
          * `draw fullscreen on` survives a gfx session (F25-C). */
         windows_set_fullscreen(s_gfx_fullscreen_saved);
+        windows_set_transcript_apply_defer(false);
         windows_exit_app_surface();
         lvgl_port_unlock();
     } else if (s_gfx_canvas != NULL) {
@@ -288,6 +289,10 @@ bool shell_command_gfx(int argc, char **argv)
          * keyboard/fullscreen changes. */
         windows_set_surface_layout_cb(gfx_relayout);
         gfx_relayout();
+        /* A canvas animation may echo per frame; its transcript is hidden, so
+         * defer the rebuild until the canvas closes (BOUNCE dropped from
+         * 33 ms to 416 ms per frame without this). */
+        windows_set_transcript_apply_defer(true);
         lvgl_port_unlock();
         shell_transcript_appendf("gfx: canvas %dx%d (%u KB PSRAM)\n", w, h,
                                  (unsigned)(((uint32_t)w * (uint32_t)h * 2u) / 1024u));

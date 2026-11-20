@@ -65,6 +65,24 @@ void tui_deinit(void);
 /** Report whether TUI mode is active. */
 bool tui_is_active(void);
 
+/**
+ * Start a fresh page for a newly launched app.
+ *
+ * The TUI surface is reused between apps (no destroy/create flash), so it can
+ * still hold the previous app's cells - and after a panel rotation those cells
+ * were authored at another pitch. `launch` calls this before running the app's
+ * script so its first frame is never composited with stale content.
+ */
+void tui_new_app_session(void);
+
+/**
+ * True when the live surface was fitted for a different panel geometry (the
+ * panel rotated since it was bound). `launch` tears such a surface down so the
+ * next app starts on a fresh one instead of laying its frame out against the
+ * previous orientation's pitch.
+ */
+bool tui_surface_needs_refit(void);
+
 /** True when LVGL/display is up, so tui_init() can safely take the port lock.
  *  False in the headless unit-test app (the page buffer is still usable). */
 bool tui_ready(void);

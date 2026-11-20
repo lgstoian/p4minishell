@@ -116,9 +116,24 @@ class DeviceSession:
         self.close()
 
     def hard_reset(self, settle: float = 0.5) -> None:
-        """Power-cycle via esptool, then reopen and wait for the prompt."""
+        """Power-cycle via esptool, then reopen and wait for the prompt.
+
+        esptool's reset intermittently fails on these USB-Serial/JTAG boards
+        (bugs.md F42); the failure used to be ignored, so the suite then talked
+        to a board that still had the previous app running and reported a
+        cascade of unrelated command timeouts. Retry, and say so when the board
+        could not be reset at all.
+        """
         self.close()
-        hard_reset(self.port)
+        ok = False
+        for _ in range(3):
+            ok = hard_reset(self.port)
+            if ok:
+                break
+            time.sleep(1.0)
+        if not ok:
+            raise P4Error("hard_reset %s: esptool could not reset the board"
+                          % self.port)
         time.sleep(settle)
         self.open()
         self.wait_prompt(timeout=25.0)

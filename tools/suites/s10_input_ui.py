@@ -115,6 +115,20 @@ def _wait_modal(dev, want, timeout=8.0):
     return st
 
 
+def _fill_transcript(dev, rows):
+    """Fill the transcript with numbered rows.
+
+    Selection checks must not depend on which echo happens to be on screen:
+    the panel height differs per board and every copy/clip adds rows. Known
+    content makes the drag deterministic (the clipboard must contain one of
+    these markers).
+    """
+    body = "".join("P4SELF-%02d\n" % i for i in range(1, rows + 1))
+    dev.push_file("SELFILL.TXT", body.encode())
+    dev.run("cls", timeout=20)
+    dev.run("type SELFILL.TXT", timeout=30)
+
+
 def run(dev, ctx):
     c = Checklist(NAME)
     disp_w, disp_h = dev.display_size()
@@ -593,6 +607,11 @@ def run(dev, ctx):
                             if ln.strip() and "clipboard:" not in ln]
 
             # A drag across the visible area adds the rows above the anchor.
+            # The transcript scrolled while the first selection was copied and
+            # read back, so a token that was on screen then may be gone now;
+            # fill it with numbered rows and require one of those instead of a
+            # particular echo (COM6's taller panel kept the echo off screen).
+            _fill_transcript(dev, 40)
             drag(x, y_bottom, x, tt["y"] + 4)
             dev.run("ui selection copy", timeout=20)
             clip_txt = dev.run("clip", timeout=20)
@@ -602,9 +621,9 @@ def run(dev, ctx):
                     len(multi_lines) >= 3,
                     "single=%d multi=%d" % (len(single_lines),
                                             len(multi_lines)))
-            c.check("multi-row selection includes a drag row",
-                    any(tok in clip_txt for tok in
-                        ("ui press", "ui move", "ui release")), clip_txt[-160:])
+            c.check("multi-row selection includes transcript rows",
+                    re.search(r"P4SELF-\d\d", clip_txt) is not None,
+                    clip_txt[-160:])
             dev.run("ui selection clear", timeout=20)
 
     finally:

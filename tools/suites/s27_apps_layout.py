@@ -333,16 +333,37 @@ def _tcmd_capture(dev, c, label):
     head = _read_until(s, "[M-TCMD-R]", 60.0)
     if b"[M-TCMD-R]" not in head:
         c.note("%s: TCMD did not reach its page: %r" % (label, head[-200:]))
-    time.sleep(1.2)
+    time.sleep(2.0)
     st = _status(dev)
     cols, rows, cw, ch = _grid(st)
-    s.write_line("p")
-    got = _read_until(s, "[M-TCMD-R]", 40.0)
-    if b"[M-TCMD-R]" not in got:
-        c.note("%s: snap key not acknowledged: %r" % (label, got[-200:]))
-    time.sleep(1.0)
-    s.write_line("q")
-    _read_until(s, "[M-TCMD-DONE]", 20.0)
+    # The shell cannot run a command while the app owns the worker, so the
+    # capture has to be the app's own `p` snap. TCMD re-arms its key loop after
+    # every refresh and a key sent while a refresh is in flight is dispatched as
+    # a shell command (H7), so retry until the app itself acknowledges the snap
+    # with its `ST=snapped` marker.
+    snapped = False
+    for _attempt in range(4):
+        s.read_until(b"key?", 30.0)
+        s.reset_input()
+        s.write_line("p")
+        got = _read_until(s, "ST=snapped", 15.0)
+        if b"ST=snapped" in got:
+            snapped = True
+            break
+        time.sleep(1.0)
+    if not snapped:
+        c.note("%s: snap key not acknowledged" % label)
+    time.sleep(1.5)
+    exited = False
+    for _attempt in range(4):
+        s.write_line("q")
+        tail = _read_until(s, "[M-TCMD-DONE]", 12.0)
+        if b"[M-TCMD-DONE]" in tail:
+            exited = True
+            break
+        s.read_until(b"key?", 30.0)
+    if not exited:
+        c.note("%s: TCMD did not quit" % label)
     _restore_shell(dev, c, "TCMD/%s" % label)
     dev.run("delay 300", timeout=20)
     try:
@@ -354,6 +375,13 @@ def _tcmd_capture(dev, c, label):
         data = b""
     dev.run("del /f %s" % TCMD_BMP, timeout=20)
     bmp = None
+    if data:
+        try:
+            os.makedirs(OUT_DIR, exist_ok=True)
+            with open(os.path.join(OUT_DIR, "tcmd_%s.bmp" % label), "wb") as fh:
+                fh.write(data)
+        except Exception:  # noqa: BLE001
+            pass
     if data:
         try:
             bmp = parse_bmp(data)

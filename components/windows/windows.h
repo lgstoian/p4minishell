@@ -535,6 +535,18 @@ void windows_refresh_app_surface(void);
  * the gfx scale). Pass NULL when the surface is destroyed. */
 void windows_set_surface_layout_cb(void (*cb)(void));
 
+/**
+ * Defer transcript applies while a gfx canvas owns the screen.
+ *
+ * A canvas animation can echo a line per frame into a transcript nobody can
+ * see; rebuilding the transcript on every echo turns a locked 30 fps loop into
+ * a crawl. Only the gfx canvas opts in (set true after entering the surface,
+ * false before exiting); TUI pages and modal app surfaces keep the normal
+ * apply. The deferral is bounded internally, so a canvas that never closes
+ * cannot silence the console.
+ */
+void windows_set_transcript_apply_defer(bool defer);
+
 #ifdef __cplusplus
 }
 #endif

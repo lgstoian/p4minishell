@@ -366,7 +366,10 @@ def _publish(dev, c, app, bmp, want, source):
         return False
 
     size_ok = (img.width, img.height) == want
-    png_ok = False
+    # Only the reference panel publishes docs PNGs (see the note above); on any
+    # other panel the PNG is intentionally not written, so its absence is not a
+    # failure - the capture itself (size, ink, colours) still has to hold.
+    png_ok = want != REFERENCE_SIZE
     if size_ok and want == REFERENCE_SIZE:
         os.makedirs(DOCS, exist_ok=True)
         try:

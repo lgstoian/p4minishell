@@ -245,6 +245,17 @@ open bugs see [`bugs.md`](bugs.md).
   upstream. Verified with 20/20 cold boots, three Wi-Fi + HTTPS + SD cycles
   and a full `c6ota` transfer (1,361,856 bytes) on the Tab5, and the JC1060
   image is built from the same tree.
+- **Rotating the panel now keeps a running app whole.** A TUI page reflowed
+  to the new grid, but only the resized label was invalidated, so the glass kept
+  the previous orientation's rows and a live app appeared cut in half; and the
+  next app launched after a rotation could inherit the previous surface's
+  metrics, drawing its panes at two different origins (TCMD's right pane
+  floated over the title bar). A rotation now re-renders the page and
+  repaints the whole surface in one pass, every `launch` starts on a fresh
+  surface fitted to the live grid, and the `%TUICOLS%`/`%TUIROWS%` values
+  resolve against the live viewport when the bound surface is stale. `s27`
+  asserts the landscape frame spans the full 80-column grid after a portrait
+  session.
 - **A gfx animation decayed to a crawl when the app printed per frame.** While
   an app surface (gfx canvas or TUI page) owns the screen the transcript is
   hidden, but its apply pump still rebuilt the transcript spans on every

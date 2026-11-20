@@ -797,6 +797,12 @@ lv_obj_t *windows_get_transcript_spans(void)
  */
 
 static bool s_transcript_apply_pending = false;
+/* Set while a gfx canvas owns the screen. A canvas animation echoes a line per
+ * frame into a transcript nobody can see, and re-rendering that transcript on
+ * every echo turned a locked 30 fps loop into a 400 ms-per-frame crawl. Only
+ * the canvas defers; TUI pages and modal app surfaces keep the normal apply so
+ * their output is never held back. */
+static bool s_transcript_apply_defer = false;
 /* When set, the next transcript repaint pins the view to the bottom
  * unconditionally (used when a command is submitted), instead of only
  * following when the view is already near the bottom. Cleared after the first
@@ -2140,22 +2146,21 @@ static void windows_transcript_apply_timer_cb(lv_timer_t *timer)
     if (!s_transcript_apply_pending) {
         return;
     }
-    /* While an app surface (gfx canvas / TUI page) owns the screen the
-     * transcript is hidden, so rebuilding its spans is pure cost - and that
-     * cost is paid per append. BOUNCE echoes its frame line every frame and
-     * decayed from 33 ms to 400+ ms per frame as the transcript grew; the
-     * same loop without echoes stayed at 30 fps. Keep the text staged and
-     * apply it once, on the first tick after the app exits.
+    /* While a gfx canvas owns the screen the transcript is hidden, so
+     * rebuilding its spans is pure cost - and that cost is paid per append.
+     * BOUNCE echoes its frame line every frame and decayed from 33 ms to
+     * 400+ ms per frame as the transcript grew; the same loop without echoes
+     * stayed at 30 fps. Keep the text staged and apply it once, on the first
+     * tick after the canvas closes.
      *
-     * The deferral is bounded: a surface flag left standing by an app that
-     * never exits (or a boot path that paints before the shell sets up) must
-     * not silence the console forever, so after TRANSCRIPT_APPLY_DEFER_MS the
-     * apply runs anyway. BOUNCE still gets its speed (its surface lives for
-     * well over a second, but a periodic catch-up apply is one frame's cost,
-     * not one per echo). */
+     * The deferral is bounded: a canvas left open by an app that never exits
+     * must not silence the console forever, so after
+     * TRANSCRIPT_APPLY_DEFER_MS the apply runs anyway. BOUNCE still gets its
+     * speed (a periodic catch-up apply is one frame's cost, not one per
+     * echo). */
     #define TRANSCRIPT_APPLY_DEFER_MS 1500
     static uint32_t deferred_since;
-    if (s_windows.app_surface_active || s_windows.tui_mode) {
+    if (s_transcript_apply_defer) {
         if (deferred_since == 0) {
             deferred_since = lv_tick_get();
             if (deferred_since == 0) {
@@ -3112,6 +3117,11 @@ lv_obj_t *windows_enter_app_surface(void)
     windows_apply_stop_visibility();
     windows_refresh_app_surface();
     return s_windows.transcript;
+}
+
+void windows_set_transcript_apply_defer(bool defer)
+{
+    s_transcript_apply_defer = defer;
 }
 
 void windows_exit_app_surface(void)

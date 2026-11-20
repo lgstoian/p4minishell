@@ -326,23 +326,51 @@ void tui_app_grid(int *cols_out, int *rows_out, int *cell_w_out,
     int cell_w = 0;
     int cell_h = 0;
 
+    /* The grid the next app surface resolves to: the app viewport with the
+     * header and the input row reclaimed (TUI mode hides the keyboard and the
+     * header/input row are not part of an app surface). */
+    window_rect_t app = windows_get_app_viewport();
+    int app_h = windows_get_display_height()
+        - windows_get_rect(WINDOW_REGION_HEADER).height
+        - windows_get_rect(WINDOW_REGION_INPUT_ROW).height;
+    int live_cols = P4_CONFIG_TUI_COLS;
+    int live_rows = P4_CONFIG_TUI_ROWS;
+    int live_cw = 0;
+    int live_ch = 0;
+
+    if (tui_font_cell_count > 0) {
+        tui_grid_resolve(app.width, app_h, &live_cols, &live_rows,
+                         &live_cw, &live_ch);
+    }
+
     if (s_active && s_bound_cell != NULL) {
         /* A surface is up (a sub-app launched from a running app): report the
-         * grid it is drawing into, not a re-resolution of the region. */
-        cols = s_cols;
-        rows = s_rows;
-        cell_w = s_bound_cell->cell_w;
-        cell_h = s_bound_cell->cell_h;
+         * grid it is drawing into, not a re-resolution of the region.
+         *
+         * Unless the panel was rotated since it was fitted: then the bound
+         * pitch no longer matches the live viewport, and handing the stale
+         * grid to the next app makes it lay an 80x97 portrait page out on an
+         * 80x25 landscape grid (the frame came out at the wrong origin and
+         * size). The live resolution wins in that case. */
+        bool stale = (live_cw > 0 && live_ch > 0 &&
+                      (live_cw != s_bound_cell->cell_w ||
+                       live_ch != s_bound_cell->cell_h));
+        if (!stale) {
+            cols = s_cols;
+            rows = s_rows;
+            cell_w = s_bound_cell->cell_w;
+            cell_h = s_bound_cell->cell_h;
+        } else {
+            cols = live_cols;
+            rows = live_rows;
+            cell_w = live_cw;
+            cell_h = live_ch;
+        }
     } else if (tui_font_cell_count > 0) {
-        /* The grid the next app surface resolves to: the app viewport with
-         * the header and the input row reclaimed (TUI mode hides the keyboard
-         * and the header/input row are not part of an app surface). */
-        window_rect_t app = windows_get_app_viewport();
-        int app_h = windows_get_display_height()
-            - windows_get_rect(WINDOW_REGION_HEADER).height
-            - windows_get_rect(WINDOW_REGION_INPUT_ROW).height;
-
-        tui_grid_resolve(app.width, app_h, &cols, &rows, &cell_w, &cell_h);
+        cols = live_cols;
+        rows = live_rows;
+        cell_w = live_cw;
+        cell_h = live_ch;
     }
     if (cols_out != NULL) *cols_out = cols;
     if (rows_out != NULL) *rows_out = rows;
@@ -798,13 +826,30 @@ static void tui_apply_layout(void)
     }
     lv_obj_update_layout(s_tui_label);
     tui_bg_relayout();
-    if (grid_changed && s_active) {
-        /* Repaint at the new pitch now: an idle app would otherwise keep the
-         * old grid's markup until its next draw. */
-        if (s_page != NULL) {
+    if (grid_changed) {
+        /* A rotation (or a fullscreen toggle) changed the logical grid and/or
+         * the cell pitch. The page model is kept - only its rendering changes
+         * - so re-render it at the new pitch and repaint the whole surface.
+         *
+         * Resizing the label only invalidates its new area, so the glass kept
+         * the previous orientation's rows and the app looked cut in half.
+         * Invalidating the container and the screen after the reflow forces
+         * one coherent repaint at the new pitch. */
+        tui_title_hide();
+        s_selecting = false;
+        s_scroll_offset = 0;
+        if (s_active && s_page != NULL) {
             tui_page_render();
         }
-        tui_flush();
+        if (s_tui_container != NULL) {
+            lv_obj_invalidate(s_tui_container);
+        }
+        if (s_tui_label != NULL) {
+            lv_obj_invalidate(s_tui_label);
+        }
+        if (s_active) {
+            tui_flush();
+        }
     }
     ESP_LOGD(TUI_TAG, "tui layout: cell %dx%d grid %dx%d in %dx%d",
              best->cell_w, best->cell_h, (int)gw, (int)gh, (int)cw, (int)ch);
@@ -813,6 +858,11 @@ static void tui_apply_layout(void)
 bool tui_init(void)
 {
     if (s_active) return true;
+    if (s_active) {
+        /* The flag survived without widgets (a teardown that did not finish).
+         * Rebuild instead of handing the app a surface that cannot draw. */
+        s_active = false;
+    }
     /* Hand the snapshot model the live-page accessor (see the seam above). */
     tui_page_shot_set_view(&s_page_shot_view, NULL);
     /* Keep the committed grid: it tracks the panel aspect, and any live page
@@ -932,6 +982,64 @@ void tui_deinit(void)
 }
 
 bool tui_is_active(void) { return s_active; }
+
+bool tui_surface_needs_refit(void)
+{
+    window_rect_t app;
+    int app_h;
+    int live_cols = 0, live_rows = 0, live_cw = 0, live_ch = 0;
+
+    if (!s_active) {
+        return false;
+    }
+    if (s_bound_cell == NULL) {
+        /* Active without a bound font: the surface cannot draw correctly. */
+        return true;
+    }
+    app = windows_get_app_viewport();
+    app_h = windows_get_display_height()
+        - windows_get_rect(WINDOW_REGION_HEADER).height
+        - windows_get_rect(WINDOW_REGION_INPUT_ROW).height;
+    if (tui_font_cell_count <= 0) {
+        return false;
+    }
+    tui_grid_resolve(app.width, app_h, &live_cols, &live_rows, &live_cw, &live_ch);
+    (void)live_cols;
+    (void)live_rows;
+    return (live_cw > 0 && live_ch > 0 &&
+            (live_cw != s_bound_cell->cell_w || live_ch != s_bound_cell->cell_h));
+}
+
+void tui_new_app_session(void)
+{
+    if (!s_active) {
+        return;
+    }
+    /* A newly launched app owns the whole screen. Clear the page it inherits:
+     * the surface is reused (destroying and recreating it flashes), so without
+     * this the previous app's cells stay where the new one does not draw - and
+     * after a rotation the page mixed two layouts (portrait panes at the
+     * landscape pitch). */
+    /* Both stores: the visible grid *and* the page model the snapshot and the
+     * page shot render from. Clearing only the grid left the previous app's
+     * rows in the page, so the next app's snapshot composited two layouts.
+     *
+     * The page height is reset too: a previous app (a browser page, a menu
+     * list) can grow the page to hundreds of rows, and a fixed-layout app that
+     * offsets by the page height then draws its frame at the wrong origin -
+     * the "right pane floating over the title bar" look after a rotation. */
+    tui_viewport_init(P4_CONFIG_TUI_PAGE_ROWS);
+    if (lvgl_port_lock(0)) {
+        /* Fit the surface *before* the app draws its first cell. A reflow that
+         * lands between the app's two pane draws is what put the second pane at
+         * the previous orientation's origin (the split frame). */
+        tui_apply_layout();
+        tui_clear();
+        tui_flush();
+        lvgl_port_unlock();
+    }
+    tui_flush();
+}
 
 bool tui_ready(void)
 {

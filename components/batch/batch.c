@@ -4247,6 +4247,18 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
          * sub-app of COMPANION) sees 30 rows there, and growing its authored
          * 25-row screens would move every classic landscape layout. A tall
          * (portrait) grid keeps all of its rows. */
+        /* Whatever the previous app left on the TUI page is stale: this app
+         * owns the screen now (and the panel may have been rotated since).
+         *
+         * Tear the old surface down first. A rotated panel left the previous
+         * surface's metrics bound, and the first app launched against them
+         * drew its panes at the old pitch/origin (the split frame); the next
+         * app, starting from a fresh surface, was correct. Doing the teardown
+         * here gives every app the fresh-surface path. */
+        if (tui_is_active()) {
+            tui_deinit();
+        }
+        tui_new_app_session();
         {
             int cols = 0;
             int rows = 0;

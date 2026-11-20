@@ -28,30 +28,47 @@ class Device:
 
     # -- lifecycle -------------------------------------------------------
     def boot(self, settle_ms: int = 8000) -> None:
-        """Wait for the prompt, then let boot chatter (Wi-Fi/C6) quiesce.
+        """Wait until the shell is genuinely ready, not just printing.
 
-        A board whose saved network is unreachable keeps the boot workflow
-        printing retry lines for ~30 s, and every one of them is queued on the
-        command worker ahead of ours. A fixed settle therefore saw suites start
-        while the shell was still chewing retries: commands went out but their
-        markers arrived tens of seconds later, which looked like a hang and
-        cascaded into unrelated failures. Wait for the console to go quiet, then
-        prove the worker is free with the deterministic `delay` marker.
+        Boot is not over when the banner appears: the Wi-Fi/C6 workflow runs on
+        the command worker afterwards and queues a burst of lines (a saved
+        network that is unreachable retries with 1/2/4/8/16 s delays for up to
+        half a minute). A fixed settle let suites start while the worker was
+        still chewing that burst, so a command's marker arrived tens of seconds
+        late and the suite failed somewhere unrelated.
+
+        `wifi status` reports `state: starting` while that workflow runs, so
+        poll until it is no longer starting, then require a quiet console and
+        prove it with the deterministic `delay` marker.
         """
-        self.session.wait_prompt(timeout=25.0)
-        deadline = time.time() + 60.0
-        last = time.time()
+        self.session.wait_prompt(timeout=45.0)
+        deadline = time.time() + 300.0
+        quiet_state = ("starting", "stopping", "unknown")
         while time.time() < deadline:
-            chunk = self.session.read_for(0.3)
-            if chunk:
-                last = time.time()
-            elif time.time() - last > 2.0:
+            try:
+                status = self.session.run("wifi status", timeout=30)
+            except P4Error:
+                time.sleep(2.0)
+                continue
+            match = re.search(r"state:\s*(\w+)", status)
+            state = match.group(1) if match else "unknown"
+            if state not in quiet_state:
                 break
+            time.sleep(2.0)
+
+        # Let the trailing lines of the workflow drain, then prove the worker
+        # is free: a `delay` marker only prints when the command actually ran.
+        last = time.time()
+        while time.time() < deadline and time.time() - last < 3.0:
+            if self.session.read_for(0.3):
+                last = time.time()
         if settle_ms > 0:
-            for attempt in range(5):
+            for attempt in range(4):
                 try:
+                    # Generous: the marker only prints once the worker is free,
+                    # and a slow C6/Wi-Fi bring-up can hold it for a while.
                     self.session.run("delay %d" % settle_ms,
-                                     timeout=settle_ms / 1000.0 + 25)
+                                     timeout=settle_ms / 1000.0 + 60)
                     break
                 except P4Error:
                     if attempt == 4:
