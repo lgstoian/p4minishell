@@ -496,6 +496,7 @@ void tui_page_bg_rect(int col, int row, int w, int h, uint8_t bg,
  */
 static lv_obj_t *s_touch;
 static lv_obj_t *s_sel_layer;
+
 static bool s_selecting;
 static sel_range_t s_sel;
 static void (*s_link_cb)(const char *url);
@@ -876,6 +877,7 @@ bool tui_init(void)
     s_saved_col = 1;
     s_def_fg = 16;
     s_def_bg = 16;
+
     /* Enter windows TUI mode (create container/label). */
     lvgl_port_lock(0);
     lv_obj_t *surf = windows_enter_tui_mode();
@@ -960,6 +962,13 @@ void tui_deinit(void)
     s_title_visible = false;
     s_bg_rect_count = 0;   /* the container delete frees the rectangle objects */
     windows_exit_tui_mode();
+    /* The shell is back, so its header and input row must be back too. An app
+     * that enabled fullscreen and exited on a path that skips its own
+     * `draw fullscreen off` (a quit inside the key loop, a Stop, a reset of the
+     * page) otherwise left a prompt with no input row at all. Restoring the
+     * value captured at entry kept the mistake alive once it had happened (the
+     * next app inherited "fullscreen"), so always clear it here. */
+    windows_set_fullscreen(false);
     s_tui_container = NULL;
     s_bound_cell = NULL;
     s_touch = NULL;
