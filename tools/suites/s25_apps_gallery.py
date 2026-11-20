@@ -417,14 +417,25 @@ def _publish(dev, c, app, bmp, want, source):
 
 
 def _pull_bmp(dev, c, remote):
-    """Pull an app-written BMP and parse it through the shared pixel model."""
-    try:
-        data = dev.pull_file(remote)
-    except PanicError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        c.note("pull %s failed: %s" % (remote, exc))
-        return None
+    """Pull an app-written BMP and parse it through the shared pixel model.
+
+    The app writes the file from its own key handler and a key can be delivered
+    a moment after the snapshot is asked for; one retry after a short settle
+    keeps a correct screen from failing on the write/pull race (SNAKE's capture
+    came back missing once in a full sweep).
+    """
+    data = None
+    for attempt in range(2):
+        try:
+            data = dev.pull_file(remote)
+            break
+        except PanicError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            if attempt == 1:
+                c.note("pull %s failed: %s" % (remote, exc))
+                return None
+            time.sleep(1.0)
     try:
         return parse_bmp(data)
     except Exception as exc:  # noqa: BLE001
