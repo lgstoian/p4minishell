@@ -420,6 +420,10 @@ def _tcmd(dev, c):
                 if _shell_echo(dev):
                     break
                 session.read_for(0.5)
+            if not _shell_echo(dev):
+                # The worker is still owned by the app: a reset is cheaper than
+                # every later suite timing out on a wedged shell.
+                dev.reboot(settle_ms=8000)
 
 
 def _taskmgr(dev, c):

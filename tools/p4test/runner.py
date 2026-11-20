@@ -386,6 +386,22 @@ def _board_worker(label: str, port: str, mods, quick: bool,
                     flaky.append(name)
                     print("  [FLAKY] %s passed on attempt %d" % (name, tried))
                 board_results.append((name, res, failed, False))
+                if not res.ok:
+                    # A suite that timed out may have left the shell worker
+                    # blocked (an app still owning it, a stuck SD op). Without a
+                    # reset every later suite inherits the wedge and the sweep
+                    # reports a cascade of unrelated failures instead of one
+                    # real one.
+                    err = res.error or ""
+                    wedged = ("not seen within" in err or
+                              "did not return" in err)
+                    if wedged:
+                        try:
+                            print("  [RESET] %s timed out; rebooting before the "
+                                  "next suite" % name)
+                            dev.reboot(settle_ms=4000 if quick else 8000)
+                        except Exception:  # noqa: BLE001
+                            pass
                 if fail_fast and not res.ok:
                     stop_event.set()
         finally:
