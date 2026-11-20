@@ -162,7 +162,18 @@ class Device:
         sdbridge.push_local(self.session, local, remote)
 
     def pull_file(self, remote: str) -> bytes:
-        return sdbridge.pull_file(self.session, remote)
+        """Download a device file, retrying once when it was just written.
+
+        `send` reports "transfer failed" when FATFS still holds the handle the
+        producer used, so a pull that immediately follows an export/extract can
+        fail on a healthy device. The retry only covers that timing race; a
+        genuinely missing file still fails.
+        """
+        try:
+            return sdbridge.pull_file(self.session, remote)
+        except P4Error:
+            time.sleep(0.8)
+            return sdbridge.pull_file(self.session, remote)
 
     def deploy(self, files: Iterable[Tuple[str, str]],
                appinfo_dir: str = "APPS") -> None:

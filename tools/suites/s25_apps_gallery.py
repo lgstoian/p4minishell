@@ -61,6 +61,11 @@ REFERENCE_SIZE = (1024, 600)
 # Apps whose PNG was written by the current run (the final gate uses this so a
 # stale file from an older run can never stand in for a failed capture).
 WRITTEN = set()
+# Apps this run tried to publish. The closing gate compares against this, not
+# against every spec: a panel other than the reference one deliberately skips
+# the app-written captures, and requiring them there failed the gate for apps
+# the run never attempted.
+ATTEMPTED = set()
 
 sys.path.insert(0, APPS)
 
@@ -350,6 +355,7 @@ def _ink(bmp):
 
 def _publish(dev, c, app, bmp, want, source):
     """Write the PNG and run the one-per-app gallery gate."""
+    ATTEMPTED.add(app)
     check_name = ("%s: PNG is a valid %dx%d image and not blank"
                   % (app, want[0], want[1]))
     if bmp is None:
@@ -645,6 +651,7 @@ def run(dev, ctx):
                "(no PNG will be written on this panel)" % (want + REFERENCE_SIZE))
 
     WRITTEN.clear()
+    ATTEMPTED.clear()
     import tempfile
     tmp = tempfile.mkdtemp(prefix="p4gallery_")
     try:
@@ -667,7 +674,8 @@ def run(dev, ctx):
 
         # One closing gate: every app was captured by THIS run (a stale file
         # from an older run cannot satisfy it).
-        names = [spec["app"] for spec in SPECS + BG_SPECS]
+        names = [spec["app"] for spec in SPECS + BG_SPECS
+                 if spec["app"] in ATTEMPTED]
         missing = [n for n in names if n not in WRITTEN]
         c.check("gallery publishes every app PNG",
                 not missing and len(names) == len(set(names)),
