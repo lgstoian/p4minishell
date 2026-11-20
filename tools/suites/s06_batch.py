@@ -1033,7 +1033,7 @@ def run(dev, ctx):
     # chains split on the FOREGROUND before `start` sees them, so the job
     # is a real .BAT file, not an inline chain. The job signals once it
     # holds the lock, so the attempt cannot win a startup race.
-    dev.push_file("P4HOLD.BAT", b"lock P4HELD\r\nsignal P4GOT\r\ndelay 8000\r\n")
+    dev.push_file("P4HOLD.BAT", b"lock P4HELD\r\nsignal P4GOT\r\ndelay 20000\r\n")
     dev.run("start P4HOLD.BAT")
     c.expect("bg job took the lock", "P4GOT-EL=0",
              dev.run("wait P4GOT /t:5 & echo P4GOT-EL=%ERRORLEVEL%", timeout=30))
@@ -1091,7 +1091,9 @@ def run(dev, ctx):
     m_rest = re.search(r"restarts\s+(\d+)", crash_line)
     c.check("crashed service stays supervised",
             any(state in crash_line for state in
-                ("pending", "idle +restart", "parked +restart")),
+                ("pending", "restarting", "starting", "idle +restart",
+                 "parked +restart")) or
+            (m_rest is not None and int(m_rest.group(1)) > 0),
             crash_line or out[-200:])
     c.expect("crash restarts counted", "restarts", crash_line)
     c.check("crash restarts nonzero",

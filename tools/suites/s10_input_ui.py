@@ -352,6 +352,15 @@ def run(dev, ctx):
             while not ghost and time.time() < deadline:
                 time.sleep(0.3)
                 ghost, typed = ghost_now()
+        if not ghost:
+            # Still cold: warm the completion cache from the console, then type
+            # the prefix once more (the hint itself remains the assertion).
+            dev.run("help", timeout=20)
+            clear_and_retype()
+            deadline = time.time() + 5.0
+            while not ghost and time.time() < deadline:
+                time.sleep(0.3)
+                ghost, typed = ghost_now()
         c.check("ghost completion shown", len(ghost) > 0,
                 "ghost=%r state=%s" % (ghost, typed[-200:]))
         # Submit the pending input line (OSK enter) so the shell starts clean.

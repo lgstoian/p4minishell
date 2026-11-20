@@ -87,11 +87,13 @@ if errorlevel 1 goto :done
 gfx clear 0
 gfx ellipse 50 45 30 25 0xFF0000 fill
 gfx show
+delay 400
 screenshot /panel %APPDRIVE%/P1.BMP
 delay 300
 gfx clear 0
 gfx ellipse 190 135 30 25 0x00FF00 fill
 gfx show
+delay 400
 screenshot /panel %APPDRIVE%/P2.BMP
 gfx close
 :done

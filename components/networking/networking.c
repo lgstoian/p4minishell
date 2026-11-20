@@ -147,6 +147,9 @@ static led_event_t networking_wifi_idle_led_event_locked(void)
  * every scan) or, for an explicit status request, a one-shot scan. */
 static wifi_ap_record_t s_wifi_ap_cache;
 static bool s_wifi_ap_cache_valid;
+/* When the cache was last filled by a scan (us since boot, 0 = never). A scan
+ * is a blocking RPC over the C6 link; status requests must not repeat it. */
+static int64_t s_wifi_ap_cache_scanned_us;
 
 /* ---- Persistent Wi-Fi watchdog ---- */
 /* A single persistent task that monitors Wi-Fi connection state and retries
@@ -1638,12 +1641,20 @@ void networking_wifi_status(void)
         wifi_ap_record_t radio_info;
         const wifi_ap_record_t *radio = &ap_info;
 
-        /* The hosted get_ap_info RPC omits RSSI/PHY. Use the cached scan
-         * record for this association, refreshing with a one-shot scan when
-         * the cache is cold or holds a different BSSID. */
+        /* The hosted get_ap_info RPC omits RSSI/PHY, so the scan record is the
+         * only source. A scan is a BLOCKING RPC over the C6 link (several
+         * seconds, and the link returns "no response" under load), so refresh
+         * at most once a minute: every status request asking for a scan held
+         * the worker long enough to break timing-sensitive commands and
+         * produced eh_host_feat_rpc timeouts in long sweeps. */
         if ((ap_info.rssi == 0 || !networking_wifi_ap_has_phy(&ap_info)) &&
             !networking_wifi_ap_cache_matches(&ap_info)) {
-            (void)networking_wifi_ap_cache_refresh();
+            int64_t now = esp_timer_get_time();
+            if (s_wifi_ap_cache_scanned_us == 0 ||
+                now - s_wifi_ap_cache_scanned_us > 60 * 1000 * 1000) {
+                s_wifi_ap_cache_scanned_us = now;
+                (void)networking_wifi_ap_cache_refresh();
+            }
         }
         if (networking_wifi_ap_cache_matches(&ap_info)) {
             radio_info = s_wifi_ap_cache;
