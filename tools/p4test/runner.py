@@ -343,33 +343,17 @@ def _board_worker(label: str, port: str, mods, quick: bool,
                         (name, SuiteResult(name, 0, 0, skipped=1), [], True))
                     continue
                 print("\nSUITE [%s]: %s" % (label, name))
-                # Long suites accumulate live UI/transcript/service state in
-                # internal RAM (PSRAM is plentiful). When the internal heap is
-                # too small for the next area (notably httpd's 8 KB task), a
-                # clean boot is faster and more representative than failing
-                # on fragmentation. SD state persists across the reset.
+                # Every suite starts from a clean boot. Long suites accumulate
+                # live UI/transcript/service state (internal RAM, a TUI page, a
+                # background job, a Wi-Fi retry loop), and a suite that inherits
+                # any of it produces failures that have nothing to do with the
+                # area under test - the full sweep used to report one unrelated
+                # timeout per run on a different suite each time. The SD payload
+                # persists across the reset, so a reboot costs ~15 s and buys a
+                # reproducible result.
                 if mod is not mods[0]:
                     try:
-                        mem = dev.run("mem", timeout=20)
-                        internal = re.search(r"mem\.internal:\s*(\d+)", mem)
-                        dma = re.search(r"mem\.dma\.free:\s*(\d+)", mem)
-                        low_internal = (internal is not None and
-                                        int(internal.group(1)) < (12 * 1024))
-                        low_dma = (dma is not None and
-                                   int(dma.group(1)) < (9 * 1024))
-                        # These areas need a healthy DMA/internal pool up
-                        # front: I2S descriptors (power-audio) and httpd's
-                        # 8 KB task/sockets (browser/http). Always start them
-                        # from a clean boot, exactly like a user power-cycle.
-                        force_boot = name in (
-                            "editor", "input-ui", "power-audio", "apps",
-                            "browser", "http")
-                        if force_boot or low_internal or low_dma:
-                            print("  [MEM] internal %s B / dma %s B free; "
-                                  "rebooting before %s"
-                                  % (internal.group(1) if internal else "?",
-                                     dma.group(1) if dma else "?", name))
-                            dev.reboot(settle_ms=4000 if quick else 8000)
+                        dev.reboot(settle_ms=4000 if quick else 8000)
                     except PanicError:
                         raise
                     except Exception:  # noqa: BLE001
