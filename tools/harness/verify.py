@@ -44,6 +44,10 @@ gates = [
     # a blob of it is an unstyled widget (the input-row buttons used to leak
     # it as a blue flash). Scans docs/assets/apps + the shell idle shot.
     ('ui colours', 'check_assets.py'),
+    # Identity of the shipped gallery: reject a PNG that shows the shell prompt
+    # or is (nearly) the same screen as another app. The old "valid PNG, some
+    # ink, 3 colours" gate let 14 wrong captures ship in v1.4.3.
+    ('gallery identity', 'gallery_audit.py'),
 ]
 # The static-DRAM budget gate needs a firmware image; only run it when one has
 # been built, so a fresh checkout (no build/) never fails the host gate.

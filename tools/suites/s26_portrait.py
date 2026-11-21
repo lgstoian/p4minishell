@@ -44,6 +44,9 @@ import time
 from p4test.asserts import Checklist, SuiteResult
 from p4test.session import PanicError, P4Error
 
+# Pixel/rotation state from the previous suite changes these captures.
+NEEDS_CLEAN_BOOT = True
+
 NAME = "portrait"
 TAGS = ["display", "ui", "slow"]
 OUT_DIR = os.path.join("screenshots", "portrait")

@@ -58,6 +58,9 @@ from p4test.asserts import Checklist
 from p4test.session import PanicError
 from p4test.screenshot import diff_ratio, parse_bmp
 
+# Pixel/rotation state from the previous suite changes these captures.
+NEEDS_CLEAN_BOOT = True
+
 NAME = "render_alpha"
 TAGS = ["ui", "apps", "gfx"]
 

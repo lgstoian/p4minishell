@@ -57,6 +57,8 @@ def _wait_ip(dev, timeout_s=120):
     watchdog already retries with backoff, and resetting it aborts an
     association in progress.
     """
+    if getattr(dev, "_no_station_ip", False):
+        return None
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         status = dev.run("wifi status", timeout=15)
@@ -70,6 +72,7 @@ def _wait_ip(dev, timeout_s=120):
                         m.group(1) != "255.255.255.255"):
                     return m.group(1)
         time.sleep(1.0)
+    dev._no_station_ip = True
     return ""
 
 

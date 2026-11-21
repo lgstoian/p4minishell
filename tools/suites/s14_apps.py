@@ -1045,6 +1045,11 @@ def run(dev, ctx):
     for name, start, done, timeout, extra in NONSTOP:
         out = _oneshot(dev, c, name, start, done, timeout, extra)
         _check_gfx_pacing(c, name, out)
+        if name == "GFXTOOL":
+            # Its :nofx branch also emits DONE; only this marker distinguishes
+            # "gfx ready" from "the canvas could not be created".
+            c.check("GFXTOOL canvas was available", "[M-GFXTOOL-FAIL]" not in out,
+                    out[-200:])
 
     # Hybrid model: every app launches through a .BAT shim, even when a
     # linked-in C entry does the work (see ABI.md).

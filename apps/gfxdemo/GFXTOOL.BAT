@@ -22,16 +22,16 @@ gfx rect 230 12 72 40 0xFFFFFF
 gfx fill 266 30 0xFFAA00
 gfx hline 8 190 304 0xFFFFFF
 gfx vline 158 20 120 0xFFFF00
-gfx text /scale:2 18 150 0xFFFFFF Gfx Toolkit
-gfx text 18 170 0x00FFFF tri ellipse poly fill text
 rem Sprite stamp row (blitmany): load the 16x16 BALL sprite once and stamp a
-rem diagonal row of copies, rotating each step 90 degrees. The stamps land
-rem in the free area below the triangle/ellipse and beside the PHOTO blit,
-rem so no representative primitive pixel (gfx_toolkit_test.py) is touched.
+rem diagonal row of copies, rotating each step 90 degrees. The text is drawn
+rem AFTER the stamps so a sprite can never cover the title or the key legend
+rem (the v1.4.3 gallery image had two balls stamped over both lines).
 gfx load 0 %APPDRIVE%/BALL.BMP
 set /a sx=24
 set /a sy=160
 for /L %%s in (0,1,3) do call :stamp %%s
+gfx text /scale:2 18 150 0xFFFFFF Gfx Toolkit
+gfx text 18 170 0x00FFFF tri ellipse poly fill text
 echo [M-GFXTOOL-BLIT]
 rem Scaled BMP blit below the text and above the hline: 232..312 x 154..186
 rem is outside every primitive/text region checked by gfx_toolkit_test.py.
@@ -58,4 +58,5 @@ return
 
 :nofx
 echo gfx: canvas unavailable (TUI active or out of memory)
+echo [M-GFXTOOL-FAIL]
 echo [M-GFXTOOL-DONE]

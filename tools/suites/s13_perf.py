@@ -94,11 +94,11 @@ def _diag_benchmark(dev, c):
         text = head.decode("utf-8", "replace") + tail
         line = _stat_line(text, "gfx stats:")
         stats = parse_perf_report(line)
-        if stats is not None and stats.frames > 0:
-            c.check("DIAG benchmark frames > 0", True, stats.as_text())
+        c.check("DIAG benchmark frames > 0",
+                stats is not None and stats.frames > 0,
+                stats.as_text() if stats else repr(line))
+        if stats is not None:
             c.note("DIAG benchmark gfx stats: " + stats.as_text())
-        else:
-            c.note("DIAG benchmark gfx stats not parsed: %r" % line)
         if b"[M-DIAG-MENU]" in dev.session.read_until(b"[M-DIAG-MENU]", 30):
             dev.session.write_line("9")  # Exit
             exited = b"[M-DIAG-DONE]" in dev.session.read_until(b"[M-DIAG-DONE]", 30)

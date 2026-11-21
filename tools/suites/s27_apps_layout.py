@@ -44,6 +44,9 @@ from p4test.asserts import Checklist
 from p4test.session import PanicError
 from p4test.screenshot import parse_bmp
 
+# Pixel/rotation state from the previous suite changes these captures.
+NEEDS_CLEAN_BOOT = True
+
 NAME = "apps_layout"
 TAGS = ["apps", "display", "ui", "slow"]
 OUT_DIR = os.path.join("screenshots", "apps_layout")

@@ -283,8 +283,18 @@ def scan_python_suite():
         if calls == 0:
             errors.append("%s: Checklist created but no check/expect/equals call "
                           "(zero-check suite -> false green)" % rel(path))
-        for m in re.finditer(r"\.check\s*\(\s*[^,]+,\s*(True|1)\s*\)", text):
+        # A tautology with a detail argument used to slip through the regex
+        # (`c.check(name, True, detail)`), so allow anything after the literal.
+        for m in re.finditer(r"\.check\s*\(\s*[^,]+,\s*(True|1)\b", text):
             errors.append("%s: tautological check %r" % (rel(path), m.group(0)))
+        # A suite that records its load-bearing evidence only as notes can be
+        # green while proving nothing (s25 shipped 13 wrong gallery PNGs this
+        # way: every start/done/snap marker was `c.note`, never `c.check`).
+        notes = len(re.findall(r"\.note\s*\(", text))
+        if notes > 20 and notes > 3 * calls:
+            errors.append("%s: %d note() calls vs %d checks - evidence is "
+                          "recorded but never asserted (false green)"
+                          % (rel(path), notes, calls))
         for m in re.finditer(r"\.equals\s*\(\s*[^,]+,\s*([^,]+),\s*([^,]+?)\s*\)", text):
             if m.group(1).strip() == m.group(2).strip():
                 warnings.append("%s: tautological equals %r" % (rel(path), m.group(0)))

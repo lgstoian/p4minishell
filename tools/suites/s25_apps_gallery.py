@@ -50,12 +50,19 @@ from p4test.session import PanicError
 from p4test.screenshot import parse_bmp
 from p4test import theme_guard
 
+# Pixel/rotation state from the previous suite changes these captures.
+NEEDS_CLEAN_BOOT = True
+
 NAME = "apps_gallery"
 TAGS = ["apps", "gallery", "slow"]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APPS = os.path.join(ROOT, "apps")
 DOCS = os.path.join(ROOT, "docs", "assets", "apps")
+# A test run stages its captures here. Publishing to docs/ is a separate,
+# explicitly reviewed step (tools/publish_gallery.py); a normal `git add -A`
+# after a suite run must never commit a screenshot into the docs tree.
+STAGING = os.path.join(ROOT, "screenshots", "gallery")
 REFERENCE_SIZE = (1024, 600)
 
 # Apps whose PNG was written by the current run (the final gate uses this so a
@@ -88,6 +95,15 @@ from app_manifest import (  # noqa: E402
 # ``end_shell`` require a real shell answer after the quit lines
 # ``done``      for one-shots: the marker the app emits before we shoot
 # ---------------------------------------------------------------------------
+# Apps with NO on-screen page: one-shot transcript emitters and headless
+# services. They are still driven and marker-checked (functional coverage), but
+# a screenshot of the shell after they exit is NOT their documentation. This is
+# the exact false green that shipped 13 wrong PNGs in v1.4.3.
+NON_VISUAL = {
+    "agenda", "aliases", "appl", "control", "hybrid", "lib", "pkgtest",
+    "uitest", "writer", "svc", "memlog", "moodsvc",
+}
+
 SPECS = [
     # ---- TUI shells and menus -----------------------------------------
     dict(app="tcmd", cmd="launch TCMD", start="[M-TCMD-R]",
@@ -130,7 +146,10 @@ SPECS = [
               (0.3, "snap", "[M-ADV-SNAP]")],
          shot=("file", "ADVENT.BMP"), quit=["quit"], end="[M-ADV-QUIT]"),
     dict(app="snake", cmd="launch SNAKE", start="[M-SNAKE]",
-         pre=[(1.2, "s", None)],
+         # Drive enough steps for a real snake before the snapshot: one key
+         # left a 3-cell stub that looked like a broken render in v1.4.3.
+         pre=[(1.2, "s", None), (1.0, "s", None), (1.0, "s", None),
+              (1.0, "d", None)],
          shot=("snap", "p", "[M-SNAKE-SNAP]", "SNAKE.BMP"),
          quit=["q"], end="[M-SNAKE-DONE]"),
     dict(app="mood", cmd="launch MOOD", start="[M-MOOD]",
@@ -353,16 +372,22 @@ def _ink(bmp):
     return 1.0 - (mode / float(total)), len(counts)
 
 
-def _publish(dev, c, app, bmp, want, source):
+def _publish(dev, c, app, bmp, want, source, identity_ok=True):
     """Write the PNG and run the one-per-app gallery gate."""
     ATTEMPTED.add(app)
+    if not identity_ok:
+        # The app never proved it was on its own screen. Publishing the capture
+        # is what shipped 14 shell-transcript PNGs as app documentation.
+        c.check("%s: on-screen identity verified before capture" % app,
+                False, "the app's start/done/snap markers were not all seen")
+        return False
     check_name = ("%s: PNG is a valid %dx%d image and not blank"
                   % (app, want[0], want[1]))
     if bmp is None:
         c.check(check_name, False, "no capture from %s" % (source or "the app"))
         return False
 
-    path = os.path.join(DOCS, app + ".png")
+    path = os.path.join(STAGING, app + ".png")
     try:
         img = _image_from_bmp(bmp)
     except Exception as exc:  # noqa: BLE001
@@ -396,7 +421,7 @@ def _publish(dev, c, app, bmp, want, source):
     # require a second/third tone plus real ink, not a palette count that
     # would reject a legitimate monochrome app.
     not_blank = ink >= 0.01 and colours >= 3
-    ok = size_ok and png_ok and not_blank
+    ok = size_ok and png_ok and not_blank and identity_ok
     if not size_ok:
         detail = ("captured %dx%d from %s; the docs gallery requires the %dx%d "
                   "reference panel" % (img.width, img.height, source,
@@ -457,25 +482,43 @@ def _read_until(session, marker, timeout=45.0):
 
 
 def _drive(dev, c, spec, want):
+    """Drive one app, prove it reached its own screen, then capture it.
+
+    Two rules this harness broke in v1.4.3:
+
+      * a stream screenshot must be taken WHILE the app is on screen - waiting
+        for the app's done/exit marker first photographs the shell prompt and
+        publishes it as the app's documentation;
+      * a missing identity marker is a FAILED CHECK, never a note.
+
+    Non-visual apps (one-shot transcript emitters and headless services) are
+    still driven and marker-checked here, but they publish no PNG: they have no
+    screen to photograph. Functional coverage is unchanged; only the misleading
+    screenshot is gone.
+    """
     app = spec["app"]
     s = dev.session
+    identity_ok = True
+    shot = spec.get("shot")
+    visual = app not in NON_VISUAL
 
     # Delete the app's own snapshot first so a stale file can never be taken
-    # for this run's capture.
-    shot = spec.get("shot")
+    # for this run's capture (a failed delete is reported by the pull gate).
     if isinstance(shot, tuple) and shot[0] in ("file", "snap"):
         _run(dev, c, app + " clear snapshot", "del /f %s" % shot[-1],
              timeout=20)
 
-    start = spec.get("start")
-    if start is None:
+    start_marker = spec.get("start")
+    if start_marker is None:
         _run(dev, c, app + " surface", spec["cmd"], timeout=60)
     else:
         s.reset_input()
         s.write_line(spec["cmd"])
-        head = _read_until(s, start, spec.get("timeout", 60.0))
-        if start.encode() not in head:
-            c.note("%s: start marker %s missing: %s" % (app, start, _tail(head)))
+        head = _read_until(s, start_marker, spec.get("timeout", 60.0))
+        seen = start_marker.encode() in head
+        c.check("%s reached its start marker %s" % (app, start_marker),
+                seen, _tail(head))
+        identity_ok = identity_ok and seen
 
     for delay, line, wait_marker in spec.get("pre", []):
         s.read_for(delay)
@@ -489,51 +532,46 @@ def _drive(dev, c, spec, want):
                 s.write_line(line)
                 got += _read_until(s, wait_marker,
                                    spec.get("step_timeout", 45.0))
-            if wait_marker.encode() not in got:
-                c.note("%s: step marker %s missing after %r: %s"
-                       % (app, wait_marker, line, _tail(got)))
-
-    done = spec.get("done")
-    if done:
-        got = _read_until(s, done, spec.get("done_timeout", 240.0))
-        if done.encode() not in got:
-            c.note("%s: done marker %s missing: %s" % (app, done, _tail(got)))
-
-    if spec.get("shot_delay"):
-        s.read_for(spec["shot_delay"])
+            seen = wait_marker.encode() in got
+            c.check("%s reached step marker %s" % (app, wait_marker),
+                    seen, _tail(got))
+            identity_ok = identity_ok and seen
 
     bmp = None
     source = ""
-    if isinstance(shot, str) and shot == "stream":
+    # --- Capture while the app owns the screen (stream / snap) -------------
+    if visual and shot == "stream":
+        if spec.get("shot_delay"):
+            s.read_for(spec["shot_delay"])
         try:
             bmp = dev.screenshot(unwind=False)
             source = "screenshot stream"
         except PanicError:
             raise
         except Exception as exc:  # noqa: BLE001
-            c.note("%s: streaming capture failed: %s" % (app, exc))
-    elif isinstance(shot, tuple) and shot[0] == "snap":
+            c.check("%s: streaming capture" % app, False, str(exc))
+    elif visual and isinstance(shot, tuple) and shot[0] == "snap":
         _kind, key, marker, remote = shot
         s.read_for(0.8)
         s.write_line(key)
         got = _read_until(s, marker, 30.0)
-        if marker.encode() not in got:
-            c.note("%s: snap key %r was not acknowledged: %s"
-                   % (app, key, _tail(got)))
+        seen = marker.encode() in got
+        c.check("%s acknowledged snap key %r" % (app, key), seen, _tail(got))
+        identity_ok = identity_ok and seen
         source = "app snapshot " + remote
-    elif isinstance(shot, tuple) and shot[0] == "file":
-        source = "app snapshot " + shot[1]
-    else:
-        c.note("%s: no capture path configured" % app)
 
-    # Quit before pulling an app-written BMP: the app owns the console while
-    # it runs, so a `send`/`pull` command would be eaten as keys.
+    done = spec.get("done")
+    if done:
+        got = _read_until(s, done, spec.get("done_timeout", 240.0))
+        seen = done.encode() in got
+        c.check("%s reached its done marker %s" % (app, done),
+                seen, _tail(got))
+        identity_ok = identity_ok and seen
+
+    # --- Quit before pulling an app-written BMP ----------------------------
     exited = True
     if spec.get("quit") or spec.get("end") or spec.get("end_shell"):
         s.read_for(0.5)
-        # Do NOT drain after the last line: the app's exit marker is emitted
-        # in the next few hundred ms and `read_for` would throw it away (that
-        # was why every menu app looked like it had not exited cleanly).
         quit_lines = spec.get("quit", [])
         settle = spec.get("quit_settle", 0.6)
         for index, line in enumerate(quit_lines):
@@ -544,9 +582,6 @@ def _drive(dev, c, spec, want):
             got = _read_until(s, spec["end"], 18.0)
             exited = spec["end"].encode() in got
             if not exited:
-                # A dropped quit line is common while a modal is closing.
-                # One short retry is enough: `_ensure_shell` below is the
-                # real "the next app can start" gate.
                 for _ in range(2):
                     for line in quit_lines:
                         s.write_line(line)
@@ -556,17 +591,14 @@ def _drive(dev, c, spec, want):
                         exited = True
                         break
                 if not exited:
-                    c.note("%s: end marker %s missing; tail: %s"
-                           % (app, spec["end"], _tail(got)))
-    # The next app's launch must reach the shell, never an app that still
-    # owns the input (also heals a console wedged by a large `send` frame).
+                    c.check("%s reached its exit marker %s"
+                            % (app, spec["end"]), False, _tail(got))
+                    identity_ok = False
     shell_ok = _ensure_shell(dev, c, app, spec.get("quit", ()))
     exited = exited and shell_ok
 
-    if isinstance(shot, tuple) and shot[0] in ("file", "snap"):
+    if visual and isinstance(shot, tuple) and shot[0] in ("file", "snap"):
         remote = shot[-1]
-        # A short settle keeps the pull off a console that is still closing
-        # the app's TUI (measured with TCMD's BMP on the Tab5).
         _run(dev, c, app + " settle", "delay 300", timeout=20)
         if bmp is None:
             bmp = _pull_bmp(dev, c, remote)
@@ -574,7 +606,18 @@ def _drive(dev, c, spec, want):
              timeout=20)
         _ensure_shell(dev, c, app)
 
-    ok = _publish(dev, c, app, bmp, want, source)
+    if not visual:
+        # Functional verification for transcript emitters / headless services:
+        # no screenshot is published, but a missing marker still fails.
+        c.check("%s functional markers verified" % app, identity_ok,
+                _tail(source or "no visual surface by design"))
+        return True
+
+    if app in NON_VISUAL:
+        c.check("%s service tick verified" % app, identity_ok,
+                _tail(out))
+        return True
+    ok = _publish(dev, c, app, bmp, want, source, identity_ok)
     if not ok:
         c.note("%s: no usable capture (%s)" % (app, source))
     elif not exited:
@@ -593,9 +636,9 @@ def _drive_background(dev, c, spec, want):
     if not tick_seen:
         got = _read_until(dev.session, spec["start"], 45.0)
         tick_seen = spec["start"].encode() in got
-    if not tick_seen:
-        c.note("%s: first tick %s missing: %s"
-               % (app, spec["start"], _tail(out)))
+    c.check("%s produced its first tick %s" % (app, spec["start"]),
+            tick_seen, _tail(out))
+    identity_ok = tick_seen
     dev.session.read_for(0.6)
     bmp = None
     try:
@@ -615,7 +658,11 @@ def _drive_background(dev, c, spec, want):
     if read_marker:
         _read_until(dev.session, read_marker, 15.0)
     _ensure_shell(dev, c, app)
-    ok = _publish(dev, c, app, bmp, want, source)
+    if app in NON_VISUAL:
+        c.check("%s service tick verified" % app, identity_ok,
+                _tail(out))
+        return True
+    ok = _publish(dev, c, app, bmp, want, source, identity_ok)
     if not ok:
         c.note("%s: no usable capture (%s)" % (app, source))
     return ok
@@ -677,9 +724,13 @@ def run(dev, ctx):
         names = [spec["app"] for spec in SPECS + BG_SPECS
                  if spec["app"] in ATTEMPTED]
         missing = [n for n in names if n not in WRITTEN]
-        c.check("gallery publishes every app PNG",
-                not missing and len(names) == len(set(names)),
-                "missing=%r" % missing)
+        if want == REFERENCE_SIZE:
+            c.check("gallery stages every app PNG",
+                    not missing and len(names) == len(set(names)),
+                    "staged=%r missing=%r" % (sorted(WRITTEN), missing))
+        else:
+            c.note("no PNG is staged on this panel; the docs gallery is the "
+                   "%dx%d reference board" % REFERENCE_SIZE)
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)

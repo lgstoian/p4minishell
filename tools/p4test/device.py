@@ -27,7 +27,7 @@ class Device:
             self.boot(settle_ms)
 
     # -- lifecycle -------------------------------------------------------
-    def boot(self, settle_ms: int = 8000) -> None:
+    def boot(self, settle_ms: int = 2000) -> None:
         """Wait until the shell is genuinely ready, not just printing.
 
         Boot is not over when the banner appears: the Wi-Fi/C6 workflow runs on
@@ -75,7 +75,7 @@ class Device:
                         raise
                     time.sleep(2.0)
 
-    def reboot(self, settle_ms: int = 8000) -> None:
+    def reboot(self, settle_ms: int = 2000) -> None:
         self.session.hard_reset()
         self.boot(settle_ms)
 
@@ -89,7 +89,7 @@ class Device:
         self.close()
 
     # -- commands / screen ----------------------------------------------
-    def run(self, cmd: str, timeout: float = 30.0, settle: float = 0.5) -> str:
+    def run(self, cmd: str, timeout: float = 30.0, settle: float = 0.2) -> str:
         return self.session.run(cmd, timeout=timeout, settle=settle)
 
     def send(self, text: str, settle: float = 0.4) -> str:

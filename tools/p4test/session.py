@@ -270,8 +270,8 @@ class DeviceSession:
         self,
         cmd: str,
         timeout: float = 30.0,
-        settle: float = 0.5,
-        silence: float = 1.2,
+        settle: float = 0.2,
+        silence: float = 0.4,
         drop_echo: bool = True,
     ) -> str:
         """Run ``cmd`` and return its ANSI-stripped output.

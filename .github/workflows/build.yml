@@ -83,6 +83,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: False-green and artifact identity gates
+        run: |
+          python3 -m pip install -q Pillow
+          python3 tools/green_guard.py --strict
+          python3 tools/gallery_audit.py
+          python3 tools/harness/verify.py
       - name: Python syntax check (host tools)
         run: python3 -m compileall -q tools apps
       - name: Board profiles complete

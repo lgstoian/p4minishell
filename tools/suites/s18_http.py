@@ -57,6 +57,8 @@ def _connected_ip(dev, timeout_s=150):
     association in progress. Requiring two samples rules out a single stale
     ``connected: yes``.
     """
+    if getattr(dev, "_no_station_ip", False):
+        return None
     deadline = time.time() + timeout_s
     streak = 0
     while time.time() < deadline:
@@ -72,6 +74,7 @@ def _connected_ip(dev, timeout_s=150):
         else:
             streak = 0
         time.sleep(1.0)
+    dev._no_station_ip = True
     return ""
 
 

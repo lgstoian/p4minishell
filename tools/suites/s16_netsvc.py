@@ -66,6 +66,10 @@ def run(dev, ctx):
     dev.run("net disconnect")
     out = dev.run("net connect", timeout=30)
     live = False
+    if getattr(dev, "_no_broker", False):
+        c.note("no broker reachable (cached from an earlier suite); live "
+               "publish/loopback skipped")
+        return c
     for _ in range(12):
         time.sleep(5)
         st = dev.run("net status /b")
@@ -73,6 +77,7 @@ def run(dev, ctx):
             live = True
             break
     if not live:
+        dev._no_broker = True
         c.note("no broker reachable: live publish/loopback skipped")
         dev.run("net disconnect")
         return c

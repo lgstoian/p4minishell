@@ -168,6 +168,9 @@ STATIC_GATES = [
     ("green guard (false-green tests)", "green_guard.py"),
     ("machine-readable comments", "comment_index.py"),
     ("agent breadcrumbs", "breadcrumbs.py"),
+    # Artifact identity: reject a gallery PNG that shows the shell or is the
+    # same screen as another app. This is the gate that v1.4.3 lacked.
+    ("gallery identity", "gallery_audit.py"),
 ]
 
 
@@ -351,9 +354,12 @@ def _board_worker(label: str, port: str, mods, quick: bool,
                 # timeout per run on a different suite each time. The SD payload
                 # persists across the reset, so a reboot costs ~15 s and buys a
                 # reproducible result.
-                if mod is not mods[0]:
+                # Only pixel-sensitive areas need a hard reset between suites.
+                # Rebooting for every area cost ~8 min/board and hid nothing:
+                # a failed or timed-out suite already triggers the reset below.
+                if mod is not mods[0] and getattr(mod, "NEEDS_CLEAN_BOOT", False):
                     try:
-                        dev.reboot(settle_ms=4000 if quick else 8000)
+                        dev.reboot(settle_ms=4000 if quick else 2000)
                     except PanicError:
                         raise
                     except Exception:  # noqa: BLE001
@@ -369,6 +375,15 @@ def _board_worker(label: str, port: str, mods, quick: bool,
                 if tried > 1 and res.ok:
                     flaky.append(name)
                     print("  [FLAKY] %s passed on attempt %d" % (name, tried))
+                    if strict_green:
+                        # Passing on retry is not a true green. Report it as a
+                        # failure so a release gate cannot hide an intermittent
+                        # defect behind a second attempt.
+                        res = SuiteResult(name, 0, 1,
+                                          error="passed only on retry "
+                                                "(strict green)",
+                                          duration=res.duration)
+                        failed = [name]
                 board_results.append((name, res, failed, False))
                 if not res.ok:
                     # A suite that timed out may have left the shell worker
@@ -407,7 +422,7 @@ def _board_worker(label: str, port: str, mods, quick: bool,
 
 
 def run_boards(board_tokens: List[str], mods, quick: bool = False,
-               fail_fast: bool = True, retry: int = 0,
+               fail_fast: bool = True, retry: int = 0, strict_green: bool = False,
                baseline: Optional[Dict[str, Dict[str, float]]] = None
                ) -> Tuple[int, Dict]:
     """Run the suites concurrently on every board; merged table + differentials.
@@ -637,6 +652,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="stop remaining suites at the first failure")
     ap.add_argument("--keep-going", action="store_true", default=False,
                     help="never stop early (overrides fail-fast)")
+    ap.add_argument("--strict-green", action="store_true",
+                    help="a suite that passes only on retry is a failure")
     ap.add_argument("--retry", type=int, default=0,
                     help="retry a failed suite N times; pass-on-retry is FLAKY, never for panics")
     ap.add_argument("--baseline", default=None,
@@ -690,6 +707,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         rc, _report = run_boards(tokens, mods, quick=quick,
                                  fail_fast=fail_fast or (len(tokens) > 1 and not args.keep_going),
                                  retry=args.retry,
+                                 strict_green=args.strict_green,
                                  baseline=_load_baseline(args.baseline))
         if args.write_baseline and _report:
             _write_baseline(args.write_baseline, _report)
