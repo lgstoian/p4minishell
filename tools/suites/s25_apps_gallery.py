@@ -564,7 +564,9 @@ def _drive(dev, c, spec, want):
     elif visual and isinstance(shot, tuple) and shot[0] == "snap":
         _kind, key, marker, remote = shot
         for attempt in range(2):
-            s.read_for(0.8)
+            s.read_for(0.5)
+            s.read_until(b"key?", 20.0)
+            s.read_for(0.3)
             s.write_line(key)
             got = _read_until(s, marker, 20.0)
             seen = marker.encode() in got
@@ -716,6 +718,10 @@ def run(dev, ctx):
 
     WRITTEN.clear()
     ATTEMPTED.clear()
+    if os.path.isdir(STAGING):
+        for stale in os.listdir(STAGING):
+            if stale.lower().endswith(".png"):
+                os.remove(os.path.join(STAGING, stale))
     import tempfile
     tmp = tempfile.mkdtemp(prefix="p4gallery_")
     try:
