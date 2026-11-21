@@ -95,7 +95,7 @@ Regenerate the committed manifests after changing tags or components:
 Recent changes are recorded in [`changelog.md`](changelog.md). Known quirks and
 the bug-campaign log live in [`bugs.md`](bugs.md).
 
-- **LVGL 9.6.0~1 upgrade (2026-11-18, builds green, NOT yet HW-verified):**
+- **LVGL 9.6.0~1 upgrade (2026-11-18, builds green and hardware-verified on both boards in v1.4.3):**
   - Pin bumped in `main/idf_component.yml` (esp_lvgl_port 2.9.0 unchanged; it
     accepts `lvgl >=8,<10`). Because the four patched components are vendored
     via `EXTRA_COMPONENT_DIRS`, the component manager treats them as *local*

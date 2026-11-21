@@ -9,7 +9,7 @@ from their owning folders. Nothing is invented: every file in the archive is a
 repository asset that a push tool would place on the card.
 
 Usage:
-    python tools/make_sd_archive.py [--out release/p4minishell-sd-v1.4.3.zip]
+    python tools/make_sd_archive.py [--out release/p4minishell-sd-v1.4.4.zip]
                                     [--fonts all|dejavu|none]
                                     [--dry-run]
 """
@@ -26,7 +26,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "apps"))
 from app_manifest import deploy_list  # noqa: E402
 
-README = """P4MiniShell v1.4.3 - SD card payload
+README = """P4MiniShell v1.4.4 - SD card payload
 =====================================
 
 Copy the CONTENTS of this folder to the root of a FAT32 microSD card (or a USB
@@ -51,7 +51,7 @@ def add_file(sd_dir: str, remote: str, local: str) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(
-        ROOT, "release", "p4minishell-sd-v1.4.3.zip"))
+        ROOT, "release", "p4minishell-sd-v1.4.4.zip"))
     ap.add_argument("--fonts", choices=("all", "dejavu", "none"), default="dejavu")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()

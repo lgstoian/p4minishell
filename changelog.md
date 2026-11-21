@@ -14,7 +14,7 @@ open bugs see [`bugs.md`](bugs.md).
 
 ---
 
-## [1.4.3] - 2026-11-18
+## [1.4.3] - 2026-11-21
 
 ### Added
 
@@ -386,7 +386,7 @@ open bugs see [`bugs.md`](bugs.md).
 - Firmware builds on both profiles (JC1060P470C, M5Stack Tab5) and the
   standalone `test/` project builds for both; the on-board unit suite is
   **699/0/2 on COM3 and COM6** (the late v1.4.3 browser/grid/for cases
-  included); the host lane is **285/285 (last run)**; `green_guard` (757),
+  included); the host lane is **285/285 (last run)**; `green_guard` (758),
   `comment_index` and `breadcrumbs` pass; `tools/harness/verify.py` is green.
 - COM3/COM6 hardware: `version` reports v1.4.3; `emoji list/check/path` and a
   real colour pack render in the transcript (LVGL) and the TUI; `html`

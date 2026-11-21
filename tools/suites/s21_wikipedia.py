@@ -38,6 +38,10 @@ LINK_TEXT = "official ESP-IDF page"
 LINK_FG = 11            # bright cyan, the documented <a> foreground
 MISSING_ALT = "[ESP32 die shot unavailable]"
 
+# Live proof is staged here and published explicitly; a test run never
+# writes into docs/ directly.
+PROOF = os.path.join(ROOT, "screenshots", "proof")
+
 IP_RE = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})")
 TEXT_RE = re.compile(r"^(\d{3})\|(.*)$", re.MULTILINE)
 ATTR_RE = re.compile(r"^(\d{3})@(.*)$", re.MULTILINE)
@@ -213,22 +217,44 @@ def _live(dev, c, ctx):
 
     dev.run("browser cache clear", timeout=20)
     out = dev.run("browser %s" % LIVE_URL, timeout=240, settle=3.0)
+
+    # Proof capture FIRST: `tui dump` appends to the transcript and can repaint
+    # the shell over the page. This is the screenshot v1.4.3 failed to ship.
+    shot = None
+    try:
+        # The in-memory BMP path needs ~1.8 MB contiguous PSRAM, which the
+        # rendered Wikipedia page has already consumed. The panel capture
+        # streams the framebuffer in 256 KB chunks and works in this state.
+        dev.run("screenshot /panel WIKI/PROOF.BMP", timeout=120)
+        shot = dev.pull_file("WIKI/PROOF.BMP")
+        dev.run("del /f WIKI/PROOF.BMP", timeout=30)
+    except Exception as exc:  # noqa: BLE001
+        c.check("live Wikipedia proof screenshot", False, str(exc))
     dump = _dump(dev)
 
     rendered = ("Failed to" not in out and "Failed to fetch" not in out and
-                "Espressif" in dump and "ESP32" in dump)
+                 "Espressif" in dump and "ESP32" in dump)
+    c.check("live HTTPS full render", rendered,
+            "fetch=%r dump=%r" % (out[-300:], dump[-300:]))
     if rendered:
-        c.check("live HTTPS full render", "Espressif" in dump,
-                "Wikipedia rendered through the cert-bundle path")
         c.expect("live render shows the infobox", "Espressif Systems", dump)
-    else:
-        # The transport rejects a page above P4_CONFIG_HTTP_MAX_BODY_BYTES
-        # instead of exhausting PSRAM. That is the documented degradation.
-        degraded = ("Page exceeds the" in out or "exceeds the" in out)
-        c.check("live fetch bounded by the documented size cap", degraded,
-                out[-500:])
-        c.check("live degradation did not crash the board",
-                "Guru Meditation" not in out + dump, out[-300:])
+        c.expect("live render shows the article title", "ESP32", dump)
+
+    if shot is not None:
+        try:
+            os.makedirs(PROOF, exist_ok=True)
+            from p4test.screenshot import parse_bmp
+            img = parse_bmp(shot).to_image()
+            img.save(os.path.join(PROOF, "wikipedia_live.png"), "PNG")
+            # The same live app screenshot is the documented `web` app proof.
+            img.save(os.path.join(PROOF, "web.png"), "PNG")
+            with open(os.path.join(PROOF, "wikipedia_live.txt"), "w",
+                      encoding="utf-8") as fh:
+                fh.write("URL: %s\n\n%s\n" % (LIVE_URL, dump))
+            c.check("live Wikipedia proof screenshot saved",
+                    os.path.getsize(os.path.join(PROOF, "wikipedia_live.png")) > 1000)
+        except Exception as exc:  # noqa: BLE001
+            c.check("live Wikipedia proof screenshot saved", False, str(exc))
 
     if ssid:
         dev.run("wifi disconnect", timeout=20)
@@ -251,12 +277,14 @@ def run(dev, ctx):
     dump = _dump(dev)
     _assert_page(c, dump)
 
-    if os.environ.get("P4_WIFI_LIVE") == "1":
-        try:
-            _live(dev, c, ctx)
-        except Exception as exc:  # noqa: BLE001
-            c.check("live Wikipedia leg completed", False, str(exc))
-    else:
-        c.note("live Wikipedia leg skipped (set P4_WIFI_LIVE=1 to record it)")
+    if os.environ.get("P4_WIFI_LIVE") != "1":
+        c.check("live Wikipedia leg executed (P4_WIFI_LIVE=1)", False,
+                "v1.4.3 claimed a live full render but the gate never enabled "
+                "the live leg - 1.4.4 requires the proof")
+        return c
+    try:
+        _live(dev, c, ctx)
+    except Exception as exc:  # noqa: BLE001
+        c.check("live Wikipedia leg completed", False, str(exc))
 
     return c

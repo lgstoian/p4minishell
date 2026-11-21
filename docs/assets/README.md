@@ -35,9 +35,9 @@ Committed, curated screenshots for the public docs. This folder is the
 Aim for ~12 shots minimum: shell, files, editor, one modal, TUI, gfx, plot,
 one app, one theme variant, header, and the browser.
 
-`docs/assets/apps/` holds the per-app gallery captures (35 PNGs, 1024x600,
+`docs/assets/apps/` holds the per-app gallery captures (22 PNGs, 1024x600,
 `<app>.png`). They are produced by
-`python tools/p4test_run.py <COMx> --only s25_apps_gallery`, and
+`python tools/p4test_run.py <COMx> --only s25_apps_gallery` stages into `screenshots/gallery/`; `python tools/publish_gallery.py --yes` is the only publish path, and
 `python tools/gen_apps_gallery.py` writes [`../apps.md`](../apps.md) from them. The browser shot is
 reproduced by `python tools/p4test_run.py <COMx> --only s20_website`, which
 renders `apps/website/INDEX.HTML` offline and leaves the BMP in

@@ -26,7 +26,7 @@ Current target version: **v1.4.3** (`P4_CONFIG_VERSION_*` in
 A public release must not ship with an open HIGH-severity defect. As of the
 last campaign:
 
-- **F27 (HIGH, open)** — a transient Tab5 crash under long mixed `p4test`
+- **F27 (HIGH, resolved in v1.3.0)** — a transient Tab5 crash under long mixed `p4test`
   sweeps (Guru/WDT/silent reboot), unreproducible in targeted re-runs. **Required
   to close:** three consecutive clean full `p4test_run <COMx>` sweeps on both
   boards plus a `dogfood` soak, recorded in `bugs.md`. See

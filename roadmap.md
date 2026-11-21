@@ -86,8 +86,7 @@ PATH/`APPS` discovery with `launch`/`APPINFO`, batch process model
 (`proc`/`%ERRORLEVEL%`), shared libraries (`call file::routine`), native modals
 (`dialog`/`list`/`ask`). Palm-OS `db` store, `alarm`/`cal`.
 
-### 6. Palmtop parity (v0.34
-### 11. Extended ASCII / CP437 support (v1.3.1)
+### 6. Palmtop parity (v0.34 - v0.38)
 
 - **Full CP437 8x8 font**: `gfx_font.c` expanded from printable ASCII (0x20-0x7E, 96 glyphs) to full CP437 range 0x00-0xFF (256 glyphs) via `tools/gen_gfx_font.py` using unscii-8 TTF.
 - **`gfx_surface_text`**: Renders box-drawing (U+2500-U+257F), accented letters, and symbols (0x80-0xFF) when `P4_CONFIG_GFX_FONT_EXTENDED=1` (default). Control chars (0x00-0x1F, 0x7F) render empty; ASCII 0x20-0x7E always render.
@@ -95,7 +94,7 @@ PATH/`APPS` discovery with `launch`/`APPINFO`, batch process model
 - **`hexview` ASCII column**: Displays extended chars (0x80-0xFF) via `strutil_format_hex_row` when extended font enabled.
 - **Config**: `P4_CONFIG_GFX_FONT_EXTENDED` (default 1) toggles extended rendering; font array always 256 entries but 0x00-0x1F/0x80-0xFF empty when disabled.
 - **Unit tests**: `test_gfx_font_extended`, `test_cas_asc_extended_ascii`, `test_cas_chr_extended_ascii`.
-- **Documentation**: Updated `command.md` (gfx text, hexview), `editor.md` (Symbols page), `readme.md`, `changelog.md`, `ai-context.md`. – v0.38)
+- **Documentation**: Updated `command.md` (gfx text, hexview), `editor.md` (Symbols page), `readme.md`, `changelog.md`, `ai-context.md`. –
 
 FX-870P/VX-4 `calc` (math/string/financial, base conversions). TUI cell buffer
 + `draw` verbs, `gfx` RGB565 canvas with sprites/BMP, `plot` graph layer. App
@@ -256,7 +255,7 @@ Five user-facing goals, each behind one implementation.
   `APPNAME`, `launch` discovers `usb:/APPS`, and the reference apps keep data
   beside themselves.
 - **Memory.** The 81 KB Natural Display layout grid moved to PSRAM (and a
-  per-render leak was fixed), taking static DIRAM from 89% to 71% used.
+  per-render leak was fixed), taking static DIRAM from 89.1% to 64.2% used.
 
 **Status in v1.4.3:** shipped and hardware-verified. Colour packs render in
 LVGL through an RGB565 image glyph from the shared PSRAM cache; `html` is a
@@ -295,7 +294,7 @@ commitments.
 | Hardware-free host unit lane | PR-time logic coverage | Done: `test/host/` on the IDF `linux` target, **285 cases** (last run), CI `host-unit` job; manifest + generator + prelude + guard classification. Hardware sign-off unchanged ([`harness.md`](harness.md) 2.2) |
 | Remaining hardware-coupled models | More host coverage | Open: `batch_expr` needs `shell_sd_begin/end` and `svc` needs `storage_ini_file_foreach` (a file-I/O seam); `tui` is NO-GO - the selftest needs real `lv_font_t` metrics and `tui_font_cell_t` embeds an LVGL pointer. LVGL-on-host is rejected (esp_lcd/esp_vfs_fat) |
 | Per-board release artifacts | Shippable images | Done: `make_release.py bins` verified for both boards (`p4minishell-<board>.bin` merge; `release/` stays ignored) |
-| Two-board stability gate | Exit criterion | Open: `bugs.md` F27 (transient Tab5 crash under long mixed sweeps) must close with three clean full sweeps on both boards + a `dogfood` soak before this chapter is declared complete |
+| Two-board stability gate | Exit criterion | Closed: `bugs.md` F27 (transient Tab5 crash under long mixed sweeps) must close with three clean full sweeps on both boards + a `dogfood` soak before this chapter is declared complete |
 
 ### B. PDA / PIM
 

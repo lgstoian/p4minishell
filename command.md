@@ -115,7 +115,7 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 - Command submission: LV_EVENT_READY on input line (touch) or Enter (serial)
 - Heavy commands run on dedicated worker task (not LVGL input callback stack)
 - Native modal surfaces (`dialog`, `list`, `ask`, `browse`, `view`, `hexview`) take over the transcript area
-  using the shared modal runtime in `components/modal/`. All 6 modals fill the live transcript region (resizes with rotation and keyboard visibility), accept `/t:secs`, and work both interactively and in batch — the `dialog`/`list`/`ask` dispatcher was fixed to handle both paths. Batch files remain the
+  using the shared modal runtime in `components/modal/`. The 8 modal surfaces fill the live transcript region (resizes with rotation and keyboard visibility), accept `/t:secs`, and work both interactively and in batch — the `dialog`/`list`/`ask` dispatcher was fixed to handle both paths. Batch files remain the
   apps; these commands are the polished UI layer a batch app can drop into.
 
 ## Where Commands Live
@@ -5491,7 +5491,7 @@ string functionality):
 Not applicable to this firmware (no stub, no equivalent): `LLIST`/`LPRINT`
 (no printer), `MODE` (covered by
 `display`/`keyboard`/`power`), `PASS` (no program lock), `DEFCHR$` (LVGL
-fonts, not a character LCD), `DEFSEG`/`DEFM`/`PEEK`/`POKE`/`PBLOAD`/`PBGET`
+fonts, not a character LCD). The `debug` family provides `mem`/`peek`/`poke` (YES-gated), so `DEFSEG`/`DEFM`/`PEEK`/`POKE`/`PBLOAD`/`PBGET`
 (no memory pokes; hardware access is `gpio read`/`set`), `CALC$`/`CALCJMP`
 (internal calculator ROM), `RENUM` (batch has no line numbers), `CONT` (no
 program suspension), `VERIFY` (FATFS write verification is not exposed),
@@ -5499,21 +5499,7 @@ program suspension), `VERIFY` (FATFS write verification is not exposed),
 file), `NEW` (no in-memory program; a fresh shell session), `DSKF` (reported
 by `chkdsk`).
 
-## Unsupported Commands
-
-Stubs registered in the dispatcher that only print an error message are listed
-here for reference and to prevent confusion if typed. (Implemented commands
-with their own sections, like rgb, are not stubs.)
-
-| Command | Reason |
-|---------|--------|
-| rgb <#RRGGBB|r g b|effect|auto> | WS2812 status LED (GPIO26) with auto status layer -- see Hardware Commands |
-| camera init | Power and initialise the MIPI-CSI camera (Tab5 SC202CS via esp_video) |
-| camera snap <file.bmp> | Capture a still to a 24-bit BMP on SD (BMP only) |
-| imu [read] | Read the BMI270 accel/gyro + orientation; publishes IMU_* env vars |
-| imu status | IMU presence, orientation, and auto-rotate state |
-| imu rotate <on\|off> | Enable/disable tilt-based display rotation |
-| shutdown (poweroff) | Flush, darken LEDs, cut board power (deep sleep when no latch) |
+## Hardware Commands (verified)
 
 ## Runtime Notes
 
@@ -5523,7 +5509,7 @@ with their own sections, like rgb, are not stubs.)
 - sd cat preview bounded to 8192 bytes
 - **Recursive walkers keep their per-level buffers on the heap**, not the worker task stack.
   `dir /s`, `tree`, and `chkdsk /F` each release one level's buffer before descending, so
-  memory use stays flat with depth and the 8 KB task stack is never at risk.
+  memory use stays flat with depth and the 28 KB command task stack is never at risk.
 - **Free-space guardrails**: writes that would leave under 64 KB free are refused before any
   file is opened, so an overwrite cannot destroy existing contents and then fail
 - **`format` requires interactive confirmation** and refuses to run when no key source is

@@ -31,8 +31,9 @@ device - the live Wikipedia article is fetched and rendered whole. The showcase 
 
 All screenshots are captured live from the device over USB serial
 (`python tools/capture_docs.py <COM_PORT>`); the full set is in
-[`docs/assets/`](docs/assets/README.md), and every reference app has its own
-captured main screen in the [`app gallery`](docs/apps.md).
+[`docs/assets/`](docs/assets/README.md), and every visual app has a captured main screen in the
+[`app gallery`](docs/apps.md); headless services and one-shot transcript emitters
+are verified by markers instead.
 
 The `screenshot` command reports success in the header notification only
 (v1.4.3); the transcript stays clean, and only errors are printed.
@@ -72,7 +73,7 @@ background jobs, and a C app ABI included.
 
 ## Current state (v1.4.3)
 
-This is the first public release. The firmware is hardware-verified on the
+v1.4.4 is the current release. The first public release was v1.0.0 (2026-09-18). The firmware is hardware-verified on the
 ESP32-P4 Function EV Board (JC1060P470C, JD9165 panel, GT911 touch, SD card)
 and on the M5Stack Tab5 (ILI9881C/ST7123 720x1280 DSI, ES8388 audio, hosted C6
 Wi-Fi + BLE, Tab5Keyboard input with two independent RGB LEDs, INA226 pack
@@ -467,7 +468,7 @@ lane is a **pre-gate only**: hardware sign-off still comes from
 
 ### Connectivity and hardware
 
-- Hosted Wi-Fi on the C6 (station-only) with a known-network list, `wifi scan`
+- Hosted Wi-Fi on the C6 (default STA; SoftAP for portal and board-to-board chat) with a known-network list, `wifi scan`
   and rich `wifi status`, plus `ping`, `dns`, `httpget`, and `tcpterm`.
 - An SD **HTTP file server** (`httpd`), `netstat`, and `ipconfig`.
 - An MQTT **event service** (`net` verbs + `/onmsg` batch hook): one task
@@ -599,7 +600,7 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
 | [tools/README.md](tools/README.md) | Host-side drivers and hardware tests |
 | [PORTING.md](PORTING.md) | Board profiles (`boards/`) and bring-up checklist |
 | [schematics.md](schematics.md) | Per-board hardware reference: pinouts, buses, power tree, expander maps |
-| [docs/native_packaging.md](docs/native_packaging.md) | Package spec: bundle layout, hybrid/native types, signed manifests (packaging spec v1.2) |
+| [docs/native_packaging.md](docs/native_packaging.md) | Package spec: bundle layout, hybrid/native types, signed manifests (packaging spec v1.3) |
 | [docs/assets/README.md](docs/assets/README.md) | Public screenshot set + capture guide |
 | [apps/companion/FINDINGS.md](apps/companion/FINDINGS.md) | Companion batch-app findings log (test campaigns) |
 | [assets/fonts/README.md](assets/fonts/README.md) | Vendored/pushed font payloads |

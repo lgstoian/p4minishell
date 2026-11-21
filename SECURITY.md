@@ -174,7 +174,7 @@ and keep their contract; prefer `link` for anything destructive.
   jobs run, and restores Wi-Fi afterwards.
 - SoftAP is station-only except the captive portal (`wifi setup on`, open AP
   `P4MiniShell-Setup` by config, TX-capped) and **board-to-board chat** (`chat host on`, open AP `P4MiniShell-Chat` by config, TX-capped); there is no open AP by default.
-- Secure boot / flash encryption: no provisioned profile ships in v1.3.0
+- Secure boot / flash encryption: no provisioned profile ships in v1.4.4
   (see `roadmap.md` platform row). Enable them via your own ESP-IDF signing
   flow if your deployment needs them.
 

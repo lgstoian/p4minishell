@@ -285,6 +285,13 @@ def _make_sprites(tmp):
 
 
 def _deploy(dev, c, tmp):
+    # A flapping hosted Wi-Fi link emits `eh_host_feat_rpc: no response` lines
+    # asynchronously; they corrupt the in-flight BMPX screenshot frames. The
+    # gallery is entirely local, so disconnect before driving any app.
+    try:
+        dev.run("wifi disconnect", timeout=20)
+    except Exception:  # noqa: BLE001 - already disconnected is fine
+        pass
     _log("deploying the reference bundle")
     for name in ("APPS", "WEB", "EMOJI", "DOCS", "TEMPLATES", "DICTS",
                  "NOTES", "tmp"):

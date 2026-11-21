@@ -7,7 +7,7 @@
 ## What we looked at
 
 - gallery_audit.py (A text file (notes, source code or settings))
-- D:\Code\new\p4minishell\release\p4minishell-v1.4.3-src.zip (shipped source)
+- D:\Code\new\p4minishell\release\p4minishell-src.zip (shipped source)
 - bad gallery PNG from git HEAD~1 (extracted to temp image)
 - D:\Code\new\p4minishell\tools\gallery_audit.py and tools/suites/s25_apps_gallery.py (redesigned gates)
 

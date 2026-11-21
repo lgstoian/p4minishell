@@ -1237,7 +1237,7 @@ steps in exactly this order; the order is load-bearing, not stylistic:
 Hosted NimBLE is brought up separately and lazily by `bluetooth.c`, which receives the
 same host callback surface during `networking_init()`.
 
-**Station-only** is enforced at two levels: the code always sets `WIFI_MODE_STA`, and
+**Default STA runtime** is enforced at two levels: the code always sets `WIFI_MODE_STA`, and
 `CONFIG_ESP_WIFI_SOFTAP_SUPPORT` / `CONFIG_WIFI_RMT_SOFTAP_SUPPORT` are both disabled so
 the AP path is not compiled in. Both symbols matter because esp_wifi_remote mirrors the
 Wi-Fi Kconfig under its own `WIFI_RMT_` prefix.
@@ -1711,7 +1711,7 @@ A new component under `components/` must be added to BOTH the root `CMakeLists.t
 - Flash: 16 MB, QIO mode
 - Optimization: Size (`-Os`)
 - PSRAM: Enabled, 200 MHz, XIP from PSRAM disabled
-- ESP-Hosted: SDIO host interface, 1-bit bus, reset GPIO 54
+- ESP-Hosted: SDIO host interface, 4-bit bus (slot 1), reset GPIO 54
 - Wi-Fi: Station-only, WPA2, nano newlib, warn-level logging
 - FATFS: LFN heap-backed, 255 chars, UTF-8 encoding
 - Power: Light sleep enabled (`CONFIG_PM_ENABLE`)

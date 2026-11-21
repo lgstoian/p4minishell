@@ -2324,7 +2324,7 @@ esp_hosted_init()
   -> esp_wifi_start()
 ```
 
-Hosted NimBLE is initialized separately and lazily by `bluetooth.c`. Station-only is a
+Hosted NimBLE is initialized separately and lazily by `bluetooth.c`. Default STA runtime; SoftAP is compiled in for opt-in APSTA flows is a
 hard constraint enforced both in code and by disabling SoftAP in Kconfig.
 
 - `esp_err_t networking_wifi_wait_for_ota(void)`

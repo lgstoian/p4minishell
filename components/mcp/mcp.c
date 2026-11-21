@@ -15,6 +15,7 @@
  */
 
 #include "mcp.h"
+#include "p4minishell_config.h"
 
 #include "json.h"
 #include "networking.h"
@@ -199,10 +200,14 @@ esp_err_t mcp_connect(mcp_client_t *client, const char *url, const char *token)
     snprintf(client->url, sizeof(client->url), "%s", url);
     snprintf(client->token, sizeof(client->token), "%s", token != NULL ? token : "");
     client->connected = true;
-    err = mcp_run(client, 0, "initialize",
-                  "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},"
-                  "\"clientInfo\":{\"name\":\"p4minishell\",\"version\":\"1.4.1\"}}",
-                  NULL, 0);
+    {
+        char init_params[192];
+        snprintf(init_params, sizeof(init_params),
+                 "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},"
+                 "\"clientInfo\":{\"name\":\"p4minishell\",\"version\":\"%s\"}}",
+                 P4_CONFIG_VERSION_STRING + 1);
+        err = mcp_run(client, 0, "initialize", init_params, NULL, 0);
+    }
     if (err != ESP_OK) {
         client->connected = false;
         return err;

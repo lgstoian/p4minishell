@@ -57,7 +57,7 @@ banner, the system info commands, and the read-only FreeRTOS task introspection 
   redirection layer), the shared memory-allocation policy and debug-log error
   reporting, time/timer/sleep/system-info helpers, and Wi-Fi state accessors
   that route through the registered `applib_net_ops_t` table. It is a leaf
-  (depends only on `shell`, `clock`, and the FreeRTOS/heap/esp_timer IDF
+  (depends on `shell`, `clock`, `storage`, `db`, `tui` and `p4heap`, plus the FreeRTOS/heap/esp_timer IDF
   components) and never includes `networking.h`.
 - `components/networking` owns hosted Wi-Fi runtime state, boot restore, diagnostics, OTA
   restore hooks, and the persistent known-network list (`wifi_known.c`, `sd:/WIFI.KNOWN`).

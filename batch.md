@@ -18,7 +18,7 @@
 
 A batch app is a plain-text `.bat` file on the SD card. No compilation step.
 It runs as a command stream on the single command-worker task (foreground
-apps share everything: transcript, the 64-slot RAM environment, cwd, and
+apps share everything: transcript, the class-tagged RAM environment (64 global + 32 frame-local + 256 array + 64 map = 416 slots), cwd, and
 ERRORLEVEL with the whole shell — see §3). A `start`ed background job is
 the isolated case: it reads the global environment but `set` lands in a
 lazily-allocated job-private overlay (freed at job exit), and its `himem`
@@ -98,7 +98,7 @@ the shim ` [hybrid]`. The frozen contract and the C side live in
 | **argv** | `%0` = script name, `%1`..`%9` = caller arguments, `%*` = everything from `%1`. `call` / `call :label` / `gosub` push a fresh frame; `shift` slides it. |
 | **cwd** | RAM-only current directory (storage-owned). Relative paths resolve at run time. |
 | **PATH** | RAM-only `PATH` slot (default `sd:/`). Resolution tries the literal name, `name.bat`, then each `;`-separated PATH entry with both forms. |
-| **environment** | 64 RAM slots (`P4_CONFIG_ENV_VAR_MAX`), session-global. `set`
+| **environment** | 416 class-tagged slots (`P4_CONFIG_ENV_VAR_MAX` global 64, plus frame-local, array and map pools), session-global. `set`
 / `set /a` / `set /p` / `calc` mutate it; `call <file>::<routine>` isolates it; `setlocal` / `endlocal`
 snapshot/restore it (a scope left open is unwound on frame return). A `start`ed job writes a private overlay instead (see §1). |
 | **errorlevel** | Integer exit code. Read with `if errorlevel N` (true when ≥ N) or `%ERRORLEVEL%`; set by commands, `choice` (1-based key index), `exit /b N`, `return N`. |
