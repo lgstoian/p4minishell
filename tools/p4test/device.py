@@ -190,6 +190,33 @@ class Device:
                 made.add(parent)
             self.push_local(local, remote)
 
+    def deploy_cached(self, files, pusher, tag="P4DEPLOY.SHA"):
+        """Push ``(local, remote)`` pairs only when their content changed.
+
+        ``s14_apps`` and ``s25_apps_gallery`` deploy the same 60-file bundle;
+        re-pushing it cost 2-4 minutes per board per sweep. SD payloads persist
+        across the reboots between suites, so a content hash on the card is a
+        safe cache key. Returns True when files were actually pushed.
+        """
+        import hashlib
+
+        pairs = list(files)
+        digest = hashlib.sha256(
+            "\n".join("%s:%s" % (remote,
+                                  hashlib.sha256(open(local, "rb").read())
+                                  .hexdigest())
+                       for local, remote in pairs).encode()).hexdigest()[:24]
+        try:
+            current = self.run("type " + tag, timeout=15).strip()
+        except Exception:  # noqa: BLE001 - no marker file yet
+            current = ""
+        if current == digest:
+            return False
+        for local, remote in pairs:
+            pusher(local, remote)
+        self.push_file(tag, digest.encode())
+        return True
+
     # -- destructive commands (existing firmware, driven verbatim) -------
     def factory_reset(self, timeout: float = 30.0) -> str:
         self.session.reset_input()

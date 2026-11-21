@@ -2,7 +2,7 @@
 rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
 rem SPDX-License-Identifier: MIT
 rem =====================================================================
-rem  SNAKE.BAT - TUI snake on packed coordinates (v = y*64+x). The body
+rem  SNAKE.BAT - TUI snake on packed coordinates (v = y*128+x). The body
 rem  lives in the S[] array; `for /L` seeds the slots, `for /A` iterates
 rem  the prefix (index to %%k, live value to %%l) for drawing, food
 rem  collision and the shift, and each slot is a gosub routine so `%1`
@@ -11,7 +11,7 @@ rem  stay opaque packed numbers: split (q=y, t=x) happens only for wall
 rem  checks and drawing.
 rem  Markers: [M-SNAKE] / [M-SNAKE-EAT] / [M-SNAKE-DONE].
 rem  Foreground-only: draw refuses in background jobs (see :nogfx).
-rem  Grid: x 3..42, y 4..21 maps to packed max 21*64+42=1386. Sentinel 6435
+rem  Grid: x 3..42, y 4..(TUIROWS-4) maps to a live packed max; sentinel
 rem  (99,99) fills the spare slots and never matches a live head; guarded
 rem  draws keep it off-screen.
 rem =====================================================================
@@ -25,17 +25,23 @@ rem Full screen: reclaim the header and on-screen keyboard rows so the whole
 rem 44x22 playfield and the score panel are visible (TCMD does the same).
 draw fullscreen on
 rem Layout: the shell publishes the grid (80x25 landscape, 80x97 portrait).
-rem The frame spans the grid and grows into the extra rows; the playfield
-rem itself keeps its authored 44x22 cells (x 3..42, y 4..21) because the game
-rem logic - packed y*64+x coordinates, wall checks and food ranges - is bound
-rem to them.
+rem The frame spans the grid AND the playfield grows into the extra rows:
+rem x 3..42, y 4..(TUIROWS-4). The packed coordinate stride and the food range
+rem are derived from the live grid, so the board is not a small strip at the
+rem top of a tall portrait panel (the v1.4.3 gallery bug).
 if "%TUICOLS%"=="" set TUICOLS=80
 if "%TUIROWS%"=="" set TUIROWS=25
 set /a SH=%TUIROWS%-3 > NUL
 if %SH% LSS 22 set SH=22
+set /a YMAX=%TUIROWS%-4 > NUL
+set /a YSPAN=%TUIROWS%-9 > NUL
+if %YSPAN% LSS 18 set YSPAN=18
+set /a MID=%TUIROWS%/2 > NUL
+set /a MID2=%MID%+2 > NUL
+set /a FOOT=%TUIROWS%-6 > NUL
+set /a FOOT2=%FOOT%+2 > NUL
 draw box 1 2 %TUICOLS% %SH% double "SNAKE ★"
 if errorlevel 1 goto nogfx
-set hh=596
 set dir=1
 set dc=d
 set len=3
@@ -43,19 +49,20 @@ set score=0
 rem Seed all twelve slots with the guaranteed-miss sentinel, then lay the
 rem 3-cell start: `for /L` precomputes the index (%%i -> n) so set S[n]=
 rem writes plain numbered slots.
-for /L %%i in (0,1,11) do set S[%%i]=6435
-set S[0]=596
-set S[1]=595
-set S[2]=594
+for /L %%i in (0,1,11) do set S[%%i]=20000
+set /a hh=%MID%*128+20 > NUL
+set S[0]=%hh%
+set /a S[1]=%hh%-1 > NUL
+set /a S[2]=%hh%-2 > NUL
 goto newfood
 
 :newfood
 set /a fx=%RANDOM% / 820 + 3
-set /a fy=%RANDOM% / 1821 + 4
-set /a nh=%fy% * 64 + %fx%
+set /a fy=%RANDOM% %% %YSPAN% + 4
+set /a nh=%fy% * 128 + %fx%
 set col=0
 rem Body check: for /A hands the live segment value to %%l, so no dynamic
-rem name lookups are needed. Every slot is either a segment or the 6435
+rem name lookups are needed. Every slot is either a segment or the 20000
 rem sentinel (which can never equal a real cell).
 for /A %%k in (S) do if %nh%==%%l set col=1
 if %col%==1 goto newfood
@@ -68,8 +75,8 @@ draw text 48 4 "Score %score%"
 draw text 48 6 "Length %len%"
 draw text 48 8 "wasd move"
 draw text 48 9 "Enter on serial"
-draw text 48 10 "p snap  q quit"
-draw text 48 12 "1s per step"
+draw text 48 %FOOT% "p snap  q quit"
+draw text 48 %FOOT2% "1s per step"
 draw text %fx% %fy% *
 rem Draw the body once per frame: head gets the @, the rest get O.
 for /A %%k in (S) do if %%k LSS %len% call :drawseg %%k %%l
@@ -103,20 +110,20 @@ set dir=0
 goto move
 
 :move
-if %dir% EQU 0 set /a nh=%hh% - 64
+if %dir% EQU 0 set /a nh=%hh% - 128
 if %dir% EQU 1 set /a nh=%hh% + 1
-if %dir% EQU 2 set /a nh=%hh% + 64
+if %dir% EQU 2 set /a nh=%hh% + 128
 if %dir% EQU 3 set /a nh=%hh% - 1
-set /a q=%nh% / 64
-set /a t=%nh% - %q% * 64
+set /a q=%nh% / 128
+set /a t=%nh% - %q% * 128
 if %q% LSS 4 goto dead
-if %q% GTR 21 goto dead
+if %q% GTR %YMAX% goto dead
 if %t% LSS 3 goto dead
 if %t% GTR 42 goto dead
 set col=0
 for /A %%k in (S) do if %nh%==%%l set col=1
 if %col%==1 goto dead
-set /a q=%fy% * 64 + %fx%
+set /a q=%fy% * 128 + %fx%
 if %q%==%nh% goto eat
 rem Shift the body down one slot (S[k]=S[k-1]) so the new head lands in
 rem S[0]. `for /A` visits slots ascending and the previous slot's OLD value
@@ -127,7 +134,11 @@ set hh=%nh%
 goto frame
 
 :shiftseg
-rem %1 = index text, %2 = that slot's current value
+rem %1 = index text, %2 = that slot's current value.
+rem Only the first `len` slots are the body: without this guard every one of
+rem the 12 slots fills up after 12 moves and the snake renders as a 13-cell
+rem streak even though the HUD says Length 3 (the v1.4.3 gallery bug).
+if %1 GEQ %len% return
 set S[%1]=%prev%
 set prev=%2
 return
@@ -141,9 +152,9 @@ tone 880 80
 goto newfood
 
 :drawseg
-rem %1 = index, %2 = packed segment value (y*64+x)
-set /a q=%2 / 64
-set /a t=%2 - %q% * 64
+rem %1 = index, %2 = packed segment value (y*128+x)
+set /a q=%2 / 128
+set /a t=%2 - %q% * 128
 if %1 EQU 0 draw text %t% %q% @
 if not %1 EQU 0 draw text %t% %q% O
 return
@@ -155,24 +166,24 @@ echo [M-SNAKE-SNAP]
 goto frame
 
 :dead
-draw text 48 13 GAME OVER
-draw text 48 14 Score %score%
+draw text 48 %MID% GAME OVER
+draw text 48 %MID2% Score %score%
 draw refresh
 screenshot %APPDRIVE%/SNAKE.BMP
 echo [M-SNAKE-DONE] score=%score% len=%len%
 goto end
 
 :win
-draw text 48 13 YOU WIN
-draw text 48 14 Score %score%
+draw text 48 %MID% YOU WIN
+draw text 48 %MID2% Score %score%
 draw refresh
 screenshot %APPDRIVE%/SNAKE.BMP
 echo [M-SNAKE-DONE] score=%score% len=%len% WIN
 goto end
 
 :quit
-draw text 48 13 QUIT
-draw text 48 14 Score %score%
+draw text 48 %MID% QUIT
+draw text 48 %MID2% Score %score%
 draw refresh
 echo [M-SNAKE-DONE] score=%score% len=%len% QUIT
 goto end

@@ -88,6 +88,7 @@ jobs:
           python3 -m pip install -q Pillow
           python3 tools/green_guard.py --strict
           python3 tools/gallery_audit.py
+          python3 tools/gallery_audit_selftest.py
           python3 tools/harness/verify.py
       - name: Python syntax check (host tools)
         run: python3 -m compileall -q tools apps

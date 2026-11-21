@@ -176,8 +176,10 @@ def _deploy(dev, c):
             raise
         except Exception:  # noqa: BLE001
             time.sleep(1.0)
-    for subdir, name, target in APP_PAYLOADS + COMPANION_PAYLOADS:
-        _push(dev, c, payload_path(subdir, name), remote_target(name, target))
+    dev.deploy_cached(
+        [(payload_path(subdir, name), remote_target(name, target))
+         for subdir, name, target in APP_PAYLOADS + COMPANION_PAYLOADS],
+        lambda local, remote: _push(dev, c, local, remote))
 
 
 def _make_ship(path):

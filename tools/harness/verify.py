@@ -48,6 +48,8 @@ gates = [
     # or is (nearly) the same screen as another app. The old "valid PNG, some
     # ink, 3 colours" gate let 14 wrong captures ship in v1.4.3.
     ('gallery identity', 'gallery_audit.py'),
+    # Canary: prove the identity guard itself can go red.
+    ('gallery guard canary', 'gallery_audit_selftest.py'),
 ]
 # The static-DRAM budget gate needs a firmware image; only run it when one has
 # been built, so a fresh checkout (no build/) never fails the host gate.

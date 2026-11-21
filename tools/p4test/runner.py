@@ -171,6 +171,7 @@ STATIC_GATES = [
     # Artifact identity: reject a gallery PNG that shows the shell or is the
     # same screen as another app. This is the gate that v1.4.3 lacked.
     ("gallery identity", "gallery_audit.py"),
+    ("gallery guard canary", "gallery_audit_selftest.py"),
 ]
 
 

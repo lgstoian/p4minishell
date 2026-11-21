@@ -39,6 +39,27 @@ SIGNATURE_GRID = 24
 DUPLICATE_L1 = 8
 
 
+def last_ink_row(path: str) -> int:
+    """Last row with a bright pixel in the content area.
+
+    A shell transcript dump has its only content at the very top (the echoed
+    commands) and is black below; a real app page (even a dark canvas) paints
+    down to the bottom of its surface. Used together with the chrome strip so a
+    browser page that legitimately keeps the prompt row is not misflagged.
+    """
+    im = Image.open(path).convert("RGB")
+    w, h = im.size
+    px = im.load()
+    last = 0
+    for y in range(50, h - 52):
+        for x in range(0, w, 4):
+            r, g, b = px[x, y]
+            if r + g + b > 250:
+                last = y
+                break
+    return last
+
+
 def signature(path: str):
     im = Image.open(path).convert("RGB")
     w, h = im.size
@@ -58,7 +79,8 @@ def signature(path: str):
                 colours.add((r // 32, g // 32, b // 32))
     chrome = (total and bright / float(total) >= CHROME_BRIGHT and
               len(colours) >= CHROME_COLOURS)
-    return im.size, sig, bool(chrome)
+    shell = bool(chrome) and last_ink_row(path) < 0.5 * h
+    return im.size, sig, shell
 
 
 def audit(folder: str = GALLERY):
@@ -97,5 +119,63 @@ def audit(folder: str = GALLERY):
                  any(s is None for _, s, _ in entries)) else 0
 
 
+def self_test() -> int:
+    """Prove the guard can go RED: synthesize a shell capture and a duplicate.
+
+    A guard that has never been observed failing is a guard nobody should
+    trust, especially in a project whose harness shipped false greens.
+    """
+    import shutil
+    import tempfile
+
+    tmp = tempfile.mkdtemp(prefix="gallery_audit_selftest_")
+    try:
+        w, h = 1024, 600
+        # A plausible app page: bright content spread down to the bottom.
+        good = Image.new("RGB", (w, h), (10, 10, 10))
+        px = good.load()
+        for y in range(60, h - 60, 6):
+            for x in range(20, w - 20, 12):
+                px[x, y] = (200, 200, 200)
+        good.save(os.path.join(tmp, "real_app.png"))
+        shutil.copyfile(os.path.join(tmp, "real_app.png"),
+                        os.path.join(tmp, "duplicate_app.png"))
+
+        # A shell capture: bright prompt/keyboard chrome at the bottom and
+        # only a few echoed lines at the top (the v1.4.3 false green).
+        shell = Image.new("RGB", (w, h), (6, 6, 6))
+        px = shell.load()
+        for y in range(0, 44):
+            for x in range(w):
+                px[x, y] = (90, 60, 20)
+        for y in range(60, 240, 8):
+            for x in range(20, 500, 8):
+                px[x, y] = (220, 220, 220)
+        for y in range(h - 46, h - 4):
+            for x in range(0, w, 3):
+                # The real prompt row is multi-coloured (buttons, prompt,
+                # cursor); a single flat bar would not exercise the detector.
+                px[x, y] = ((200, 150, 40), (60, 40, 20), (230, 190, 60),
+                            (20, 20, 20))[(x // 90) % 4]
+        shell.save(os.path.join(tmp, "shell_capture.png"))
+
+        # The same guard must reject the bad pair and accept a clean directory.
+        clean = os.path.join(tmp, "clean")
+        os.makedirs(clean)
+        shutil.copyfile(os.path.join(tmp, "real_app.png"),
+                        os.path.join(clean, "real_app.png"))
+        bad_rc = audit(tmp)
+        good_rc = audit(clean)
+        ok = bad_rc != 0 and good_rc == 0
+        print("gallery_audit self-test: %s (bad=%d good=%d)"
+              % ("PASS" if ok else "FAIL", bad_rc, good_rc))
+        return 0 if ok else 1
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
-    sys.exit(audit(sys.argv[1] if len(sys.argv) > 1 else GALLERY))
+    args = sys.argv[1:]
+    if "--self-test" in args:
+        sys.exit(self_test())
+    sys.exit(audit(args[0] if args else GALLERY))

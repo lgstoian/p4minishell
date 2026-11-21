@@ -114,7 +114,9 @@ SPECS = [
     dict(app="palmtop", cmd="launch PALMTOP", start="[M-PALM]",
          shot="stream", shot_delay=3.0, quit=["7"], end_shell=True),
     dict(app="notes", cmd="launch NOTES", start="[M-NOTE]",
-         pre=[(2.0, "ok", None)], shot="stream", shot_delay=1.5,
+         # Dismiss the welcome dialog, then wait for the real menu marker:
+         # capturing after "ok" photographed a nearly empty "Text" prompt.
+         pre=[(2.0, "ok", "[M-NOTE-MENU]")], shot="stream", shot_delay=3.0,
          quit=["8"], end_shell=True),
     dict(app="companion", cmd="launch COMPANION", start="[C-MENU]",
          shot="stream", shot_delay=2.0, quit=["6"], end="[C-EXIT]"),
@@ -148,8 +150,7 @@ SPECS = [
     dict(app="snake", cmd="launch SNAKE", start="[M-SNAKE]",
          # Drive enough steps for a real snake before the snapshot: one key
          # left a 3-cell stub that looked like a broken render in v1.4.3.
-         pre=[(1.2, "s", None), (1.0, "s", None), (1.0, "s", None),
-              (1.0, "d", None)],
+         pre=[(1.2, "s", None), (1.0, "s", None)],
          shot=("snap", "p", "[M-SNAKE-SNAP]", "SNAKE.BMP"),
          quit=["q"], end="[M-SNAKE-DONE]"),
     dict(app="mood", cmd="launch MOOD", start="[M-MOOD]",
@@ -191,11 +192,11 @@ SPECS = [
 
     # ---- extra sub-screens that document a feature in place ------------
     dict(app="files-notes", cmd="launch FILES", start="[M-FILES]",
-         pre=[(4.0, "6", "[M-FILES-NOTES]")], shot="stream", shot_delay=1.0,
+         pre=[(4.0, "6", "[M-FILES-NOTES]")], shot="stream", shot_delay=3.0,
          quit=["5"], end="[M-FILES-BACK]"),
     dict(app="net-msg", cmd="launch NET", start="[M-NET]",
          pre=[(4.0, "7", "[M-NET-OUTBOX]")], shot="stream", shot_delay=1.0,
-         quit=["1", "8"], quit_settle=2.0, end="[M-NET-BACK]"),
+         quit=["8"], quit_settle=2.0, end="[M-NET-BACK]"),
 ]
 
 # Background-service surfaces: start the real script in a pool slot, wait for
@@ -289,10 +290,11 @@ def _deploy(dev, c, tmp):
                  "NOTES", "tmp"):
         _run(dev, c, "mkdir %s" % name, "md %s" % name, timeout=20)
     payloads = APP_PAYLOADS + COMPANION_PAYLOADS
-    for index, (subdir, name, target) in enumerate(payloads):
-        _push(dev, c, payload_path(subdir, name), remote_target(name, target))
-        if index % 12 == 0:
-            _log("pushed %d/%d payloads" % (index, len(payloads)))
+    pushed = dev.deploy_cached(
+        [(payload_path(subdir, name), remote_target(name, target))
+         for subdir, name, target in payloads],
+        lambda local, remote: _push(dev, c, local, remote))
+    _log("app bundle %s" % ("pushed" if pushed else "already current"))
     for local, remote in _make_sprites(tmp):
         _push(dev, c, local, remote)
     # WRITER needs both template seeds and the sample wordlist.
@@ -402,7 +404,7 @@ def _publish(dev, c, app, bmp, want, source, identity_ok=True):
     # failure - the capture itself (size, ink, colours) still has to hold.
     png_ok = want != REFERENCE_SIZE
     if size_ok and want == REFERENCE_SIZE:
-        os.makedirs(DOCS, exist_ok=True)
+        os.makedirs(STAGING, exist_ok=True)
         try:
             img.save(path, "PNG", optimize=True)
             from PIL import Image
@@ -543,20 +545,35 @@ def _drive(dev, c, spec, want):
     if visual and shot == "stream":
         if spec.get("shot_delay"):
             s.read_for(spec["shot_delay"])
-        try:
-            bmp = dev.screenshot(unwind=False)
-            source = "screenshot stream"
-        except PanicError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            c.check("%s: streaming capture" % app, False, str(exc))
+        for attempt in range(2):
+            try:
+                bmp = dev.screenshot(unwind=False)
+                source = "screenshot stream"
+                break
+            except PanicError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                # Both attempts are recorded. A first-attempt failure is a
+                # failed check even if a retry later succeeds: hiding it would
+                # be exactly the retry-masked false green this harness had.
+                c.check("%s: streaming capture attempt %d"
+                        % (app, attempt + 1), False, str(exc))
+                if attempt == 0:
+                    s.read_for(1.0)
+                    s.reset_input()
     elif visual and isinstance(shot, tuple) and shot[0] == "snap":
         _kind, key, marker, remote = shot
-        s.read_for(0.8)
-        s.write_line(key)
-        got = _read_until(s, marker, 30.0)
-        seen = marker.encode() in got
-        c.check("%s acknowledged snap key %r" % (app, key), seen, _tail(got))
+        for attempt in range(2):
+            s.read_for(0.8)
+            s.write_line(key)
+            got = _read_until(s, marker, 20.0)
+            seen = marker.encode() in got
+            # Record every attempt: a first failure stays red even if the
+            # second snap lands (no retry-masked green).
+            c.check("%s snap key %r attempt %d" % (app, key, attempt + 1),
+                    seen, _tail(got))
+            if seen:
+                break
         identity_ok = identity_ok and seen
         source = "app snapshot " + remote
 
