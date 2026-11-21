@@ -19,7 +19,7 @@ rem    :paths          default APPDRIVE/APPROOT when a script runs outside
 rem                    the shell's .bat launcher (apps use %APPDRIVE% instead
 rem                    of a hardcoded sd:/ so they run from SD or USB)
 rem    :box            whole-grid frame: `:box <style> [title]`
-rem    :page           page frame: title bar on the classic grid, whole panel on a tall one
+rem    :page           page frame across the whole grid (title in the top border)
 rem    :bar            full-width bar at an authored row: `:bar <y> <h> <style> [title]`
 rem    :panel          full-width panel that grows into the extra panel rows
 rem    :footer         full-width panel pinned to the bottom edge
@@ -61,9 +61,8 @@ rem reference board, 80x97 on the 720x1280 portrait panel). These are the one
 rem set of frame/width/height helpers every reference app uses:
 rem
 rem   :box    <style> [title]          frame across the whole grid
-rem   :page   <style> [title]          page frame: the title bar on the classic
-rem                                    grid (3 rows), the whole panel on a tall
-rem                                    (portrait) grid
+rem   :page   <style> [title]          page frame across the whole live grid;
+rem                                    the title sits in the top border
 rem   :bar    <y> <h> <style> [title]  full-width bar at the authored row
 rem   :panel  <y> <h> <style> [title]  full-width panel that grows into the
 rem                                    extra panel rows (h is the height on the
@@ -91,17 +90,16 @@ if "%TUIROWS%"=="" set TUIROWS=25
 draw box 1 1 %TUICOLS% %TUIROWS% %1 %2
 goto :eof
 
-rem Page frame for a page whose only chrome is its title bar (a menu page
-rem whose content is the modal list): the title bar on the classic landscape
-rem grid, the whole panel on a tall (portrait) grid - "taller than it is
-rem wide" is what makes a grid portrait-shaped. Landscape therefore keeps the
-rem authored 3-row bar and portrait gets a page that fills the panel.
+rem Page frame: the whole live grid, on both panel shapes. Callers put their
+rem content at rows 5+ (and some at the bottom edge), so a 3-row title bar on
+rem the classic 80x25 grid framed nothing - the prose/bars sat outside the
+rem box and the rest of the page looked empty. Drawing the full grid keeps the
+rem title in the top border on every panel and gives tall panels the same
+rem full-height page they already had (TUIROWS=97 on the portrait board).
 :page
 if "%TUICOLS%"=="" set TUICOLS=80
 if "%TUIROWS%"=="" set TUIROWS=25
-set PH=3
-if %TUIROWS% GTR %TUICOLS% set PH=%TUIROWS%
-draw box 1 1 %TUICOLS% %PH% %1 %2
+draw box 1 1 %TUICOLS% %TUIROWS% %1 %2
 goto :eof
 
 rem Full-width bar at an authored row/height (title bars, help bars): the

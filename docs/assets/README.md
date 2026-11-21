@@ -8,7 +8,16 @@ Committed, curated screenshots for the public docs. This folder is the
 - Everything in this folder is committed: keep it small. Store **PNG only**
   (no 1.8 MB BMPs), 1024x600 native panel size, descriptive kebab-case names.
 
-## Naming convention
+## Live proof
+
+`docs/assets/proof/` holds the required live-browser proof: a panel capture of
+`https://en.wikipedia.org/wiki/ESP32` rendered over HTTPS on the device, the
+matching `tui dump` transcript, and the same app screenshot published as
+`apps/web.png`. `s21_wikipedia` stages these under `screenshots/proof/` and
+`tools/publish_proof.py` is the only publish path. The live leg is mandatory:
+a gate that skips it is a failure, not a pass.
+
+## App captures
 
 `<surface>-<subject>.png` — the name must say what the shot shows:
 

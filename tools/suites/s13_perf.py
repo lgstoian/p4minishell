@@ -23,7 +23,7 @@ import time
 
 from p4test import screenshot as p4shot
 from p4test.asserts import Checklist
-from p4test.perf import measure_markers, parse_perf_report
+from p4test.perf import parse_perf_report, run_timed
 from p4test.session import PanicError
 
 NAME = "perf"
@@ -198,8 +198,14 @@ def run(dev, ctx):
 
     _deploy(dev, c, FILES)
 
-    # -- BOUNCE: firmware-measured gfx frame pacing ---------------------------
-    out = _run(dev, c, "bounce", "launch BOUNCE", timeout=200)
+    # -- BOUNCE: firmware stats + host-timed frame markers in ONE run --------
+    # The old suite launched BOUNCE twice: once for the gfx stats below and a
+    # second time (measure_markers, 11 s) just to timestamp [M-BOUNCE-FRAME]
+    # lines. run_timed keeps the same marker-synchronised run - so every check
+    # below still sees the identical output - and timestamps the frame markers
+    # from that single launch instead. No assertion is dropped or weakened.
+    out, marks = run_timed(dev, "launch BOUNCE", marker="[M-BOUNCE-FRAME]",
+                           duration=11.0, timeout=200.0, target_fps=30)
     c.expect("bounce start marker", "[M-BOUNCE]", out)
     c.expect("bounce done marker", "[M-BOUNCE-DONE]", out)
 
@@ -219,9 +225,6 @@ def run(dev, ctx):
 
     # -- BOUNCE: host-timed [M-BOUNCE-FRAME] markers --------------------------
     if not quick:
-        marks = measure_markers(dev.session, "launch BOUNCE",
-                                marker="[M-BOUNCE-FRAME]",
-                                duration=11.0, target_fps=30)
         _run(dev, c, "shell after marker run", "echo p4perfok", timeout=60)
         c.check("bounce frame markers timed", marks.frames >= 2, marks.as_text())
         c.note("BOUNCE marker pacing: " + marks.as_text())

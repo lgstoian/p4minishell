@@ -103,6 +103,15 @@ These are the host-side systems behind [`AGENTS.md`](../AGENTS.md),
   tests, missing test `CMakeLists.txt` entries, zero-check `Checklist`s, and
   tautological checks. `--strict` promotes warnings; `--json` writes a report.
   `p4test_run.py --static` runs it with the comment/breadcrumb gates.
+- `gallery_audit.py` — identity gate over the committed
+  `docs/assets/apps/*.png`: rejects a capture that carries the shell's
+  header/prompt/keyboard chrome or duplicates another app's pixels (the defect
+  that shipped shell screenshots as app images in v1.4.3). Wired into
+  `tools/harness/verify.py` as the `gallery identity` gate.
+- `gallery_audit_selftest.py` — red canary for that gate: synthesizes a shell
+  dump and a duplicate and requires the audit to reject both (and accept a
+  clean set), so a silently broken guard cannot stay green. Also wired into
+  `tools/harness/verify.py`.
 
 The p4test runner also treats a zero-assertion `Checklist`/`SuiteResult` as a
 failure at run time, so a suite that asserts nothing can never report green.

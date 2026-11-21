@@ -31,12 +31,16 @@ last campaign:
   to close:** three consecutive clean full `p4test_run <COMx>` sweeps on both
   boards plus a `dogfood` soak, recorded in `bugs.md`. See
   [`bugs.md`](bugs.md) F27 for the current evidence and next experiment.
-- **Deferred-hardware items** — features marked "build-verified, on-device
-  verification deferred" in [`changelog.md`](changelog.md) (captive portal, TLS
-  `CERTS` store, BLE HID host, serial PIM sync, record editing, the `sync` USB
-  handshake, the `net` MQTT event service + SD outbox, and the batch/redirection
-  DOS-parity rounds). Either verify them on hardware before release or label
-  them **experimental** in the release notes. Do not present them as verified.
+- **Deferred-hardware items** — features whose on-device acceptance is still
+  open in [`changelog.md`](changelog.md): captive portal, TLS `CERTS` store,
+  BLE HID host, serial PIM sync, and record editing. The v1.3.0 bring-up round
+  exercised some focused paths (portal timeout/TX-cap, CERTS PEM/DER activation,
+  BLE mouse), but none has a full acceptance gate; verify them on hardware
+  before release or label them **experimental** in the release notes. Do not
+  present them as verified. The `sync` USB handshake, the `net` MQTT event
+  service with SD outbox, and the batch/redirection DOS-parity rounds were
+  **shipped and hardware-verified in v1.3.0** (see [`readme.md`](readme.md))
+  and are no longer deferred.
 - **No open build warnings** — zero compiler warnings on both boards and the
   `test/` app is a gate, not a goal.
 - **No build artifacts tracked in git** — `.gitignore` covers `build/`,
@@ -66,6 +70,8 @@ last campaign:
    python tools/comment_index.py
    python tools/breadcrumbs.py
    python tools/green_guard.py --strict
+   python tools/gallery_audit.py           # gallery identity + uniqueness
+   python tools/gallery_audit_selftest.py  # red canary for that identity gate
    ```
 3. **Version freeze** — update, in one change:
    - `p4minishell_config.h` `P4_CONFIG_VERSION_{MAJOR,MINOR,PATCH}` (+ the
@@ -260,6 +266,10 @@ the archive tool, not a golden image.
 - [`SECURITY.md`](SECURITY.md) current (lock, secrets, TLS, httpd scope).
 - `test/README.md` and `harness.md` counts refreshed from the hardware run
   (they drift when new tests land).
+- Gallery captures re-checked with `python tools/gallery_audit.py` and
+  `python tools/gallery_audit_selftest.py` (the red canary); both are wired into
+  `tools/harness/verify.py` as static gates, so a shell screenshot published as
+  an app image fails the release.
 - `roadmap.md` curated (completed work folded into history, open items listed).
 
 ---
@@ -277,8 +287,10 @@ Release is ready when **all** boxes below are true:
       `python tools/screenshot_gate.py`; the browser dashboard shot comes from
       `s20_website`).
 - [ ] `p4test` full sweep + `regression.py` + `boot_regression` green on both boards.
-- [ ] F27 closed (or the release explicitly documents it as a known issue with a
-      repro) and deferred-hardware features verified or labelled experimental.
+- [ ] F27 is closed (resolved in v1.3.0; the three consecutive clean full
+      sweeps on both boards plus the dogfood soak are recorded in
+      [`bugs.md`](bugs.md)) and the genuinely deferred-hardware features are
+      verified or labelled experimental.
 - [ ] `make_release.py bins/c6/srczip/manifest` produced `release/` artifacts
       (including the per-board `esp32c6_hosted_slave-<board>.bin`) and
       `SHA256SUMS` verifies.

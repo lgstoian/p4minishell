@@ -82,8 +82,10 @@ Run these before a hardware run (or in CI without a board):
 python tools/green_guard.py            # false-green / false-positive tests
 python tools/comment_index.py          # machine-readable tags + layering
 python tools/breadcrumbs.py            # breadcrumb map validity
-python tools/harness/verify.py         # on-disk invariants
-# all three through the runner, no board:
+python tools/harness/verify.py         # on-disk invariants, incl. gallery identity
+python tools/gallery_audit.py          # gallery PNG identity + uniqueness
+python tools/gallery_audit_selftest.py # red canary: the identity guard must go red
+# all of the above through the runner, no board:
 python tools/p4test_run.py --static
 ```
 
@@ -207,6 +209,7 @@ Suites (`tools/suites/sNN_*.py`) and what they cover:
 | `s08_display` | `draw`/`tui`/`gfx`/`plot`/`font`/`theme`/header/cursor + screenshot invariants |
 | `s09_editor` | the `edit` editor surfaces and save round-trips, the spell user dictionary (`\spell-add` learn, `spell list/forget`), and the autosave/`recover` crash round-trip |
 | `s10_input_ui` | keyboard pages, `ui` synthetic touch/key, modals, HID mouse cursor/click toggles + status, hyperlinks (`link`/`ui links`/`ui link` tap-confirm) + serial cursor simulation (`usb mouse move`/`click`, `Device.cursor_move/cursor_click`) |
+| `s11_chat` | the `chat` verb surface on one board (argument validation, `peer`/`onmsg` round-trip, no SoftAP); the two-board host↔peer exchange lives in the focused `tools/chat_test.py` driver |
 | `s11_connectivity` | Wi-Fi, `ipconfig`/`netstat`/`ping`/`dns`, `httpd`/`httpget`, USB, BT, `c6ota status` |
 | `s12_power_audio` | audio (`status` route/jack, `output` mode + `/b` + `/v:`, generated-WAV `wavplay`, `CONFIG AUDIO_OUTPUT` persist), `battery`, `power`, `gpio`/`pwm`/`adc`/`i2c`, SPI master (`status`/`peek`/`poke`/`loopback`, C6 stays alive), RGB LED (skipped if absent) |
 | `s13_perf` | frame pacing (`gfx stats`/`tui stats`) and app animation |
@@ -221,6 +224,9 @@ Suites (`tools/suites/sNN_*.py`) and what they cover:
 | `s22_canvas` | the HTML5 subset gate: renders `apps/website/canvas.html` (CSS page/banner backgrounds + a 96x48 canvas drawn through the 2D context), asserts the canvas width/height reached JS, the bitmap replaced the fallback, the red/green/cyan colour runs and pixels, background pixels, no panic, and a BMP capture |
 | `s23_apps_usb` | the drive-aware apps gate: installs the fixture and HYBRID under `usb:/APPS`, asserts `launch /list` discovers them, that `%APPDRIVE%`/`%APPROOT%`/`%APPNAME%` report the USB root, that the same app on SD reports `sd:`, and that HYBRID completes from USB. **Requires a mounted USB stick**; without one it reports an explicit skip (0 checks, no false green) so the rest of the full tier can run |
 | `s24_render_alpha` | the v1.4.3 presentation gate: launches TCMD three times (opaque, opaque control, `alpha=40%`/`scrim=40%`), snapshots its TUI with the documented `p` snap key, and asserts the two opaque runs are pixel-identical while the translucent run blends the surface background across the screen without changing content or text ink; restores the installed `TCMD.APPINFO`; opens a real `dialog /t:3` with `scrim` set (host capture while the modal is up, no panic); asserts `draw text "😀"` stores the retro U+263A glyph by comparing panel snapshots against a literal U+263A page and a cleared cell. **Reboots first** (the transcript surface keeps stale LVGL background state across a session) |
+| `s25_apps_gallery` | the docs gallery: drives every reference app to its main screen, asserts each capture's identity, ink and theme, and stages PNGs for `tools/publish_gallery.py`; the committed captures are re-checked by `tools/gallery_audit.py` with `tools/gallery_audit_selftest.py` as its red canary |
+| `s26_portrait` | portrait geometry and runtime rotation on the Tab5: grid resolve (80 columns, extra rows), surface/modal fill, reflow through `rotate 90`/`rotate 0`, touch after rotation, and PSRAM stability over five rotate cycles |
+| `s27_apps_layout` | pins app layout to the live grid: no hard-coded 80x25 draw geometry, ≥60 % panel fill in portrait, and the classic 80-column frame preserved in landscape |
 
 The framework (`tools/p4test/`): `session.py` (DTR-safe open, marker-synced
 `run()`, panic detection, byte-exact `BMPX`/`SDFX` framing, ANSI+OSC 8 strip
@@ -313,6 +319,14 @@ logic (`tools/README.md` has the full list).
 | `tools/dogfood.py COM3 --minutes 15` | autonomous curious-user drive; screenshots every action, journals anomalies |
 | `tools/completion_test.py`, `editor_test.py`, `header_test.py`, `plot_test.py`, `theme_test.py` | focused subsystem drivers |
 
+### Live-browser proof (hard gate)
+
+`s21_wikipedia` must run with `P4_WIFI_LIVE=1`. It fetches the real HTTPS
+Wikipedia page, requires a full render (a size-cap degradation is not
+accepted as proof), and stages `screenshots/proof/wikipedia_live.png`,
+`web.png` and `wikipedia_live.txt`. A skipped live leg fails the suite.
+`tools/publish_proof.py` copies the proof into `docs/assets/proof/`.
+
 ### Present-level diagnostics (what the glass shows)
 
 `docs` screenshots and `screenshot <file>` re-render the LVGL object tree, so
@@ -340,6 +354,12 @@ as a blue flash whenever the row reappeared). Three places enforce it:
 - `tools/check_assets.py` - scans the committed `docs/assets/apps/*.png` and
   `shell-idle.png`; wired into `tools/harness/verify.py` as the `ui colours`
   gate.
+- `tools/gallery_audit.py` - identity-by-exclusion (no shell header/prompt/keyboard
+  chrome) plus near-duplicate detection over the committed gallery; wired into
+  `tools/harness/verify.py` as the `gallery identity` gate.
+- `tools/gallery_audit_selftest.py` - the red canary: synthesizes a shell dump
+  and a duplicate and fails unless the audit rejects both (and accepts a clean
+  set). A guard never seen failing is not a guard.
 - `s25_apps_gallery` - one check per app capture (live, so a regression fails
   the suite before a PNG is published).
 - `dogfood.py` - journals a HIGH `unstyled-widget` anomaly (with the colour,

@@ -65,17 +65,17 @@ def run(dev, ctx):
     # --- live broker checks (notes when unreachable) ---------------------
     dev.run("net disconnect")
     out = dev.run("net connect", timeout=30)
-    live = False
     if getattr(dev, "_no_broker", False):
         c.note("no broker reachable (cached from an earlier suite); live "
                "publish/loopback skipped")
         return c
-    for _ in range(12):
-        time.sleep(5)
-        st = dev.run("net status /b")
-        if "connected" in st.splitlines()[0]:
-            live = True
-            break
+    # One read is enough: `net status /b` reports netsvc_state_string() on its
+    # first line, which is exactly "connected" when the session is up. The old
+    # 12x5 s poll only re-read that same value; it cannot turn a stale
+    # "not connected" into a pass without the broker having connected.
+    st = dev.run("net status /b")
+    state_lines = st.splitlines()
+    live = bool(state_lines) and "connected" in state_lines[0]
     if not live:
         dev._no_broker = True
         c.note("no broker reachable: live publish/loopback skipped")
@@ -87,11 +87,11 @@ def run(dev, ctx):
     out = dev.run("net pub %s P4NETLOOP" % FILTER, timeout=60)
     c.expect("publish live", "live", out)
     got = ""
-    for _ in range(12):
-        time.sleep(5)
+    deadline = time.time() + 60.0
+    while time.time() < deadline and "P4NETLOOP" not in got:
         got = dev.run("net msg /b", timeout=30)
-        if "P4NETLOOP" in got:
-            break
+        if "P4NETLOOP" not in got:
+            time.sleep(0.3)
     c.expect("inbound loopback", "P4NETLOOP", got)
 
     # --- cleanup ----------------------------------------------------------

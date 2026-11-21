@@ -15,6 +15,16 @@ rem The Tools panel takes the extra rows; Status stays on the bottom rows.
 if "%TUICOLS%"=="" set TUICOLS=80
 if "%TUIROWS%"=="" set TUIROWS=25
 set /a SY=%TUIROWS%-8 > NUL
+rem The Messaging help lines are authored at rows 15..22 of the 80x25 grid.
+set NX=0
+if %TUIROWS% GTR 25 set /a NX=%TUIROWS%-26 > NUL
+set /a N15=15+%NX% > NUL
+set /a N16=16+%NX% > NUL
+set /a N17=17+%NX% > NUL
+set /a N18=18+%NX% > NUL
+set /a N19=19+%NX% > NUL
+set /a N20=20+%NX% > NUL
+set /a N22=22+%NX% > NUL
 draw clear screen
 gosub %APPROOT%/APPLIB.BAT::bar 1 3 single
 draw text 32 2 "NETWORK TOOLS ★" 14
@@ -132,13 +142,13 @@ draw text 31 2 "MESSAGING (MQTT)" 14
 gosub %APPROOT%/APPLIB.BAT::bar 4 8 single "Service"
 net status
 gosub %APPROOT%/APPLIB.BAT::panel 13 10 single "Try it"
-draw text 5 15 "net broker <host> [port] [user]   set the broker"
-draw text 5 16 "net password                       set credentials"
-draw text 5 17 "net connect | net disconnect       control the session"
-draw text 5 18 "net sub p4/demo/#                  subscribe"
-draw text 5 19 "net pub p4/demo/heartbeat hi       publish"
-draw text 5 20 "net msg | net outbox               last message / queue"
-draw text 5 22 "Offline publishes queue in the SD outbox."
+draw text 5 %N15% "net broker <host> [port] [user]   set the broker"
+draw text 5 %N16% "net password                       set credentials"
+draw text 5 %N17% "net connect | net disconnect       control the session"
+draw text 5 %N18% "net sub p4/demo/#                  subscribe"
+draw text 5 %N19% "net pub p4/demo/heartbeat hi       publish"
+draw text 5 %N20% "net msg | net outbox               last message / queue"
+draw text 5 %N22% "Offline publishes queue in the SD outbox."
 net outbox /b
 echo [M-NET-OUTBOX]
 rem A list modal (not a pause) so the messaging page can be captured by the

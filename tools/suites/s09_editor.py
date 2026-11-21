@@ -112,7 +112,9 @@ def run(dev, ctx):
         a_lines = ["EDITOR SUITE FILE A", "SECOND LINE", "THIRD LINE", "END OF FILE A"]
         dev.push_file(FILE_A, ("\r\n".join(a_lines) + "\r\n").encode())
 
-        dev.send("edit %s" % FILE_A, 6.0)
+        # The open is confirmed by the _wait_editor state poll below, so the
+        # raw send only needs to clear the serial line, not a blind 6 s.
+        dev.send("edit %s" % FILE_A, 0.6)
         st = _wait_editor(dev, "open", timeout=15)
         c.check("editor opened", st == "open", "state=%r" % st)
         small_state = _ui_state(dev)
@@ -144,7 +146,7 @@ def run(dev, ctx):
         # Find is prompt-driven: `\f` then the needle on the next line.
         dev.send("\\f", 1.5)
         dev.send("SECOND", 2.0)
-        dev.send("\\s", 6.0)
+        dev.send("\\s", 0.6)  # _wait_field below polls modified=0
         c.check("editor clean after save",
                 _wait_field(dev, "modified", "0", timeout=10) == "0",
                 "state=%r" % _ui_state(dev)[-160:])
@@ -169,7 +171,7 @@ def run(dev, ctx):
             # A stale crash file would open a recover prompt over the buffer.
             dev.run("recover clear", timeout=20)
             dev.run("del /f %s" % FILE_C, timeout=20)
-            dev.send("edit", 8.0)
+            dev.send("edit", 0.6)  # _wait_editor below owns the open deadline
             opened = _wait_editor(dev, "open", timeout=20) == "open"
             if not opened:
                 continue
@@ -188,7 +190,8 @@ def run(dev, ctx):
                 dev.session.write(b"\x03")
             except Exception:  # noqa: BLE001
                 pass
-            time.sleep(2.0)
+            # Poll for the shell/editor to settle instead of a blind 2 s.
+            _wait_editor(dev, "closed", timeout=2.0)
         c.check("unnamed editor opened", opened,
                 "state=%r" % _ui_state(dev)[-160:])
         c.check("editor closed after save-as", closed,
@@ -202,7 +205,7 @@ def run(dev, ctx):
         # 2. Edit-page / nav-page serial verbs smoke
         # =================================================================
         c.note("editor: nav/edit verb smoke")
-        dev.send("edit %s" % FILE_D, 6.0)
+        dev.send("edit %s" % FILE_D, 0.6)  # state poll below owns the deadline
         c.check("editor reopened", _wait_editor(dev, "open", timeout=15) == "open",
                 "state=%r" % _ui_state(dev)[-160:])
         dev.send("ECHO HI", 1.5)
@@ -222,7 +225,7 @@ def run(dev, ctx):
                       for i in range(BIG_LINES))
         dev.push_file(FILE_BIG, big.encode())
 
-        dev.send("edit %s" % FILE_BIG, 12.0)
+        dev.send("edit %s" % FILE_BIG, 0.6)  # _wait_editor owns the 25 s load
         st = _wait_editor(dev, "open", timeout=25)
         c.check("big editor opened", st == "open", "state=%r" % st)
         if st == "open":
@@ -234,7 +237,7 @@ def run(dev, ctx):
             dev.send("\\g", 2.0)
             dev.send(str(BIG_LINES), 5.0)
             dev.send(BIG_MARK, 2.0)
-            dev.send("\\s", 8.0)
+            dev.send("\\s", 0.6)  # _wait_field below polls modified=0
             _wait_field(dev, "modified", "0", timeout=25)
             dev.send("\\q", 8.0)
             dev.send("y", 3.0)
@@ -252,7 +255,7 @@ def run(dev, ctx):
         # =================================================================
         c.note("editor: spell user dictionary")
         dev.push_file(FILE_E, b"RECOVER BASE LINE\n")
-        dev.send("edit %s" % FILE_E, 6.0)
+        dev.send("edit %s" % FILE_E, 0.6)  # _wait_editor below owns the deadline
         c.check("spell editor opened",
                 _wait_editor(dev, "open", timeout=15) == "open",
                 "state=%r" % _ui_state(dev)[-160:])
@@ -275,7 +278,7 @@ def run(dev, ctx):
 
         # Autosave: type without saving, let the crash file land, quit
         # discarding, then recover the unsaved content back.
-        dev.send("edit %s" % FILE_E, 6.0)
+        dev.send("edit %s" % FILE_E, 0.6)  # _wait_editor below owns the deadline
         c.check("recover editor opened",
                 _wait_editor(dev, "open", timeout=15) == "open",
                 "state=%r" % _ui_state(dev)[-160:])

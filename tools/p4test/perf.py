@@ -95,6 +95,28 @@ def parse_perf_report(text: str) -> Optional[FrameStats]:
     return stats
 
 
+def _stamps_stats(stamps: List[float],
+                  target_fps: Optional[float] = None) -> FrameStats:
+    """Turn host timestamps of successive frame markers into ``FrameStats``."""
+    stats = FrameStats()
+    if len(stamps) >= 2:
+        intervals = [(stamps[i + 1] - stamps[i]) * 1000.0
+                     for i in range(len(stamps) - 1)]
+        stats.frames = len(stamps)
+        stats.duration_s = stamps[-1] - stamps[0]
+        stats.interval_ms_min = min(intervals)
+        stats.interval_ms_max = max(intervals)
+        stats.interval_ms_avg = sum(intervals) / len(intervals)
+        mean = stats.interval_ms_avg
+        stats.jitter_ms = math.sqrt(
+            sum((iv - mean) ** 2 for iv in intervals) / len(intervals))
+        limit = (1000.0 / target_fps) * 1.6 if target_fps else mean * 1.6
+        stats.dropped = sum(1 for iv in intervals if iv > limit)
+    elif stamps:
+        stats.frames = len(stamps)
+    return stats
+
+
 def measure_markers(dev: DeviceSession, launch_cmd: str,
                     marker: str = "[M-FRAME]",
                     duration: float = 8.0,
@@ -115,20 +137,45 @@ def measure_markers(dev: DeviceSession, launch_cmd: str,
             line, buf = buf.split(b"\n", 1)
             if marker.encode() in line:
                 stamps.append(time.time())
-    stats = FrameStats()
-    if len(stamps) >= 2:
-        intervals = [(stamps[i + 1] - stamps[i]) * 1000.0
-                     for i in range(len(stamps) - 1)]
-        stats.frames = len(stamps)
-        stats.duration_s = stamps[-1] - stamps[0]
-        stats.interval_ms_min = min(intervals)
-        stats.interval_ms_max = max(intervals)
-        stats.interval_ms_avg = sum(intervals) / len(intervals)
-        mean = stats.interval_ms_avg
-        stats.jitter_ms = math.sqrt(
-            sum((iv - mean) ** 2 for iv in intervals) / len(intervals))
-        limit = (1000.0 / target_fps) * 1.6 if target_fps else mean * 1.6
-        stats.dropped = sum(1 for iv in intervals if iv > limit)
-    elif stamps:
-        stats.frames = len(stamps)
-    return stats
+    return _stamps_stats(stamps, target_fps)
+
+
+def run_timed(dev: DeviceSession, cmd: str, marker: str, duration: float,
+              timeout: float = 200.0,
+              target_fps: Optional[float] = None):
+    """Run one marker-synchronised command and time ``marker`` lines in it.
+
+    This is the single-launch replacement for ``run()`` followed by a separate
+    ``measure_markers()`` launch: the command's own output (firmware stats,
+    start/done markers) and the host-timed frame stamps come from the SAME run.
+
+    ``DeviceSession.run`` is left untouched - its marker sync, panic detection,
+    boot-cause tracking and timeout still apply. A thin wrapper on the
+    instance's ``_read_serial`` only timestamps each newly seen marker line,
+    and is always removed in ``finally``. Stamps stop after ``duration``
+    seconds so the timing window matches the old second-launch measurement.
+    """
+    stamps: List[float] = []
+    start = time.time()
+    # `dev` is normally the Device facade, whose .session owns _read_serial;
+    # accept a bare DeviceSession too.
+    session = dev.session if hasattr(dev, "session") else dev
+    original = session._read_serial
+    needle = marker.encode()
+
+    def watched(n: int, wait: float) -> bytes:
+        chunk = original(n, wait)
+        if chunk and time.time() - start <= duration:
+            count = chunk.count(needle)
+            for _ in range(count):
+                # One stamp per new marker line; a line split across reads is
+                # counted when it completes, exactly as in measure_markers.
+                stamps.append(time.time())
+        return chunk
+
+    session._read_serial = watched
+    try:
+        out = dev.run(cmd, timeout=timeout)
+    finally:
+        session._read_serial = original
+    return out, _stamps_stats(stamps, target_fps)

@@ -12,6 +12,20 @@ setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-MOOD]
 title "Mood"
+rem Layout: the trend bars are authored for rows 8..12 of the 80x25 grid.
+rem Shifting by half the extra rows centres the block on an 80x97 panel
+rem without moving a single row on landscape. Bar width/label follow TUICOLS.
+if "%TUICOLS%"=="" set TUICOLS=80
+if "%TUIROWS%"=="" set TUIROWS=25
+set /a MO=(%TUIROWS%-25)/2 > NUL
+set /a BW=%TUICOLS%-40 > NUL
+set /a LX=14+%BW%+4 > NUL
+set /a TRH=2+%MO% > NUL
+set /a S5=5+%MO% > NUL
+set /a S6=6+%MO% > NUL
+set /a S7=7+%MO% > NUL
+set /a S8=8+%MO% > NUL
+set /a S9=9+%MO% > NUL
 draw fullscreen on
 goto menu
 
@@ -37,7 +51,7 @@ goto :live_loop
 :live_trend
 draw clear screen
 gosub %APPROOT%/APPLIB.BAT::page double "MOOD TREND"
-draw text 5 2 "heap free percent per sample" 14
+draw text 5 %TRH% "heap free percent per sample" 14
 for /A %%k in (SAMPLE) do call :barline %%k %%l
 draw refresh
 rem Save the trend page for the docs gallery before the dialog covers it.
@@ -72,30 +86,30 @@ echo [M-MOOD-SAMPLE]
 echo heap %heapf%/%heapt% pct %pct%
 draw clear screen
 gosub %APPROOT%/APPLIB.BAT::page double "MOOD SAMPLE"
-draw text 5 5 "heap free %heapf% / %heapt% bytes = %pct pct%" 14
+draw text 5 %S5% "heap free %heapf% / %heapt% bytes = %pct pct%" 14
 rem %DATE%/%TIME% are the auto-synced local clock (SNTP + detected timezone).
-draw text 5 6 "local %DATE% %TIME%" 7
+draw text 5 %S6% "local %DATE% %TIME%" 7
 if %pct% GEQ 80 goto mood_calm
 if %pct% GEQ 50 goto mood_ok
 if %pct% GEQ 20 goto mood_tense
 goto mood_low
 :mood_calm
-draw text 5 7 "mood: CALM" 10
+draw text 5 %S7% "mood: CALM" 10
 rgb 0 255 0
 tone 523 120
 goto live_done
 :mood_ok
-draw text 5 7 "mood: CONTENT" 11
+draw text 5 %S7% "mood: CONTENT" 11
 rgb 0 0 255
 tone 659 120
 goto live_done
 :mood_tense
-draw text 5 7 "mood: TENSE" 14
+draw text 5 %S7% "mood: TENSE" 14
 rgb 255 165 0
 tone 440 180
 goto live_done
 :mood_low
-draw text 5 7 "mood: STRAINED" 12
+draw text 5 %S7% "mood: STRAINED" 12
 rgb 255 0 0
 tone 220 250
 goto live_done
@@ -104,10 +118,10 @@ return
 
 :barline
 rem %1 = sample index, %2 = pct; one trend bar per sample.
-set /a my=7+%1
+set /a my=7+%MO%+%1
 draw text 2 %my% "sample %1"
-draw bar 14 %my% 40 %2 # . 10 0
-draw text 58 %my% "%2 pct" 7
+draw bar 14 %my% %BW% %2 # . 10 0
+draw text %LX% %my% "%2 pct" 7
 return
 
 :rgb_demo
@@ -155,16 +169,16 @@ for /f "eol= tokens=1,2 delims==" %%a in (sd:/MOODLAST.INI) do if "%%a"=="heap_f
 for /f "eol= tokens=1,2 delims==" %%a in (sd:/MOODLAST.INI) do if "%%a"=="heap_total" set svct=%%b
 for /f "eol= tokens=1,2 delims==" %%a in (sd:/MOODLAST.INI) do if "%%a"=="pct" set svcp=%%b
 echo [M-MOOD-SVC]
-draw text 5 5 "sampler heap %svcf% / %svct% = %svcp pct%" 14
-draw bar 14 7 40 %svcp% # . 10 0
-draw text 5 9 "Press any key..." 7
+draw text 5 %S5% "sampler heap %svcf% / %svct% = %svcp pct%" 14
+draw bar 14 %S7% %BW% %svcp% # . 10 0
+draw text 5 %S9% "Press any key..." 7
 pause
 goto menu
 :svcnone
 echo [M-MOODSVC-NONE]
-draw text 5 5 "no sampler running" 12
-draw text 5 6 "install: service install moodsampler MOODSVC /restart" 7
-draw text 5 8 "Press any key..." 7
+draw text 5 %S5% "no sampler running" 12
+draw text 5 %S6% "install: service install moodsampler MOODSVC /restart" 7
+draw text 5 %S8% "Press any key..." 7
 pause
 goto menu
 

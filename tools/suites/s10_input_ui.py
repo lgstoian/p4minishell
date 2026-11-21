@@ -95,7 +95,7 @@ def _console(dev, line, settle=1.0):
                         ("ui.hit:" in text) or ("ui.selection:" in text)
             if has_reply and quiet_since is None:
                 quiet_since = time.time()
-            elif quiet_since is not None and time.time() - quiet_since > settle:
+            elif quiet_since is not None and time.time() - quiet_since > 0.25:
                 break
     return bytes(buf).decode("utf-8", "replace")
 
@@ -365,7 +365,15 @@ def run(dev, ctx):
                 "ghost=%r state=%s" % (ghost, typed[-200:]))
         # Submit the pending input line (OSK enter) so the shell starts clean.
         dev.run("ui key \uf8a2", timeout=15)
-        time.sleep(0.8)
+        # Poll the published input line back to the bare prompt instead of a
+        # blind 0.8 s; the same 8 s cap as the clearing loops above.
+        deadline = time.time() + 8.0
+        while time.time() < deadline:
+            st = _ui_state(dev)
+            cur = (_between(st, "input", "ghost") or "").rstrip()
+            if cur in ("", "PS /sdcard>", "PS /sdcard> "):
+                break
+            time.sleep(0.25)
         dev.read_for(0.5)
 
         # =================================================================
@@ -533,9 +541,16 @@ def run(dev, ctx):
         dev.session.write_line("view %s" % sel_file)
         st = _wait_modal(dev, "viewer", timeout=10)
         c.check("viewer opened for selection", st == "viewer", "modal=%r" % st)
-        # Let the panel finish its open transition before reading geometry.
-        time.sleep(1.0)
-        ta = textarea_target() if st == "viewer" else None
+        # Let the panel finish its open transition: poll its published target
+        # list instead of a blind 1 s. The assertion below is unchanged.
+        ta = None
+        if st == "viewer":
+            deadline = time.time() + 1.0
+            while time.time() < deadline:
+                ta = textarea_target()
+                if ta is not None:
+                    break
+                time.sleep(0.25)
         c.check("viewer textarea target found", ta is not None)
         if ta is not None:
             x_left = ta["x"] + 6
@@ -563,8 +578,14 @@ def run(dev, ctx):
             # to past line 2, so a point near the top-left is inside it.
             dev.session.write_line("view %s" % sel_file)
             st = _wait_modal(dev, "viewer", timeout=10)
-            time.sleep(1.0)
-            ta = textarea_target() if st == "viewer" else None
+            ta = None
+            if st == "viewer":
+                deadline = time.time() + 1.0
+                while time.time() < deadline:
+                    ta = textarea_target()
+                    if ta is not None:
+                        break
+                    time.sleep(0.25)
             if ta is not None:
                 drag(ta["x"] + 6, ta["y"] + 6,
                      ta["x"] + 6, ta["y"] + ta["h"] // 2)

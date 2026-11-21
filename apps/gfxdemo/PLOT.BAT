@@ -13,7 +13,10 @@ calc /rad
 gfx init 320 200
 if errorlevel 1 goto :nofx
 gfx clear 0
-plot window -6.28 6.28 -1.6 1.6
+rem Nudge the x window just past 2 full periods: at exactly +/-6.28 the
+rem sine endpoints land on the rightmost/leftmost tick labels ("6"/"-6")
+rem and overdraw them. Ending at +/-6.8 lifts the endpoints off the axis.
+plot window -6.8 6.8 -1.6 1.6
 plot axes /grid
 plot func "sin(X)" 15
 plot func "cos(X)" 11

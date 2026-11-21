@@ -27,20 +27,33 @@ rem %TUICOLS%/%TUIROWS% are the shell-published layout grid; the 80x25
 rem fallback keeps the app runnable outside the shell launcher.
 if "%TUICOLS%"=="" set TUICOLS=80
 if "%TUIROWS%"=="" set TUIROWS=25
+rem The eight menu lines are authored at rows 7..14 of the 80x25 grid. Step
+rem them down by the extra panel rows on a tall grid; the step is 1 on the
+rem classic 25-row panel so the authored landscape layout is unchanged.
+set /a EX=%TUIROWS%-25 > NUL
+set /a DS=1+%EX%/8 > NUL
+set /a R7=7 > NUL
+set /a R8=7+%DS% > NUL
+set /a R9=7+2*%DS% > NUL
+set /a R10=7+3*%DS% > NUL
+set /a R11=7+4*%DS% > NUL
+set /a R12=7+5*%DS% > NUL
+set /a R13=7+6*%DS% > NUL
+set /a R14=7+7*%DS% > NUL
 
 :menu
 draw clear screen
 gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "P4 DIAGNOSTICS ★"
 draw text 3 2 "System health, capabilities and frame-rate benchmark"
 gosub %APPROOT%/APPLIB.BAT::panel 5 15 single "Diagnostics"
-draw text 5 7 "Full report"
-draw text 5 8 "Identity          software / board / build"
-draw text 5 9 "System            heap + PSRAM, CPU, tasks, clock"
-draw text 5 10 "Storage           SD card, disk, recycle bin"
-draw text 5 11 "Network           Wi-Fi, DNS, sockets"
-draw text 5 12 "Devices           audio, LED, USB, battery"
-draw text 5 13 "Benchmark         graphical frame rate + jitter"
-draw text 5 14 "Capabilities      feature checklist"
+draw text 5 %R7% "Full report"
+draw text 5 %R8% "Identity          software / board / build"
+draw text 5 %R9% "System            heap + PSRAM, CPU, tasks, clock"
+draw text 5 %R10% "Storage           SD card, disk, recycle bin"
+draw text 5 %R11% "Network           Wi-Fi, DNS, sockets"
+draw text 5 %R12% "Devices           audio, LED, USB, battery"
+draw text 5 %R13% "Benchmark         graphical frame rate + jitter"
+draw text 5 %R14% "Capabilities      feature checklist"
 gosub %APPROOT%/APPLIB.BAT::footer 21 3 single
 rem The footer prompt rides inside its bar: row 22 on the 25-row grid, the
 rem matching row (TUIROWS-3) on a taller panel.

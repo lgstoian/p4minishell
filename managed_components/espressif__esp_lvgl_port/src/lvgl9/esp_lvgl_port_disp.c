@@ -5,6 +5,7 @@
  */
 
 #include <string.h>
+#include "esp_attr.h"
 #include "board_config.h"
 #include "sdkconfig.h"
 #include "esp_log.h"
@@ -97,6 +98,16 @@ static bool lvgl_port_flush_dpi_panel_ready_callback(esp_lcd_panel_handle_t pane
         esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx);
 static bool lvgl_port_flush_dpi_vsync_ready_callback(esp_lcd_panel_handle_t panel_io,
         esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx);
+/* P4MiniShell addition (tracked in tools/managed_patches.patch): the DPI bridge
+ * invokes on_vsync straight from the ISR on ESP32-P4. This weak hook lets the
+ * gfx present path blit its staged dirty rectangle into the scanned frame
+ * buffer during blanking. Everything it touches must be IRAM/internal RAM.
+ * The weak default is a no-op so an unpatched firmware is unaffected. */
+IRAM_ATTR __attribute__((weak)) void p4_gfx_panel_vsync_hook(void)
+{
+}
+static bool lvgl_port_flush_dpi_vsync_hook_callback(esp_lcd_panel_handle_t panel_io,
+        esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx);
 #endif
 #endif
 static void lvgl_port_flush_callback(lv_display_t *drv, const lv_area_t *area, uint8_t *color_map);
@@ -165,6 +176,11 @@ lv_display_t *lvgl_port_add_disp_dsi(const lvgl_port_display_cfg_t *disp_cfg,
         } else {
             cbs.on_color_trans_done = lvgl_port_flush_dpi_panel_ready_callback;
         }
+        /* P4MiniShell addition (tracked in tools/managed_patches.patch): add our
+         * blanking hook to the SAME callbacks struct. A second
+         * esp_lcd_dpi_panel_register_event_callbacks() call would replace the
+         * LVGL flush callback above and stall every present. */
+        cbs.on_vsync = lvgl_port_flush_dpi_vsync_hook_callback;
         /* Register done callback */
         esp_lcd_dpi_panel_register_event_callbacks(disp_ctx->panel_handle, &cbs, disp);
 
@@ -522,6 +538,16 @@ static bool lvgl_port_flush_dpi_panel_ready_callback(esp_lcd_panel_handle_t pane
     lv_display_t *disp_drv = (lv_display_t *)user_ctx;
     assert(disp_drv != NULL);
     lv_disp_flush_ready(disp_drv);
+    return false;
+}
+
+static bool IRAM_ATTR lvgl_port_flush_dpi_vsync_hook_callback(esp_lcd_panel_handle_t panel_io,
+        esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx)
+{
+    (void)panel_io;
+    (void)edata;
+    (void)user_ctx;
+    p4_gfx_panel_vsync_hook();
     return false;
 }
 

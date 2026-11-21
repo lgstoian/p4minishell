@@ -42,6 +42,10 @@ set /a EY1=%TUIROWS%-11 > NUL
 set /a EY2=%TUIROWS%-10 > NUL
 set /a EY3=%TUIROWS%-8 > NUL
 set /a EY4=%TUIROWS%-7 > NUL
+rem The market table used to stay at row 5 while the status block followed
+rem the panel bottom. Keep the authored 9-row gap on landscape and move the
+rem table with the status on a tall panel (row 5 at TUIROWS=25).
+set /a TY=%TUIROWS%-20 > NUL
 draw hold on
 if errorlevel 1 goto nogfx
 goto dock
@@ -56,7 +60,7 @@ echo [M-ELITE-DOCKED] %sname%
 draw clear
 gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "ELITE 🚀"
 draw text 3 2 %sname% station
-draw table 3 5 14 0 "Good|Price|Hold" "Food|%PRICE[0]%|%HOLD[0]%" "Textiles|%PRICE[1]%|%HOLD[1]%" "Computers|%PRICE[2]%|%HOLD[2]%"
+draw table 3 %TY% 14 0 "Good|Price|Hold" "Food|%PRICE[0]%|%HOLD[0]%" "Textiles|%PRICE[1]%|%HOLD[1]%" "Computers|%PRICE[2]%|%HOLD[2]%"
 draw text 3 %EY1% Credits %credits%
 draw text 3 %EY2% Hull %hull%%
 draw text 50 %EY1% Buy low

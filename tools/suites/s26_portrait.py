@@ -59,11 +59,76 @@ ROTATE_SETTLE = 3.0
 # Host helpers
 # ---------------------------------------------------------------------------
 def _console(dev, line, wait=1.2, read=0.8):
-    """Send a console-local line (works while a modal/app owns the worker)."""
+    """Send a console-local line and return its reply without a blind sleep.
+
+    These verbs are answered by the serial console reader even while a modal or
+    app owns the command worker. Read in 0.2 s slices and stop once the reply
+    has been quiet for 0.2 s instead of sleeping ``wait`` up front. The overall
+    deadline (``wait + read``) is unchanged, and ``read_for`` keeps the ANSI
+    stripping and panic analysis the old fixed read provided.
+    """
     dev.session.reset_input()
     dev.session.write_line(line)
-    time.sleep(wait)
-    return dev.session.read_for(read)
+    buf = []
+    end = time.time() + wait + read
+    quiet_since = None
+    while time.time() < end:
+        chunk = dev.session.read_for(0.2)
+        if chunk.strip():
+            buf.append(chunk)
+            quiet_since = None
+        elif buf:
+            if quiet_since is None:
+                quiet_since = time.time()
+            elif time.time() - quiet_since >= 0.2:
+                break
+    return "".join(buf)
+
+
+def _read_until(session, marker, timeout):
+    """Marker read that reports a miss as empty bytes (the caller checks)."""
+    raw = marker.encode() if isinstance(marker, str) else marker
+    try:
+        return session.read_until(raw, timeout)
+    except Exception:  # noqa: BLE001 - a missing marker is checked by the caller
+        return b""
+
+
+def _wait_modal(dev, want, timeout):
+    end = time.time() + timeout
+    state = None
+    while time.time() < end:
+        state = _modal(dev)
+        if state == want:
+            break
+        time.sleep(0.25)
+    return state
+
+
+def _wait_tui_active(dev, timeout):
+    end = time.time() + timeout
+    st = ""
+    while time.time() < end:
+        st = _status(dev)
+        if "tui active" in st:
+            break
+        time.sleep(0.25)
+    return st
+
+
+def _wait_grid(dev, angle, timeout):
+    """Poll ``tui status`` until its cells match the new orientation."""
+    def settled(cw, ch):
+        if angle == 0:
+            return cw == 8 and ch == 12
+        return cw == 12 and ch in (20, 24)
+
+    end = time.time() + timeout
+    while True:
+        _, _, cw, ch = _grid(_console(dev, "tui status", wait=0.4, read=0.4))
+        if settled(cw, ch) or time.time() >= end:
+            return
+        time.sleep(0.25)
 
 
 def _ui_state(dev):
@@ -168,7 +233,11 @@ def _tap_named(dev, c, name):
 
 
 def _rotate(dev, angle, settle=ROTATE_SETTLE):
-    out = _console(dev, "rotate %d" % angle, wait=settle, read=1.0)
+    # The reply itself is quick; the settle is for the grid reflow. Poll the
+    # published cell geometry instead of sleeping the whole settle, bounded by
+    # the same deadline. The returned text still carries "rotation set to N".
+    out = _console(dev, "rotate %d" % angle, wait=1.2, read=0.8)
+    _wait_grid(dev, angle, settle)
     return out
 
 
@@ -189,13 +258,15 @@ def run(dev, ctx):
     if (disp_w, disp_h) not in ((720, 1280), (1280, 720)):
         return SuiteResult(NAME, 0, 0, skipped=1)
     if not native_portrait:
-        dev.run("rotate 0", timeout=25, settle=2.0)
+        dev.run("rotate 0", timeout=25)
+        _wait_grid(dev, 0, 2.0)
 
     # =====================================================================
     # 1. Portrait geometry: the grid follows the aspect and fills the slot
     # =====================================================================
     c.note("portrait geometry")
-    dev.run("rotate 0", timeout=25, settle=2.0)
+    dev.run("rotate 0", timeout=25)
+    _wait_grid(dev, 0, 2.0)
     dev.run("cls", timeout=15)
     pw, ph, prot = _display(dev)
     c.check("portrait orientation is 720x1280", (pw, ph, prot) == (720, 1280, 0),
@@ -265,7 +336,8 @@ def run(dev, ctx):
     # =====================================================================
     c.note("TCMD mid-app rotation")
     dev.session.write_line("launch TCMD")
-    time.sleep(5.0)
+    # Wait for the app's own ready marker instead of a blind 5 s (same deadline).
+    _read_until(dev.session, "[M-TCMD-R]", 5.0)
     dev.session.read_for(0.6)
     tui_portrait = _shot(dev, c, "s26_tcmd_portrait")
     if tui_portrait is not None:
@@ -307,11 +379,13 @@ def run(dev, ctx):
 
     # Still the same app, still taking keys: `j` (move) then `q` (quit).
     dev.session.write_line("j")
-    time.sleep(1.0)
+    # Each app step waits for the key loop to re-arm / the exit marker rather
+    # than a fixed sleep; the three deadlines (1/2.5/1.2 s) are unchanged.
+    _read_until(dev.session, "key?", 1.0)
     dev.session.write_line("q")
-    time.sleep(2.5)
+    _read_until(dev.session, "[M-TCMD-DONE]", 2.5)
     dev.session.write_line("")
-    time.sleep(1.2)
+    _read_until(dev.session, "PS /sdcard>", 1.2)
     dev.session.read_for(1.0)
     alive = dev.run("echo S26APPOK", timeout=20)
     c.check("TCMD survived both rotations (no restart, no panic)",
@@ -323,7 +397,7 @@ def run(dev, ctx):
     c.note("dialog reflow + touch after rotation")
     _rotate(dev, 0)
     dev.session.write_line('dialog /t:40 "S26" "portrait dialog" "OK" "Cancel"')
-    time.sleep(2.5)
+    _wait_modal(dev, "dialog", 2.5)
     c.check("dialog opened in portrait", _modal(dev) == "dialog", _ui_state(dev)[-200:])
     dlg_p = _shot(dev, c, "s26_dialog_portrait")
     if dlg_p is not None:
@@ -344,14 +418,14 @@ def run(dev, ctx):
                 "panel y[%d..%d] (%.1f%%)" % (top, bot, frac))
 
     dismissed = _tap_named(dev, c, "OK")
-    time.sleep(1.0)
+    _wait_modal(dev, "none", 1.0)
     c.check("touch on OK dismisses the reflowed dialog", dismissed and _modal(dev) == "none",
             "tap=%r modal=%s" % (dismissed, _modal(dev)))
     if _modal(dev) == "dialog":
         # Never leak an open modal into the browser leg (the tap may have been
         # rejected); the dialog's own serial line closes it.
         _console(dev, "ok", wait=1.5)
-        dev.read_for(0.5)
+        _read_until(dev.session, "PS /sdcard>", 0.5)
 
     # =====================================================================
     # 5. Browser page reflow in both directions
@@ -359,7 +433,8 @@ def run(dev, ctx):
     c.note("browser page reflow")
     _rotate(dev, 0)
     dev.session.write_line("browser sd:/WEB/INDEX.HTML")
-    time.sleep(5.0)
+    # The page claims the TUI surface; poll that state instead of a blind 5 s.
+    _wait_tui_active(dev, 5.0)
     dev.session.read_for(0.8)
     st = _status(dev)
     c.check("browser page owns the TUI surface", "tui active" in st, st[-220:])
@@ -382,7 +457,7 @@ def run(dev, ctx):
 
     out = _rotate(dev, 90)
     c.check("rotate 90 while the page is up", "rotation set to 90" in out, out[-160:])
-    time.sleep(1.0)
+    _wait_tui_active(dev, 1.0)
     st = _status(dev)
     c.check("browser page stayed up across the rotation", "tui active" in st, st[-220:])
     page_l = _shot(dev, c, "s26_browser_landscape")
@@ -427,7 +502,7 @@ def run(dev, ctx):
                                           page_mem_first - page_mem_last))
     c.check("page still up after repeated rotations", "tui active" in _status(dev),
             _status(dev)[-220:])
-    dev.run("draw close", timeout=20, settle=1.0)
+    dev.run("draw close", timeout=20)
     st = dev.run("tui status", timeout=20)
     c.check("browser page closes back to the shell", "tui inactive" in st, st[-220:])
 
@@ -435,7 +510,8 @@ def run(dev, ctx):
     # 6. Five rotation cycles: memory stable, no panic
     # =====================================================================
     c.note("rotation stability (5 cycles)")
-    dev.run("rotate 0", timeout=25, settle=1.5)
+    dev.run("rotate 0", timeout=25)
+    _wait_grid(dev, 0, 1.5)
     first = _free(dev)
     lows = []
     for _ in range(5):
@@ -452,6 +528,7 @@ def run(dev, ctx):
     c.check("board alive after five rotation cycles", "S26ROTOK" in alive, alive[-120:])
 
     # Leave the reference orientation for the next suite.
-    dev.run("rotate 0", timeout=25, settle=1.5)
+    dev.run("rotate 0", timeout=25)
+    _wait_grid(dev, 0, 1.5)
     dev.run("cls", timeout=15)
     return c

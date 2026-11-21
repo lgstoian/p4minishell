@@ -30,18 +30,32 @@ rem (19..21) with its text inside it (row 21).
 if "%TUICOLS%"=="" set TUICOLS=80
 if "%TUIROWS%"=="" set TUIROWS=25
 set /a TY=%TUIROWS%-4 > NUL
+rem The nine menu lines are authored at rows 7..15 of the 80x25 grid. Step
+rem them out by the extra panel rows so they spread down a tall menu panel;
+rem with TUIROWS=25 the step is 1 and every row stays exactly as authored.
+set /a EX=%TUIROWS%-25 > NUL
+set /a CS=1+%EX%/9 > NUL
+set /a R7=7 > NUL
+set /a R8=7+%CS% > NUL
+set /a R9=7+2*%CS% > NUL
+set /a R10=7+3*%CS% > NUL
+set /a R11=7+4*%CS% > NUL
+set /a R12=7+5*%CS% > NUL
+set /a R13=7+6*%CS% > NUL
+set /a R14=7+7*%CS% > NUL
+set /a R15=7+8*%CS% > NUL
 gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "P4 CHAT 🎵"
 draw text 24 2 "Board-to-board chat over the local link" 14
 gosub %APPROOT%/APPLIB.BAT::panel 5 13 single "Menu"
-draw text 5 7 "1  Host      start/stop the SoftAP host"
-draw text 5 8 "2  Join      join the host AP"
-draw text 5 9 "3  Send      send a message"
-draw text 5 10 "4  Poll      fetch new messages"
-draw text 5 11 "5  Log       show the local log"
-draw text 5 12 "6  Status    host/peer/sequence state"
-draw text 5 13 "7  Clear     clear inbox and log"
-draw text 5 14 "8  Help      command reference"
-draw text 5 15 "9  Quit"
+draw text 5 %R7% "1  Host      start/stop the SoftAP host"
+draw text 5 %R8% "2  Join      join the host AP"
+draw text 5 %R9% "3  Send      send a message"
+draw text 5 %R10% "4  Poll      fetch new messages"
+draw text 5 %R11% "5  Log       show the local log"
+draw text 5 %R12% "6  Status    host/peer/sequence state"
+draw text 5 %R13% "7  Clear     clear inbox and log"
+draw text 5 %R14% "8  Help      command reference"
+draw text 5 %R15% "9  Quit"
 gosub %APPROOT%/APPLIB.BAT::footer 19 3 single
 draw text 5 %TY% "Tip: the host prints 192.168.4.1; the peer joins that address."
 draw refresh

@@ -100,6 +100,51 @@ gfx close
 echo [M-PRESENT-DONE]
 """
 
+# v1.4.4 tear-free present fixture: a ball crosses to the right wall, reverses
+# and steps back. The panel is captured at each step. Every capture must show
+# ONE complete ball at the current position: no stale pixels from the previous
+# position and no half-written (torn) ball. Colour-coding the three positions
+# makes a direction-change tear observable in the panel framebuffer.
+BOUNCE_TEAR_BAT = r"""@echo off
+echo [M-BTEAR]
+gfx init 240 180
+if errorlevel 1 goto :done
+gfx clear 1
+gfx ellipse 40 90 12 12 0xFF0000 fill
+gfx show
+delay 120
+screenshot /panel %APPDRIVE%/T1.BMP
+gfx clear 1
+gfx ellipse 210 90 12 12 0x00FF00 fill
+gfx show
+delay 120
+screenshot /panel %APPDRIVE%/T2.BMP
+gfx clear 1
+gfx ellipse 180 90 12 12 0x00FFFF fill
+gfx show
+delay 120
+screenshot /panel %APPDRIVE%/T3.BMP
+gfx close
+:done
+echo [M-BTEAR-DONE]
+"""
+
+def _ball_centroid(bmp, rgb, tol=40, step=2):
+    """Sampled centroid (x, y, count) of pixels near @p rgb."""
+    sx = sy = n = 0
+    for y in range(0, bmp.height, step):
+        for x in range(0, bmp.width, step):
+            r, g, b = bmp.px(x, y)
+            if abs(r - rgb[0]) <= tol and abs(g - rgb[1]) <= tol and \
+                    abs(b - rgb[2]) <= tol:
+                sx += x
+                sy += y
+                n += 1
+    if n == 0:
+        return (0.0, 0.0, 0)
+    return (sx / n, sy / n, n)
+
+
 def run(dev, ctx):
     c = Checklist(NAME)
     dev.run("md WEB", timeout=20)
@@ -207,6 +252,74 @@ def run(dev, ctx):
         c.check("the two presents differ on the panel", moved >= 0.002,
                 "%.5f of sampled pixels differ" % moved)
     dev.run("del /f P1.BMP & del /f P2.BMP", timeout=20)
+
+    # ------------------------------------------------------------------
+    # v1.4.4 bounce present: the direction change is where a single-framebuffer
+    # DSI panel tears. `screenshot /panel` reads the framebuffer the panel
+    # scans, so a stale old-position ball or a half-written new ball is visible
+    # here even though an LVGL model snapshot would still look correct. Every
+    # capture failure is a recorded check - no note()-only evidence.
+    # ------------------------------------------------------------------
+    dev.run("draw close", timeout=20)
+    dev.push_file("BTEAR.BAT", BOUNCE_TEAR_BAT.encode())
+    s.reset_input()
+    s.write_line("launch BTEAR.BAT")
+    got = _read_until(s, "[M-BTEAR-DONE]", 60.0)
+    c.check("bounce present fixture completed", b"[M-BTEAR-DONE]" in got,
+            got[-200:].decode("utf-8", "replace"))
+    t1 = _pull_bmp(dev, c, "T1.BMP")
+    t2 = _pull_bmp(dev, c, "T2.BMP")
+    t3 = _pull_bmp(dev, c, "T3.BMP")
+    if t1 is not None and t2 is not None and t3 is not None:
+        RED = (255, 0, 0)
+        GREEN = (0, 255, 0)
+        CYAN = (0, 255, 255)
+        nred1, ngreen1, ncyan1 = (_count_near(t1, k, tol=40, step=2)
+                                  for k in (RED, GREEN, CYAN))
+        nred2, ngreen2, ncyan2 = (_count_near(t2, k, tol=40, step=2)
+                                  for k in (RED, GREEN, CYAN))
+        nred3, ngreen3, ncyan3 = (_count_near(t3, k, tol=40, step=2)
+                                  for k in (RED, GREEN, CYAN))
+        rx1, _, _ = _ball_centroid(t1, RED)
+        gx2, _, _ = _ball_centroid(t2, GREEN)
+        cx3, _, _ = _ball_centroid(t3, CYAN)
+
+        c.check("bounce frame 1 shows the red ball", nred1 >= 100,
+                "%d red panel samples" % nred1)
+        c.check("bounce frame 2 shows the green ball", ngreen2 >= 100,
+                "%d green panel samples" % ngreen2)
+        c.check("bounce frame 3 shows the cyan ball", ncyan3 >= 100,
+                "%d cyan panel samples" % ncyan3)
+        # A ball left behind at the old position, or a half-written ball, is a
+        # tear at the direction change. Both colours must be absent outside
+        # their own frame.
+        c.check("bounce direction change left no stale red", nred2 < 40,
+                "%d stale red samples in frame 2" % nred2)
+        c.check("bounce reversal left no stale green", ngreen3 < 40,
+                "%d stale green samples in frame 3" % ngreen3)
+        c.check("bounce frame 1 had no other ball colours",
+                ngreen1 < 40 and ncyan1 < 40,
+                "green=%d cyan=%d" % (ngreen1, ncyan1))
+        c.check("bounce frame 2 had no other ball colours",
+                nred2 < 40 and ncyan2 < 40,
+                "red=%d cyan=%d" % (nred2, ncyan2))
+        c.check("bounce frame 3 had no other ball colours",
+                nred3 < 40 and ngreen3 < 40,
+                "red=%d green=%d" % (nred3, ngreen3))
+        # The balls are fully drawn, not a partial (torn) stamp.
+        c.check("bounce balls are fully drawn",
+                400 <= nred1 <= 4000 and 400 <= ngreen2 <= 4000 and
+                400 <= ncyan3 <= 4000,
+                "red=%d green=%d cyan=%d" % (nred1, ngreen2, ncyan3))
+        # Centroids prove a single ball moved right and then reversed, rather
+        # than two half-balls split across the old and new positions.
+        c.check("bounce ball advanced before the wall",
+                gx2 - rx1 >= 0.20 * t2.width,
+                "dx=%.1f px" % (gx2 - rx1))
+        c.check("bounce ball reversed after the wall",
+                gx2 - cx3 >= 0.05 * t3.width,
+                "dx=%.1f px" % (gx2 - cx3))
+    dev.run("del /f T1.BMP & del /f T2.BMP & del /f T3.BMP", timeout=20)
 
     try:
         os.makedirs(SPIKES, exist_ok=True)

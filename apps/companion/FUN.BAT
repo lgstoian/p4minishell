@@ -17,6 +17,18 @@ if "%TUICOLS%"=="" set TUICOLS=80
 if "%TUIROWS%"=="" set TUIROWS=25
 set /a BW=%TUICOLS%-10 > NUL
 set /a EH=%TUIROWS%-15 > NUL
+rem Melody notes are authored at rows 7..13 inside the growing Notes box.
+rem Step them out by the extra rows so they fill a tall panel; step 1 on the
+rem 25-row grid leaves every note where it was.
+set /a EX=%TUIROWS%-25 > NUL
+set /a NS=1+%EX%/7 > NUL
+set /a N7=7 > NUL
+set /a N8=7+%NS% > NUL
+set /a N9=7+2*%NS% > NUL
+set /a N10=7+3*%NS% > NUL
+set /a N11=7+4*%NS% > NUL
+set /a N12=7+5*%NS% > NUL
+set /a N13=7+6*%NS% > NUL
 draw clear screen
 gosub %APPROOT%/APPLIB.BAT::bar 1 3 single
 draw text 35 2 "FUN / DEMOS 😀" 14
@@ -54,25 +66,25 @@ gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "MELODY"
 draw text 30 2 "Playing a little tune..." 14
 draw box 5 5 %BW% %EH% single "Notes"
 tone 523 180
-draw text 10 7 "C5 (523Hz)" 11
+draw text 10 %N7% "C5 (523Hz)" 11
 delay 450
 tone 659 180
-draw text 10 8 "E5 (659Hz)" 11
+draw text 10 %N8% "E5 (659Hz)" 11
 delay 450
 tone 784 180
-draw text 10 9 "G5 (784Hz)" 11
+draw text 10 %N9% "G5 (784Hz)" 11
 delay 450
 tone 1046 350
-draw text 10 10 "C6 (1046Hz)" 11
+draw text 10 %N10% "C6 (1046Hz)" 11
 delay 600
 tone 784 180
-draw text 10 11 "G5 (784Hz)" 11
+draw text 10 %N11% "G5 (784Hz)" 11
 delay 450
 tone 659 180
-draw text 10 12 "E5 (659Hz)" 11
+draw text 10 %N12% "E5 (659Hz)" 11
 delay 450
 tone 523 500
-draw text 10 13 "C5 (523Hz)" 11
+draw text 10 %N13% "C5 (523Hz)" 11
 delay 300
 tui fullscreen off
 dialog "Melody" "Done." "OK"

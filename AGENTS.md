@@ -79,11 +79,15 @@ the currently modified files from `git status`.
 
 A test that passes without asserting anything is a defect, not a pass. The
 static guard scans the Unity suite and the host suites for vacuous tests,
-declared-but-never-run tests, tautological assertions, and zero-check suites:
+declared-but-never-run tests, tautological assertions, and zero-check suites.
+The gallery has its own identity gate plus a red canary, so a shell screenshot
+cannot be published as an app image:
 
 ```powershell
 python tools/green_guard.py            # scan; non-zero on any error
 python tools/green_guard.py --strict   # warnings become errors
+python tools/gallery_audit.py          # gallery PNG identity + uniqueness
+python tools/gallery_audit_selftest.py # red canary: the identity guard must go red
 ```
 
 The runner also treats a zero-assertion `Checklist`/`SuiteResult` as a failure

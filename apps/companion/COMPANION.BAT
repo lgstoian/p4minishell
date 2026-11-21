@@ -18,12 +18,23 @@ rem bottom rows (20..22) and its text inside it (row 22).
 gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "P4 COMPANION ★"
 draw text 22 2 "Pure-batch helper for P4MiniShell (%APPDRIVE%)" 14
 gosub %APPROOT%/APPLIB.BAT::panel 4 15 single "Main Menu"
-draw text 5 6 "What would you like to do?"
-draw text 5 8 "Live System  - dashboard & status"
-draw text 5 9 "File Tools   - browse, view, notes"
-draw text 5 10 "Network      - wifi, ping, fetch"
-draw text 5 11 "Fun / Demos  - games, calc, RGB"
-draw text 5 12 "Settings     - brightness, volume"
+if "%TUIROWS%"=="" set TUIROWS=25
+rem Spread the five menu lines down a tall panel; the step is 1 on the
+rem classic 25-row grid, keeping rows 8..12 exactly where they were.
+set /a EX=%TUIROWS%-25 > NUL
+set /a MS=1+%EX%/4 > NUL
+set /a R6=6 > NUL
+set /a R8=8 > NUL
+set /a R9=8+%MS% > NUL
+set /a R10=8+2*%MS% > NUL
+set /a R11=8+3*%MS% > NUL
+set /a R12=8+4*%MS% > NUL
+draw text 5 %R6% "What would you like to do?"
+draw text 5 %R8% "Live System  - dashboard & status"
+draw text 5 %R9% "File Tools   - browse, view, notes"
+draw text 5 %R10% "Network      - wifi, ping, fetch"
+draw text 5 %R11% "Fun / Demos  - games, calc, RGB"
+draw text 5 %R12% "Settings     - brightness, volume"
 gosub %APPROOT%/APPLIB.BAT::footer 20 3 single
 if "%TUIROWS%"=="" set TUIROWS=25
 set /a FY=%TUIROWS%-3 > NUL

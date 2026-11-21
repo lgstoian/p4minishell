@@ -144,10 +144,12 @@ SPECS = [
 
     # ---- games / adventures: a few moves so the shot looks alive -------
     dict(app="adventure", cmd="launch ADVENT", start="[M-ADV]",
+         prompt="What now?",
          pre=[(1.0, "n", "---"), (0.3, "w", "---"),
               (0.3, "snap", "[M-ADV-SNAP]")],
          shot=("file", "ADVENT.BMP"), quit=["quit"], end="[M-ADV-QUIT]"),
     dict(app="snake", cmd="launch SNAKE", start="[M-SNAKE]",
+         prompt="Move?",
          # Drive enough steps for a real snake before the snapshot: one key
          # left a 3-cell stub that looked like a broken render in v1.4.3.
          pre=[(1.2, "s", None), (1.0, "s", None)],
@@ -572,7 +574,7 @@ def _drive(dev, c, spec, want):
         _kind, key, marker, remote = shot
         for attempt in range(2):
             s.read_for(0.5)
-            s.read_until(b"key?", 20.0)
+            s.read_until(spec.get("prompt", "key?").encode(), 20.0)
             s.read_for(0.3)
             s.write_line(key)
             got = _read_until(s, marker, 20.0)
@@ -598,6 +600,7 @@ def _drive(dev, c, spec, want):
     exited = True
     if spec.get("quit") or spec.get("end") or spec.get("end_shell"):
         s.read_for(0.5)
+        s.read_until(spec.get("prompt", "key?").encode(), 20.0)
         quit_lines = spec.get("quit", [])
         settle = spec.get("quit_settle", 0.6)
         for index, line in enumerate(quit_lines):

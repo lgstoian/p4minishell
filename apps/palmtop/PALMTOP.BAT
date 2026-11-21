@@ -12,6 +12,11 @@ setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-PALM]
 title "PalmTop"
+rem The sheet/TCP "Press any key" lines are authored at rows 15/20 of the
+rem 80x25 grid. Anchor them just inside the bottom edge on a taller panel.
+if "%TUIROWS%"=="" set TUIROWS=25
+set /a PY15=%TUIROWS%-10 > NUL
+set /a PY20=%TUIROWS%-5 > NUL
 goto menu
 
 :menu
@@ -70,7 +75,7 @@ echo [M-PALM-CSV]
 draw clear screen
 gosub %APPROOT%/APPLIB.BAT::page double "CSV"
 csv eval %APPDRIVE%/_palm.csv
-draw text 5 15 "Press any key..." 7
+draw text 5 %PY15% "Press any key..." 7
 pause
 del %APPDRIVE%/_palm.csv > NUL
 goto menu
@@ -112,7 +117,7 @@ draw text 5 5 "Probing the on-board httpd on loopback..." 14
 rem Offline (no Wi-Fi/httpd) the connect is refused cleanly; ERRORLEVEL 1.
 tcpterm 127.0.0.1 80 /t:6 GET / HTTP/1.0\r\n\r\n
 echo [M-PALM-TCP]
-draw text 5 20 "Press any key..." 7
+draw text 5 %PY20% "Press any key..." 7
 pause
 goto menu
 

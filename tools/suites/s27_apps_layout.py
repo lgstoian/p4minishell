@@ -88,15 +88,83 @@ LAYOUT_ROUTINES = (":box", ":page", ":bar", ":panel", ":footer")
 # Host helpers (same idiom as s26_portrait / s25_apps_gallery)
 # ---------------------------------------------------------------------------
 def _console(dev, line, wait=1.2, read=0.8):
-    """Send a console-local line (works while a modal/app owns the worker)."""
+    """Send a console-local line and return its reply without a blind sleep.
+
+    The console reader answers these verbs while an app owns the worker. Read
+    in 0.2 s slices until the reply has been quiet for 0.2 s; the overall
+    deadline (``wait + read``) is unchanged and ``read_for`` still strips ANSI
+    and runs panic analysis.
+    """
     dev.session.reset_input()
     dev.session.write_line(line)
-    time.sleep(wait)
-    return dev.session.read_for(read)
+    buf = []
+    end = time.time() + wait + read
+    quiet_since = None
+    while time.time() < end:
+        chunk = dev.session.read_for(0.2)
+        if chunk.strip():
+            buf.append(chunk)
+            quiet_since = None
+        elif buf:
+            if quiet_since is None:
+                quiet_since = time.time()
+            elif time.time() - quiet_since >= 0.2:
+                break
+    return "".join(buf)
 
 
 def _status(dev):
     return _console(dev, "tui status")
+
+
+def _modal(dev):
+    m = re.search(r"modal=(\S+)", _console(dev, "ui state"))
+    return m.group(1) if m else "?"
+
+
+def _wait_modal(dev, want, timeout):
+    """Poll the published UI modal state instead of a fixed sleep."""
+    end = time.time() + timeout
+    state = None
+    while time.time() < end:
+        state = _modal(dev)
+        if state == want:
+            break
+        time.sleep(0.25)
+    return state
+
+
+def _wait_modal_up(dev, timeout):
+    """Wait until any real modal (list/dialog/viewer) owns the screen."""
+    end = time.time() + timeout
+    state = None
+    while time.time() < end:
+        state = _modal(dev)
+        if state not in ("none", "?", None):
+            break
+        time.sleep(0.25)
+    return state
+
+
+def _wait_quiet(session, timeout):
+    """Wait for the serial stream to settle (bounded by the old sleep)."""
+    end = time.time() + timeout
+    while time.time() < end:
+        if not session.read_for(0.2).strip():
+            break
+
+
+def _wait_grid(dev, angle, timeout):
+    """Poll ``tui status`` until its cells match the new orientation."""
+    end = time.time() + timeout
+    while True:
+        _, _, cw, ch = _grid(_status(dev))
+        if angle == 0:
+            done = cw == 8 and ch == 12
+        else:
+            done = cw == 12 and ch in (20, 24)
+        if done or time.time() >= end:
+            return
 
 
 def _grid(text):
@@ -336,7 +404,9 @@ def _tcmd_capture(dev, c, label):
     head = _read_until(s, "[M-TCMD-R]", 60.0)
     if b"[M-TCMD-R]" not in head:
         c.note("%s: TCMD did not reach its page: %r" % (label, head[-200:]))
-    time.sleep(2.0)
+    # The app re-arms its key loop with `key?`; poll that instead of a blind
+    # 2 s so the following status read sees the settled grid (same deadline).
+    _read_until(s, "key?", 2.0)
     st = _status(dev)
     cols, rows, cw, ch = _grid(st)
     # The shell cannot run a command while the app owns the worker, so the
@@ -353,10 +423,10 @@ def _tcmd_capture(dev, c, label):
         if b"ST=snapped" in got:
             snapped = True
             break
-        time.sleep(1.0)
+        _read_until(s, "key?", 1.0)
     if not snapped:
         c.note("%s: snap key not acknowledged" % label)
-    time.sleep(1.5)
+    _read_until(s, "key?", 1.5)
     exited = False
     for _attempt in range(4):
         s.write_line("q")
@@ -403,10 +473,14 @@ def _drive_menu_app(dev, c, spec):
     ok = spec["start"].encode() in head
     c.check("%s reaches its page" % app, ok, head[-200:])
     if spec.get("pre"):
-        time.sleep(1.5)
+        # The first-run dialog is a real UI state; wait for it, dismiss it,
+        # then wait for the screen to come back (same 1.5 s deadlines).
+        _wait_modal(dev, "dialog", 1.5)
         s.write_line(spec["pre"])
-        time.sleep(1.5)
-    time.sleep(2.0)
+        _wait_modal(dev, "none", 1.5)
+    # The menu's list/dialog modal is part of the page this suite measures;
+    # wait until a modal owns the screen instead of a blind 2 s.
+    _wait_modal_up(dev, 2.0)
     bmp = _shot(dev, c, "s27_%s_portrait" % app.lower())
     s.read_for(0.5)
     s.write_line(spec["quit"])
@@ -415,7 +489,9 @@ def _drive_menu_app(dev, c, spec):
         c.check("%s leaves its page cleanly" % app,
                 spec["end"].encode() in tail, tail[-200:])
     else:
-        time.sleep(2.0)
+        # No end marker for this app: wait for output to go quiet (same 2 s
+        # deadline) before probing for a live shell.
+        _wait_quiet(s, 2.0)
     c.check("%s returns to a live shell" % app, _restore_shell(dev, c, app), "")
     return bmp
 
@@ -437,7 +513,8 @@ def run(dev, ctx):
                "(720x1280). Static audit above still ran." % (disp_w, disp_h))
         return c
     if not native_portrait:
-        dev.run("rotate 0", timeout=25, settle=2.0)
+        dev.run("rotate 0", timeout=25)
+        _wait_grid(dev, 0, 2.0)
 
     try:
         dev.run("draw close", timeout=15)
@@ -451,7 +528,8 @@ def run(dev, ctx):
     # 2. Portrait: the published grid, then TCMD's own 80x97 page
     # =====================================================================
     c.note("portrait app layout")
-    dev.run("rotate 0", timeout=25, settle=2.0)
+    dev.run("rotate 0", timeout=25)
+    _wait_grid(dev, 0, 2.0)
     st = dev.run("tui status", timeout=20)
     fw, fh, fcols, frows, fcw, fch = _fit(st)
     c.check("portrait publishes an app grid", fcols is not None and frows is not None,
@@ -526,6 +604,7 @@ def run(dev, ctx):
     # =====================================================================
     c.note("landscape classic frame")
     out = _console(dev, "rotate 90", wait=3.0)
+    _wait_grid(dev, 90, 3.0)
     c.check("rotate 90 lands in landscape", "rotation set to 90" in out, out[-160:])
     lw, lh, lrot = _display(dev)
     c.check("landscape orientation is 1280x720", (lw, lh, lrot) == (1280, 720, 90),
@@ -562,7 +641,8 @@ def run(dev, ctx):
                    % (fr["span_px"], fr["bottom_row"]))
 
     # Leave the reference orientation for the next suite.
-    dev.run("rotate 0", timeout=25, settle=1.5)
+    dev.run("rotate 0", timeout=25)
+    _wait_grid(dev, 0, 1.5)
     dev.run("draw close", timeout=15)
     dev.run("draw fullscreen off", timeout=15)
     dev.run("cls", timeout=15)
