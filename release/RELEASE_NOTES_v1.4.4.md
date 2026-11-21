@@ -83,17 +83,16 @@ and `test/` build with zero errors and zero warnings on both board profiles.
 
 ## Known limits
 
-- **Tear-free partial presentation at vsync is STILL OPEN.** The one-frame tear
-  at a direction change has *not* been fixed in this release image. A
-  back-buffer dirty blit at vsync is being implemented in the working tree
-  (managed LVGL port hook + `gfx_commands` present path + an `s22_canvas` panel
-  invariant); at the time these notes were written it was uncommitted and had
-  not passed the on-panel present check on either board. Treat tear-free
-  presentation as **not delivered** until that work lands and is verified.
-  Panel-level diagnostics are described in [`harness.md`](../harness.md)
-  ("Present-level diagnostics"); model screenshots cannot see this defect.
-
-- **Deferred-hardware features remain build-verified only:** captive portal,
+- **Tear-free partial presentation is delivered.** The DSI panel now
+  accepts a weak IRAM vsync hook from the firmware; the gfx present stages
+  only the dirty canvas rows in internal RAM and blits them into the scanned
+  framebuffer at blanking. The integer canvas scale and the 30 fps partial
+  render are unchanged. `s22_canvas` adds 11 panel-level invariants across a
+  wall reversal (36/36 on the reference board) and `s14_apps` keeps BOUNCE
+  pacing steady (130/130). The vendored hook is recorded in
+  `tools/managed_patches.patch` and verified by a reverse/reapply check.
+  Panel-level diagnostics are described in `harness.md`
+  ("Present-level diagnostics"); model screenshots cannot see this defect.- **Deferred-hardware features remain build-verified only:** captive portal,
   the TLS `CERTS` store, the BLE HID host, serial PIM sync, and record editing.
   The v1.3.0 bring-up round exercised focused paths (portal timeout/TX-cap,
   CERTS PEM/DER activation, BLE mouse) but none has a full on-device acceptance
