@@ -5,13 +5,6 @@ Every screenshot below is captured live from the device by
 (JC1060P470C, 1024x600). The apps are batch-first and run from SD or USB;
 metadata comes from each app's `APPINFO`.
 
-This index lists the **22 visual apps** of the gallery. The `web.png` capture in
-the same folder is the live-browser proof published by
-`tools/publish_proof.py`, not a separate gallery app (see
-[`assets/README.md`](assets/README.md)). A capture is published only after
-`s25_apps_gallery` asserts its identity on the board and `tools/gallery_audit.py`
-re-checks the committed PNG set.
-
 The feature matrix in [`readme.md`](../readme.md) lists which v1.4.3
 surface each app exercises (emoji, transparency, HTML, drive-aware data).
 
@@ -184,3 +177,11 @@ Batch task manager: pool jobs, priorities, services, events; pool view reports m
 Dual-pane file commander: browse selectors plus copy/move/delete/mkdir/rename/view/edit on the app drive
 
 *Screenshot: `docs/assets/apps/tcmd.png`*
+
+## Browser
+
+![Browser](assets/apps/web.png)
+
+Renders a basic website from <drive>/WEB/ with the html page verb
+
+*Screenshot: `docs/assets/apps/web.png`*
