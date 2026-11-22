@@ -71,13 +71,36 @@ HELP_TOPICS = [
     "help format", "help disk", "help archive", "help crypt",
 ]
 
-TUI_SNIPPETS = [
-    ["draw box 1 1 30 5 single \"DOG FOOD\"", "draw text 3 2 sniffing...", "draw refresh"],
-    ["draw box 1 1 40 7 double", "draw line 2 3 38 3",
-     "draw bar 3 4 30 60 219 176", "draw refresh"],
-    ["draw clear screen", "draw text 1 1 \"dogfood tui\"",
-     "draw table 1 2 3 8 8 8 \"a,b\" \"c,d\"", "draw refresh"],
-]
+def tui_snippets(session):
+    """TUI snippets sized to the LIVE grid.
+
+    The old hard-coded 30x5 / 40x7 boxes covered ~5% of the 80x97 portrait
+    panel, which the dogfood visual anomaly detector correctly flagged as a
+    blank screen. Deriving the geometry keeps the same drawing verbs and
+    fills the panel on both shapes.
+    """
+    cols, rows = 80, 25
+    try:
+        out = session.run("tui status", timeout=20)
+        import re
+        m = re.search(r"grid fit \S+ ->\s*(\d+)\s*x\s*(\d+)", out)
+        if m:
+            cols, rows = int(m.group(1)), int(m.group(2))
+    except Exception:  # noqa: BLE001 - fall back to the classic grid
+        pass
+    h = max(8, rows - 4)
+    mid = max(2, rows // 2)
+    w = max(20, cols - 4)
+    return [
+        ["draw box 1 1 %d %d single \"DOG FOOD\"" % (cols, h),
+         "draw text 3 %d sniffing..." % mid, "draw refresh"],
+        ["draw box 1 1 %d %d double" % (cols, h),
+         "draw line 2 %d %d %d" % (mid, cols - 2, mid),
+         "draw bar 3 %d %d 60 219 176" % (mid + 2, w), "draw refresh"],
+        ["draw clear screen", "draw text 3 %d \"dogfood tui\"" % mid,
+         "draw table 3 %d 3 8 8 8 \"a,b\" \"c,d\"" % (mid + 3),
+         "draw refresh"],
+    ]
 
 MODALS = [
     ("dialog \"Dogfood check\" \"Is the shell alive?\" yesno", ["y"]),
@@ -345,7 +368,7 @@ class DogfoodAgent:
         return "\n".join(out)
 
     def action_tui(self) -> str:
-        snippet = self.rng.choice(TUI_SNIPPETS)
+        snippet = self.rng.choice(tui_snippets(self.session))
         out = []
         for cmd in snippet:
             out.append(self.dev.run(cmd, timeout=15))
