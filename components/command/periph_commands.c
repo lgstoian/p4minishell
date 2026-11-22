@@ -1671,6 +1671,13 @@ void shell_execute_rgb_command(int argc, char **argv)
                                       state.red, state.green, state.blue);
         shell_transcript_appendf_ansi("  " SH_LBL "output:" SH_RST " " SH_NUM "#%02X%02X%02X" SH_RST "\n",
                                       state.out_red, state.out_green, state.out_blue);
+        shell_transcript_appendf_ansi("  " SH_LBL "cpu sample:" SH_RST " " SH_NUM "%u%%" SH_RST "%s\n",
+                                      (unsigned int)state.cpu_percent,
+                                      state.cpu_manual_override ? " (manual override)" : "");
+        if (state.kbd_write_failures) {
+            shell_transcript_appendf_ansi("  " SH_LBL "RGB write errors:" SH_RST " " SH_NUM "%u" SH_RST "\n",
+                                          (unsigned int)state.kbd_write_failures);
+        }
         if (state.refresh_failures) {
             shell_transcript_appendf_ansi("  " SH_LBL "refresh errors:" SH_RST " " SH_NUM "%u" SH_RST "\n",
                                           (unsigned int)state.refresh_failures);

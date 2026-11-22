@@ -68,6 +68,9 @@ typedef struct {
     uint8_t out_green;
     uint8_t out_blue;
     uint32_t refresh_failures;  /**< RMT refresh errors since boot */
+    uint32_t kbd_write_failures;/**< keyboard RGB I2C errors since boot */
+    uint8_t cpu_percent;         /**< last CPU sample from the telemetry task */
+    bool cpu_manual_override;    /**< explicit `rgb 2` is overriding the gauge */
 } led_state_t;
 
 /**

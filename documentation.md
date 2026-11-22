@@ -1012,7 +1012,7 @@ filesystem or the batch language:
   `BOARD_CFG_RGB_VIA_TAB5KBD` is set — a small animation task, and a mutex-protected state
   engine. It renders solid colours, effects (`rainbow`/`breath`/`pulse`/`blink`/`solid`), and
   transient event notifications on top of a persistent status colour. On the two-LED board the
-  primaries are independently addressable (`rgb 1|2 <r> <g> <b>`; LED1 = status, LED2 = CPU gauge, continuous green/yellow/red ramp, until explicitly overridden).
+  primaries are independently addressable (`rgb 1|2 <r> <g> <b>`; LED1 = status, LED2 = CPU gauge, perceptual green/yellow/orange/red ramp, until explicitly overridden).
   The `rgb` command lives in `components/command/command.c` (hardware verbs), the Wi-Fi/HTTP
   event hooks are pushed from `components/networking`, and `main.c` fires the boot confirmation
   flash. GPIO26 is a reserved critical line in the board pin table.

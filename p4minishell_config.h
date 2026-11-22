@@ -2660,7 +2660,7 @@
 #define P4_CONFIG_LED_MAX_BRIGHTNESS_PCT      50
 
 /** Stack bytes for the LED animation/notification task. */
-#define P4_CONFIG_LED_TASK_STACK_BYTES        2048
+#define P4_CONFIG_LED_TASK_STACK_BYTES        4096
 
 /** Animation tick period in milliseconds (the frame rate of effects). */
 #define P4_CONFIG_LED_TICK_MS                 10

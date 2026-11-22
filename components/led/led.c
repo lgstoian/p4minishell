@@ -111,6 +111,7 @@ static uint8_t s_last_red;            /* last values actually written to the str
 static uint8_t s_last_green;
 static uint8_t s_last_blue;
 static uint32_t s_refresh_failures;  /**< WS2812 RMT refresh errors since boot */
+static uint32_t s_kbd_write_failures; /**< Tab5 keyboard RGB I2C write errors */
 static bool s_cpu_manual_override;    /* set by an explicit `rgb 2` command */
 static led_notification_t s_notification;
 
@@ -276,6 +277,28 @@ static void led_render_frame(const led_frame_t *frame, uint64_t now_us,
 }
 
 /** Animation task: render one frame per tick. */
+/** Perceptual CPU colour ramp. A linear R=CPU/G=100-CPU keeps even a busy
+ *  board looking green (10% CPU is still ~90% green), so apply a ~0.45 gamma
+ *  from a tiny integer lookup: 0% green, 10% yellow-green, 20% yellow,
+ *  50% orange, 100% red. No float/sqrt on the device. */
+static const uint8_t s_cpu_ramp[11] = {
+    0, 36, 49, 59, 67, 73, 79, 85, 90, 95, 100
+};
+
+static void led_cpu_ramp(uint8_t percent, uint8_t *r, uint8_t *g, uint8_t *b)
+{
+    uint16_t p = (percent > 100) ? 100 : percent;
+    uint16_t i = (uint16_t)(p / 10u);
+    uint16_t t = s_cpu_ramp[i];
+
+    if (i < 10u) {
+        t += (uint16_t)(s_cpu_ramp[i + 1] - s_cpu_ramp[i]) * (p % 10u) / 10u;
+    }
+    *r = (uint8_t)((uint32_t)t * 255u / 100u);
+    *g = (uint8_t)((uint32_t)(100u - t) * 255u / 100u);
+    *b = 0;
+}
+
 static void led_task(void *arg)
 {
     (void)arg;
@@ -303,7 +326,6 @@ static void led_task(void *arg)
         } else {
             frame = s_auto_status ? s_status_frame : s_manual_frame;
             s_notification.active = false;
-    s_cpu_manual_override = false;
         }
 
         led_render_frame(&frame, now_us, s_speed, &red, &green, &blue);
@@ -311,6 +333,25 @@ static void led_task(void *arg)
         red = (uint8_t)((uint16_t)red * LED_BRIGHTNESS_PCT / 100);
         green = (uint8_t)((uint16_t)green * LED_BRIGHTNESS_PCT / 100);
         blue = (uint8_t)((uint16_t)blue * LED_BRIGHTNESS_PCT / 100);
+
+#if LED_PRESENT && !LED_BACKEND_KEYBOARD
+        /* Single-LED boards have no separate CPU LED. Blend a load-proportional
+         * amount of the CPU gauge into the status colour so the CPU is visible
+         * without losing the Wi-Fi status machine: at idle the status colour
+         * dominates, and transient notifications above are never blended. */
+        if (s_auto_status && !use_notification) {
+            uint8_t cr, cg, cb;
+            uint16_t w = (uint16_t)s_cpu_percent * 80u / 50u;
+
+            led_cpu_ramp(s_cpu_percent, &cr, &cg, &cb);
+            if (w > 80u) {
+                w = 80u;
+            }
+            red = (uint8_t)(((uint32_t)red * (100u - w) + (uint32_t)cr * w) / 100u);
+            green = (uint8_t)(((uint32_t)green * (100u - w) + (uint32_t)cg * w) / 100u);
+            blue = (uint8_t)(((uint32_t)blue * (100u - w) + (uint32_t)cb * w) / 100u);
+        }
+#endif
 
         s_last_red = red;
         s_last_green = green;
@@ -322,10 +363,7 @@ static void led_task(void *arg)
             }
             if (strip_err != ESP_OK && s_refresh_failures < 100) {
                 s_refresh_failures++;
-                if (s_refresh_failures == 1) {
-                    ESP_LOGE(LED_TAG, "strip refresh failed: %s",
-                             esp_err_to_name(strip_err));
-                }
+                /* Count only - see above. */
             }
         }
 #if LED_BACKEND_KEYBOARD
@@ -340,8 +378,14 @@ static void led_task(void *arg)
             /* LED2 is driven by led_set_cpu_usage() on two-LED boards;
              * LED1 above still follows the documented Wi-Fi status machine. */
 
-            (void)tab5kbd_set_rgb_index(0, red, green, blue);
-            (void)tab5kbd_set_rgb_index(1, sr, sg, sb);
+            esp_err_t kbd_err = tab5kbd_set_rgb_index(0, red, green, blue);
+            esp_err_t kbd_err2 = tab5kbd_set_rgb_index(1, sr, sg, sb);
+            if ((kbd_err != ESP_OK || kbd_err2 != ESP_OK) &&
+                    s_kbd_write_failures < 100) {
+                s_kbd_write_failures++;
+                /* Counts only: log from the status command, not from this
+                 * 2 KB animation task (a log formatter overflowed its stack). */
+            }
         }
 #endif
         led_unlock();
@@ -408,6 +452,9 @@ void led_init(void)
     memset(&s_secondary_frame, 0, sizeof(s_secondary_frame));
     s_secondary_frame.effect = LED_EFFECT_SOLID;
     s_notification.active = false;
+#if LED_BACKEND_KEYBOARD
+    s_kbd_write_failures = 0;
+#endif
 #if LED_PRESENT
     led_strip_clear(strip);
 #endif
@@ -606,6 +653,9 @@ void led_get_state(led_state_t *out)
     out->out_green = s_last_green;
     out->out_blue = s_last_blue;
     out->refresh_failures = s_refresh_failures;
+    out->kbd_write_failures = s_kbd_write_failures;
+    out->cpu_percent = s_cpu_percent;
+    out->cpu_manual_override = s_cpu_manual_override;
     led_unlock();
 }
 
@@ -655,11 +705,9 @@ void led_set_cpu_usage(uint8_t percent)
     if (LED2_CPU_USAGE && !s_cpu_manual_override) {
         /* green <40%, amber 40-75%, red >75% - the same mapping the header
          * CPU bar uses for its tone. */
-        /* Continuous ramp so even a light load is visible: 0% pure green,
-         * 50% yellow, 100% pure red. */
-        s_secondary_frame.red = (uint8_t)((uint16_t)s_cpu_percent * 255u / 100u);
-        s_secondary_frame.green = (uint8_t)((uint16_t)(100u - s_cpu_percent) * 255u / 100u);
-        s_secondary_frame.blue = 0;
+        /* Perceptual ramp so even a light load is visibly different. */
+        led_cpu_ramp(s_cpu_percent, &s_secondary_frame.red,
+                     &s_secondary_frame.green, &s_secondary_frame.blue);
         s_secondary_frame.effect = LED_EFFECT_SOLID;
     }
 #endif

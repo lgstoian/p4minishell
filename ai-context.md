@@ -2582,21 +2582,16 @@ the raster core + 8x8 font are `components/gfx/`
 - LED2 (the Tab5 keyboard's second RGB) is the **CPU gauge** by default:
   `led_set_cpu_usage()` is a leaf API; the telemetry producer in `shell.c`
   publishes the same CPU sample it sends to the header through the
-  `shell_command_ops_t.led_cpu_usage` callback (no reverse dependency).
-  Continuous ramp: R=CPU%, G=100-CPU%. LED1 keeps the documented
-  Wi-Fi/status state machine. An explicit `rgb 2 <r> <g> <b>` overrides the
-  gauge; `rgb auto on` restores it. On the single-LED reference board the
-  status machine is unchanged and no CPU override applies
-  boards without a second LED.
-- LED2 (the Tab5 keyboard's second RGB) is the **CPU gauge** by default:
-  `led_set_cpu_usage()` is a leaf API; the telemetry producer in `shell.c`
-  publishes the same CPU sample it sends to the header through the
-  `shell_command_ops_t.led_cpu_usage` callback (no reverse dependency).
-  Green below 40%, amber 40-75%, red above 75%. LED1 keeps the documented
-  Wi-Fi/status state machine. An explicit `rgb 2 <r> <g> <b>` overrides the
-  gauge; `rgb auto on` restores it. On the single-LED reference board the
-  status machine is unchanged and no CPU override applies
-  boards without a second LED.
+  `shell_command_ops_t.led_cpu_usage` callback (no reverse dependency). The
+  gauge uses a perceptual ~0.45-gamma ramp (green at 0%, yellow-green ~10%,
+  yellow ~20%, orange ~50%, red at 100%) so ordinary loads are visible - a
+  linear R=CPU/G=100-CPU left even a busy board looking green. LED1 keeps the
+  documented Wi-Fi/status state machine. An explicit `rgb 2 <r> <g> <b>`
+  overrides the gauge; `rgb auto on` restores it. On single-LED boards (the
+  JC1060P470C) there is no second LED: a load-proportional amount of the CPU
+  colour is blended into the status colour in auto mode, so the CPU is visible
+  while the status machine and all transient notifications stay intact.
+  `rgb status` reports the last value actually written and the CPU sample.
 - All tunables live in `P4_CONFIG_LED_*` (documented in `p4minishell_config.yaml`).
 
 ### Audio Rules (beep / tone / wavplay / volume / mic)
