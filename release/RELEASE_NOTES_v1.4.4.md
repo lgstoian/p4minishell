@@ -1,6 +1,6 @@
 # P4MiniShell v1.4.4 — release notes
 
-**Date:** 2026-11-21
+**Date:** 2026-11-22
 **Boards:** `jc1060p470c` (reference, COM3) and `m5stack_tab5` (COM6)
 **Firmware version:** `P4_CONFIG_VERSION_*` = 1.4.4
 
@@ -54,6 +54,23 @@ gate itself is in [`release.md`](../release.md) and [`harness.md`](../harness.md
 - **MCP client version tracks firmware.** The reported MCP version is derived
   from the firmware version macro instead of a stale literal.
 
+- **The LED CPU gauge is now visibly responsive on both boards.** CPU load is
+  sampled from *both* P4 cores' idle counters (the old single-core estimate
+  stayed near zero). LED2 uses a perceptual ~0.45-gamma ramp so 3% and 47% CPU
+  are clearly different colours instead of two shades of green; single-LED
+  boards blend the CPU colour into the status colour in proportion to load.
+  Wi-Fi status events no longer cancel boot/HTTP/alarm transients, `HTTPD_STOPPED`
+  returns to the status colour, an explicit `rgb 2` override persists until
+  `rgb auto on`, and `rgb status` reports the last colour actually written plus
+  the current CPU sample and any strip/keyboard write errors. The LED task has
+  a 4 KB stack and no in-task logging (a log formatter overflowed the old 2 KB
+  stack and froze the physical LED). `tools/led_contract.py` guards the full
+  state machine.
+
+- **Screenshot no longer OOMs at low PSRAM.** It streams the BMP row-by-row
+  instead of allocating a second ~1.8 MB frame, so dogfood captures work with
+  the reference board's ~2.9 MB free PSRAM.
+
 - **Documentation corrections.** First-public-release history, stale test and
   asset counts, obsolete "unsupported commands", stale DIRAM figures, broken
   links, the gallery capture workflow, and the deferred-hardware list (the
@@ -74,6 +91,8 @@ gate itself is in [`release.md`](../release.md) and [`harness.md`](../harness.md
 | `comment_index`, `breadcrumbs`, `tools/harness/verify.py` | pass, including `gallery identity` and its canary |
 | `s21_wikipedia` live leg (COM6) | **17 / 17**, full render, proof staged and published |
 | Gallery | 22 visual app captures plus the separately published live-proof `web.png` |
+| `tools/led_contract.py` | pass, 0 errors; LED states distinct on both boards |
+| LED hardware (`rgb status` under `display stress`) | COM3 `#018300` -> `#805A00`, COM6 LED2 `#19E500` -> `#B54900` |
 
 F27 is resolved in v1.3.0; the three consecutive clean full sweeps on both
 boards and the dogfood soak are recorded in [`bugs.md`](../bugs.md). Firmware
@@ -92,7 +111,9 @@ and `test/` build with zero errors and zero warnings on both board profiles.
   pacing steady (130/130). The vendored hook is recorded in
   `tools/managed_patches.patch` and verified by a reverse/reapply check.
   Panel-level diagnostics are described in `harness.md`
-  ("Present-level diagnostics"); model screenshots cannot see this defect.- **Deferred-hardware features remain build-verified only:** captive portal,
+  ("Present-level diagnostics"); model screenshots cannot see this defect.
+
+- **Experimental features remain build-verified only:** captive portal,
   the TLS `CERTS` store, the BLE HID host, serial PIM sync, and record editing.
   The v1.3.0 bring-up round exercised focused paths (portal timeout/TX-cap,
   CERTS PEM/DER activation, BLE mouse) but none has a full on-device acceptance
