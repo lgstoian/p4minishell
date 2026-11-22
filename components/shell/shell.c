@@ -5005,16 +5005,22 @@ static int shell_sample_cpu_percent(void)
      * `top` commands still use the full snapshot on demand. */
     static uint32_t s_last_idle_us;
     static int64_t s_last_total_us;
-    uint32_t idle_us = (uint32_t)ulTaskGetIdleRunTimeCounter();
+    /* Sum BOTH cores' idle counters: the P4 is dual-core, and using only the
+     * calling core's idle counter against wall time reported near-zero CPU on
+     * a busy board (the header bar and the LED2 CPU gauge both stayed green).
+     * Two cores advance wall time twice as fast, hence the factor 2. */
+    uint32_t idle_us = (uint32_t)(ulTaskGetIdleRunTimeCounterForCore(0) +
+                                  ulTaskGetIdleRunTimeCounterForCore(1));
     int64_t total_us = esp_timer_get_time();
     int cpu_percent = 0;
 
     if (s_last_total_us != 0 && total_us > s_last_total_us) {
-        uint32_t total_delta = (uint32_t)(total_us - s_last_total_us);
+        uint32_t wall_delta = (uint32_t)(total_us - s_last_total_us);
+        uint64_t total_delta = (uint64_t)wall_delta * 2u;
         uint32_t idle_delta = (idle_us >= s_last_idle_us)
                               ? (idle_us - s_last_idle_us) : 0;
         if (total_delta > 0) {
-            cpu_percent = 100 - (int)((int64_t)idle_delta * 100 / total_delta);
+            cpu_percent = 100 - (int)((uint64_t)idle_delta * 100 / total_delta);
             if (cpu_percent < 0) cpu_percent = 0;
             if (cpu_percent > 100) cpu_percent = 100;
         }
