@@ -655,10 +655,10 @@ void led_set_cpu_usage(uint8_t percent)
     if (LED2_CPU_USAGE && !s_cpu_manual_override) {
         /* green <40%, amber 40-75%, red >75% - the same mapping the header
          * CPU bar uses for its tone. */
-        s_secondary_frame.red = s_cpu_percent >= 75 ? 255 :
-                                (s_cpu_percent >= 40 ? 255 : 0);
-        s_secondary_frame.green = s_cpu_percent < 40 ? 255 :
-                                  (s_cpu_percent < 75 ? 160 : 0);
+        /* Continuous ramp so even a light load is visible: 0% pure green,
+         * 50% yellow, 100% pure red. */
+        s_secondary_frame.red = (uint8_t)((uint16_t)s_cpu_percent * 255u / 100u);
+        s_secondary_frame.green = (uint8_t)((uint16_t)(100u - s_cpu_percent) * 255u / 100u);
         s_secondary_frame.blue = 0;
         s_secondary_frame.effect = LED_EFFECT_SOLID;
     }
