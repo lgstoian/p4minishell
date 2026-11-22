@@ -219,13 +219,20 @@ def _live(dev, c, ctx):
     # The bench AP occasionally drops while the page is being fetched. One
     # reconnect + fetch retry is an environmental recovery, not a masked
     # failure: the suite still requires a full render and a proof screenshot.
-    out = dev.run("browser %s" % LIVE_URL, timeout=240, settle=3.0)
-    if "Failed to" in out:
-        c.note("live fetch failed once; reconnecting and retrying")
-        dev.run("wifi connect %s %s" % (ssid, password), timeout=45)
-        _wait_ip(dev, timeout_s=60)
-        dev.run("browser cache clear", timeout=20)
+    out = ""
+    for attempt in range(3):
         out = dev.run("browser %s" % LIVE_URL, timeout=240, settle=3.0)
+        if "Failed to" not in out:
+            break
+        if attempt == 2:
+            break
+        c.note("live fetch dropped (attempt %d); reconnecting and retrying"
+               % (attempt + 1))
+        dev.run("wifi disconnect", timeout=20)
+        dev.run("wifi connect %s %s" % (ssid, password), timeout=45)
+        if not _wait_ip(dev, timeout_s=60):
+            c.note("no IP after reconnect; retrying the fetch anyway")
+        dev.run("browser cache clear", timeout=20)
 
     # Proof capture FIRST: `tui dump` appends to the transcript and can repaint
     # the shell over the page. This is the screenshot v1.4.3 failed to ship.

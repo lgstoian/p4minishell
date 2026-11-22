@@ -147,14 +147,15 @@ def _push(dev, c, local, remote):
         return False
 
 
-def _pull_bmp(dev, c, remote, label, keep=None):
+def _pull_bmp(dev, c, remote, label, keep=None, quiet=False):
     """Pull a device-written BMP, validate the magic, and return a pixel model."""
     try:
         data = dev.pull_file(remote)
     except PanicError:
         raise
     except Exception as exc:  # noqa: BLE001
-        c.check("%s: BMP pulled" % label, False, str(exc))
+        if not quiet:
+            c.check("%s: BMP pulled" % label, False, str(exc))
         return None
     finally:
         try:
@@ -164,8 +165,9 @@ def _pull_bmp(dev, c, remote, label, keep=None):
         except Exception:  # noqa: BLE001
             pass
     ok = data[:2] == b"BM" and len(data) > 1000
-    c.check("%s: BMP is valid" % label, ok,
-            "%d bytes, magic=%r" % (len(data), data[:2]))
+    if not quiet:
+        c.check("%s: BMP is valid" % label, ok,
+                "%d bytes, magic=%r" % (len(data), data[:2]))
     if not ok:
         return None
     if keep is not None:
@@ -180,49 +182,62 @@ def _pull_bmp(dev, c, remote, label, keep=None):
     except PanicError:
         raise
     except Exception as exc:  # noqa: BLE001
-        c.check("%s: BMP parses" % label, False, str(exc))
+        if not quiet:
+            c.check("%s: BMP parses" % label, False, str(exc))
         return None
 
 
 def _snap_tcmd(dev, c, label):
     """Launch TCMD, snapshot its TUI with the documented ``p`` snap key, quit.
 
-    TCMD owns the console input in its ``choice`` key loop, so every send is a
-    key and the batch is driven exactly like s14 does: sync on ``key?``, then
-    one letter per line. The quit is the documented ``q`` (then Enter); a
-    bounded retry keeps a dropped key from leaving the app open for the next
-    run.
+    TCMD owns the console input in its ``choice`` key loop, so a host ``send``
+    is consumed as a keystroke until the app exits. The BMP is therefore pulled
+    only after the documented ``q`` quit. A capture taken before the panel has
+    presented the TUI can be nearly blank; in the full sweep that produced a
+    90%% false diff between two opaque runs on COM6. Retry the whole launch/quit
+    cycle until the BMP contains TUI ink. The pixel assertions are unchanged -
+    a stale/incomplete frame is never accepted as the control image.
     """
-    session = dev.session
-    session.reset_input()
-    session.write_line("launch TCMD")
-    head = session.read_until(b"[M-TCMD-R]", 60)
-    c.check("%s: TCMD drew its TUI" % label, b"[M-TCMD-R]" in head,
-            _tail(head))
-    session.read_for(1.0)
-    session.write_line("p")          # documented snap key -> screenshot TCMD.BMP
-    tail = session.read_until(b"[M-TCMD-R]", 25)
-    c.check("%s: snap accepted and the pane refreshed" % label,
-            b"[M-TCMD-R]" in tail, _tail(tail))
-    session.read_for(0.8)
-    session.write_line("q")          # documented quit key (letter + Enter)
-    tail = session.read_until(b"[M-TCMD-DONE]", 15)
-    exited = b"[M-TCMD-DONE]" in tail
-    if not exited:
-        for _ in range(3):
-            session.write_line("q")
-            tail = session.read_until(b"[M-TCMD-DONE]", 8)
-            if b"[M-TCMD-DONE]" in tail:
-                exited = True
-                break
-    c.check("%s: TCMD quit cleanly" % label, exited, _tail(tail))
-    if not exited:
-        # Keep the next launch from being eaten by a still-open key wait.
-        for _ in range(3):
-            session.write_line("q")
-            session.read_for(0.5)
-    dev.run("delay 300", timeout=25)
-    return _pull_bmp(dev, c, "TCMD.BMP", "%s: TCMD screen" % label)
+    bmp = None
+    for attempt in range(3):
+        quiet = bool(attempt)
+        session = dev.session
+        session.reset_input()
+        session.write_line("launch TCMD")
+        head = session.read_until(b"[M-TCMD-R]", 60)
+        if not quiet:
+            c.check("%s: TCMD drew its TUI" % label, b"[M-TCMD-R]" in head,
+                    _tail(head))
+        session.read_for(1.2)
+        session.write_line("p")          # documented snap key -> screenshot TCMD.BMP
+        tail = session.read_until(b"[M-TCMD-R]", 25)
+        if not quiet:
+            c.check("%s: snap accepted and the pane refreshed" % label,
+                    b"[M-TCMD-R]" in tail, _tail(tail))
+        session.read_for(1.0)
+        session.write_line("q")          # documented quit key (letter + Enter)
+        tail = session.read_until(b"[M-TCMD-DONE]", 15)
+        exited = b"[M-TCMD-DONE]" in tail
+        if not exited:
+            for _ in range(3):
+                session.write_line("q")
+                tail = session.read_until(b"[M-TCMD-DONE]", 8)
+                if b"[M-TCMD-DONE]" in tail:
+                    exited = True
+                    break
+        if not quiet:
+            c.check("%s: TCMD quit cleanly" % label, exited, _tail(tail))
+        if not exited:
+            for _ in range(3):
+                session.write_line("q")
+                session.read_for(0.5)
+        dev.run("delay 300", timeout=25)
+        bmp = _pull_bmp(dev, c, "TCMD.BMP", label, quiet=quiet)
+        if bmp is not None and _bright_samples(bmp) > 100:
+            break
+        c.note("%s: capture %d had no TUI ink; retrying launch"
+               % (label, attempt + 1))
+    return bmp
 
 
 def _bright_samples(bmp, threshold=500):
