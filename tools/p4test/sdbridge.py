@@ -20,6 +20,7 @@ from .session import DeviceSession, P4Error
 CHUNK = 4096
 READY = b"=== RX READY ==="
 DONE = b"=== RX DONE ==="
+TX_DONE = b"=== TX DONE ==="
 # Success line the device prints *after* DONE. Accepting it as a second proof
 # matters for a large transfer: the footer and the transcript's success line
 # are queued behind ~1 MB of ACKs, and a busy console can deliver the line
@@ -221,4 +222,15 @@ def pull_file(dev: DeviceSession, remote: str, timeout: float = 120.0) -> bytes:
     if b"SDFX" not in prelude:
         raise P4Error("send %s: no SDFX frame (%r)" % (remote, prelude[-160:]))
     size = struct.unpack("<I", dev.read_exact(4, 15.0))[0]
-    return dev.read_exact(size, timeout)
+    payload = dev.read_exact(size, timeout)
+    # The device re-enables its console reader only AFTER emitting TX DONE
+    # (components/command/serial_commands.c). Returning as soon as the payload
+    # is read lets the next command arrive while that reader is still
+    # suspended - the intermittent `del /f ... : marker not seen` hangs after a
+    # screenshot in the full sweep. The framed transfer is not complete until
+    # the marker is consumed.
+    tail = dev.read_until(TX_DONE, 15.0)
+    if TX_DONE not in tail:
+        raise P4Error("send %s: no TX DONE after %d bytes (%r)"
+                      % (remote, size, tail[-120:]))
+    return payload
