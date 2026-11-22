@@ -1011,7 +1011,15 @@ def _services(dev, c):
     dev.run("service start P14MEM")
     c.expect("logger signalled a tick", "P14WAIT-EL=0",
              dev.run("wait memlogtick /t:10 & echo P14WAIT-EL=%ERRORLEVEL%", timeout=60))
-    out = dev.run("type sd:/MEMLOG.CSV")
+    # The tick signal fires before the service necessarily flushed its CSV;
+    # poll the file instead of reading once and failing on a healthy service.
+    out = ""
+    deadline = time.time() + 15.0
+    while time.time() < deadline:
+        out = dev.run("type sd:/MEMLOG.CSV", timeout=20)
+        if "heap_free" in out:
+            break
+        time.sleep(0.5)
     c.expect("logger wrote the CSV", "heap_free", out)
     dev.run("service stop P14MEM")
     dev.run("service remove P14MEM")
