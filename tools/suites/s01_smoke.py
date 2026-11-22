@@ -92,7 +92,13 @@ def run(dev, ctx):
     # appdiff gate) makes this geometry check fail for unrelated reasons.
     dev.run("keyboard show", timeout=15)
     disp_w, disp_h = dev.display_size()
-    bmp = dev.screenshot(out_dir=OUT_DIR, name="smoke")
+    try:
+        bmp = dev.screenshot(out_dir=OUT_DIR, name="smoke")
+    except Exception:  # noqa: BLE001 - PSRAM may be fragmented at boot
+        dev.run("screenshot /panel SMOKE.BMP", timeout=90)
+        from p4test.screenshot import parse_bmp
+        bmp = parse_bmp(dev.pull_file("SMOKE.BMP"))
+        dev.run("del /f SMOKE.BMP", timeout=20)
     c.equals("screenshot width", bmp.width, disp_w)
     c.equals("screenshot height", bmp.height, disp_h)
     c.equals("screenshot bpp", bmp.bpp, 24)

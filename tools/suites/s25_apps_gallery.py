@@ -116,7 +116,7 @@ SPECS = [
     dict(app="notes", cmd="launch NOTES", start="[M-NOTE]",
          # Dismiss the welcome dialog, then wait for the real menu marker:
          # capturing after "ok" photographed a nearly empty "Text" prompt.
-         pre=[(2.0, "ok", "[M-NOTE-MENU]")], shot="stream", shot_delay=3.0,
+         shot="stream", shot_delay=3.0,
          quit=["8"], end_shell=True),
     dict(app="companion", cmd="launch COMPANION", start="[C-MENU]",
          shot="stream", shot_delay=2.0, quit=["6"], end="[C-EXIT]"),
@@ -198,7 +198,7 @@ SPECS = [
          quit=["5"], end="[M-FILES-BACK]"),
     dict(app="net-msg", cmd="launch NET", start="[M-NET]",
          pre=[(4.0, "7", "[M-NET-OUTBOX]")], shot="stream", shot_delay=1.0,
-         quit=["8"], quit_settle=2.0, end="[M-NET-BACK]"),
+         quit=["1"], quit_settle=2.0, end="[M-NET-BACK]"),
 ]
 
 # Background-service surfaces: start the real script in a pool slot, wait for

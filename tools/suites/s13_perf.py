@@ -96,7 +96,7 @@ def _diag_benchmark(dev, c):
         if b"benchmark" not in dev.session.read_until(b"benchmark", 25):
             c.note("DIAG benchmark selection was not accepted")
             return
-        head = dev.session.read_until(b"gfx stats:", 90)
+        head = dev.session.read_until(b"frames=", 90)
         tail = dev.session.read_for(1.0)
         text = head.decode("utf-8", "replace") + tail
         line = _stat_line(text, "gfx stats:")
