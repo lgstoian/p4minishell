@@ -127,7 +127,9 @@ def _diag_benchmark(dev, c):
             time.sleep(0.3)
         except Exception:  # noqa: BLE001
             pass
-        _run(dev, c, "resync after DIAG", "echo p4diagok", timeout=30)
+        dev.reboot(settle_ms=8000)
+    c.check("resync after DIAG", "p4diagok" in dev.run("echo p4diagok", timeout=20),
+            "shell did not answer after the DIAG benchmark")
 
 
 def _cleanup(dev, c):
