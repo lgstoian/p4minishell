@@ -51,7 +51,18 @@ def main():
         errors.append("led.c: HTTPD_STOPPED must cue back to the status colour, "
                       "not a black default")
 
-    # 4. Event colours must remain distinct (no flattening to one colour).
+    # 4. LED2 must remain the CPU gauge, fed from telemetry through the ops
+    #    table (no reverse dependency from led into shell/header).
+    ledh = read("components/led/led.h")
+    shell = read("components/shell/shell.c")
+    command = read("components/command/command.c")
+    if "led_set_cpu_usage" not in ledh or "led_set_cpu_usage" not in led:
+        errors.append("led: CPU gauge API led_set_cpu_usage must exist")
+    if "led_cpu_usage" not in shell or "led_cpu_usage" not in command:
+        errors.append("shell/command: CPU telemetry must reach the LED engine "
+                      "via shell_command_ops_t")
+
+    # 5. Event colours must remain distinct (no flattening to one colour).
     expected = {
         "BOOT_OK": "0x00FF00",
         "WIFI_CONNECTED": "0x00FF00",

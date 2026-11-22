@@ -480,7 +480,7 @@ lane is a **pre-gate only**: hardware sign-off still comes from
   power management (idle display-off, sleep, deep-sleep, and `shutdown`).
 - Status LED(s): a single WS2812 on the EV board, or the two **independently
   addressable** keyboard LEDs on the Tab5 (`rgb 1|2 <r> <g> <b>`; LED1 = status,
-  LED2 = user).
+  LED2 = CPU gauge by default: green/amber/red from the same CPU sample the header shows; `rgb 2 ...` overrides it until `rgb auto on`).
 - **Battery:** EV = ADC divider; Tab5 = INA226 pack gauge (read-only measurement)
   with charging enabled at boot and an honest `charging`/`discharging`/`idle`/
   `full` state.
