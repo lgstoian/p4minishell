@@ -50,6 +50,9 @@ gates = [
     ('gallery identity', 'gallery_audit.py'),
     # Canary: prove the identity guard itself can go red.
     ('gallery guard canary', 'gallery_audit_selftest.py'),
+    # The documented auto-LED state machine must not be flattened into one
+    # colour (a previous "fix" removed the status signalling feature).
+    ('led contract', 'led_contract.py'),
 ]
 # The static-DRAM budget gate needs a firmware image; only run it when one has
 # been built, so a fresh checkout (no build/) never fails the host gate.

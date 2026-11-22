@@ -172,6 +172,7 @@ STATIC_GATES = [
     # same screen as another app. This is the gate that v1.4.3 lacked.
     ("gallery identity", "gallery_audit.py"),
     ("gallery guard canary", "gallery_audit_selftest.py"),
+    ("LED state-machine contract", "led_contract.py"),
 ]
 
 
