@@ -216,7 +216,15 @@ def _live(dev, c, ctx):
         return
 
     dev.run("browser cache clear", timeout=20)
+    # The bench AP occasionally drops while the page is being fetched. One
+    # reconnect + fetch retry is an environmental recovery, not a masked
+    # failure: the suite still requires a full render and a proof screenshot.
     out = dev.run("browser %s" % LIVE_URL, timeout=240, settle=3.0)
+    if "Failed to" in out:
+        c.note("live fetch failed once; reconnecting and retrying")
+        dev.run("wifi reconnect", timeout=45)
+        dev.run("browser cache clear", timeout=20)
+        out = dev.run("browser %s" % LIVE_URL, timeout=240, settle=3.0)
 
     # Proof capture FIRST: `tui dump` appends to the transcript and can repaint
     # the shell over the page. This is the screenshot v1.4.3 failed to ship.
