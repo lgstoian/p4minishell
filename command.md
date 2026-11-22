@@ -1260,7 +1260,7 @@ owns the driver, a small animation task, and the auto status layer.
   when the HTTP server starts. A green flash confirms boot.
 - `rgb 1 <r> <g> <b>` / `rgb 2 <r> <g> <b>` — set one LED independently
   (Tab5 keyboard LEDs only). LED1 (index 1) is the status engine; LED2
-  (index 2) is the CPU gauge by default (green <40%, amber 40-75%, red >75%).
+  (index 2) is the CPU gauge by default (continuous green->yellow->red ramp: R=CPU%, G=100-CPU%).
   `rgb 2 ...` takes manual control until `rgb auto on` hands it back.
   `rgb 1|2 off` clears one.
 

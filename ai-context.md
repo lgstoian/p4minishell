@@ -2583,7 +2583,7 @@ the raster core + 8x8 font are `components/gfx/`
   `led_set_cpu_usage()` is a leaf API; the telemetry producer in `shell.c`
   publishes the same CPU sample it sends to the header through the
   `shell_command_ops_t.led_cpu_usage` callback (no reverse dependency).
-  Green below 40%, amber 40-75%, red above 75%. LED1 keeps the documented
+  Continuous ramp: R=CPU%, G=100-CPU%. LED1 keeps the documented
   Wi-Fi/status state machine. An explicit `rgb 2 <r> <g> <b>` overrides the
   gauge; `rgb auto on` restores it. On the single-LED reference board the
   status machine is unchanged and no CPU override applies
