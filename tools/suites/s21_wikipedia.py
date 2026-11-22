@@ -222,7 +222,8 @@ def _live(dev, c, ctx):
     out = dev.run("browser %s" % LIVE_URL, timeout=240, settle=3.0)
     if "Failed to" in out:
         c.note("live fetch failed once; reconnecting and retrying")
-        dev.run("wifi reconnect", timeout=45)
+        dev.run("wifi connect %s %s" % (ssid, password), timeout=45)
+        _wait_ip(dev, timeout_s=60)
         dev.run("browser cache clear", timeout=20)
         out = dev.run("browser %s" % LIVE_URL, timeout=240, settle=3.0)
 
