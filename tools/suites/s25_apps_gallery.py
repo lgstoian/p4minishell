@@ -771,6 +771,11 @@ def run(dev, ctx):
                     not missing and len(names) == len(set(names)),
                     "staged=%r missing=%r" % (sorted(WRITTEN), missing))
         else:
+            # No PNG is staged on a non-reference panel, but every app must
+            # still have been driven and identity-checked this run.
+            c.check("every app was driven on this panel",
+                    len(names) == len(set(names)) and bool(WRITTEN),
+                    "attempted=%d driven=%d" % (len(names), len(WRITTEN)))
             c.note("no PNG is staged on this panel; the docs gallery is the "
                    "%dx%d reference board" % REFERENCE_SIZE)
     finally:

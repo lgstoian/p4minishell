@@ -239,6 +239,16 @@ def _live(dev, c, ctx):
     if rendered:
         c.expect("live render shows the infobox", "Espressif Systems", dump)
         c.expect("live render shows the article title", "ESP32", dump)
+    else:
+        # The transport rejects a page above P4_CONFIG_HTTP_MAX_BODY_BYTES
+        # instead of exhausting PSRAM. Keep asserting that safety contract:
+        # a full render is still required for the proof, but a degraded fetch
+        # must be bounded and must not crash the board.
+        degraded = ("Page exceeds the" in out or "exceeds the" in out)
+        c.check("live fetch bounded by the documented size cap", degraded,
+                out[-500:])
+        c.check("live degradation did not crash the board",
+                "Guru Meditation" not in out + dump, out[-300:])
 
     if shot is not None:
         try:

@@ -1238,7 +1238,9 @@ Hosted NimBLE is brought up separately and lazily by `bluetooth.c`, which receiv
 same host callback surface during `networking_init()`.
 
 **Default STA runtime** is enforced at two levels: the code always sets `WIFI_MODE_STA`, and
-`CONFIG_ESP_WIFI_SOFTAP_SUPPORT` / `CONFIG_WIFI_RMT_SOFTAP_SUPPORT` are both disabled so
+the default runtime is station-only; `CONFIG_ESP_WIFI_SOFTAP_SUPPORT` /
+`CONFIG_WIFI_RMT_SOFTAP_SUPPORT` are compiled in for the captive portal and
+`chat host on` (board-to-board APSTA). Neither is enabled at boot by default. The AP path is enabled only by those opt-in flows so
 the AP path is not compiled in. Both symbols matter because esp_wifi_remote mirrors the
 Wi-Fi Kconfig under its own `WIFI_RMT_` prefix.
 
