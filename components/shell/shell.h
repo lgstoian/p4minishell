@@ -148,6 +148,9 @@ typedef struct {
     /** Report shell user activity (power idle clock + display wake). */
     void (*pm_notify_activity)(void);
 
+    /** Publish a CPU-usage sample to the status LED engine (LED2 on Tab5). */
+    void (*led_cpu_usage)(uint8_t percent);
+
     /** Milliseconds until the idle display-off deadline; 0 when disabled or
      *  already off. Used by the adaptive header refresh scheduler. */
     int (*pm_ms_until_idle_off)(void);

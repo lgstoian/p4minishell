@@ -138,6 +138,28 @@ esp_err_t led_set_auto_status(bool enable);
 void led_get_state(led_state_t *out);
 
 /**
+ * Publish the latest CPU usage sample (0..100) from the telemetry producer.
+ *
+ * The LED component stays a leaf: it never queries the header or FreeRTOS
+ * itself. On a two-LED board LED2 shows the CPU colour while LED1 keeps the
+ * documented Wi-Fi/status state machine. On a single-LED board only a short
+ * warning transient is raised above P4_CONFIG_LED_CPU_WARN_PCT, so the
+ * persistent status colour is never replaced.
+ */
+void led_set_cpu_usage(uint8_t percent);
+
+/**
+ * Publish the latest CPU usage sample (0..100) from the telemetry producer.
+ *
+ * The LED component stays a leaf: it never queries the header or FreeRTOS
+ * itself. On a two-LED board LED2 shows the CPU colour while LED1 keeps the
+ * documented Wi-Fi/status state machine. On a single-LED board only a short
+ * warning transient is raised above P4_CONFIG_LED_CPU_WARN_PCT, so the
+ * persistent status colour is never replaced.
+ */
+void led_set_cpu_usage(uint8_t percent);
+
+/**
  * Push a transient event colour. In auto mode, Wi-Fi state events update the
  * persistent status colour; every other event (boot OK, HTTP server, errors)
  * flashes for P4_CONFIG_LED_NOTIFY_MS and then returns to the status colour.

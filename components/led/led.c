@@ -69,6 +69,8 @@
 #define LED_BOOT_FLASH_MS      P4_CONFIG_LED_BOOT_FLASH_MS
 #define LED_EFFECT_SPEED       P4_CONFIG_LED_EFFECT_SPEED_DEFAULT
 #define LED_AUTO_STATUS        P4_CONFIG_LED_AUTO_STATUS
+#define LED2_CPU_USAGE         P4_CONFIG_LED2_CPU_USAGE
+#define LED_CPU_WARN_PCT       P4_CONFIG_LED_CPU_WARN_PCT
 #define LED_COLOR_BOOT_OK           P4_CONFIG_LED_COLOR_BOOT_OK
 #define LED_COLOR_WIFI_CONNECTING   P4_CONFIG_LED_COLOR_WIFI_CONNECTING
 #define LED_COLOR_WIFI_CONNECTED    P4_CONFIG_LED_COLOR_WIFI_CONNECTED
@@ -104,6 +106,8 @@ static uint8_t s_speed;
 static led_frame_t s_status_frame;   /* persistent auto status colour */
 static led_frame_t s_manual_frame;   /* persistent manual colour/effect */
 static led_frame_t s_secondary_frame;/* secondary user LED (Tab5 keyboard RGB2) */
+static uint8_t s_cpu_percent;         /* last sample pushed by the telemetry producer */
+static bool s_cpu_manual_override;    /* set by an explicit `rgb 2` command */
 static led_notification_t s_notification;
 
 static void led_lock(void)
@@ -295,6 +299,7 @@ static void led_task(void *arg)
         } else {
             frame = s_auto_status ? s_status_frame : s_manual_frame;
             s_notification.active = false;
+    s_cpu_manual_override = false;
         }
 
         led_render_frame(&frame, now_us, s_speed, &red, &green, &blue);
@@ -316,6 +321,8 @@ static void led_task(void *arg)
             uint8_t sr = (uint8_t)((uint16_t)s_secondary_frame.red * LED_BRIGHTNESS_PCT / 100);
             uint8_t sg = (uint8_t)((uint16_t)s_secondary_frame.green * LED_BRIGHTNESS_PCT / 100);
             uint8_t sb = (uint8_t)((uint16_t)s_secondary_frame.blue * LED_BRIGHTNESS_PCT / 100);
+            /* LED2 is driven by led_set_cpu_usage() on two-LED boards;
+             * LED1 above still follows the documented Wi-Fi status machine. */
 
             (void)tab5kbd_set_rgb_index(0, red, green, blue);
             (void)tab5kbd_set_rgb_index(1, sr, sg, sb);
@@ -457,6 +464,9 @@ esp_err_t led_set_index_color(uint8_t index, uint8_t red, uint8_t green, uint8_t
     return ESP_ERR_NOT_SUPPORTED;
 #else
     led_lock();
+    /* An explicit `rgb 2` takes LED2 over from the CPU gauge; `rgb auto on`
+     * gives it back to the system. */
+    s_cpu_manual_override = true;
     s_secondary_frame.red = red;
     s_secondary_frame.green = green;
     s_secondary_frame.blue = blue;
@@ -543,6 +553,7 @@ esp_err_t led_set_auto_status(bool enable)
     led_lock();
     s_auto_status = enable;
     if (enable) {
+        s_cpu_manual_override = false;
         /* Keep the current status frame; events will refresh it. */
     } else {
         s_notification.active = false;
@@ -608,6 +619,42 @@ void led_notify(led_event_t event)
         s_notification.duration_ms = (event == LED_EVENT_BOOT_OK) ? LED_BOOT_FLASH_MS : LED_NOTIFY_MS;
         s_notification.active = true;
     }
+    led_unlock();
+}
+
+void led_set_cpu_usage(uint8_t percent)
+{
+    if (!s_initialized) {
+        return;
+    }
+    led_lock();
+    s_cpu_percent = percent > 100 ? 100 : percent;
+#if LED_BACKEND_KEYBOARD
+    if (LED2_CPU_USAGE && !s_cpu_manual_override) {
+        /* green <40%, amber 40-75%, red >75% - the same mapping the header
+         * CPU bar uses for its tone. */
+        s_secondary_frame.red = s_cpu_percent >= 75 ? 255 :
+                                (s_cpu_percent >= 40 ? 255 : 0);
+        s_secondary_frame.green = s_cpu_percent < 40 ? 255 :
+                                  (s_cpu_percent < 75 ? 160 : 0);
+        s_secondary_frame.blue = 0;
+        s_secondary_frame.effect = LED_EFFECT_SOLID;
+    }
+#else
+    /* One LED: it belongs to the status state machine. Only a high-CPU
+     * warning is allowed, and only on crossing the threshold (rate-limited
+     * implicitly by the low telemetry refresh rate). */
+    if (s_auto_status && s_cpu_percent >= LED_CPU_WARN_PCT &&
+            !s_notification.active) {
+        s_notification.frame.red = LED_COLOR_WIFI_ERROR >> 16;
+        s_notification.frame.green = (LED_COLOR_WIFI_ERROR >> 8) & 0xFF;
+        s_notification.frame.blue = LED_COLOR_WIFI_ERROR & 0xFF;
+        s_notification.frame.effect = LED_EFFECT_PULSE;
+        s_notification.started_us = esp_timer_get_time();
+        s_notification.duration_ms = 400;
+        s_notification.active = true;
+    }
+#endif
     led_unlock();
 }
 

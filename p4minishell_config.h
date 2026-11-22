@@ -2677,6 +2677,16 @@
 
 /** Start with the auto status layer enabled (Wi-Fi state colours). */
 #define P4_CONFIG_LED_AUTO_STATUS             1
+/** LED2 (Tab5 keyboard) follows CPU usage: green <40%, amber 40-75%, red >75%.
+ *  LED1 remains the Wi-Fi/status engine. */
+#define P4_CONFIG_LED2_CPU_USAGE              1
+/** Single-LED boards show a short warning transient above this CPU percent. */
+#define P4_CONFIG_LED_CPU_WARN_PCT            85
+/** LED2 (Tab5 keyboard) follows CPU usage: green <40%, amber 40-75%, red >75%.
+ *  LED1 remains the Wi-Fi/status engine. */
+#define P4_CONFIG_LED2_CPU_USAGE              1
+/** Single-LED boards show a short warning transient above this CPU percent. */
+#define P4_CONFIG_LED_CPU_WARN_PCT            85
 
 /** Event colours as 0xRRGGBB. */
 #define P4_CONFIG_LED_COLOR_BOOT_OK           0x00FF00

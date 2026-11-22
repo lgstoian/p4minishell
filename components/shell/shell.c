@@ -5164,6 +5164,12 @@ void shell_header_status_refresh(void)
     };
     header_update_batch(&batch);
 
+    /* Publish the SAME CPU sample to the LED engine (leaf, no reverse
+     * dependency): LED2 becomes the CPU gauge on two-LED boards. */
+    if (shell_core_command_ops.led_cpu_usage != NULL) {
+        shell_core_command_ops.led_cpu_usage((uint8_t)s_tlm_cpu_percent);
+    }
+
     /* Physical keyboard auto-detect: hide the on-screen keyboard while ANY
      * physical keyboard is present (USB HID, a connected Bluetooth HID
      * keyboard, or the M5Stack Tab5 keyboard) and restore it on removal.

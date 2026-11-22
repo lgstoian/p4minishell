@@ -7360,6 +7360,7 @@ void command_init(void)
         .c6ota_is_pending       = c6ota_is_confirmation_pending,
         .c6ota_is_busy          = c6ota_is_busy,
         .pm_notify_activity     = shell_power_notify_activity,
+        .led_cpu_usage          = led_set_cpu_usage,
         .pm_ms_until_idle_off   = shell_power_ms_until_idle_off,
         .time_auto_sync         = command_time_auto_sync,
         .complete_line          = command_complete_line,
