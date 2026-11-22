@@ -2586,8 +2586,8 @@ the raster core + 8x8 font are `components/gfx/`
   Green below 40%, amber 40-75%, red above 75%. LED1 keeps the documented
   Wi-Fi/status state machine. An explicit `rgb 2 <r> <g> <b>` overrides the
   gauge; `rgb auto on` restores it. On the single-LED reference board the
-  status machine is unchanged and a short red warning appears only above
-  `P4_CONFIG_LED_CPU_WARN_PCT`.
+  status machine is unchanged and no CPU override applies
+  boards without a second LED.
 - LED2 (the Tab5 keyboard's second RGB) is the **CPU gauge** by default:
   `led_set_cpu_usage()` is a leaf API; the telemetry producer in `shell.c`
   publishes the same CPU sample it sends to the header through the
@@ -2595,8 +2595,8 @@ the raster core + 8x8 font are `components/gfx/`
   Green below 40%, amber 40-75%, red above 75%. LED1 keeps the documented
   Wi-Fi/status state machine. An explicit `rgb 2 <r> <g> <b>` overrides the
   gauge; `rgb auto on` restores it. On the single-LED reference board the
-  status machine is unchanged and a short red warning appears only above
-  `P4_CONFIG_LED_CPU_WARN_PCT`.
+  status machine is unchanged and no CPU override applies
+  boards without a second LED.
 - All tunables live in `P4_CONFIG_LED_*` (documented in `p4minishell_config.yaml`).
 
 ### Audio Rules (beep / tone / wavplay / volume / mic)
