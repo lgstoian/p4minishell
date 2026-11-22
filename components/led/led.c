@@ -160,6 +160,13 @@ static void led_event_frame(led_event_t event, led_frame_t *frame)
         led_unpack(LED_COLOR_HTTPD, &frame->red, &frame->green, &frame->blue);
         frame->effect = LED_EFFECT_PULSE;
         break;
+    case LED_EVENT_HTTPD_STOPPED:
+    case LED_EVENT_NONE:
+        /* "Back to the status colour" cue: use the live persistent frame,
+         * never a black default (that looked like the LED had switched off). */
+        *frame = s_status_frame;
+        frame->effect = LED_EFFECT_SOLID;
+        break;
     case LED_EVENT_ALARM:
         led_unpack(LED_COLOR_ALARM, &frame->red, &frame->green, &frame->blue);
         frame->effect = LED_EFFECT_PULSE;
@@ -582,9 +589,14 @@ void led_notify(led_event_t event)
          * as a transient and left the status colour stale (e.g. amber while
          * connected). */
         led_event_frame(event, &s_status_frame);
-        if (s_auto_status) {
-            s_notification.active = false;
-        } else {
+        /* Update the persistent status; DO NOT cancel a transient notification.
+         * Wi-Fi associate/disconnect events arrive repeatedly at boot, and
+         * cancelling the override there swallowed the green boot flash, the
+         * blue HTTP cue and the cyan alarm cue - the LED just sat green.
+         * Status events only take effect visually once the transient expires.
+         * (In manual mode the status event is still shown transiently, as
+         * documented.) */
+        if (!s_auto_status) {
             led_event_frame(event, &s_notification.frame);
             s_notification.started_us = esp_timer_get_time();
             s_notification.duration_ms = LED_NOTIFY_MS;

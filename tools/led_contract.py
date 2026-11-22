@@ -41,7 +41,17 @@ def main():
         errors.append("networking.c: idle LED event must return DISCONNECTED for "
                       "a configured target and IDLE when there is no target")
 
-    # 3. Event colours must remain distinct (no flattening to one colour).
+    # 3. A Wi-Fi status event must not cancel an active transient notification
+    #    (boot green / HTTP blue / alarm cyan), which made the LED sit green.
+    fn = re.search(r"void led_notify\(led_event_t event\)\s*\{(.*?)\n\}", led, re.S)
+    if not fn or "s_notification.active = false" in fn.group(1).split("if (!s_auto_status)")[0]:
+        errors.append("led.c: status events must not cancel active transient "
+                      "notifications in auto mode")
+    if "case LED_EVENT_HTTPD_STOPPED" not in led or "*frame = s_status_frame" not in led:
+        errors.append("led.c: HTTPD_STOPPED must cue back to the status colour, "
+                      "not a black default")
+
+    # 4. Event colours must remain distinct (no flattening to one colour).
     expected = {
         "BOOT_OK": "0x00FF00",
         "WIFI_CONNECTED": "0x00FF00",
