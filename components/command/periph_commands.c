@@ -1669,6 +1669,12 @@ void shell_execute_rgb_command(int argc, char **argv)
                                       led_effect_name(state.effect));
         shell_transcript_appendf_ansi("  " SH_LBL "colour:" SH_RST " " SH_NUM "#%02X%02X%02X" SH_RST "\n",
                                       state.red, state.green, state.blue);
+        shell_transcript_appendf_ansi("  " SH_LBL "output:" SH_RST " " SH_NUM "#%02X%02X%02X" SH_RST "\n",
+                                      state.out_red, state.out_green, state.out_blue);
+        if (state.refresh_failures) {
+            shell_transcript_appendf_ansi("  " SH_LBL "refresh errors:" SH_RST " " SH_NUM "%u" SH_RST "\n",
+                                          (unsigned int)state.refresh_failures);
+        }
         shell_transcript_appendf_ansi("  " SH_LBL "speed:" SH_RST " " SH_NUM "%u" SH_RST " " SH_MUTE "(1..10)" SH_RST "\n",
                                       (unsigned int)state.speed);
         shell_transcript_appendf_ansi("  " SH_LBL "brightness:" SH_RST " " SH_NUM "%u%%" SH_RST "\n",

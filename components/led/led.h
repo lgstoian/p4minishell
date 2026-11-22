@@ -64,6 +64,10 @@ typedef struct {
     uint8_t blue;            /**< Solid / base colour component (0-255). */
     uint8_t speed;           /**< Effect speed, 1 (slow) .. 10 (fast). */
     uint8_t brightness_pct;  /**< Applied colour scale (0-100). */
+    uint8_t out_red;         /**< Last RGB actually written to the strip. */
+    uint8_t out_green;
+    uint8_t out_blue;
+    uint32_t refresh_failures;  /**< RMT refresh errors since boot */
 } led_state_t;
 
 /**

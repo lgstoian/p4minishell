@@ -439,52 +439,38 @@ pixels_ready:
         size_t total_size = 54 + (size_t)width * height * 3;
         header_notify(HEADER_NOTIFY_INFO, "screenshot: streaming to serial", 2000);
 
-        /* Build the full BMP in memory first */
-        uint8_t *bmp_data = p4heap_alloc_psram(total_size);
-        if (bmp_data == NULL) {
-            shell_print_error("screenshot: out of memory for BMP buffer");
-            free(pixel_data);
-            free(draw_buf);
-            batch_set_errorlevel(1);
-            return;
-        }
-
-        /* Write BMP header */
-        screenshot_write_bmp_headers(bmp_data, width, height);
-
-        /* Convert RGB565 to RGB888 row-by-row, bottom-up (BMP convention) */
+        /* Stream the BMP row-by-row instead of materialising a second full
+         * frame. The capture buffer is already ~1.2 MB; allocating a further
+         * 1.8 MB BMP needed ~3 MB contiguous PSRAM and failed once PSRAM was
+         * below that (the reference board boots with ~2.9 MB free). */
         uint32_t row_bytes = width * 3;
         uint8_t *row_buf = p4heap_alloc_psram(row_bytes);
         if (row_buf == NULL) {
             shell_print_error("screenshot: out of memory for row buffer");
-            free(bmp_data);
             free(pixel_data);
             free(draw_buf);
             batch_set_errorlevel(1);
             return;
         }
-
-        int32_t y;
-        for (y = height - 1; y >= 0; y--) {
-            const uint16_t *row = (const uint16_t *)((const uint8_t *)draw_buf->data +
-                                                       (uint32_t)y * draw_buf->header.stride);
-            rgb565_to_bmp_row(row_buf, row, width);
-            memcpy(bmp_data + 54 + (height - 1 - y) * row_bytes, row_buf, row_bytes);
-        }
-        free(row_buf);
+        uint8_t bmp_header[54];
+        screenshot_write_bmp_headers(bmp_header, width, height);
 
         /* The raw stream owns the console byte stream: suspend the console
          * reader (as `send`/`receive` do) so no host input is misread and no
          * console echo interleaves with the BMP payload. */
         shell_uart_console_rx_begin();
         serial_write_frame_header(P4_CONFIG_SCREENSHOT_BMP_MAGIC, (uint32_t)total_size);
-        /* Send raw BMP data (raw driver write: no CRLF translation). */
-        size_t written = serial_write_raw(bmp_data, total_size) ? total_size : 0;
+        bool written = serial_write_raw(bmp_header, sizeof(bmp_header));
+        for (int32_t y = (int32_t)height - 1; y >= 0 && written; y--) {
+            const uint16_t *row = (const uint16_t *)((const uint8_t *)draw_buf->data +
+                                                       (uint32_t)y * draw_buf->header.stride);
+            rgb565_to_bmp_row(row_buf, row, width);
+            written = serial_write_raw(row_buf, row_bytes);
+        }
         shell_uart_console_rx_end();
+        free(row_buf);
 
-        free(bmp_data);
-
-        if (written == 0) {
+        if (!written) {
             shell_print_error("screenshot: stream write failed");
             batch_set_errorlevel(1);
         } else {

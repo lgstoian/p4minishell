@@ -107,6 +107,10 @@ static led_frame_t s_status_frame;   /* persistent auto status colour */
 static led_frame_t s_manual_frame;   /* persistent manual colour/effect */
 static led_frame_t s_secondary_frame;/* secondary user LED (Tab5 keyboard RGB2) */
 static uint8_t s_cpu_percent;         /* last sample pushed by the telemetry producer */
+static uint8_t s_last_red;            /* last values actually written to the strip */
+static uint8_t s_last_green;
+static uint8_t s_last_blue;
+static uint32_t s_refresh_failures;  /**< WS2812 RMT refresh errors since boot */
 static bool s_cpu_manual_override;    /* set by an explicit `rgb 2` command */
 static led_notification_t s_notification;
 
@@ -308,9 +312,21 @@ static void led_task(void *arg)
         green = (uint8_t)((uint16_t)green * LED_BRIGHTNESS_PCT / 100);
         blue = (uint8_t)((uint16_t)blue * LED_BRIGHTNESS_PCT / 100);
 
+        s_last_red = red;
+        s_last_green = green;
+        s_last_blue = blue;
         if (s_strip != NULL) {
-            led_strip_set_pixel(s_strip, 0, red, green, blue);
-            led_strip_refresh(s_strip);
+            esp_err_t strip_err = led_strip_set_pixel(s_strip, 0, red, green, blue);
+            if (strip_err == ESP_OK) {
+                strip_err = led_strip_refresh(s_strip);
+            }
+            if (strip_err != ESP_OK && s_refresh_failures < 100) {
+                s_refresh_failures++;
+                if (s_refresh_failures == 1) {
+                    ESP_LOGE(LED_TAG, "strip refresh failed: %s",
+                             esp_err_to_name(strip_err));
+                }
+            }
         }
 #if LED_BACKEND_KEYBOARD
         /* Drive the two keyboard LEDs independently; a detached module reports
@@ -584,6 +600,12 @@ void led_get_state(led_state_t *out)
     out->effect = frame->effect;
     out->speed = s_speed;
     out->brightness_pct = LED_BRIGHTNESS_PCT;
+    /* `output` is what the animation task last wrote to the strip, not the
+     * configured frame - it exposes a stuck transient override directly. */
+    out->out_red = s_last_red;
+    out->out_green = s_last_green;
+    out->out_blue = s_last_blue;
+    out->refresh_failures = s_refresh_failures;
     led_unlock();
 }
 
@@ -639,20 +661,6 @@ void led_set_cpu_usage(uint8_t percent)
                                   (s_cpu_percent < 75 ? 160 : 0);
         s_secondary_frame.blue = 0;
         s_secondary_frame.effect = LED_EFFECT_SOLID;
-    }
-#else
-    /* One LED: it belongs to the status state machine. Only a high-CPU
-     * warning is allowed, and only on crossing the threshold (rate-limited
-     * implicitly by the low telemetry refresh rate). */
-    if (s_auto_status && s_cpu_percent >= LED_CPU_WARN_PCT &&
-            !s_notification.active) {
-        s_notification.frame.red = LED_COLOR_WIFI_ERROR >> 16;
-        s_notification.frame.green = (LED_COLOR_WIFI_ERROR >> 8) & 0xFF;
-        s_notification.frame.blue = LED_COLOR_WIFI_ERROR & 0xFF;
-        s_notification.frame.effect = LED_EFFECT_PULSE;
-        s_notification.started_us = esp_timer_get_time();
-        s_notification.duration_ms = 400;
-        s_notification.active = true;
     }
 #endif
     led_unlock();

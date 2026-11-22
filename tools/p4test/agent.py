@@ -368,7 +368,7 @@ class DogfoodAgent:
         return "\n".join(out)
 
     def action_tui(self) -> str:
-        snippet = self.rng.choice(tui_snippets(self.session))
+        snippet = self.rng.choice(tui_snippets(self.dev.session))
         out = []
         for cmd in snippet:
             out.append(self.dev.run(cmd, timeout=15))
