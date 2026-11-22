@@ -358,7 +358,7 @@ def _board_worker(label: str, port: str, mods, quick: bool,
                 # Only pixel-sensitive areas need a hard reset between suites.
                 # Rebooting for every area cost ~8 min/board and hid nothing:
                 # a failed or timed-out suite already triggers the reset below.
-                if mod is not mods[0] and getattr(mod, "NEEDS_CLEAN_BOOT", False):
+                if mod is not mods[0]:
                     try:
                         dev.reboot(settle_ms=4000 if quick else 2000)
                     except PanicError:

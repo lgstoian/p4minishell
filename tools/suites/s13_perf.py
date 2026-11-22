@@ -53,9 +53,16 @@ def _run(dev, c, label, cmd, timeout=30.0, settle=0.5):
 
 
 def _stat_line(text, prefix):
+    """Last real statistics line carrying numbers, not the `reset` echo.
+
+    `gfx stats reset` prints a line with the same prefix but no `frames=`;
+    taking that line made a real assertion read a non-stat and fail (the old
+    tautology had hidden the parser bug).
+    """
     last = ""
     for line in text.splitlines():
-        if prefix.lower() in line.lower():
+        low = line.lower()
+        if prefix.lower() in low and "frames=" in low:
             last = line.strip()
     return last
 

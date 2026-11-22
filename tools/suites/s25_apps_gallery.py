@@ -739,7 +739,16 @@ def run(dev, ctx):
 
         for spec in SPECS:
             _log("driving %s" % spec["app"])
+            started = time.time()
             ok = _drive(dev, c, spec, want)
+            if time.time() - started > 180.0:
+                # A wedged app otherwise costs dozens of 20s timeouts and can
+                # stall a whole sweep for an hour. Fail it explicitly and reset
+                # before the next app, instead of grinding on.
+                c.check("%s drive bounded to 180s" % spec["app"], False,
+                        "%.0fs" % (time.time() - started))
+                dev.reboot(settle_ms=8000)
+                continue
             if not ok:
                 _log("retrying %s" % spec["app"])
                 _ensure_shell(dev, c, spec["app"])
