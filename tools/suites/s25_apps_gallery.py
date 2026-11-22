@@ -198,7 +198,7 @@ SPECS = [
          quit=["5"], end="[M-FILES-BACK]"),
     dict(app="net-msg", cmd="launch NET", start="[M-NET]",
          pre=[(4.0, "7", "[M-NET-OUTBOX]")], shot="stream", shot_delay=1.0,
-         quit=["1"], quit_settle=2.0, end="[M-NET-BACK]"),
+         quit=["1"], quit_settle=2.0, end="[M-NET-MSG-BACK]"),
 ]
 
 # Background-service surfaces: start the real script in a pool slot, wait for
