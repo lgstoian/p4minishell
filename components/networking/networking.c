@@ -136,10 +136,11 @@ static int64_t s_wifi_associated_at_us;
  * of blinking forever. Caller holds the Wi-Fi lock. */
 static led_event_t networking_wifi_idle_led_event_locked(void)
 {
-    /* Idle is green whether or not a profile is configured: "disconnected
-     * with a saved profile" is a normal resting state, not an error. Real
-     * failures (auth, transport) still raise LED_EVENT_WIFI_ERROR separately. */
-    return LED_EVENT_WIFI_IDLE;
+    /* Documented contract: a station up with no target settles to steady
+     * green; a configured network that drops pulses amber (not red - red is
+     * reserved for the watchdog-timeout error). */
+    return (s_wifi_target_ssid[0] != '\0') ? LED_EVENT_WIFI_DISCONNECTED
+                                           : LED_EVENT_WIFI_IDLE;
 }
 
 /* Cached radio telemetry for the associated AP. The ESP-Hosted

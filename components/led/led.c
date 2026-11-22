@@ -367,11 +367,12 @@ void led_init(void)
     s_strip = strip;
     s_auto_status = (LED_AUTO_STATUS != 0);
     s_speed = LED_EFFECT_SPEED;
-    /* The default, unused state is green. Transient Wi-Fi/network events
-     * override it while they are active and then fall back to green; an AP
-     * that is configured but unreachable must not leave the board looking
-     * faulty forever (the watchdog now stops after a bounded retry budget). */
-    led_event_frame(LED_EVENT_WIFI_IDLE, &s_status_frame);
+    /* Documented contract (ai-context.md "LED Rules", command.md `rgb auto`):
+     * start on the amber connecting pulse; Wi-Fi events then drive the
+     * persistent state - green when connected, steady green when idle with no
+     * target, amber pulse when a configured network drops, red pulse on the
+     * watchdog timeout. `main.c` fires the green boot flash as a transient. */
+    led_event_frame(LED_EVENT_WIFI_CONNECTING, &s_status_frame);
     memset(&s_manual_frame, 0, sizeof(s_manual_frame));
     s_manual_frame.effect = LED_EFFECT_SOLID;
     memset(&s_secondary_frame, 0, sizeof(s_secondary_frame));
