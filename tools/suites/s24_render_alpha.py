@@ -53,6 +53,7 @@ measured on COM3), so the pixel comparison must start from a clean boot.
 from __future__ import annotations
 
 import os
+import time
 
 from p4test.asserts import Checklist
 from p4test.session import PanicError
@@ -360,13 +361,31 @@ def _emoji_leg(dev, c):
     # pixel-identical.
     dev.run("cls", timeout=20)
     dev.run("echo CHROME \u2605 \u2605 \u2605 \u2605 \u2605", timeout=20)
-    star = dev.screenshot()
+    star = _settled_shot(dev)
     dev.run("cls", timeout=20)
     dev.run("echo CHROME \ue000 \ue000 \ue000 \ue000 \ue000", timeout=20)
-    box = dev.screenshot()
+    box = _settled_shot(dev)
     moved = diff_ratio(star, box, tol=0)
     c.check("emoji: a symbol renders in the transcript (not the placeholder)",
             moved >= 0.0005, "%.5f of sampled pixels differ" % moved)
+
+
+def _settled_shot(dev, tries=8):
+    """Capture after the deferred transcript apply has stopped changing.
+
+    An immediate screenshot can catch a panel that has not repainted the new
+    glyphs yet, making a healthy renderer look like a placeholder fallback.
+    Wait for two identical consecutive frames; the assertion below still
+    compares the real rendered pixels.
+    """
+    prev = dev.screenshot()
+    for _ in range(tries):
+        time.sleep(0.2)
+        cur = dev.screenshot()
+        if diff_ratio(prev, cur, tol=0) == 0.0:
+            return cur
+        prev = cur
+    return cur
 
 
 def _app_noise(a, b, top=72, tol=1):
