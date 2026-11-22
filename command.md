@@ -1260,7 +1260,9 @@ owns the driver, a small animation task, and the auto status layer.
   when the HTTP server starts. A green flash confirms boot.
 - `rgb 1 <r> <g> <b>` / `rgb 2 <r> <g> <b>` — set one LED independently
   (Tab5 keyboard LEDs only). LED1 (index 1) is the status engine; LED2
-  (index 2) is an independent user LED, off by default. `rgb 1|2 off` clears one.
+  (index 2) is the CPU gauge by default (green <40%, amber 40-75%, red >75%).
+  `rgb 2 ...` takes manual control until `rgb auto on` hands it back.
+  `rgb 1|2 off` clears one.
 
 **ERRORLEVEL:** 0 success, 1 failure (LED driver unavailable), 2 usage.
 Works in batch files (`rgb 255 0 0 && echo led-red`, `if errorlevel 1 ...`) and
