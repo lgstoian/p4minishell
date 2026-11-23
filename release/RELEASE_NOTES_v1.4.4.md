@@ -1,6 +1,6 @@
 # P4MiniShell v1.4.4 — release notes
 
-**Date:** 2026-11-22
+**Date:** 2026-11-23
 **Boards:** `jc1060p470c` (reference, COM3) and `m5stack_tab5` (COM6)
 **Firmware version:** `P4_CONFIG_VERSION_*` = 1.4.4
 
@@ -93,10 +93,17 @@ gate itself is in [`release.md`](../release.md) and [`harness.md`](../harness.md
 | Gallery | 22 visual app captures plus the separately published live-proof `web.png` |
 | `tools/led_contract.py` | pass, 0 errors; LED states distinct on both boards |
 | LED hardware (`rgb status` under `display stress`) | COM3 `#018300` -> `#805A00`, COM6 LED2 `#19E500` -> `#B54900` |
+| Full strict-green sweeps (`--tier full --strict-green`, `P4_WIFI_LIVE=1`) | **3 consecutive clean** on COM3 + COM6 (113 / 114 / 115 min) |
+| Dogfood soak (10 min, both boards) | **5/5** on COM3 and COM6, 0 high anomalies |
 
 F27 is resolved in v1.3.0; the three consecutive clean full sweeps on both
 boards and the dogfood soak are recorded in [`bugs.md`](../bugs.md). Firmware
 and `test/` build with zero errors and zero warnings on both board profiles.
+The final tree also fixes three gate-only races: the SDFX `pull_file()` now
+waits for the device's TX DONE marker before releasing the console (the old
+race dropped the next `del /f` after a screenshot), the live Wikipedia leg has
+three bounded reconnect attempts, and the alpha fixture retries a TCMD capture
+that missed the panel's first present.
 
 ---
 
