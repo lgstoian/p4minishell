@@ -193,8 +193,23 @@ class DogfoodAgent:
         try:
             mean = bmp.region_mean(0, 0, bmp.width, bmp.height)
             if sum(mean) < 12:
-                self.anomaly("HIGH", "blank-screen",
-                             "frame nearly all black mean=%r" % (mean,))
+                # A dark-but-valid TUI (e.g. a mostly empty panel showing only
+                # "sniffing...") has a header, a border and a footer. Mean
+                # brightness alone flagged that as HIGH on COM6. Require the
+                # frame to be BOTH dark and structurally empty: few lit
+                # samples and few distinct colours.
+                ink = 0
+                colours = set()
+                for yy in range(0, bmp.height, 8):
+                    for xx in range(0, bmp.width, 8):
+                        pix = bmp.px(xx, yy)
+                        if sum(pix) > 45:
+                            ink += 1
+                        colours.add(pix)
+                if ink < 8 or len(colours) < 6:
+                    self.anomaly("HIGH", "blank-screen",
+                                 "frame dark and unstructured mean=%r "
+                                 "ink=%d colours=%d" % (mean, ink, len(colours)))
             top = bmp.region_mean(0, 0, bmp.width, 40)
             if sum(top) < 20:
                 self.anomaly("LOW", "header-blank",
