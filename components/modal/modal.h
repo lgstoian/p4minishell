@@ -41,6 +41,14 @@ extern "C" {
 #define MODAL_EVENT_CLOSE_REQUEST   BIT0
 #define MODAL_EVENT_CLOSED          BIT1
 
+/* Optional async bits used by the ready-made surfaces. Only one surface is
+ * ever active on the ONE shared runtime, so they may reuse BIT2 by contract.
+ * `focus` is set by a touch/console callback, `progress_*` by a timer or a
+ * native publisher; the surface's `service()` repaints on the worker task. */
+#define MODAL_EVENT_FOCUS_CHANGED   BIT2
+#define MODAL_EVENT_PROGRESS_TICK   BIT2
+#define MODAL_EVENT_PROGRESS_DONE   BIT3
+
 /* Forward declaration of the surface descriptor. */
 typedef struct modal_surface modal_surface_t;
 
@@ -133,6 +141,54 @@ bool modal_runtime_handle_usb_key(uint8_t key_code, uint8_t modifiers, char asci
 
 /** Route a serial line to the active surface. @return true if consumed. */
 bool modal_runtime_handle_serial_line(const char *line);
+
+/**
+ * @brief Signal the active surface from a timer or another task.
+ *
+ * Sets @p bits on the event group owned by the currently running modal
+ * session. This is the single async channel for the ready-made surfaces
+ * (picker focus repaint, progress ticks/completion). No new task or input
+ * path is created: the bits are serviced by the same session loop that owns
+ * the shell_command_ops_t.modal_* hooks.
+ *
+ * @return true when a surface was active and the bits were set.
+ */
+bool modal_runtime_signal(EventBits_t bits);
+
+/* -------------------------------------------------------------------------
+ * SUSPENDED SESSION STACK (app switching on the one runtime)
+ * -------------------------------------------------------------------------
+ * A snapshot of a modal app: its surface/context, a saved transcript, the
+ * alpha pair in force and the focused row. Only one surface runs at a time;
+ * the stack is pure save/restore bookkeeping around that single session, so
+ * there is no second scheduler and no second input path. Inspired by the
+ * layered app-switching ideas of BMDS / ESP-Brookesia (credit only) - the
+ * implementation below is expressed with our own shell app-mode primitives.
+ */
+
+/** Push a session snapshot; saves the current screen via shell_screen_save()
+ *  and stores the current alpha pair. @p surface/@p ctx may be NULL for a
+ *  metadata-only snapshot used by the batch verb family. */
+bool modal_session_push(const char *name, const modal_surface_t *surface, void *ctx);
+
+/** Pop the top snapshot, discard its screen and restore the one underneath. */
+bool modal_session_pop(void);
+
+/** Mark the top session suspended / resume it (state-only transitions). */
+bool modal_session_suspend(void);
+bool modal_session_resume(void);
+
+/** Bring a named session to the top; restores its screen + alpha pair. */
+bool modal_session_switch(const char *name);
+
+int  modal_session_depth(void);
+const char *modal_session_top_name(void);
+int  modal_session_find(const char *name);
+bool modal_session_focus_set(int focus);
+int  modal_session_focus_get(void);
+
+/** Drop every snapshot (discarding saved screens), leaving the stack empty. */
+void modal_session_clear(void);
 
 #ifdef __cplusplus
 }

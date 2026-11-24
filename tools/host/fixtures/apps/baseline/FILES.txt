@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=FILES
+[M-RICH-FILES] host language extract
+W=files
+1
+[M-RICH-FILES-K] host=p4
+[M-RICH-FILES-K] port=80
+[M-RICH-FILES-F] result=42
+[M-RICH-FILES-S] rev=selif count=1 pad=files----- vals=p4,80
+[M-RICH-FILES-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

@@ -119,6 +119,27 @@ goto :eof
 rem ---- selftest: all ------------------------------------------------------
 rem Runs every selftest routine above. Callable headless:
 rem   call LIB.BAT::selftest_all
+rem ---- v1.6 richer-language showcase ------------------------------------
+rem Callable headless: call LIB.BAT::rich
+rem [M-RICH-LIB-COMPANION] proves str /rev|/count|/pad, map /set + for /K
+rem and func/return publish %RESULT% through the ONE interpreter.
+:rich
+echo [M-RICH-LIB-COMPANION] str/map/forK/func
+set LWORD=companion
+str /rev LWORD LR
+str /count LWORD n LN
+str /pad LWORD 12 LP -
+map /set LMAP lib LIB
+map /set LMAP menu COMPANION
+for /K %%k in (LMAP) do echo [M-RICH-LIB-COMPANION-K] %%k=%%l
+func :libhalf 24
+echo [M-RICH-LIB-COMPANION-F] half=%RESULT%
+echo [M-RICH-LIB-COMPANION-S] rev=%LR% n=%LN% pad=%LP%
+goto :eof
+
+:libhalf
+return %1/2
+
 :selftest_all
 rem Library calls keep an app's APPROOT, but a headless shell call has none:
 rem the selftests are read-only, so SD is a safe fallback for the recursion.

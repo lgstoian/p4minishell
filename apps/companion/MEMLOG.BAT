@@ -17,6 +17,19 @@ rem =====================================================================
 echo [M-MEMLOG]  logger started (mem reports heap + PSRAM)
 set every=300000
 if not "%1"=="" set every=%1
+rem ---- v1.6 richer-language showcase -----------------------------------
+rem [M-RICH-MEMLOG] one-shot headless str/map/forK/func tour; the CSV tick
+rem loop and the memlog mutex are unchanged.
+echo [M-RICH-MEMLOG] headless language tour
+set MW=memlog
+str /rev MW WM
+str /pad MW 8 MP .
+map /set LOGCOLS date date
+map /set LOGCOLS heap heap_free
+for /K %%k in (LOGCOLS) do echo [M-RICH-MEMLOG-K] %%k=%%l
+func :lograte 300000 1000
+echo [M-RICH-MEMLOG-F] ticks=%RESULT%
+echo [M-RICH-MEMLOG-S] rev=%WM% pad=%MP%
 :loop
 lock memlog
 mem > %APPDRIVE%/_memlog.txt
@@ -43,3 +56,7 @@ if errorlevel 1 goto stopped
 goto loop
 :stopped
 echo [M-MEMLOG] logger stopped
+goto :eof
+
+:lograte
+return %1/%2

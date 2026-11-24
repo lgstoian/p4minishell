@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "dom_arena.h"
+#include "css_color.h"
 
 typedef enum {
     DOM_NODE_ELEMENT,
@@ -16,6 +17,8 @@ typedef enum {
     DOM_DISPLAY_BLOCK,
     DOM_DISPLAY_INLINE,
     DOM_DISPLAY_NONE,
+    DOM_DISPLAY_GRID,    /* CSS grid subset, mapped to the 80-column cell grid */
+    DOM_DISPLAY_FLEX,    /* inline flow subset */
 } dom_display_t;
 
 typedef struct dom_node {
@@ -54,6 +57,25 @@ typedef struct dom_node {
     int padding_bottom;
     int padding_left;
     int padding_right;
+    /* Additive HTML5 form/table/visual state. All values are bounded and the
+     * visual ones still quantise through css_color_to_dos() (one palette). */
+    char input_type[24];  /* <input type>, <button type> (`type` is the node enum) */
+    char value[256];      /* form control value */
+    char placeholder[128];
+    bool checked;
+    bool disabled;
+    bool required;
+    int col_span;
+    int row_span;
+    uint8_t border_radius;
+    bool shadow_set;
+    uint8_t shadow_dos;
+    int shadow_x;
+    int shadow_y;
+    uint8_t shadow_alpha;
+    bool gradient_set;
+    css_gradient_t gradient;
+    uint8_t grid_columns; /* computed responsive column count (>=1) */
     struct dom_node *parent;
     struct dom_node *first_child;
     struct dom_node *last_child;
@@ -69,6 +91,13 @@ typedef struct dom_tree {
     dom_node_t *body;
     char title[256];
     dom_arena_t *arena;      /**< the arena the parsed nodes came from, or NULL */
+    /* Computed-style cache bookkeeping. No second style store: the resolved
+     * values live in dom_node_t. These four fields only say which stylesheet
+     * version / DOM mutation epoch those values came from. */
+    const void *style_rules; /**< css_ruleset_t* of the last css_compute_styles */
+    uint32_t style_rules_version;
+    uint32_t style_epoch;
+    bool style_computed;
 } dom_tree_t;
 
 dom_node_t *dom_node_new(dom_node_type_t type);
@@ -91,6 +120,16 @@ dom_node_t *dom_find_first_by_tag(dom_tree_t *tree, const char *tag);
 const char *dom_get_attribute(const dom_node_t *node, const char *name);
 void dom_set_attribute(dom_node_t *node, const char *name, const char *value);
 
+/** Monotonic DOM mutation epoch. css_compute_styles() snapshots it and skips
+ *  redundant recomputation when neither the stylesheet nor the DOM changed. */
+uint32_t dom_style_epoch(void);
+/** Mark the computed styles stale (used by the JS style setter and mutations
+ *  that add/remove nodes). */
+void dom_mark_style_dirty(void);
+/** Reset only the computed-style fields of @p node to their element defaults;
+ *  attributes and text survive. Used before re-resolving the cascade. */
+void dom_node_reset_style(dom_node_t *node);
+
 const char *dom_get_text(const dom_node_t *node);
 void dom_set_text(dom_node_t *node, const char *text);
 
@@ -102,5 +141,11 @@ void dom_dispatch_event(dom_node_t *node, const char *event);
 
 /** True when @p node's class list contains @p name (space/tab separated). */
 bool dom_node_has_class(const dom_node_t *node, const char *name);
+
+/** Inverted dependency: the JS engine registers one event hook so the DOM can
+ *  dispatch click/load/input/change handlers without depending on QuickJS. */
+typedef void (*dom_event_hook_t)(void *ctx, dom_node_t *node, const char *event,
+                                 const char *handler);
+void dom_set_event_hook(dom_event_hook_t hook, void *ctx);
 
 #endif

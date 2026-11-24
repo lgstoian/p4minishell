@@ -14,11 +14,16 @@ directory. A missing root is never faked as a mounted card.
 | Name | Covers |
 |------|--------|
 | `HELLO.BAT` | `@echo off`, `set NAME=...`, `set /a N=1+2`, `if "%NAME%"=="p4"`, `call :sub`, `return`, `goto :eof`, and the `[M-HOST-BATCH-DONE]` marker |
+| `FEATURES.BAT` | the additive v1.6 surfaces through the same one interpreter: `str /rev|/count|/pad`, `map /set|/values|/incr|/get`, `for /K` (key **and** live value binding), `func NAME`/`return <expr>` publishing `%RESULT%`, `trap /on errorlevel` and `trap /on exit`, plus `[M-HOST-STR]` / `[M-HOST-FORK]` / `[M-HOST-MAP]` / `[M-HOST-FUNC]` / `[M-HOST-TRAP]` / `[M-HOST-EXIT]` markers |
 
-`HELLO.BAT` is deliberately small: every verb is the firmware's own
-`shell_command_*` implementation in `batch.c` / `batch_expr.c` /
-`batch_env.c`. The host runner only routes lines to those verbs; it does not
-duplicate their parsing, evaluation or output.
+Both fixtures use only the firmware's own `shell_command_*` implementations in
+`batch.c` / `batch_expr.c` / `batch_env.c` / `batch_str.c` / `batch_map.c` /
+`batch_trap.c`. The host runner only routes lines to those verbs; it does not
+duplicate their parsing, evaluation or output. Unsupported verbs are reported
+honestly as `batch: unsupported command on this host lane: <verb>` with a
+nonzero ERRORLEVEL, and the gate rejects that string (never a false green).
+The `trap /on int` break path is covered by the Unity suite: a headless host
+has no injected `^C`, so no fixture pretends to fire it.
 
 ## Run
 

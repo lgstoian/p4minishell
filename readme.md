@@ -9,7 +9,7 @@ self-contained computer: a persistent command shell, a real batch-file
 language, an SD-card application ecosystem, a native C app SDK, and a
 display/TUI/GFX stack you can build on.
 
-**Version:** 1.5.0 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
+**Version:** 1.6.0 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
 
 | Shell | TUI apps |
 |---|---|
@@ -29,7 +29,52 @@ device - the live Wikipedia article is fetched and rendered whole. The showcase 
 
 ![The P4MiniShell browser rendering the device dashboard from sd:/WEB/INDEX.HTML](docs/assets/browser-website.png)
 
-All screenshots are captured live from the device over USB serial
+---
+
+## HTML examples and screenshots (shipped and screenshot-proofed)
+
+**HTML5, CSS and JavaScript examples ship with this repository.** They are not
+just a capability claim: the browser/HTML engine renders them from SD or from a
+host fixture, and the rendered pages are screenshot-proofed. The `webapp`
+facade lets a `.bat` app present the same pages, read the cell grid and dispatch
+events/timers through the one DOM/CSS/JS engine (no second renderer).
+
+| What | Where |
+|------|-------|
+| HTML5 feature fixture (semantic elements, forms/inputs, grid, table `colspan`, selectors, CSS gradients/opacity, canvas gradients/shadows, JS timers/events) | [`tools/host/fixtures/webapp/features.html`](tools/host/fixtures/webapp/features.html) |
+| Minimal page fixture | [`tools/host/fixtures/webapp/hello.html`](tools/host/fixtures/webapp/hello.html) |
+| Exact rendered text/colour-run baselines | [`features.txt`](tools/host/fixtures/webapp/baseline/features.txt), [`hello.txt`](tools/host/fixtures/webapp/baseline/hello.txt) |
+| Richer shipped example page (deployed via `apps/app_manifest.py`) | [`apps/webapp/RICH.HTML`](apps/webapp/RICH.HTML) |
+| Batch-facing app shim | [`apps/webapp/WEBAPP.BAT`](apps/webapp/WEBAPP.BAT) |
+| Fixture format and gate rules | [`tools/host/fixtures/webapp/README.md`](tools/host/fixtures/webapp/README.md) |
+
+**Proof images (host-generated from the real render path, not device captures):**
+
+![HTML5 feature render: forms, semantics, grid, table, CSS and canvas](docs/assets/web-features.png)
+
+![Webapp forms render: labels, inputs, select, button and events](docs/assets/webapp-forms.png)
+
+Both images are labelled host-generated proofs; hardware recapture is pending.
+The checked gallery of verified captures — with host proofs explicitly marked —
+is [`docs/assets/proof-index.html`](docs/assets/proof-index.html), and the richer
+per-app proofs (including the browser, dashboard and live Wikipedia render) are
+in the [reference app gallery](docs/apps.md) and
+[`docs/assets/README.md`](docs/assets/README.md).
+
+Reproduce the HTML proof without a board (Linux/WSL2, ESP-IDF v5.5.5 sourced):
+
+```powershell
+python tools/host_webapp_gate.py --check      # renders both fixtures, compares text/colour-run baselines
+python tools/host_webapp_gate.py --self-test  # red canary: a wrong baseline must fail
+python tools/host_webapp_gate.py --update     # intentional re-baseline; review the diff
+```
+
+This gate opens no serial port and is a **pre-gate only** — never hardware
+sign-off (`harness.md` §0 and §2.2). On a board, `webapp open
+sd:/WEB/INDEX.HTML` (or `launch WEBAPP`) renders the shipped showcase page
+through the same engine; `webapp event`/`webapp tick` drive JS handlers/timers.
+
+All other screenshots are captured live from the device over USB serial
 (`python tools/capture_docs.py <COM_PORT>`); the full set is in
 [`docs/assets/`](docs/assets/README.md), and every visual app has a captured main screen in the
 [`app gallery`](docs/apps.md); headless services and one-shot transcript emitters
@@ -71,11 +116,15 @@ background jobs, and a C app ABI included.
 
 ---
 
-## Current state (v1.5.0)
+## Current state (v1.6.0)
 
-v1.5.0 is the current **board-free release candidate**: it has not been tested
+v1.6.0 is the current **board-free release candidate**: it has not been tested
 on hardware, and this cycle's gates are host-only (see
-[`harness.md`](harness.md) §2.2). The first public release was v1.0.0
+[`harness.md`](harness.md) §2.2). It is an **additive expansion** over v1.5: a
+single signed-native-payload loader path, gfx AA/gradient/atlas/composite, a
+double-buffered TUI with widgets/focus/layout/scroll, modal picker/progress/
+form/session-stack surfaces, batch `func`/`for /K`/`trap /on`, richer HTML5/CSS/
+JS, and host gates for batch/webapp/gfx/tui/modal. The first public release was v1.0.0
 (2026-09-18). Earlier firmware was hardware-verified on the
 ESP32-P4 Function EV Board (JC1060P470C, JD9165 panel, GT911 touch, SD card)
 and on the M5Stack Tab5 (ILI9881C/ST7123 720x1280 DSI, ES8388 audio, hosted C6
@@ -85,6 +134,32 @@ SC202CS MIPI-CSI camera that captures BMP stills) in the v1.4.x campaigns; the
 host gates are wired into CI for this candidate. See
 [`test/README.md`](test/README.md) for the current unit-test count and
 [`tools/README.md`](tools/README.md) for the hardware drivers.
+
+**New in v1.6.0 (all additive):**
+
+- **One signed native payload path.** `native info|status|verify <APP>` inspects
+  a `NATIVE/<APP>.P4X` envelope; `natrun <APP> [args]` is the single `.bat`-facing
+  launch app. No unsigned code executes, no MMU isolation is claimed, and the
+  firmware trusts one `p4sign` key (see [`SECURITY.md`](SECURITY.md)).
+- **Gfx toolkit:** `lineaa`/`circleaa`/`rectaa` coverage AA, `gradient` linear
+  fills, `composite` alpha-blended sprite slots and `blitmany /a:` sprite-sheet
+  atlas stamps; host-gated against exact RGB565 constants.
+- **Batch:** `func NAME`/`return <expr>` publishing `%RESULT%`, `for /K` map-key
+  iteration, `trap /on errorlevel|exit|int`, `str /rev|/count|/pad` and
+  `map /values|/incr` (see [`batch.md`](batch.md)).
+- **HTML5/CSS/JS:** semantic elements and forms, responsive grid, table
+  `colspan`, CSS units/selectors/gradients/opacity, JS timers/events/console and
+  canvas gradients/shadows — shipped fixtures plus screenshot proofs (above).
+- **TUI:** one double-buffered cell frame with dirty-rect diff, plus
+  focus/layout/scroll/route and `draw run`/`draw sprite`; modal picker,
+  progress, extended form and a suspendable session stack.
+- **Verification:** host gates for batch, webapp, gfx, tui, modal **and all 33
+  enriched reference apps** (`tools/host_apps_gate.py --check`: 33/33 apps,
+  363 host assertions, 40 hardware surfaces honestly SKIP, 7 red canaries),
+  plus false-green hardening and labelled screenshot proofs. The new
+  `[M-RICH-*]` transcript lines require a **board rebaseline of
+  `tools/appdiff/baseline/*.transcript.txt`**; no hardware parity is claimed
+  for v1.6.0. All host passes are pre-gates; board sign-off is still open.
 
 **Implemented and verified**
 
@@ -634,6 +709,15 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
   anomalies (panics, timeouts, "BSOD" frames, heap decline).
 - **Camera diagnostics:** `tools/display_glitch_watch.py` and
   `tools/led_watch.py` watch the panel and the status LED with a webcam.
+- **Host pre-gates (no board, CI-enforced):** `python tools/host_gen_runner.py
+  --check`, `python tools/host_unit_run.py --static/--build`,
+  `python tools/host_batch_run.py --check`, `python tools/host_webapp_gate.py
+  --check`, `python tools/host_tui_gate.py --check`,
+  `python tools/host_modal_gate.py --check`, `python tools/gfx_toolkit_test.py
+  --host`, `python tools/host_apps_gate.py --check` (33 enriched apps), plus the
+  false-green/identity gates (`green_guard.py --strict`, `gallery_audit.py`,
+  `gallery_audit_selftest.py`). A pass is never hardware sign-off
+  (`harness.md` §0/§2.2); the app transcript goldens await a board rebaseline.
 
 See [bugs.md](bugs.md) for the reporting template and [ai-context.md](ai-context.md)
 for the change/verification rules.

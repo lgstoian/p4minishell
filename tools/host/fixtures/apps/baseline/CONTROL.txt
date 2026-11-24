@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=CONTROL
+[M-RICH-CONTROL] host language extract
+W=control
+2
+[M-RICH-CONTROL-K] host=p4
+[M-RICH-CONTROL-K] port=80
+[M-RICH-CONTROL-F] result=42
+[M-RICH-CONTROL-S] rev=lortnoc count=2 pad=control--- vals=p4,80
+[M-RICH-CONTROL-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

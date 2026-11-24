@@ -38,6 +38,40 @@ static void expect_error(const char *expression)
     TEST_ASSERT_NOT_NULL_MESSAGE(error, expression);
 }
 
+/**
+ * v1.6 return-value surface. `func NAME` / `return <expr>` publish through
+ * batch_return_eval(), which reuses this exact evaluator; the assertions are
+ * folded into an existing registered suite because test_main.c is not owned
+ * by this change.
+ */
+static void check_return_value_eval(void)
+{
+    char out[64];
+    int level = -1;
+
+    TEST_ASSERT_TRUE(batch_return_eval("21*2", out, sizeof(out), &level));
+    TEST_ASSERT_EQUAL_STRING("42", out);
+    TEST_ASSERT_EQUAL_INT(42, level);
+
+    TEST_ASSERT_TRUE(batch_return_eval("(3+4)*2", out, sizeof(out), &level));
+    TEST_ASSERT_EQUAL_STRING("14", out);
+    TEST_ASSERT_EQUAL_INT(14, level);
+
+    /* A leading integer keeps the old `return N` ERRORLEVEL contract. */
+    TEST_ASSERT_TRUE(batch_return_eval("3abc", out, sizeof(out), &level));
+    TEST_ASSERT_EQUAL_STRING("3abc", out);
+    TEST_ASSERT_EQUAL_INT(3, level);
+
+    /* A non-numeric result is published verbatim with ERRORLEVEL 0. */
+    TEST_ASSERT_TRUE(batch_return_eval("hello", out, sizeof(out), &level));
+    TEST_ASSERT_EQUAL_STRING("hello", out);
+    TEST_ASSERT_EQUAL_INT(0, level);
+
+    TEST_ASSERT_FALSE(batch_return_eval(NULL, out, sizeof(out), &level));
+    TEST_ASSERT_FALSE(batch_return_eval("", out, sizeof(out), &level));
+    TEST_ASSERT_FALSE(batch_return_eval("42", NULL, 0, &level));
+}
+
 /* ========================================================================
  * LITERALS AND NUMBER BASES
  * ======================================================================== */
@@ -94,6 +128,8 @@ void test_batch_expr_arithmetic(void)
 
     /* Unary minus against a parenthesised group. */
     expect_value("-(2+3)", -5);
+
+    check_return_value_eval();
 }
 
 /* ========================================================================

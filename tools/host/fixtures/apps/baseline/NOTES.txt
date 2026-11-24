@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=NOTES
+[M-RICH-NOTE] host language extract
+W=zettel
+2
+[M-RICH-NOTE-K] host=p4
+[M-RICH-NOTE-K] port=80
+[M-RICH-NOTE-F] result=42
+[M-RICH-NOTE-S] rev=lettez count=2 pad=zettel---- vals=p4,80
+[M-RICH-NOTE-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

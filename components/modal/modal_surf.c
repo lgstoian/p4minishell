@@ -2110,6 +2110,11 @@ typedef struct {
     modal_form_field_t *fields;
     int count;
     lv_obj_t *widgets[MODAL_FORM_MAX_FIELDS];
+    /* v1.5 form extension: focus walking + configurable button labels. */
+    int focus;
+    const char *accept_label;
+    const char *cancel_label;
+    int *out_focus;
 } form_ctx_t;
 
 static form_ctx_t *s_form_active = NULL;
@@ -2144,6 +2149,28 @@ static void form_options_to_roller(const char *options, char *out, size_t out_si
     out[used] = '\0';
 }
 
+/** Highlight the focused field. Callers hold the LVGL port lock (open/close),
+ *  except the USB handler, which runs on the single command worker. */
+static void form_apply_focus(form_ctx_t *ctx)
+{
+    int i;
+
+    if (ctx == NULL) {
+        return;
+    }
+    for (i = 0; i < ctx->count && i < MODAL_FORM_MAX_FIELDS; i++) {
+        lv_obj_t *w = ctx->widgets[i];
+        if (w == NULL) {
+            continue;
+        }
+        if (i == ctx->focus) {
+            lv_obj_add_state(w, LV_STATE_FOCUSED);
+        } else {
+            lv_obj_clear_state(w, LV_STATE_FOCUSED);
+        }
+    }
+}
+
 static bool form_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
 {
     form_ctx_t *ctx = (form_ctx_t *)ctx_ptr;
@@ -2151,6 +2178,7 @@ static bool form_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
 
     ctx->eg = eg;
     ctx->result = -1;
+    ctx->focus = modal_focus_clamp(ctx->focus, ctx->count);
     s_form_active = ctx;
     lvgl_port_lock(0);
     lv_obj_t *surf = windows_enter_editor_mode();
@@ -2252,10 +2280,11 @@ static bool form_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(row, 0, 0);
-    lv_obj_t *b1 = surf_create_button(row, "OK");
+    lv_obj_t *b1 = surf_create_button(row, ctx->accept_label ? ctx->accept_label : "OK");
     lv_obj_add_event_cb(b1, form_ok_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *b2 = surf_create_button(row, "Cancel");
+    lv_obj_t *b2 = surf_create_button(row, ctx->cancel_label ? ctx->cancel_label : "Cancel");
     lv_obj_add_event_cb(b2, form_cancel_cb, LV_EVENT_CLICKED, NULL);
+    form_apply_focus(ctx);
 
     /* Bind the on-screen keyboard to the first editable field so the touch
      * keyboard can type into the form. */
@@ -2323,15 +2352,29 @@ static void form_surface_close(void *ctx_ptr)
     windows_exit_editor_mode();
     lvgl_port_unlock();
     s_form_active = NULL;
+    if (ctx->out_focus != NULL) {
+        *ctx->out_focus = ctx->focus;
+    }
     if (ctx->eg) xEventGroupSetBits(ctx->eg, MODAL_EVENT_CLOSED);
 }
 
 static bool form_handle_usb_key(void *ctx_ptr, uint8_t key_code, uint8_t modifiers, char ascii)
 {
     form_ctx_t *ctx = (form_ctx_t *)ctx_ptr;
+    int next;
+    uint8_t nav_key;
+
     (void)modifiers; (void)ascii;
-    if (key_code == 0x29) { ctx->result = -1; surf_request_close(ctx->eg); return true; }  /* Esc */
-    if (key_code == 0x28) { ctx->result = 0; surf_request_close(ctx->eg); return true; }   /* Enter */
+    if (key_code == MODAL_KEY_ESC) { ctx->result = -1; surf_request_close(ctx->eg); return true; }
+    if (key_code == MODAL_KEY_ENTER) { ctx->result = 0; surf_request_close(ctx->eg); return true; }
+    /* Focus walking goes through the same descriptor hook the runtime reaches
+     * via shell_command_ops_t.modal_handle_usb_key - no second input path. */
+    nav_key = (key_code == 0x2bu) ? (uint8_t)MODAL_KEY_DOWN : key_code;  /* Tab */
+    if (modal_focus_move(nav_key, ctx->count, ctx->focus, 1, &next)) {
+        ctx->focus = next;
+        form_apply_focus(ctx);
+        return true;
+    }
     return false;
 }
 
@@ -2380,4 +2423,575 @@ int modal_form_run(const char *title, modal_form_field_t *fields, int count,
         return -1;
     }
     return (ctx.result == 0) ? 0 : -1;
+}
+
+/* The extended form is the same surface behaviour behind a second ready-made
+ * descriptor: configurable labels + focus output. Abort still cancels. */
+static const modal_surface_t form_ex_surface = {
+    .name = "form-ex",
+    .open = form_surface_open,
+    .close = form_surface_close,
+    .handle_usb_key = form_handle_usb_key,
+    .handle_serial_line = form_handle_serial_line,
+    .reflow = surf_reflow,
+    .abort_cancels = true,
+};
+
+int modal_form_run_ex(const char *title, modal_form_field_t *fields, int count,
+                      const char *accept_label, const char *cancel_label,
+                      uint32_t timeout_ms, int *out_focus)
+{
+    form_ctx_t ctx = {0};
+    int errorlevel = 0;
+
+    if (fields == NULL || count <= 0 || count > MODAL_FORM_MAX_FIELDS) {
+        return -1;
+    }
+    ctx.title = title;
+    ctx.fields = fields;
+    ctx.count = count;
+    ctx.accept_label = accept_label;
+    ctx.cancel_label = cancel_label;
+    ctx.out_focus = out_focus;
+    ctx.timeout_ms = timeout_ms ? timeout_ms : P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS;
+    if (modal_surface_run(&form_ex_surface, &ctx, &errorlevel) != ESP_OK) {
+        return -1;
+    }
+    return (ctx.result == 0) ? 0 : -1;
+}
+
+/* ========================================================================
+ * PICKER - scrollable list with focus navigation + async focus repaint
+ * ======================================================================== */
+
+typedef struct {
+    EventGroupHandle_t eg;
+    int result;
+    int focus;
+    int count;
+    const char **items;
+    const char *title;
+    uint32_t timeout_ms;
+    TimerHandle_t timer;
+    lv_obj_t *panel;
+    lv_obj_t *list;
+} picker_ctx_t;
+
+static picker_ctx_t *s_picker_active = NULL;
+
+static void picker_select_cb(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (s_picker_active != NULL && idx >= 0 && idx < s_picker_active->count) {
+        s_picker_active->result = idx;
+        s_picker_active->focus = idx;
+        surf_request_close(s_picker_active->eg);
+    }
+}
+
+/** Touch/console focus change: record the index and signal the worker. The
+ *  repaint itself happens in picker_service(), i.e. on the one session loop. */
+static void picker_focus_cb(lv_event_t *e)
+{
+    picker_ctx_t *ctx = s_picker_active;
+    int idx;
+
+    if (ctx == NULL) {
+        return;
+    }
+    idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (idx < 0 || idx >= ctx->count || idx == ctx->focus) {
+        return;
+    }
+    ctx->focus = idx;
+    xEventGroupSetBits(ctx->eg, MODAL_EVENT_FOCUS_CHANGED);
+}
+
+static void picker_apply_focus(picker_ctx_t *ctx)
+{
+    int i;
+
+    if (ctx == NULL || ctx->list == NULL) {
+        return;
+    }
+    for (i = 0; i < ctx->count; i++) {
+        lv_obj_t *btn = lv_obj_get_child(ctx->list, i);
+        if (btn != NULL) {
+            surf_style_item(btn, lv_obj_get_child(btn, 0), i == ctx->focus);
+        }
+    }
+    if (ctx->focus >= 0 && ctx->focus < ctx->count) {
+        lv_obj_t *btn = lv_obj_get_child(ctx->list, ctx->focus);
+        if (btn != NULL) {
+            lv_obj_scroll_to_view(btn, LV_ANIM_OFF);
+        }
+    }
+}
+
+static bool picker_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
+{
+    picker_ctx_t *ctx = (picker_ctx_t *)ctx_ptr;
+    int i;
+
+    ctx->eg = eg;
+    ctx->result = -1;
+    ctx->focus = modal_focus_clamp(ctx->focus, ctx->count);
+    s_picker_active = ctx;
+    if (ctx->count <= 0 || ctx->items == NULL) {
+        s_picker_active = NULL;
+        return false;
+    }
+    lvgl_port_lock(0);
+    lv_obj_t *surf = windows_enter_editor_mode();
+    if (!surf) {
+        lvgl_port_unlock();
+        s_picker_active = NULL;
+        return false;
+    }
+    ctx->panel = surf_create_container(surf);
+    surf_create_title(ctx->panel, ctx->title ? ctx->title : "Select");
+    ctx->list = lv_obj_create(ctx->panel);
+    lv_obj_set_width(ctx->list, LV_PCT(100));
+    lv_obj_set_flex_grow(ctx->list, 1);
+    lv_obj_set_flex_flow(ctx->list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_gap(ctx->list, 2, 0);
+    surf_style_list_container(ctx->list);
+    for (i = 0; i < ctx->count; i++) {
+        char buf[160];
+        lv_obj_t *btn = lv_btn_create(ctx->list);
+        lv_obj_t *lbl = lv_label_create(btn);
+
+        snprintf(buf, sizeof(buf), "%d. %s", i + 1,
+                 ctx->items[i] ? ctx->items[i] : "");
+        lv_obj_set_width(btn, LV_PCT(100));
+        lv_label_set_text(lbl, buf);
+        surf_style_item(btn, lbl, i == ctx->focus);
+        lv_obj_add_event_cb(btn, picker_select_cb, LV_EVENT_CLICKED,
+                            (void *)(intptr_t)i);
+        lv_obj_add_event_cb(btn, picker_focus_cb, LV_EVENT_FOCUSED,
+                            (void *)(intptr_t)i);
+    }
+    picker_apply_focus(ctx);
+    lv_obj_t *hint = lv_label_create(ctx->panel);
+    lv_label_set_text(hint, "Up/Down move - Enter select - Esc cancel");
+    lv_obj_set_width(hint, LV_PCT(100));
+    windows_refresh_editor_surface();
+    lvgl_port_unlock();
+    if (ctx->timeout_ms > 0) {
+        ctx->timer = xTimerCreate("pick_tmr", pdMS_TO_TICKS(ctx->timeout_ms),
+                                  pdFALSE, (void *)eg, surf_timeout_cb);
+        if (ctx->timer) xTimerStart(ctx->timer, 0);
+    }
+    return true;
+}
+
+static void picker_service(void *ctx_ptr, EventBits_t bits)
+{
+    picker_ctx_t *ctx = (picker_ctx_t *)ctx_ptr;
+
+    if ((bits & MODAL_EVENT_FOCUS_CHANGED) == 0 || ctx == NULL) {
+        return;
+    }
+    lvgl_port_lock(0);
+    picker_apply_focus(ctx);
+    lvgl_port_unlock();
+}
+
+static void picker_surface_close(void *ctx_ptr)
+{
+    picker_ctx_t *ctx = (picker_ctx_t *)ctx_ptr;
+
+    if (ctx->timer) { xTimerStop(ctx->timer, 0); xTimerDelete(ctx->timer, 0); ctx->timer = NULL; }
+    lvgl_port_lock(0);
+    if (ctx->panel) { surf_panel_closed(ctx->panel); lv_obj_del(ctx->panel); ctx->panel = NULL; }
+    windows_exit_editor_mode();
+    lvgl_port_unlock();
+    s_picker_active = NULL;
+    if (ctx->eg) xEventGroupSetBits(ctx->eg, MODAL_EVENT_CLOSED);
+}
+
+static bool picker_handle_usb_key(void *ctx_ptr, uint8_t key_code,
+                                  uint8_t modifiers, char ascii)
+{
+    picker_ctx_t *ctx = (picker_ctx_t *)ctx_ptr;
+    int next;
+
+    (void)modifiers;
+    if (key_code == MODAL_KEY_ESC) {
+        ctx->result = -1;
+        surf_request_close(ctx->eg);
+        return true;
+    }
+    if (key_code == MODAL_KEY_ENTER) {
+        if (ctx->focus >= 0 && ctx->focus < ctx->count) {
+            ctx->result = ctx->focus;
+        }
+        surf_request_close(ctx->eg);
+        return true;
+    }
+    if (modal_focus_move(key_code, ctx->count, ctx->focus, 5, &next)) {
+        ctx->focus = next;
+        lvgl_port_lock(0);
+        picker_apply_focus(ctx);
+        lvgl_port_unlock();
+        return true;
+    }
+    if (ascii >= '1' && ascii <= '9') {
+        int idx = ascii - '1';
+        if (idx < ctx->count) {
+            ctx->result = idx;
+            surf_request_close(ctx->eg);
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool picker_handle_serial_line(void *ctx_ptr, const char *line)
+{
+    picker_ctx_t *ctx = (picker_ctx_t *)ctx_ptr;
+    char *end = NULL;
+    long v;
+    int i;
+
+    if (line == NULL) {
+        return false;
+    }
+    if (strcasecmp(line, "q") == 0 || strcasecmp(line, "quit") == 0 ||
+        strcasecmp(line, "cancel") == 0) {
+        ctx->result = -1;
+        surf_request_close(ctx->eg);
+        return true;
+    }
+    if (strcasecmp(line, "up") == 0 || strcasecmp(line, "down") == 0 ||
+        strcasecmp(line, "home") == 0 || strcasecmp(line, "end") == 0) {
+        uint8_t key = strcasecmp(line, "up") == 0 ? MODAL_KEY_UP :
+                      strcasecmp(line, "down") == 0 ? MODAL_KEY_DOWN :
+                      strcasecmp(line, "home") == 0 ? MODAL_KEY_HOME : MODAL_KEY_END;
+        int next;
+
+        if (modal_focus_move(key, ctx->count, ctx->focus, 5, &next)) {
+            ctx->focus = next;
+            lvgl_port_lock(0);
+            picker_apply_focus(ctx);
+            lvgl_port_unlock();
+        }
+        return true;
+    }
+    v = strtol(line, &end, 10);
+    if (end != line && v >= 1 && v <= ctx->count) {
+        ctx->result = (int)(v - 1);
+        surf_request_close(ctx->eg);
+        return true;
+    }
+    for (i = 0; i < ctx->count; i++) {
+        if (ctx->items[i] != NULL && strcasecmp(line, ctx->items[i]) == 0) {
+            ctx->result = i;
+            surf_request_close(ctx->eg);
+            return true;
+        }
+    }
+    return true;   /* consume; navigation is on-screen / USB / serial */
+}
+
+static const modal_surface_t picker_surface = {
+    .name = "picker",
+    .open = picker_surface_open,
+    .service = picker_service,
+    .close = picker_surface_close,
+    .handle_usb_key = picker_handle_usb_key,
+    .handle_serial_line = picker_handle_serial_line,
+    .reflow = surf_reflow,
+    .abort_cancels = true,
+};
+
+int modal_picker_run(const char *title, const char **items, int count,
+                     int initial, uint32_t timeout_ms, int *out_selected)
+{
+    picker_ctx_t ctx = {0};
+    int errorlevel = 0;
+
+    if (items == NULL || count <= 0) {
+        return -1;
+    }
+    if (count > P4_CONFIG_TUI_LIST_MAX_ITEMS) {
+        count = P4_CONFIG_TUI_LIST_MAX_ITEMS;
+    }
+    ctx.title = title;
+    ctx.items = items;
+    ctx.count = count;
+    ctx.focus = modal_focus_clamp(initial, count);
+    ctx.timeout_ms = timeout_ms ? timeout_ms : P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS;
+    if (modal_surface_run(&picker_surface, &ctx, &errorlevel) != ESP_OK) {
+        return -1;
+    }
+    if (out_selected != NULL) {
+        *out_selected = ctx.result;
+    }
+    return ctx.result >= 0 ? 0 : -1;
+}
+
+/* ========================================================================
+ * PROGRESS - async-event surface (timer ticks / native publisher)
+ * ======================================================================== */
+
+typedef struct {
+    EventGroupHandle_t eg;
+    int result;
+    const char *title;
+    uint32_t done;
+    uint32_t total;
+    uint32_t tick_ms;
+    uint32_t step;
+    uint32_t timeout_ms;
+    TimerHandle_t timer;
+    TimerHandle_t tick_timer;
+    lv_obj_t *panel;
+    lv_obj_t *bar;
+    lv_obj_t *pct;
+    bool cancelled;
+} progress_ctx_t;
+
+static volatile progress_ctx_t *s_progress_active = NULL;
+
+/* Only one progress surface is active on the one runtime, so a single
+ * borrowed-label slot is sufficient (same lifetime rule as other ctx labels). */
+static const char *s_progress_label = NULL;
+
+static const char *progress_label_text(void)
+{
+    return s_progress_label != NULL ? s_progress_label : "Working...";
+}
+
+static void progress_set_label(const char *label)
+{
+    s_progress_label = label;
+}
+
+static void progress_tick_cb(TimerHandle_t timer)
+{
+    progress_ctx_t *ctx = (progress_ctx_t *)s_progress_active;
+
+    (void)timer;
+    if (ctx == NULL) {
+        return;
+    }
+    if (ctx->step > 0 && ctx->done < ctx->total) {
+        uint64_t next = (uint64_t)ctx->done + ctx->step;
+
+        ctx->done = next >= ctx->total ? ctx->total : (uint32_t)next;
+    }
+    if (ctx->done >= ctx->total) {
+        modal_runtime_signal(MODAL_EVENT_PROGRESS_DONE);
+    } else {
+        modal_runtime_signal(MODAL_EVENT_PROGRESS_TICK);
+    }
+}
+
+static void progress_cancel_cb(lv_event_t *e)
+{
+    progress_ctx_t *ctx = (progress_ctx_t *)s_progress_active;
+
+    (void)e;
+    if (ctx != NULL) {
+        ctx->cancelled = true;
+        ctx->result = -1;
+        surf_request_close(ctx->eg);
+    }
+}
+
+static void progress_refresh(progress_ctx_t *ctx)
+{
+    char buf[32];
+    uint8_t pct;
+
+    if (ctx == NULL || ctx->bar == NULL) {
+        return;
+    }
+    pct = modal_progress_percent(ctx->done, ctx->total);
+    lv_bar_set_value(ctx->bar, pct, LV_ANIM_OFF);
+    if (ctx->pct != NULL) {
+        snprintf(buf, sizeof(buf), "%u%% (%lu/%lu)", (unsigned)pct,
+                 (unsigned long)ctx->done, (unsigned long)ctx->total);
+        lv_label_set_text(ctx->pct, buf);
+    }
+}
+
+static bool progress_surface_open(void *ctx_ptr, EventGroupHandle_t eg)
+{
+    progress_ctx_t *ctx = (progress_ctx_t *)ctx_ptr;
+    const char *label = (const char *)ctx->title;
+    lv_obj_t *msg;
+
+    ctx->eg = eg;
+    ctx->result = -1;
+    if (ctx->total == 0) {
+        ctx->total = 100;
+    }
+    if (ctx->done > ctx->total) {
+        ctx->done = ctx->total;
+    }
+    s_progress_active = ctx;
+    lvgl_port_lock(0);
+    lv_obj_t *surf = windows_enter_editor_mode();
+    if (!surf) {
+        lvgl_port_unlock();
+        s_progress_active = NULL;
+        return false;
+    }
+    ctx->panel = surf_create_container(surf);
+    surf_create_title(ctx->panel, label ? label : "Progress");
+    msg = lv_label_create(ctx->panel);
+    lv_label_set_text(msg, progress_label_text());
+    lv_obj_set_width(msg, LV_PCT(100));
+    ctx->bar = lv_bar_create(ctx->panel);
+    lv_obj_set_width(ctx->bar, LV_PCT(100));
+    lv_bar_set_range(ctx->bar, 0, 100);
+    progress_refresh(ctx);
+    ctx->pct = lv_label_create(ctx->panel);
+    lv_obj_set_width(ctx->pct, LV_PCT(100));
+    progress_refresh(ctx);
+    lv_obj_t *row = lv_obj_create(ctx->panel);
+    lv_obj_set_scrollable(row, false);
+    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_t *btn = surf_create_button(row, "Cancel");
+    lv_obj_add_event_cb(btn, progress_cancel_cb, LV_EVENT_CLICKED, NULL);
+    windows_refresh_editor_surface();
+    lvgl_port_unlock();
+    if (ctx->timeout_ms > 0) {
+        ctx->timer = xTimerCreate("prog_tmr", pdMS_TO_TICKS(ctx->timeout_ms),
+                                  pdFALSE, (void *)eg, surf_timeout_cb);
+        if (ctx->timer) xTimerStart(ctx->timer, 0);
+    }
+    if (ctx->tick_ms > 0) {
+        ctx->tick_timer = xTimerCreate("prog_tick", pdMS_TO_TICKS(ctx->tick_ms),
+                                       pdTRUE, NULL, progress_tick_cb);
+        if (ctx->tick_timer) xTimerStart(ctx->tick_timer, 0);
+    }
+    return true;
+}
+
+static void progress_service(void *ctx_ptr, EventBits_t bits)
+{
+    progress_ctx_t *ctx = (progress_ctx_t *)ctx_ptr;
+
+    if (ctx == NULL || (bits & (MODAL_EVENT_PROGRESS_TICK |
+                                MODAL_EVENT_PROGRESS_DONE)) == 0) {
+        return;
+    }
+    lvgl_port_lock(0);
+    progress_refresh(ctx);
+    lvgl_port_unlock();
+    if ((bits & MODAL_EVENT_PROGRESS_DONE) != 0 && !ctx->cancelled) {
+        ctx->result = 0;
+        surf_request_close(ctx->eg);
+    }
+}
+
+static void progress_surface_close(void *ctx_ptr)
+{
+    progress_ctx_t *ctx = (progress_ctx_t *)ctx_ptr;
+
+    if (ctx->timer) { xTimerStop(ctx->timer, 0); xTimerDelete(ctx->timer, 0); ctx->timer = NULL; }
+    if (ctx->tick_timer) { xTimerStop(ctx->tick_timer, 0); xTimerDelete(ctx->tick_timer, 0); ctx->tick_timer = NULL; }
+    lvgl_port_lock(0);
+    if (ctx->panel) { surf_panel_closed(ctx->panel); lv_obj_del(ctx->panel); ctx->panel = NULL; }
+    windows_exit_editor_mode();
+    lvgl_port_unlock();
+    s_progress_active = NULL;
+    if (ctx->eg) xEventGroupSetBits(ctx->eg, MODAL_EVENT_CLOSED);
+}
+
+static bool progress_handle_usb_key(void *ctx_ptr, uint8_t key_code,
+                                    uint8_t modifiers, char ascii)
+{
+    progress_ctx_t *ctx = (progress_ctx_t *)ctx_ptr;
+
+    (void)modifiers; (void)ascii;
+    if (key_code == MODAL_KEY_ESC) {
+        ctx->cancelled = true;
+        ctx->result = -1;
+        surf_request_close(ctx->eg);
+        return true;
+    }
+    if (key_code == MODAL_KEY_ENTER && ctx->done >= ctx->total) {
+        ctx->result = 0;
+        surf_request_close(ctx->eg);
+        return true;
+    }
+    return true;   /* consume: a progress surface owns all input */
+}
+
+static bool progress_handle_serial_line(void *ctx_ptr, const char *line)
+{
+    progress_ctx_t *ctx = (progress_ctx_t *)ctx_ptr;
+    char *end = NULL;
+    long v;
+
+    if (line == NULL) {
+        return false;
+    }
+    if (strcasecmp(line, "q") == 0 || strcasecmp(line, "cancel") == 0) {
+        ctx->cancelled = true;
+        ctx->result = -1;
+        surf_request_close(ctx->eg);
+        return true;
+    }
+    v = strtol(line, &end, 10);
+    if (end != line && v >= 0) {
+        modal_progress_publish((uint32_t)v, ctx->total);
+    }
+    return true;
+}
+
+static const modal_surface_t progress_surface = {
+    .name = "progress",
+    .open = progress_surface_open,
+    .service = progress_service,
+    .close = progress_surface_close,
+    .handle_usb_key = progress_handle_usb_key,
+    .handle_serial_line = progress_handle_serial_line,
+    .reflow = surf_reflow,
+    .abort_cancels = true,
+};
+
+bool modal_progress_publish(uint32_t done, uint32_t total)
+{
+    progress_ctx_t *ctx = (progress_ctx_t *)s_progress_active;
+
+    if (ctx == NULL) {
+        return false;
+    }
+    if (total > 0) {
+        ctx->total = total;
+    }
+    ctx->done = done > ctx->total ? ctx->total : done;
+    if (ctx->done >= ctx->total) {
+        modal_runtime_signal(MODAL_EVENT_PROGRESS_DONE);
+    } else {
+        modal_runtime_signal(MODAL_EVENT_PROGRESS_TICK);
+    }
+    return true;
+}
+
+int modal_progress_run(const char *title, const char *label, uint32_t total,
+                       uint32_t tick_ms, uint32_t step, uint32_t timeout_ms)
+{
+    progress_ctx_t ctx = {0};
+    int errorlevel = 0;
+
+    ctx.title = title;
+    ctx.total = total;
+    ctx.tick_ms = tick_ms;
+    ctx.step = step;
+    ctx.timeout_ms = timeout_ms ? timeout_ms : P4_CONFIG_TUI_TIMEOUT_DEFAULT_MS;
+    progress_set_label(label);
+    if (modal_surface_run(&progress_surface, &ctx, &errorlevel) != ESP_OK) {
+        return -1;
+    }
+    return ctx.result == 0 ? 0 : -1;
 }

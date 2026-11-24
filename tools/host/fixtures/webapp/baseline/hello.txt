@@ -52,5 +52,9 @@ tui.dump cols=80 from=1 to=25
 025|
 025@1-80:7
 tui.dump.end
-webapp.canvas id=c w=32 h=16 pixel0=ff5555ff pixel1=55ffffff
+webapp.meta semantic=1 controls=0 grids=0 canvases=1
+webapp.events handlers=0
+webapp.cascade h1_color=h1 spec=0.0.1 imp=0 order=1 fg=11
+webapp.entity &amp;=0026/5 &reg=00AE/4 &#x41;=0041/6 &#1114112;=FFFD/10 &#x80;=20AC/6 &hellip;=2026/8
+webapp.canvas id=c w=32 h=16 pixel0=ff5555ff pixel1=55ffffff grad0=ff0000ff grad1=0000ffff round_corner=00 round_centre=ff shadow=ff0000ff
 webapp.render.end fixture=hello.html rows=25 runs=25

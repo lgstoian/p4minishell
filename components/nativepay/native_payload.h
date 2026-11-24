@@ -39,10 +39,14 @@
  * | 144    | 4     | required API set (u32 bitmask) |
  * | 148    | N     | payload bytes (N = the size field) |
  *
- * Canonical signed bytes are the header with the 64-byte signature field
- * omitted, immediately followed by the payload. SHA-256 over those bytes is
- * the 32-byte digest the publisher signs. CRC-32 is a cheap integrity check
- * using the one shared primitive; it never substitutes for the signature.
+ * Canonical signed bytes are the header with BOTH self-referential fields
+ * omitted (the 32-byte SHA-256 field at 44 and the 64-byte signature field at
+ * 76), immediately followed by the payload. That binds magic, version, arch,
+ * ABI, size, CRC, entry ordinal, reserved, required API set and payload while
+ * leaving no circular dependency on the digest or signature itself. SHA-256
+ * over those bytes is the 32-byte digest the publisher signs. CRC-32 is a
+ * cheap integrity check using the one shared primitive; it never substitutes
+ * for the signature.
  */
 
 #ifndef P4MINISHELL_NATIVE_PAYLOAD_H
@@ -171,6 +175,16 @@ void native_pay_set_crypto_ops(const native_pay_crypto_ops_t *ops);
 /** Install (or, with NULL, clear) the single trusted raw P-256 public key
  *  (`X || Y`, 64 bytes). The bytes are copied into module storage. */
 void native_pay_set_trusted_key(const uint8_t pubkey[NATIVE_PAY_PUBKEY_BYTES]);
+
+/** True when both crypto hooks are installed. Pure query; no crypto runs. */
+bool native_pay_crypto_installed(void);
+
+/** True when the single trusted key is installed. Pure query. */
+bool native_pay_key_installed(void);
+
+/** True only when hooks AND key are present, i.e. verification can succeed.
+ *  Diagnostics must use this instead of guessing from a status code. */
+bool native_pay_verifier_ready(void);
 
 /** Stable diagnostic name for a status code (never NULL). */
 const char *native_pay_status_name(native_pay_status_t status);

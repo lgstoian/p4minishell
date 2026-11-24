@@ -86,6 +86,7 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../components/imgdec
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/mcp
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/modal
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/nativepay
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/nativeexec
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/selection
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/windows
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/header

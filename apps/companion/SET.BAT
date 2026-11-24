@@ -21,6 +21,7 @@ rem =====================================================================
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 title "Settings"
 echo [M-SET]
+gosub :rich_set
 draw clear screen
 gosub %APPROOT%/APPLIB.BAT::bar 1 3 single
 draw text 34 2 "PREFERENCES ★" 14
@@ -30,6 +31,24 @@ draw text 5 6 "Settings persist in CONFIG.SYS"
 list "Preferences" "Brightness" "Volume" "Rotate" "Idle timeout" "Header" "Theme" "Fonts" "Cursor" "Keyboard page" "System" "Security" "Show settings" "Back" "Quick settings"
 on %errorlevel%+1 goto :brightness,:volume,:rotate,:idle,:header,:theme,:fonts,:cursor,:keyboard,:system,:security,:show_all,:back,:quick
 goto :back
+
+rem ---- v1.6 richer-language showcase ------------------------------------
+rem [M-RICH-SET] lists the persisted scalar names with map /set + for /K,
+rem str /pad and func/return; CONFIG.SYS is not written by this routine.
+:rich_set
+echo [M-RICH-SET] settings language tour
+map /set CFGKEYS brightness BRIGHTNESS
+map /set CFGKEYS volume VOLUME
+for /K %%k in (CFGKEYS) do echo [M-RICH-SET-K] %%k=%%l
+set SW=settings
+str /pad SW 10 SP .
+func :setsum 50 50
+echo [M-RICH-SET-F] pct=%RESULT%
+echo [M-RICH-SET-S] pad=%SP%
+return
+
+:setsum
+return %1+%2
 
 :brightness
 gosub %APPROOT%/APPLIB.BAT::page single

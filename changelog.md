@@ -12,6 +12,119 @@ release. For the current feature set see [`readme.md`](readme.md), for the
 grouped history and future direction see [`roadmap.md`](roadmap.md), and for
 open bugs see [`bugs.md`](bugs.md).
 
+## [1.6.0] - 2026-11-24
+
+> **Board-free additive expansion.** Everything in this section was verified
+> with host/static gates only. The on-device suites and the two-board matrix
+> remain open for v1.6.0 and must pass before a public release; host passes are
+> pre-flight only (`harness.md` §0 and §2.2). The last hardware sign-off was in
+> the v1.4.x campaigns.
+
+### Added
+
+- **One signed native-payload loader path (ABI amendment, additive).**
+  `components/nativeexec` is the single fixed-ABI loader for a verified
+  `NATIVE/<APP>.P4X` envelope; it parses no ELF, relocates nothing, creates no
+  address space and adds no dispatcher. The pure export-table/API checks and a
+  `native_exec_plan_t` inspect/verify/launch seam are unit-tested
+  (`test/main/test_native_exec.c`). `native info|status|verify <APP>` is the
+  diagnostics front door; `natrun <APP> [args]` is the sole `.bat`-facing launch
+  app (`components/command/native_commands.c`). Both share one run core
+  (`native_run_app`) and one loader (`native_exec_launch`). Trust uses the
+  single `p4sign` public key and the same mbedTLS SHA-256/ECDSA P-256 primitives
+  as the manifest core; a missing verifier/key is an explicit non-success
+  verdict. No unsigned payload executes; there is no MMU isolation.
+- **Gfx toolkit:** coverage anti-aliasing (`lineaa`, `circleaa`, `rectaa`),
+  linear `gradient` rect fills, alpha `composite` of a sprite slot (with an
+  optional transparent key), sprite-sheet/atlas stamps (`blitmany
+  /a:<cols>,<cw>,<ch>`), and the matching pure raster API
+  (`gfx_surface_gradient`, `gfx_surface_composite[_keyed]`,
+  `gfx_surface_blit_atlas`). Exact RGB565 expectations live in
+  `tools/host/fixtures/gfx/expected.json` and `test/main/test_gfx.c`.
+- **Batch language:** `func NAME [args]` with `return <expr>` publishing
+  `%RESULT%` in the frame-local class (a thin front door over `call :label`);
+  `for /K %%k in (MAP) do cmd` iterating one map's keys and live values;
+  `trap /on errorlevel|exit|int :label` (no longer reserved) with `TRAP_CODE`/
+  `TRAP_MSG`; `str /rev|/count|/pad`; `map /values|/incr` sharing the one
+  collector with `/keys` and `for /K`. Covered by `FEATURES.BAT` on the real
+  interpreter in the host batch gate.
+- **HTML5/CSS/JS expansion:** semantic page elements and forms/inputs,
+  responsive grid and table `colspan`, CSS units/extended selectors/gradients/
+  opacity/shadows, and in-page JS timers, `addEventListener`, `console.log` and
+  canvas `createLinearGradient`/shadows/rounded rects. The one CSS colour/
+  gradient parser and one canvas rasterizer are reused — no second renderer.
+  Shipped fixtures: `tools/host/fixtures/webapp/features.html` and
+  `hello.html`; `webapp event <id> <type>` and `webapp tick` dispatch JS events
+  and run due timers. Host-generated screenshot proofs
+  (`docs/assets/web-features.png`, `docs/assets/webapp-forms.png`) are linked
+  from `readme.md` and indexed by `docs/assets/proof-index.html`.
+- **TUI and modal surfaces:** a double-buffered cell frame with dirty-rect diff
+  and the one cell renderer/sampler (`components/tui/tui_frame.h`), focusable
+  widgets, row/column/grid layouts, named scroll regions and key/tap routing
+  (`components/tui/tui_widgets.h`); verbs `tui frame|focus|layout|scroll|route`
+  and `draw run|sprite`. Modal surfaces `mpick`, `mprog`, `mformx` and `mstack`
+  add a focusable picker, async progress, an extended form and a suspendable
+  session stack on the shared modal runtime — no second window manager.
+- **Host pre-gates (hardware-free, never sign-off):**
+  `tools/host_batch_run.py` (real `.bat` fixtures `HELLO.BAT` + `FEATURES.BAT`),
+  `tools/host_webapp_gate.py` (HTML fixtures + exact baselines),
+  `tools/host_tui_gate.py` (cell/colour-run scenes, dirty rects),
+  `tools/host_modal_gate.py` (focus/progress/session transitions over the real
+  `modal_args.c`), `tools/gfx_toolkit_test.py --host` (gfx wiring contract) and
+  the native payload checker red canary. All compile or drive shipped code;
+  none opens a serial port.
+- **Enriched reference apps and a host app proof gate (v1.6).** All 33 updated
+  `.bat` apps emit visible `[M-RICH-*]` markers exercising the additive v1.6
+  surfaces; all pre-existing `[M-*]` markers are preserved. The one host-proof
+  gate `tools/host_apps_gate.py --check` drives every app through the SAME real
+  interpreter used by `host_batch_run.py` against exact transcript baselines:
+  **33/33 apps, 363 host assertions PASS, 40 hardware-dependent surfaces
+  honestly SKIP (gfx/TUI/modal/webapp/native, reason named) and 7 red-canary
+  checks**. Hardware surfaces are detected in the real app source and never
+  faked. `apps/webapp/RICH.HTML` was added to `apps/app_manifest.py` so the
+  richer HTML proof ships with the SD payload.
+- **Host-generated screenshot proofs** for the HTML5/CSS/JS features
+  (`docs/assets/web-features.png`, `docs/assets/webapp-forms.png`) are produced
+  by `tools/make_webapp_proof.py` from the real host render and labelled as
+  host proofs; `docs/assets/proof-index.html` and `docs/apps.md` identify their
+  origin. The gallery identity gate rejects a shell screenshot published as an
+  app image (`gallery_audit.py` + `gallery_audit_selftest.py`).
+
+> **Pending hardware rebaseline:** the new `[M-RICH-*]` transcript lines
+> intentionally change app output, so `tools/appdiff/baseline/*.transcript.txt`
+> goldens **must be regenerated on a board** before the hardware transcript
+> parity checks can be green. No board parity is claimed for v1.6.0.
+
+### Fixed
+
+- Canonical signed-byte stream for native payloads corrected: the digest is
+  computed over the exact ABI §4.1 canonical bytes and verified against a
+  pre-computed digest, rather than re-hashing a reassembled buffer. The loader
+  verifies exactly once before mapping or calling any entry.
+- `trap /on errorlevel|exit|int` now installs a real one-shot handler on the
+  named event (previously reserved/unimplemented); the int/exit paths publish
+  the same `TRAP_CODE`/`TRAP_MSG` variables as the errorlevel path.
+- Stale documentation corrected: `js_canvas.h` still listed gradients/shadows
+  as unimplemented; the batch docs claimed `trap /on` was reserved; the
+  security and architecture docs described the native loader as deferred.
+
+### Changed
+
+- One ABI amendment, one renderer, one event model (architecture ADR-15..17):
+  every new surface delegates to the existing DOM/canvas engine, TUI cell
+  renderer, modal runtime and input/event queues. Host-only backends stay in
+  `test/host`/`tools/host`, report honest "unavailable" for board-only calls,
+  and never become production hardware stubs.
+- CI (`.github/workflows/build.yml`) and `harness.md` now list the full host
+  gate set plus the false-green, gallery-identity and red-canary gates. A
+  retry-pass is not green and a zero-assertion suite fails.
+- Screenshot proofs are labelled by origin: host-generated gfx/webapp/TUI
+  frames are marked as such in `docs/apps.md` and
+  `docs/assets/proof-index.html`; a shell screenshot cannot be published as an
+  app image (`gallery_audit.py` + `gallery_audit_selftest.py`).
+
+---
+
 ---
 
 ## [1.5.0] - 2026-11-24

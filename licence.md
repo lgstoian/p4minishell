@@ -108,7 +108,15 @@ Copyright protects expression, not ideas, so the architecture above is
 re-expressed in our own code (`components/browser/`, the `components/tui` page
 snapshots) with our own naming, structure and implementation. No file, function
 or table was copied and no licence text is required, because none was
-reproduced. The same discipline applies to the script-runtime ideas below (Lua
+reproduced. **Across the v1.6 additive expansion (gfx toolkit, TUI frame and
+widgets, modal sessions, HTML5/CSS/JS features and the signed native loader),
+no third-party source was copied at all: every new first-party file is
+project-authored MIT.** The only external source carried into the tree is code
+whose licence file was verified in the upstream repository — the MIT-licensed
+BMDS design reference (copyright notice shipped) and the MIT-licensed M5Stack
+Tab5 demo drivers listed below; ESP-Brookesia's one derivative tool retains
+Apache-2.0. A README claim alone is never treated as a grant. The same
+discipline applies to the script-runtime ideas below (Lua
 and MicroPython are embeddable languages, deliberately **not** adopted as
 runtimes here) and to BMDS:
 
@@ -117,6 +125,7 @@ runtimes here) and to BMDS:
 | Lua scripting for handheld apps | MIT, © Lua.org / PUC-Rio | Design credit only: a tiny embeddable scripting surface with explicit host-owned state. No Lua source, interpreter, or binding is shipped; no code copied |
 | MicroPython scripting for handheld apps | MIT, © Damien P. George | Design credit only: exposing hardware-adjacent facilities to script-style apps. No MicroPython source, VM, or port is shipped; no code copied |
 | [BMDS](https://github.com/jthwho/bmds) | MIT, © 2026 Jason Howard — upstream `LICENSE` present in the repo | Design credit only: small-device multitasking / app-switching patterns behind the opt-in `.bat`-launched native payload. No source copied; the exact upstream licence text ships at [`tools/LICENSE-BMDS-MIT.txt`](tools/LICENSE-BMDS-MIT.txt) |
+| [Ladybird](https://github.com/LadybirdBrowser/ladybird) | **BSD-2-Clause** (not MIT), © 2018-present the Ladybird developers — upstream `LICENSE` verified in the tree | Design credit only: bounded/incremental DOM tokenizing with error recovery, longest-match entity decoding, right-to-left selector matching with rightmost-key bucketing, packed cascade specificity and generation-based style invalidation, arena layout nodes, display-list recording with a structural epoch, bounded PSRAM image budgets, and microtask checkpoints on the one timer pump. This is a C firmware with no MMU or Rust toolchain; no C++/Rust source, table or file was copied, so no upstream licence text is required. Cross-check: [`docs/CRAFT_AUDIT_v143.md`](docs/CRAFT_AUDIT_v143.md) |
 
 Compared with the two browser projects, the implementation deliberately
 **surpasses** their limits: we keep QuickJS (neither has JS), a CSS cascade

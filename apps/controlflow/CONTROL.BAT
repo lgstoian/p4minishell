@@ -42,6 +42,7 @@ on 1 gosub :tick,:tick
 echo CONTROL: gosub dispatch done
 gosub :count 3
 gosub :post
+gosub :rich_control
 echo [M-CONTROL-DONE]
 goto :eof
 
@@ -102,6 +103,32 @@ echo CONTROL: delayed !live!
 endlocal
 gosub :dosparity
 return
+
+rem ---- v1.6 richer-language tour ---------------------------------------
+rem [M-RICH-CONTROL] puts func/return, the newly wired `trap /on errorlevel`,
+rem map /set + for /K and str /rev|/count|/pad through the real interpreter.
+:rich_control
+echo [M-RICH-CONTROL] func+trap+map+forK+str
+func :ctrlmul 6 7
+echo [M-RICH-CONTROL-F] result=%RESULT%
+map /set CTRLKEYS up w
+map /set CTRLKEYS down s
+for /K %%k in (CTRLKEYS) do echo [M-RICH-CONTROL-K] %%k=%%l
+set CTRL=control
+str /rev CTRL RV
+str /count CTRL o CO
+str /pad CTRL 10 CP -
+echo [M-RICH-CONTROL-S] rev=%RV% o=%CO% pad=%CP%
+trap /on errorlevel :ctrltrap
+trap /raise 4 "control probe"
+echo [M-RICH-CONTROL] handler skipped (WRONG)
+:ctrltrap
+echo [M-RICH-CONTROL-T] code=%TRAP_CODE% msg=%TRAP_MSG%
+trap /clear
+return
+
+:ctrlmul
+return %1*%2
 
 rem ---- DOS-parity tour (redirection + newer language features) --------
 rem  One pinned line per construct so a transcript diff fixes the exact

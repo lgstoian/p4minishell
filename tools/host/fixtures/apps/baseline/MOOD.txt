@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=MOOD
+[M-RICH-MOOD] host language extract
+W=mood
+2
+[M-RICH-MOOD-K] host=p4
+[M-RICH-MOOD-K] port=80
+[M-RICH-MOOD-F] result=42
+[M-RICH-MOOD-S] rev=doom count=2 pad=mood------ vals=p4,80
+[M-RICH-MOOD-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

@@ -5,7 +5,7 @@ SD card. It is modelled on the classic MS-DOS `EDIT` program and adds modern
 extras: undo/redo, a line-number gutter, a current-line highlight, syntax
 highlighting for batch files, and touch support.
 
-> **Current source build (v1.5.0):** board-free release candidate, no hardware
+> **Current source build (v1.6.0):** board-free release candidate, no hardware
 > sign-off for this version. The editor was last hardware-verified on COM3 in
 > v1.4.3 (ESP-IDF v5.5.5). The editor is one of eight modal surfaces on the shared runtime (`dialog`, `list`,
 > `ask`, `browse`, `view`, `hexview`) and shares the 80x25 transcript region;

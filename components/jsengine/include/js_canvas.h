@@ -12,9 +12,12 @@
  * affine transform, source-over alpha compositing, save/restore, subpaths,
  * solid fill/stroke colours, rectangles, lines, arcs and 8x8 bitmap text.
  *
- * Deliberately not implemented (documented in documentation.md): images,
- * patterns, gradients, shadows, clipping paths, line joins/caps beyond square
- * ends, anti-aliasing, and sub-pixel text metrics. A page that uses them still
+ * Deliberately out of scope (documented in documentation.md): arbitrary
+ * images/patterns, clipping paths, line joins/caps beyond square ends,
+ * anti-aliasing, and sub-pixel text metrics. Linear gradients, rounded
+ * rectangles and drop shadows ARE implemented in this same rasterizer through
+ * the one CSS gradient/parser and colour compositor (see js_canvas_gradient_t
+ * and js_canvas_set_shadow below). A page using an unsupported feature still
  * renders; those calls are no-ops, never crashes.
  *
  * The core is pure C: no QuickJS, no DOM, no LVGL, no USB. The JS bindings
@@ -115,6 +118,37 @@ int js_canvas_measure_text(const js_canvas_t *canvas, const char *text);
  *  Transparent pixels keep alpha 0. Returns false on bad args/OOM. */
 bool js_canvas_snapshot_rgba(const js_canvas_t *canvas, int max_w, int max_h,
                              uint8_t *out_rgba, int *out_w, int *out_h);
+
+/** Linear gradient subset. Reuses the ONE CSS gradient parser (css_color.c),
+ *  so CSS `linear-gradient()` and Canvas `createLinearGradient()` quantise the
+ *  same way and there is still one DOS palette. */
+typedef css_gradient_t js_canvas_gradient_t;
+
+bool js_canvas_gradient_parse(const char *text, js_canvas_gradient_t *out);
+js_canvas_rgba_t js_canvas_gradient_at(const js_canvas_gradient_t *gradient, float t);
+/** Make @p gradient the current fill paint (cleared by resize and restore). */
+void js_canvas_set_gradient(js_canvas_t *canvas, const js_canvas_gradient_t *gradient);
+void js_canvas_clear_gradient(js_canvas_t *canvas);
+/** Fill a rect with the gradient sampled left-to-right (or top-to-bottom when
+ *  @p vertical). Shadows and globalAlpha still apply. */
+void js_canvas_fill_gradient_rect(js_canvas_t *canvas,
+                                  const js_canvas_gradient_t *gradient,
+                                  float x, float y, float w, float h,
+                                  bool vertical);
+/** Rounded rectangle subset: a deterministic quarter-circle corner mask,
+ *  no anti-aliasing, using the current fill/gradient and shadow. */
+void js_canvas_fill_rounded_rect(js_canvas_t *canvas, float x, float y,
+                                 float w, float h, float radius);
+/** Drop-shadow subset: one offset copy composited under subsequent draws. */
+void js_canvas_set_shadow(js_canvas_t *canvas, js_canvas_rgba_t color,
+                          float offset_x, float offset_y, float blur);
+void js_canvas_clear_shadow(js_canvas_t *canvas);
+int js_canvas_get_shadow_offset_x(const js_canvas_t *canvas);
+int js_canvas_get_shadow_offset_y(const js_canvas_t *canvas);
+int js_canvas_get_shadow_blur(const js_canvas_t *canvas);
+js_canvas_rgba_t js_canvas_get_shadow_color(const js_canvas_t *canvas);
+void js_canvas_set_shadow_offset(js_canvas_t *canvas, float x, float y);
+void js_canvas_set_shadow_blur(js_canvas_t *canvas, float blur);
 
 /** Parse a CSS colour string (CSS Color 3 subset): #rgb, #rrggbb, #rrggbbaa,
  *  rgb()/rgba() with 0-255 or percentage components, `transparent`, and the

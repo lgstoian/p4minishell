@@ -42,6 +42,14 @@ delay 3000
 browser js go
 tui dump 3 9
 
+rem ---- v1.6 webapp facade showcase --------------------------------------
+rem [M-RICH-WEB] dispatches the SAME button event through the webapp facade
+rem and runs the page's JS timer via webapp tick - no second engine.
+echo [M-RICH-WEB] event+tick
+webapp event go click
+webapp tick
+webapp dump 3 9 /a
+
 echo [M-WEB-DONE]
 rem Leave the TUI surface so the shell prompt is visible again.
 draw close

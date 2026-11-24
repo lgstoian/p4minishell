@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=WEBAPP
+[M-RICH-WEBAPP] host language extract
+W=webapp
+1
+[M-RICH-WEBAPP-K] host=p4
+[M-RICH-WEBAPP-K] port=80
+[M-RICH-WEBAPP-F] result=42
+[M-RICH-WEBAPP-S] rev=ppabew count=1 pad=webapp---- vals=p4,80
+[M-RICH-WEBAPP-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

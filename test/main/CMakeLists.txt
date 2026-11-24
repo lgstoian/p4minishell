@@ -62,6 +62,7 @@ idf_component_register(
         test_bind.c
         test_trap.c
         test_native_payload.c
+        test_native_exec.c
         test_crypt.c
         test_sw_gcm.c
         test_tcpterm.c
@@ -142,6 +143,7 @@ idf_component_register(
         archive
         modal
         nativepay
+        nativeexec
         tui
         markdown
         audio

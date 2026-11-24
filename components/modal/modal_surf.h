@@ -233,4 +233,131 @@ bool modal_parse_timeout_arg(const char *arg, uint32_t *timeout_ms_out);
  */
 bool modal_parse_var_arg(const char *arg, const char **name_out);
 
+/* -------------------------------------------------------------------------
+ * PURE SELECTORS / STATE (hardware-free; implemented in modal_args.c)
+ * -------------------------------------------------------------------------
+ * These helpers contain no LVGL, display, storage or FreeRTOS calls. The
+ * surfaces call them from their existing handle_usb_key / handle_serial_line
+ * callbacks, which the shared runtime reaches through the registered
+ * shell_command_ops_t.modal_* hooks - there is no second input path. The host
+ * modal gate compiles this very translation unit to verify the transitions.
+ */
+
+/* Raw HID key codes used for focus navigation (same values the list surface
+ * already interprets: Up 0x52, Down 0x51, Enter 0x28, Esc 0x29). */
+#define MODAL_KEY_UP        0x52u
+#define MODAL_KEY_DOWN      0x51u
+#define MODAL_KEY_LEFT      0x50u
+#define MODAL_KEY_RIGHT     0x4Fu
+#define MODAL_KEY_HOME      0x4Au
+#define MODAL_KEY_END       0x4Du
+#define MODAL_KEY_PAGE_UP   0x4Bu
+#define MODAL_KEY_PAGE_DOWN 0x4Eu
+#define MODAL_KEY_ENTER     0x28u
+#define MODAL_KEY_ESC       0x29u
+
+/** Clamp an index into [0, count). Returns 0 when count <= 0. */
+int modal_focus_clamp(int index, int count);
+
+/**
+ * @brief Move a focus index by one navigation key.
+ *
+ * @param key_code   Raw HID code (MODAL_KEY_* above).
+ * @param count      Number of focusable items (<= 0 -> no movement).
+ * @param current    Current focused index.
+ * @param page_step  Rows per PageUp/PageDown (<= 0 defaults to 5).
+ * @param out        Receives the new index on true, untouched on false.
+ * @return true only when @p out was written (the caller repaints).
+ */
+bool modal_focus_move(uint8_t key_code, int count, int current,
+                      int page_step, int *out);
+
+/** Progress percentage, clamped to 0..100. total == 0 returns 0. */
+uint8_t modal_progress_percent(uint32_t done, uint32_t total);
+
+/** Maximum number of suspended modal sessions. */
+#define MODAL_SESSION_MAX 8
+
+typedef enum {
+    MODAL_SESSION_FORE = 0,  /**< foreground / running */
+    MODAL_SESSION_BACK = 1,  /**< suspended / background */
+} modal_session_state_t;
+
+typedef struct {
+    const char *name;                /**< borrowed label, never copied */
+    int focus;                       /**< focused row/widget index */
+    modal_session_state_t state;
+} modal_session_slot_t;
+
+typedef struct {
+    modal_session_slot_t slot[MODAL_SESSION_MAX];
+    int depth;                       /**< 0..MODAL_SESSION_MAX; top is depth-1 */
+} modal_session_stack_t;
+
+void modal_session_stack_init(modal_session_stack_t *st);
+int  modal_session_stack_depth(const modal_session_stack_t *st);
+bool modal_session_stack_empty(const modal_session_stack_t *st);
+bool modal_session_stack_full(const modal_session_stack_t *st);
+
+/** @param from_top 0 = top of stack. Returns NULL when out of range. */
+const char *modal_session_stack_name(const modal_session_stack_t *st, int from_top);
+
+/** Find a name by exact match, searching from the top. @return from_top index
+ *  or -1 when absent. */
+int modal_session_stack_find(const modal_session_stack_t *st, const char *name);
+
+/** Push a foreground slot, marking the previous top suspended. */
+bool modal_session_stack_push(modal_session_stack_t *st, const char *name);
+
+/** Pop the top slot and make the new top foreground again. */
+bool modal_session_stack_pop(modal_session_stack_t *st);
+
+bool modal_session_stack_suspend(modal_session_stack_t *st);
+bool modal_session_stack_resume(modal_session_stack_t *st);
+
+/** Bring a named slot to the top (rotate), making it the only foreground one. */
+bool modal_session_stack_switch(modal_session_stack_t *st, const char *name);
+
+/** Focus accessor by from_top index (0 = top). */
+int  modal_session_stack_focus(const modal_session_stack_t *st, int from_top);
+bool modal_session_stack_set_focus(modal_session_stack_t *st, int from_top, int focus);
+
+/* -------------------------------------------------------------------------
+ * NEW READY-MADE SURFACES (modal_surface_t descriptors in modal_surf.c)
+ * -------------------------------------------------------------------------
+ * All three accept a `timeout_ms` produced by modal_parse_timeout_arg() and
+ * all three descriptors set abort_cancels = true. The /v:NAME variable write
+ * belongs to the batch verb layer, which reuses modal_parse_var_arg().
+ */
+
+/** Scrollable picker with focus navigation. @return selected 0-based index,
+ *  or -1 on cancel/Esc/timeout. @p initial is clamped to [0,count). */
+int modal_picker_run(const char *title, const char **items, int count,
+                     int initial, uint32_t timeout_ms, int *out_selected);
+
+/**
+ * @brief Progress surface driven by async event bits.
+ *
+ * @p tick_ms > 0 with @p step > 0 auto-advances done by @p step on each tick
+ * and closes cleanly at 100%. With tick_ms == 0 the surface waits for
+ * modal_progress_publish() (manual mode). /t: still bounds both modes.
+ * @return 0 on completion, -1 on cancel/Esc/timeout.
+ */
+int modal_progress_run(const char *title, const char *label, uint32_t total,
+                       uint32_t tick_ms, uint32_t step, uint32_t timeout_ms);
+
+/** Publish progress from a native producer. Returns false when no progress
+ *  surface is active. Values are clamped; reaching total sets DONE. */
+bool modal_progress_publish(uint32_t done, uint32_t total);
+
+/**
+ * @brief Extended form: configurable button labels + keyboard focus walking.
+ *
+ * Up/Down/Tab move the focused field (rendered with LV_STATE_FOCUSED); Enter
+ * accepts, Esc cancels. @p out_focus, when non-NULL, receives the last focus.
+ */
+int modal_form_run_ex(const char *title, modal_form_field_t *fields, int count,
+                      const char *accept_label, const char *cancel_label,
+                      uint32_t timeout_ms, int *out_focus);
+
 #endif /* P4MINISHELL_MODAL_SURF_H */

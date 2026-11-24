@@ -1,4 +1,4 @@
-# P4MiniShell Application ABI & Package Trust (firmware v1.5.0)
+# P4MiniShell Application ABI & Package Trust (firmware v1.6.0)
 
 > **The contract between firmware and applications.** Read this before
 > shipping an app bundle or changing the native-app entry points. It freezes
@@ -224,12 +224,16 @@ format or ABI version.
 | 144 | 4 | Required API set (u32 bitmask: console, env, state, input, TUI, modal, db, time, webapp) |
 | 148 | N | Payload bytes (`N` = the size field) |
 
-**Canonical signed bytes.** The fixed header with the 64-byte signature field
-omitted, immediately followed by the payload bytes. The 32-byte digest is
-SHA-256 over exactly that stream; the publisher signs the digest. Magic,
-version, arch, ABI tag, size, CRC, SHA-256, entry ordinal, and required API set
-are therefore all bound by the signature; the signature itself is not. CRC-32
-is a cheap integrity check only and never substitutes for the signature.
+**Canonical signed bytes.** The fixed header with **both** the 64-byte
+signature field and the 32-byte SHA-256 field omitted, immediately followed by
+the payload bytes (header prefix bytes 0..43 plus header suffix bytes 76..147
+plus the payload). The 32-byte digest is SHA-256 over exactly that stream; the
+publisher signs the digest. Magic, version, arch, ABI tag, size, CRC, entry
+ordinal, and required API set are therefore bound by the signature; the SHA-256
+and signature fields themselves are not. Including the SHA field in the signed
+stream was circular and made signatures unverifiable; the verifier and
+`tools/make_native_payload.py` now agree on the corrected stream. CRC-32 is a
+cheap integrity check only and never substitutes for the signature.
 
 **Trust gates are unchanged.** Install-time manifest CRC and ECDSA verdicts,
 the single `p4sign` public key, and `P4_CONFIG_PKG_REQUIRE_SIGN` / `/signed`

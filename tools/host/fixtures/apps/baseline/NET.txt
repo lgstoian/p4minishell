@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=NET
+[M-RICH-NET] host language extract
+W=network
+1
+[M-RICH-NET-K] host=p4
+[M-RICH-NET-K] port=80
+[M-RICH-NET-F] result=42
+[M-RICH-NET-S] rev=krowten count=1 pad=network--- vals=p4,80
+[M-RICH-NET-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

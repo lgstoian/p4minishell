@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=LIB
+[M-RICH-LIB-COMPANION] host language extract
+W=companion
+1
+[M-RICH-LIB-COMPANION-K] host=p4
+[M-RICH-LIB-COMPANION-K] port=80
+[M-RICH-LIB-COMPANION-F] result=42
+[M-RICH-LIB-COMPANION-S] rev=noinapmoc count=1 pad=companion- vals=p4,80
+[M-RICH-LIB-COMPANION-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

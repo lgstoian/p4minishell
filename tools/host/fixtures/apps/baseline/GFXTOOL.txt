@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=GFXTOOL
+[M-RICH-GFXTOOL] host language extract
+W=toolkit
+2
+[M-RICH-GFXTOOL-K] host=p4
+[M-RICH-GFXTOOL-K] port=80
+[M-RICH-GFXTOOL-F] result=42
+[M-RICH-GFXTOOL-S] rev=tikloot count=2 pad=toolkit--- vals=p4,80
+[M-RICH-GFXTOOL-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

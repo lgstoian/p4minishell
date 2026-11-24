@@ -262,6 +262,64 @@ bool gfx_surface_rotate_cw(const gfx_surface_t *src, int turns, gfx_surface_t *o
 void gfx_bmp_fit(int src_w, int src_h, int max_w, int max_h,
                  int *out_w, int *out_h);
 
+/*
+ * Additive toolkit extensions. Every function below is a NEW entry point: the
+ * pixel-exact primitives above are untouched, so existing screenshots and
+ * Unity cases keep their exact bytes. All of these stay pure buffer math with
+ * no LVGL or display dependency.
+ */
+
+/** Blend @p src over @p dst with an integer coverage 0..256 (256 = opaque,
+ * 0 = leave @p dst untouched). Rounded per 5/6/5 channel. Also the shared
+ * blend primitive behind the anti-aliased and compositing helpers. */
+uint16_t gfx_blend_565(uint16_t dst, uint16_t src, unsigned coverage);
+
+/** Anti-aliased line from (x1,y1) to (x2,y2). Samples at pixel centers and
+ * blends two rows per column by coverage; endpoints are fully opaque.
+ * Clipped per pixel, NULL-safe. Unlike gfx_surface_line this writes blended
+ * colours, so it is a separate verb (the original stays pixel-exact). */
+void gfx_surface_line_aa(gfx_surface_t *s, int x1, int y1, int x2, int y2,
+                         uint16_t color);
+
+/** Anti-aliased 1px circle outline at cx,cy radius r, blended by the distance
+ * from the ideal radius. r<0 is ignored; clipped and NULL-safe. */
+void gfx_surface_circle_aa(gfx_surface_t *s, int cx, int cy, int r,
+                           uint16_t color);
+
+/** Anti-aliased 1px rectangle outline at x,y,w,h, blended by the distance to
+ * the ideal border. Degenerate sizes are ignored; clipped and NULL-safe. */
+void gfx_surface_rect_aa(gfx_surface_t *s, int x, int y, int w, int h,
+                         uint16_t color);
+
+/** Linear gradient over the rect x,y,w,h from @p c0 to @p c1. @p vertical
+ * true interpolates down the rows, false across the columns. Endpoint cells
+ * hold the exact endpoint colours; one-cell axes use @p c0. Clipped and
+ * NULL-safe. */
+void gfx_surface_gradient(gfx_surface_t *s, int x, int y, int w, int h,
+                          uint16_t c0, uint16_t c1, bool vertical);
+
+/** Blit one cell of a sprite sheet (atlas) onto @p dst at x,y. @p cols is the
+ * cell grid width, @p cell_w/@p cell_h the cell size, @p index the
+ * row-major cell number. Invalid geometry or an out-of-range index is a
+ * no-op; transparency works exactly as in gfx_surface_blit. Reuses the one
+ * blit path - there is no second sprite loader or surface type. */
+void gfx_surface_blit_atlas(gfx_surface_t *dst, const gfx_surface_t *sheet,
+                            int cell_w, int cell_h, int cols, int index,
+                            int x, int y, bool use_transparent,
+                            uint16_t transparent);
+
+/** Composite a whole offscreen layer (any gfx_surface_t, including a sprite
+ * slot) over @p dst at x,y with integer coverage @p coverage (0..256).
+ * Pixels outside the target are clipped; caller keeps ownership of @p src. */
+void gfx_surface_composite(gfx_surface_t *dst, const gfx_surface_t *src,
+                           int x, int y, unsigned coverage);
+
+/** As gfx_surface_composite but skips source pixels equal to @p transparent
+ * before blending (sprite-style keyed layer). The key is never blended. */
+void gfx_surface_composite_keyed(gfx_surface_t *dst, const gfx_surface_t *src,
+                                 int x, int y, unsigned coverage,
+                                 uint16_t transparent);
+
 /**
  * @brief Frame-present statistics for a graphical app loop.
  *

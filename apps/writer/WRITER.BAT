@@ -22,6 +22,7 @@ if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 set ERR=0
 echo [M-WRITER]
 title "Writer Deck"
+gosub :rich_writer
 echo WRITER:  P4MiniShell writerdeck (%APPNAME% on %APPDRIVE%)
 echo.
 echo WRITER: templates need apps/push_templates.py; spell needs apps/push_dicts.py
@@ -77,6 +78,34 @@ echo WRITER: preview markup  -> open the file and press Preview (Ctrl+P)
 echo WRITER: spellcheck      -> open the file and press Spell (needs DICTS\en.words)
 echo WRITER: share over LAN  -> httpd start, then open /WRITERDEMO.HTML
 if "%ERR%"=="1" (echo WRITER: one or more steps failed) else (echo WRITER: all steps passed)
+gosub :rich_writer_report
 echo [M-WRITER-DONE]
 endlocal
 exit /b %ERR%
+
+rem ---- v1.6 richer-language showcase -----------------------------------
+rem [M-RICH-WRITER] word/length stats via str /count|/pad, map /incr and
+rem func/return. Runs headless; no editor state is touched.
+:rich_writer
+echo [M-RICH-WRITER] draft word tour
+set WT=writer
+str /count WT e CE
+str /pad WT 10 WP .
+map /set WRDK words 0
+map /incr WRDK words 42
+for /K %%k in (WRDK) do echo [M-RICH-WRITER-K] %%k=%%l
+echo [M-RICH-WRITER-S] e=%CE% pad=%WP%
+return
+
+:rich_writer_report
+echo [M-RICH-WRITER] export language tour
+func :wread 420 2
+echo [M-RICH-WRITER-F] minutes=%RESULT%
+set WR=export
+str /rev WR RV
+str /count WR t CT
+echo [M-RICH-WRITER-FINAL] rev=%RV% t=%CT%
+return
+
+:wread
+return %1/%2

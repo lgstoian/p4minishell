@@ -27,7 +27,17 @@ build. Board behaviour remains the on-target unit suite and `p4test`.
 - `<script>` and `onload` are documentation for the browser path. The host
   harness does **not** run QuickJS: it probes the pure `js_canvas` rasterizer
   through its public API and lets the DOM renderer draw the canvas fallback
-  child, exactly as a no-script surface does.
+  child, exactly as a no-script surface does. `modern.html` also documents the
+  timer/microtask ordering that the browser's one `timers.run()` pump enforces.
+- `modern.html` exercises the one entity decoder (longest named match, legacy
+  no-semicolon forms, numeric clamp and C1 remap) and the one cascade
+  comparator: (id,class,type) specificity, `!important` and source order.
+  `recovery.html` exercises implied end tags (`p`/`li`/`td`), first-duplicate-
+  attribute wins, and a source truncated inside a quoted attribute, repaired
+  through the bounded PSRAM chunk buffer before the same `dom_parse()` runs.
+- The harness emits `webapp.entity ...` and `webapp.cascade ...` lines from
+  those same shipped functions; the gate treats them as part of the exact
+  baseline and its red-canary self-test rejects a tampered decision/mapping.
 - The harness emits a completion marker pair (`webapp.render.begin ...` /
   `webapp.render.end ...`) plus `tui.dump cols=...`, per-row `NNN|text` and
   `NNN@start-end:fg` lines, and `tui.dump.end`. A missing, stale or

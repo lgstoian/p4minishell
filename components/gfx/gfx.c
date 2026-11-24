@@ -902,3 +902,277 @@ int gfx_frame_stats_format(const gfx_frame_stats_t *s, char *out, size_t out_siz
                     (unsigned)gfx_frame_stats_jitter_us(s), (unsigned)s->dropped,
                     fps10, (unsigned)(s->target_us ? 1000000u / s->target_us : 0u));
 }
+
+/*
+ * Additive toolkit extensions. They live in this one raster translation unit
+ * so pixel access and colour blending still have exactly one implementation;
+ * nothing above this line changes behaviour.
+ */
+
+uint16_t gfx_blend_565(uint16_t dst, uint16_t src, unsigned coverage)
+{
+    unsigned a;
+    unsigned dr;
+    unsigned dg;
+    unsigned db;
+    unsigned sr;
+    unsigned sg;
+    unsigned sb;
+
+    if (coverage == 0) return dst;
+    if (coverage >= 256) return src;
+    a = coverage;
+    dr = (dst >> 11) & 0x1Fu;
+    dg = (dst >> 5) & 0x3Fu;
+    db = dst & 0x1Fu;
+    sr = (src >> 11) & 0x1Fu;
+    sg = (src >> 5) & 0x3Fu;
+    sb = src & 0x1Fu;
+    return (uint16_t)((((sr * a + dr * (256u - a) + 128u) / 256u) << 11) |
+                      (((sg * a + dg * (256u - a) + 128u) / 256u) << 5) |
+                       ((sb * a + db * (256u - a) + 128u) / 256u));
+}
+
+/** Plot one anti-aliased sample. The major axis has already been chosen: in
+ * steep mode the logical (x,y) pair is swapped before it reaches the surface.
+ * Coverage is clamped and converted to the shared 0..256 blend unit. */
+static void gfx_aa_plot(gfx_surface_t *s, int x, int y, uint16_t color,
+                        double coverage, bool steep)
+{
+    int px = steep ? y : x;
+    int py = steep ? x : y;
+
+    if (coverage <= 0.0) return;
+    if (coverage >= 1.0) {
+        gfx_surface_pixel(s, px, py, color);
+    } else {
+        unsigned a = (unsigned)(coverage * 256.0 + 0.5);
+
+        gfx_surface_pixel(s, px, py,
+                          gfx_blend_565(gfx_surface_get(s, px, py), color, a));
+    }
+}
+
+void gfx_surface_line_aa(gfx_surface_t *s, int x1, int y1, int x2, int y2,
+                         uint16_t color)
+{
+    bool steep;
+    double dx;
+    double dy;
+    double gradient;
+    double center;
+    int x;
+    int tmp;
+
+    if (s == NULL || s->px == NULL) return;
+    if (x1 == x2 && y1 == y2) {
+        gfx_surface_pixel(s, x1, y1, color);
+        return;
+    }
+    /* Walk the longer axis so there is at most one column step per sample. */
+    steep = fabs((double)(y2 - y1)) > fabs((double)(x2 - x1));
+    if (steep) {
+        tmp = x1; x1 = y1; y1 = tmp;
+        tmp = x2; x2 = y2; y2 = tmp;
+    }
+    if (x1 > x2) {
+        tmp = x1; x1 = x2; x2 = tmp;
+        tmp = y1; y1 = y2; y2 = tmp;
+    }
+    dx = (double)(x2 - x1);
+    dy = (double)(y2 - y1);
+    gradient = (dx == 0.0) ? 1.0 : dy / dx;
+    /* Pixel centers sit at x+0.5; sample the ideal line there and split the
+     * coverage between the two rows it crosses. The final endpoint pass
+     * paints both endpoints fully opaque. */
+    center = (double)y1 + gradient * 0.5;
+    for (x = x1; x <= x2; x++) {
+        int iy = (int)floor(center);
+        double frac = center - (double)iy;
+
+        gfx_aa_plot(s, x, iy, color, 1.0 - frac, steep);
+        gfx_aa_plot(s, x, iy + 1, color, frac, steep);
+        center += gradient;
+    }
+    gfx_aa_plot(s, x1, y1, color, 1.0, steep);
+    gfx_aa_plot(s, x2, y2, color, 1.0, steep);
+}
+
+void gfx_surface_circle_aa(gfx_surface_t *s, int cx, int cy, int r,
+                           uint16_t color)
+{
+    int y;
+    int x;
+    double radius;
+
+    if (s == NULL || s->px == NULL || r < 0) return;
+    if (r == 0) {
+        gfx_surface_pixel(s, cx, cy, color);
+        return;
+    }
+    /* The ideal 1px ring sits half a pixel outside the integer radius, so the
+     * r and r+1pixel rows each receive half coverage instead of a hard edge. */
+    radius = (double)r + 0.5;
+    for (y = cy - r - 2; y <= cy + r + 2; y++) {
+        for (x = cx - r - 2; x <= cx + r + 2; x++) {
+            double dx = (double)(x - cx);
+            double dy = (double)(y - cy);
+            double dist = sqrt(dx * dx + dy * dy);
+            double cover = 1.0 - fabs(dist - radius);
+
+            if (cover > 0.0) {
+                gfx_aa_plot(s, x, y, color, cover, false);
+            }
+        }
+    }
+}
+
+void gfx_surface_rect_aa(gfx_surface_t *s, int x, int y, int w, int h,
+                         uint16_t color)
+{
+    int py;
+    int px;
+    int right;
+    int bottom;
+
+    if (s == NULL || s->px == NULL) return;
+    if (w < 1 || h < 1) return;
+    right = x + w - 1;
+    bottom = y + h - 1;
+    /* Ideal border lines sit half a pixel outside the integer rect, so the
+     * edge column and its outside neighbour share the coverage evenly. */
+    for (py = y - 2; py <= bottom + 2; py++) {
+        for (px = x - 2; px <= right + 2; px++) {
+            double dx = 0.0;
+            double dy = 0.0;
+            double dist;
+            double cover;
+
+            if (px < x) dx = (double)x - 0.5 - (double)px;
+            else if (px > right) dx = (double)px - (double)right - 0.5;
+            if (py < y) dy = (double)y - 0.5 - (double)py;
+            else if (py > bottom) dy = (double)py - (double)bottom - 0.5;
+            if (dx > 0.0 && dy > 0.0) {
+                dist = sqrt(dx * dx + dy * dy);  /* rounded corner */
+            } else if (dx > 0.0 || dy > 0.0) {
+                dist = (dx > 0.0) ? dx : dy;     /* straight side */
+            } else {
+                double l = (double)px - (double)x + 0.5;
+                double r = (double)right + 0.5 - (double)px;
+                double t = (double)py - (double)y + 0.5;
+                double b = (double)bottom + 0.5 - (double)py;
+
+                dist = l;
+                if (r < dist) dist = r;
+                if (t < dist) dist = t;
+                if (b < dist) dist = b;
+            }
+            cover = 1.0 - dist;
+            if (cover > 0.0) {
+                gfx_aa_plot(s, px, py, color, cover, false);
+            }
+        }
+    }
+}
+
+void gfx_surface_gradient(gfx_surface_t *s, int x, int y, int w, int h,
+                          uint16_t c0, uint16_t c1, bool vertical)
+{
+    int x0;
+    int x1;
+    int y0;
+    int y1;
+    int count;
+
+    if (s == NULL || s->px == NULL) return;
+    if (w < 1 || h < 1) return;
+    x0 = (x < 0) ? 0 : x;
+    y0 = (y < 0) ? 0 : y;
+    x1 = x + w;
+    y1 = y + h;
+    if (x1 > s->w) x1 = s->w;
+    if (y1 > s->h) y1 = s->h;
+    if (x0 >= x1 || y0 >= y1) return;
+
+    if (vertical) {
+        count = h;
+        for (int yy = y0; yy < y1; yy++) {
+            double t = (count > 1) ? (double)(yy - y) / (double)(count - 1) : 0.0;
+            uint16_t c = gfx_blend_565(c0, c1, (unsigned)(t * 256.0 + 0.5));
+
+            gfx_surface_hline(s, x0, yy, x1 - x0, c);
+        }
+    } else {
+        count = w;
+        for (int xx = x0; xx < x1; xx++) {
+            double t = (count > 1) ? (double)(xx - x) / (double)(count - 1) : 0.0;
+            uint16_t c = gfx_blend_565(c0, c1, (unsigned)(t * 256.0 + 0.5));
+
+            gfx_surface_vline(s, xx, y0, y1 - y0, c);
+        }
+    }
+}
+
+void gfx_surface_blit_atlas(gfx_surface_t *dst, const gfx_surface_t *sheet,
+                            int cell_w, int cell_h, int cols, int index,
+                            int x, int y, bool use_transparent,
+                            uint16_t transparent)
+{
+    int ox;
+    int oy;
+
+    if (dst == NULL || dst->px == NULL || sheet == NULL || sheet->px == NULL) return;
+    if (cell_w < 1 || cell_h < 1 || cols < 1 || index < 0) return;
+    ox = (index % cols) * cell_w;
+    oy = (index / cols) * cell_h;
+    if (ox >= sheet->w || oy >= sheet->h) return;
+    for (int sy = 0; sy < cell_h && oy + sy < sheet->h; sy++) {
+        for (int sx = 0; sx < cell_w && ox + sx < sheet->w; sx++) {
+            uint16_t px = sheet->px[(size_t)(oy + sy) * (size_t)sheet->w +
+                                    (size_t)(ox + sx)];
+
+            if (use_transparent && px == transparent) continue;
+            gfx_surface_pixel(dst, x + sx, y + sy, px);
+        }
+    }
+}
+
+void gfx_surface_composite(gfx_surface_t *dst, const gfx_surface_t *src,
+                           int x, int y, unsigned coverage)
+{
+    if (dst == NULL || dst->px == NULL || src == NULL || src->px == NULL) return;
+    for (int sy = 0; sy < src->h; sy++) {
+        for (int sx = 0; sx < src->w; sx++) {
+            int dx = x + sx;
+            int dy = y + sy;
+            uint16_t px;
+
+            if (dx < 0 || dy < 0 || dx >= dst->w || dy >= dst->h) continue;
+            px = src->px[(size_t)sy * (size_t)src->w + (size_t)sx];
+            dst->px[(size_t)dy * (size_t)dst->w + (size_t)dx] =
+                gfx_blend_565(dst->px[(size_t)dy * (size_t)dst->w + (size_t)dx],
+                              px, coverage);
+        }
+    }
+}
+
+void gfx_surface_composite_keyed(gfx_surface_t *dst, const gfx_surface_t *src,
+                                 int x, int y, unsigned coverage,
+                                 uint16_t transparent)
+{
+    if (dst == NULL || dst->px == NULL || src == NULL || src->px == NULL) return;
+    for (int sy = 0; sy < src->h; sy++) {
+        for (int sx = 0; sx < src->w; sx++) {
+            int dx = x + sx;
+            int dy = y + sy;
+            uint16_t px;
+
+            if (dx < 0 || dy < 0 || dx >= dst->w || dy >= dst->h) continue;
+            px = src->px[(size_t)sy * (size_t)src->w + (size_t)sx];
+            if (px == transparent) continue;
+            dst->px[(size_t)dy * (size_t)dst->w + (size_t)dx] =
+                gfx_blend_565(dst->px[(size_t)dy * (size_t)dst->w + (size_t)dx],
+                              px, coverage);
+        }
+    }
+}

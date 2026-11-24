@@ -9,7 +9,7 @@
 > rules live in [`ai-context.md`](ai-context.md); open bugs in
 > [`bugs.md`](bugs.md).
 
-- **Version:** v1.5.0 · **Targets:** ESP32-P4 + ESP32-C6
+- **Version:** v1.6.0 · **Targets:** ESP32-P4 + ESP32-C6
 - **Boards:** `jc1060p470c` (reference, e.g. COM3) and `m5stack_tab5` (COM6)
 
 ---
@@ -25,7 +25,9 @@ board. After flashing the test app, **reflash the main firmware**.
 The **host unit lane** (§2.2) is an additional pre-gate: it catches logic
 regressions before a board is free, and it must stay green when a change
 touches a source it compiles. It is **never** a substitute for this rule — a
-host pass signs off nothing about hardware.
+host pass signs off nothing about hardware. The same applies to all v1.6 host
+gates (batch, webapp, gfx, tui, modal, native payload checker): they compile or
+drive shipped code, never a fake backend, and none requires or replaces a board.
 
 ---
 
@@ -86,9 +88,26 @@ python tools/check_assets.py           # UI colours: no LVGL default-theme blobs
 python tools/gallery_audit.py          # gallery PNG identity + uniqueness
 python tools/gallery_audit_selftest.py # red canary: the identity guard must go red
 python tools/harness/verify.py         # on-disk invariants + harness markers
+python tools/host_tui_gate.py --check      # v1.6: one cell renderer + dirty rects
+python tools/host_modal_gate.py --check    # v1.6: focus/progress/session transitions
+python tools/gfx_toolkit_test.py --host    # v1.6: gfx wiring/RGB565 contract
+python tools/host_batch_run.py --check     # v1.6: real .bat fixtures
+python tools/host_webapp_gate.py --check   # v1.6: shared DOM/CSS render path
+python tools/host_apps_gate.py --check     # v1.6: 33 enriched apps, 363 host assertions
 # size budget runs only when build/p4minishell.elf exists
 python tools/p4test_run.py --static    # the SAME gate list, no board
 ```
+
+The v1.6 gates are **hardware-free pre-gates**. `host_tui_gate.py` compiles
+`tui_frame.h`, the one ANSI palette and the one CSS colour parser from the
+shipped tree into a generated harness over scene fixtures; `host_modal_gate.py`
+generates a harness from `tools/host/fixtures/modal/transitions.json` and links
+the real `components/modal/modal_args.c`; `gfx_toolkit_test.py --host` checks
+the RGB565 constants shared with `test/main/test_gfx.c` against
+`tools/host/fixtures/gfx/expected.json`; `host_apps_gate.py` loads
+`host_batch_run.py` as a library and checks the 33 `[M-RICH-*]` app fixtures,
+reporting the 40 hardware-only surfaces as honest SKIPs (never simulated).
+Each has a red canary or exact baseline; none opens a serial port.
 
 `tools/harness/verify.py` and `tools/p4test/runner.py` now share one canonical
 gate list (asserted by `python tools/p4test_run.py --self-test`), so `--static`
@@ -134,7 +153,8 @@ python tools/host_webapp_gate.py --check  # webapp render pre-gate (separate; no
 python tools/host_batch_run.py --check    # real .bat fixture pre-gate (separate; no board)
 ```
 
-- **Coverage today: 345 cases** (last run) - the leaf components with no board
+- **Coverage today: 375 generated cases** (manifest count for v1.6; refresh
+  the last-run count with `tools/host_unit_run.py --build`) - the leaf components with no board
   dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`, plus the
   `strutil`/`p4heap` helpers they use), the hardware-free halves of the shell
   (`shell_core.c`: text helpers, statement scanner, history store, abort/busy,
@@ -207,6 +227,48 @@ python tools/host_batch_run.py --check    # real .bat fixture pre-gate (separate
   Verified: 1 fixture, 7 assertions OK (Unity host lane 345/0/0). This is a
   pre-gate only — never hardware sign-off; the on-device suites remain
   authoritative (§0).
+- **TUI render pre-gate (v1.6):** `tools/host_tui_gate.py` compiles the **one**
+  cell renderer (`components/tui/tui_frame.h`), the one DOS palette and the one
+  CSS colour parser with a plain C compiler, drives `tools/host/fixtures/tui/`
+  scenes and compares normalised text, `NNN@start-end:fg` colour runs and the
+  dirty rect against `baseline/`. `--check` (default), `--update` and
+  `--self-test` (red canary) are supported. No second renderer; no board.
+- **Modal state pre-gate (v1.6):** `tools/host_modal_gate.py` generates a C
+  harness from `tools/host/fixtures/modal/transitions.json`, links the **real**
+  `components/modal/modal_args.c`, and asserts `modal.check` lines, markers and
+  check count for `focus`, `progress` and `sessions` (push/pop/suspend/resume/
+  switch/find/focus/bounds). `--fixture`, `--cc`, `--check`, `--self-test`.
+  The LVGL/FreeRTOS paint half stays on-target.
+- **Gfx wiring pre-gate (v1.6):** `python tools/gfx_toolkit_test.py --host`
+  checks that the AA/gradient/atlas/composite constants in
+  `test/main/test_gfx.c` still match `tools/host/fixtures/gfx/expected.json`
+  and that `tools/host/fixtures/gfx/GFXAA.BAT` still exercises every new verb.
+  It is a contract check, not a pixel or hardware proof.
+- **Reference-app host proof (v1.6):** `python tools/host_apps_gate.py --check`
+  drives every enriched `.bat` app through the same real interpreter ELF used
+  by `host_batch_run.py` (fixtures under `tools/host/fixtures/apps/`, baselines
+  under `baseline/`). Current result: **33/33 apps, 363 host assertions PASS,
+  40 hardware surfaces SKIP (gfx/TUI/modal/webapp/native, each with a named
+  reason) and 7 red-canary checks**. A SKIP is honest — the fixture contains no
+  unsupported verb and the gate rejects the host-lane "unsupported command"
+  string. `--update` rebaselines only after an intentional transcript change;
+  `--self-test` proves the gate can fail. This is a host proof, not hardware
+  sign-off. The new `[M-RICH-*]` lines intentionally change app transcripts, so
+  `tools/appdiff/baseline/*.transcript.txt` must be regenerated on a board
+  before hardware transcript parity is green.
+- **Native payload checker:** `tools/make_native_payload.py check|selftest`
+  verifies a signed test envelope in `tools/host/fixtures/native/` with a
+  throwaway key; it never maps or runs the bytes. The keys are test-only and
+  never installed on a board (`SECURITY.md`).
+- **App proofs:** `tools/host_apps_gate.py` drives all **33 updated reference
+  apps** through the real interpreter (363 host assertions PASS, 40
+  hardware-dependent surfaces honestly SKIP with a named reason, 7 self-test
+  canaries); hardware surfaces are never faked. The app identity/uniqueness
+  gates (`gallery_audit.py` + `gallery_audit_selftest.py`) remain static
+  pre-gates; a host-generated app proof is labelled as such in `docs/apps.md`
+  and `docs/assets/proof-index.html`. **The v1.6 `[M-RICH-*]` transcript lines
+  change app output, so `tools/appdiff/baseline/*.transcript.txt` goldens must
+  be rebaselined on a board before those hardware parity checks can be green.**
 - **Extending it:** add the source (or the hardware-free translation unit) to
   `test/host/main/CMakeLists.txt`, add the test file to
   `tools/host_test_manifest.json`, then re-run `tools/host_gen_runner.py` (it
@@ -217,9 +279,10 @@ python tools/host_batch_run.py --check    # real .bat fixture pre-gate (separate
 ## 3. Layer 1 — on-target unit tests (Unity)
 
 Pure/headless logic runs on the P4 in `test/` (Unity; the static case count is
-**769** in the current tree - the v1.4.3 browser-cache, grid-resolve and
-interactive-`for` cases, plus 4 new `trap` cases in `test/main/test_trap.c` and
-7 native-payload cases - refresh the hardware count with `tools/unit_run.py`;
+**809** in the current tree - the v1.4.3 browser-cache, grid-resolve and
+interactive-`for` cases, the `trap` cases in `test/main/test_trap.c`, and the
+v1.6 native-payload/loader, gfx toolkit, TUI frame/widget, modal, HTML/CSS/JS
+and batch-expression cases - refresh the hardware count with `tools/unit_run.py`;
 includes the software AES-256-GCM vectors in `test_sw_gcm.c`).
 
 ```powershell
@@ -553,7 +616,10 @@ it automatically.
 2. **Behaviour on hardware** → extend the matching `tools/suites/sNN_*.py`; add
    a focused driver only if it needs a bespoke loop.
 3. **Cross-app behaviour** → the `s14_apps` markers and, if a reference app's
-   transcript changes, re-baseline `tools/appdiff.py --update`.
+   transcript changes, re-baseline `tools/appdiff.py --update`. **Open for
+   v1.6.0:** the 33 apps now emit `[M-RICH-*]` lines, so every
+   `tools/appdiff/baseline/*.transcript.txt` golden needs a board rebaseline;
+   do not report hardware transcript parity as green until that is done.
 4. **Boot/serial/visual concerns** → `boot_regression.py`,
    `tx_stress_test.py`, or the webcam watchers.
 

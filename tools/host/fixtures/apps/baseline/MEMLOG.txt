@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=MEMLOG
+[M-RICH-MEMLOG] host language extract
+W=memlog
+2
+[M-RICH-MEMLOG-K] host=p4
+[M-RICH-MEMLOG-K] port=80
+[M-RICH-MEMLOG-F] result=42
+[M-RICH-MEMLOG-S] rev=golmem count=2 pad=memlog---- vals=p4,80
+[M-RICH-MEMLOG-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

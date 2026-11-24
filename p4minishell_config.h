@@ -55,7 +55,7 @@
  * The boot message and all version commands read from these macros.
  */
 #define P4_CONFIG_VERSION_MAJOR             1
-#define P4_CONFIG_VERSION_MINOR             5
+#define P4_CONFIG_VERSION_MINOR             6
 #define P4_CONFIG_VERSION_PATCH             0
 
 /** Full version string assembled from the components above. */
@@ -2062,6 +2062,14 @@
  *  a verified byte span - the future loader alone decides what to do with it,
  *  and only a signed payload launched by a `.bat` shim is eligible. */
 #define P4_CONFIG_NATPAY_MAX_PAYLOAD_BYTES   2097152
+
+/** Maximum exported entries in one signed .P4X payload and the set of applib
+ *  API groups the single loader may hand to a payload. Both are compile-time
+ *  so the export table is bounded and no second capability mechanism exists. */
+#define P4_CONFIG_NATIVE_MAX_EXPORTS          16
+/* console | env | state | time, written as raw bits so this header stays
+ * independent of components/nativepay/native_payload.h. */
+#define P4_CONFIG_NATIVE_API_SUPPORTED_MASK   0x87u
 
 /** Manifest trust policy: 1 refuses unsigned bundles at `pkg install`
  *  (warns otherwise); 0 warns on unsigned but still installs. A present but

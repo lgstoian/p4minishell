@@ -51,6 +51,34 @@ css_rgba_t css_color_from_dos(uint8_t dos);
  *  Used where a surface can render only one foreground colour per cell. */
 css_rgba_t css_color_blend(css_rgba_t fg, css_rgba_t bg, uint8_t alpha);
 
+/** Composite a translucent colour over an opaque backdrop, using @p fg's own
+ *  alpha. This is the single opacity-composition path for CSS backgrounds,
+ *  box-shadows and canvas fills; it always routes through css_color_blend()
+ *  so there is still one DOS palette and one blending rule. */
+css_rgba_t css_color_composite(css_rgba_t fg, css_rgba_t bg);
+
+/** Maximum colour stops in the shared linear-gradient subset. */
+#define CSS_GRADIENT_MAX_STOPS 4
+
+/** A deterministic linear-gradient subset. Colours come from css_color_parse()
+ *  (one colour parser); the renderer quantises samples with css_color_to_dos()
+ *  (one DOS palette). `angle` is CSS-like: 90 = to right, 180 = to bottom,
+ *  270 = to left, 0 = to top. */
+typedef struct {
+    css_rgba_t stops[CSS_GRADIENT_MAX_STOPS];
+    uint8_t positions[CSS_GRADIENT_MAX_STOPS];  /* 0..255 along the gradient line */
+    int count;
+    uint16_t angle;                             /* degrees, 0..359 */
+} css_gradient_t;
+
+/** Parse `linear-gradient([<angle>deg | to <side>,] <colour> [<pos>%], ...)`.
+ *  Up to CSS_GRADIENT_MAX_STOPS stops; missing positions are spaced evenly.
+ *  Returns false for an unsupported value (the caller keeps the old paint). */
+bool css_gradient_parse(const char *text, css_gradient_t *out);
+
+/** Sample the gradient at @p t (0..255 along its gradient line). */
+css_rgba_t css_gradient_sample(const css_gradient_t *gradient, uint8_t t);
+
 #ifdef __cplusplus
 }
 #endif

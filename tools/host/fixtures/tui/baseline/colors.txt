@@ -1,0 +1,13 @@
+tui.scene.begin name=colors cols=80 rows=25
+tui.scene.dump name=colors
+001|RED       CUB
+002|BLU    bol
+003|YEL
+004|def
+001@1-1:12 2-8:16 9-9:2 10-12:16
+002@1-1:1 2-5:16 6-6:7 7-12:16
+003@1-1:14 2-12:16
+004@1-12:16
+tui.scene.dirty any=yes rect=1,1-9,4
+tui.scene.clean any=no
+tui.scene.end name=colors

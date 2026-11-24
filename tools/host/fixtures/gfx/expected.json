@@ -1,0 +1,13 @@
+{
+  "SPDX-FileCopyrightText": "2026 Stoian Alexandru",
+  "SPDX-License-Identifier": "MIT",
+  "_comment": "Exact RGB565 constants asserted by the pure Unity cases for the additive gfx toolkit. tools/gfx_toolkit_test.py --host checks that these literals are still present in test/main/test_gfx.c.",
+  "blend_midpoint": "0x8410",
+  "blend_three_quarters_red": "0xC000",
+  "line_aa_half_coverage": "0x8410",
+  "gradient_one_third": "0xA80A",
+  "gradient_red_end": "0xF800",
+  "gradient_blue_end": "0x001F",
+  "atlas_cell_pixels": ["0x1234", "0x5678", "0x9ABC", "0xDEF0"],
+  "keyed_composite_background": "0x1234"
+}

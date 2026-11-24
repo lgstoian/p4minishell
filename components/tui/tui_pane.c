@@ -8,6 +8,7 @@
  */
 
 #include "tui_pane.h"
+#include "tui_widgets.h"
 #include "tui.h"
 #include "shell.h"
 #include "p4minishell_config.h"
@@ -323,12 +324,23 @@ typedef struct {
     int max_val;
 } ws_widget_t;
 
-static ws_widget_t s_widgets[P4_CONFIG_WS_WIDGET_MAX];
+/* Bulk workspace tables are allocated lazily from PSRAM (p4heap), never kept
+ * as static DIRAM arrays. A failed allocation leaves the table absent and the
+ * touching verb reports failure instead of using a short or stale table. */
+static ws_widget_t *s_widgets;
+
+static ws_widget_t *widgets_ensure(void)
+{
+    if (s_widgets == NULL) {
+        s_widgets = p4heap_calloc_any(P4_CONFIG_WS_WIDGET_MAX, sizeof(*s_widgets));
+    }
+    return s_widgets;
+}
 
 static ws_widget_t *widget_find(const char *name)
 {
     int i;
-    if (name == NULL) return NULL;
+    if (name == NULL || widgets_ensure() == NULL) return NULL;
     for (i = 0; i < P4_CONFIG_WS_WIDGET_MAX; i++) {
         if (s_widgets[i].used && strcmp(s_widgets[i].name, name) == 0) {
             return &s_widgets[i];
@@ -355,6 +367,7 @@ bool tui_widget_add(const char *name, const char *type_str, int x, int y,
 
     if (name == NULL || name[0] == '\0' || type_str == NULL) return false;
     if (strlen(name) >= P4_CONFIG_WS_WIDGET_NAME_BYTES) return false;
+    if (widgets_ensure() == NULL) return false;
 
     wd = widget_find(name);
     if (wd == NULL) {
@@ -431,6 +444,7 @@ bool tui_widget_exists(const char *name)
 void tui_widget_render(void)
 {
     int i;
+    if (widgets_ensure() == NULL) return;
     for (i = 0; i < P4_CONFIG_WS_WIDGET_MAX; i++) {
         ws_widget_t *wd = &s_widgets[i];
         if (!wd->used) continue;
@@ -867,6 +881,27 @@ void tui_workspace_render(void)
     tui_widget_render();
 }
 
+typedef struct {
+    char name[P4_CONFIG_WS_WIDGET_NAME_BYTES];
+    int offset;
+    int viewport;
+    int content;
+    bool used;
+} ws_scroll_t;
+
+/* Declared before reset() so the reset can clear it. Lazily allocated in
+ * PSRAM: the table is absent until a scroll region is first used. */
+static ws_scroll_t *s_scroll_regions;
+
+static ws_scroll_t *scroll_regions_ensure(void)
+{
+    if (s_scroll_regions == NULL) {
+        s_scroll_regions = p4heap_calloc_any(TUI_WIDGET_SCROLL_MAX,
+                                             sizeof(*s_scroll_regions));
+    }
+    return s_scroll_regions;
+}
+
 void tui_workspace_reset(void)
 {
     int i;
@@ -876,13 +911,214 @@ void tui_workspace_reset(void)
     memset(s_panes, 0, sizeof(s_panes));
     s_pane_count = 0;
     s_focus_index = -1;
-    memset(s_widgets, 0, sizeof(s_widgets));
+    if (s_widgets != NULL) {
+        memset(s_widgets, 0, P4_CONFIG_WS_WIDGET_MAX * sizeof(*s_widgets));
+    }
     memset(s_hud_cells, 0, sizeof(s_hud_cells));
     s_event_head = 0;
     s_event_count = 0;
     memset(s_keybinds, 0, sizeof(s_keybinds));
     s_key_mode = 0;
     memset(s_taps, 0, sizeof(s_taps));
+    tui_widget_focus_clear();
+    if (s_scroll_regions != NULL) {
+        memset(s_scroll_regions, 0, TUI_WIDGET_SCROLL_MAX * sizeof(*s_scroll_regions));
+    }
     s_hud_refresh_ms = P4_CONFIG_WS_HUD_REFRESH_MS;
     s_hud_last_refresh = 0;
+}
+
+/* ========================================================================
+ * COMPONENT LAYER: focus ring, scroll regions, input routing
+ * Lives in the same TU as the pane/widget state so there is ONE workspace,
+ * not a second one. See tui_widgets.h for the pure geometry helpers.
+ * ======================================================================== */
+
+static char (*s_focus_names)[P4_CONFIG_WS_WIDGET_NAME_BYTES];
+static int s_focus_count = 0;
+static int s_focus_sel = -1;
+
+/* The focus-name table is bulk state too; allocate it with the widgets so a
+ * PSRAM failure leaves no half-built focus ring. */
+static char (*focus_names_ensure(void))[P4_CONFIG_WS_WIDGET_NAME_BYTES]
+{
+    if (s_focus_names == NULL) {
+        s_focus_names = p4heap_calloc_any(P4_CONFIG_WS_WIDGET_MAX,
+                                          sizeof(*s_focus_names));
+    }
+    return s_focus_names;
+}
+
+void tui_widget_focus_clear(void)
+{
+    if (s_focus_names != NULL) {
+        memset(s_focus_names, 0,
+               P4_CONFIG_WS_WIDGET_MAX * sizeof(*s_focus_names));
+    }
+    s_focus_count = 0;
+    s_focus_sel = -1;
+}
+
+bool tui_widget_focus_add(const char *name)
+{
+    int i;
+
+    if (name == NULL || name[0] == '\0' || !tui_widget_exists(name)) return false;
+    if (focus_names_ensure() == NULL) return false;
+    for (i = 0; i < s_focus_count; i++) {
+        if (strcmp(s_focus_names[i], name) == 0) return true;
+    }
+    if (s_focus_count >= P4_CONFIG_WS_WIDGET_MAX) return false;
+    snprintf(s_focus_names[s_focus_count], P4_CONFIG_WS_WIDGET_NAME_BYTES,
+             "%s", name);
+    if (s_focus_sel < 0) s_focus_sel = s_focus_count;
+    s_focus_count++;
+    return true;
+}
+
+bool tui_widget_focus_set(const char *name)
+{
+    if (name == NULL || focus_names_ensure() == NULL) return false;
+    for (int i = 0; i < s_focus_count; i++) {
+        if (strcmp(s_focus_names[i], name) == 0) {
+            s_focus_sel = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+int tui_widget_focus_step(int dir)
+{
+    s_focus_sel = tui_focus_wrap(s_focus_sel, s_focus_count, dir);
+    return s_focus_sel;
+}
+
+const char *tui_widget_focus_current(void)
+{
+    if (s_focus_names == NULL || s_focus_sel < 0 ||
+        s_focus_sel >= s_focus_count) return NULL;
+    return s_focus_names[s_focus_sel];
+}
+
+int tui_widget_focus_count(void)
+{
+    return s_focus_count;
+}
+
+const char *tui_widget_get_label(const char *name)
+{
+    ws_widget_t *wd = widget_find(name);
+
+    return wd != NULL ? wd->bind_label : NULL;
+}
+
+bool tui_scroll_region_add(const char *name, int viewport, int content)
+{
+    ws_scroll_t *r = NULL;
+
+    if (name == NULL || name[0] == '\0' || viewport <= 0 || content < 0) {
+        return false;
+    }
+    if (scroll_regions_ensure() == NULL) return false;
+    for (int i = 0; i < TUI_WIDGET_SCROLL_MAX; i++) {
+        if (s_scroll_regions[i].used &&
+            strcmp(s_scroll_regions[i].name, name) == 0) {
+            r = &s_scroll_regions[i];
+            break;
+        }
+    }
+    if (r == NULL) {
+        for (int i = 0; i < TUI_WIDGET_SCROLL_MAX; i++) {
+            if (!s_scroll_regions[i].used) {
+                r = &s_scroll_regions[i];
+                break;
+            }
+        }
+    }
+    if (r == NULL) return false;
+    memset(r, 0, sizeof(*r));
+    snprintf(r->name, sizeof(r->name), "%s", name);
+    r->viewport = viewport;
+    r->content = content;
+    r->offset = tui_scroll_clamp(0, viewport, content);
+    r->used = true;
+    return true;
+}
+
+int tui_scroll_region_step(const char *name, int delta)
+{
+    if (scroll_regions_ensure() == NULL) return -1;
+    for (int i = 0; i < TUI_WIDGET_SCROLL_MAX; i++) {
+        ws_scroll_t *r = &s_scroll_regions[i];
+
+        if (!r->used || name == NULL || strcmp(r->name, name) != 0) continue;
+        r->offset = tui_scroll_step(r->offset, r->viewport, r->content, delta);
+        return r->offset;
+    }
+    return -1;
+}
+
+int tui_scroll_region_get(const char *name)
+{
+    if (scroll_regions_ensure() == NULL) return -1;
+    for (int i = 0; i < TUI_WIDGET_SCROLL_MAX; i++) {
+        ws_scroll_t *r = &s_scroll_regions[i];
+
+        if (r->used && name != NULL && strcmp(r->name, name) == 0) {
+            return r->offset;
+        }
+    }
+    return -1;
+}
+
+bool tui_scroll_region_remove(const char *name)
+{
+    if (scroll_regions_ensure() == NULL) return false;
+    for (int i = 0; i < TUI_WIDGET_SCROLL_MAX; i++) {
+        ws_scroll_t *r = &s_scroll_regions[i];
+
+        if (r->used && name != NULL && strcmp(r->name, name) == 0) {
+            memset(r, 0, sizeof(*r));
+            return true;
+        }
+    }
+    return false;
+}
+
+bool tui_widgets_route_key(const char *stroke, char *label_out, size_t size)
+{
+    bool resolved;
+
+    if (stroke == NULL || stroke[0] == '\0') return false;
+    /* The MODAL layer owns chords and modes. We only ask it to resolve a
+     * stroke; there is no second mode stack anywhere in this file. */
+    resolved = modal_chord_push(stroke, label_out, size);
+    tui_event_post(TUI_EVENT_KEY, stroke);
+    return resolved;
+}
+
+bool tui_widgets_route_tap(int col, int row, char *label_out, size_t size)
+{
+    const char *label = tui_tap_hit(col, row);
+
+    if (label == NULL) return false;
+    if (label_out != NULL && size > 0) {
+        snprintf(label_out, size, "%s", label);
+    }
+    tui_event_post(TUI_EVENT_TAP, label);
+    return true;
+}
+
+const char *tui_widgets_activate_focused(void)
+{
+    const char *name = tui_widget_focus_current();
+    const char *label;
+
+    if (name == NULL) return NULL;
+    label = tui_widget_get_label(name);
+    if (label != NULL && label[0] != '\0') {
+        tui_event_post(TUI_EVENT_KEY, label);
+    }
+    return label;
 }

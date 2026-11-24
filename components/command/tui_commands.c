@@ -26,8 +26,11 @@
 #include "filetype.h"
 #include "modal_surf.h"
 #include "tui.h"
+#include "tui_frame.h"
 #include "tui_pane.h"
+#include "tui_widgets.h"
 #include "tui_fonts.h"
+#include "css_color.h"   /* the ONE CSS colour parser */
 #include "dom_render.h"   /* DOM_CELL_ATTR_BG_FILL for readable page dumps */
 #include "windows.h"
 #include "storage.h"
@@ -101,11 +104,50 @@ uint8_t draw_color_arg(const char *s, uint8_t fallback)
     return draw_dos_value(v);
 }
 
+/**
+ * Parse an extended colour token for `draw run`:
+ *   `dos:N` / bare `N`  -> DOS palette index (0-16, 16 = default);
+ *   `#rrggbb`, `rgb(...)`, `rgba(...)`, CSS names -> 24-bit RGB through the
+ *   ONE css_color_parse(), then quantised through tui_frame_rgb_to_dos().
+ * Returns false on an unknown token; never introduces a second parser.
+ */
+static bool draw_ext_color(const char *s, uint8_t *dos_out, uint32_t *rgb_out,
+                           bool *rgb_mode)
+{
+    css_rgba_t css;
+    unsigned long v;
+    char *end = NULL;
+
+    if (s == NULL || *s == '\0') return false;
+    if (rgb_mode != NULL) *rgb_mode = false;
+    if (strncmp(s, "dos:", 4) == 0) s += 4;
+    v = strtoul(s, &end, 0);
+    if (end != s && *end == '\0' && v <= 16) {
+        if (dos_out != NULL) *dos_out = (uint8_t)v;
+        return true;
+    }
+    if (css_color_parse(s, &css)) {
+        if (rgb_mode != NULL) *rgb_mode = true;
+        if (rgb_out != NULL) {
+            *rgb_out = ((uint32_t)css.r << 16) | ((uint32_t)css.g << 8) |
+                       (uint32_t)css.b;
+        }
+        return true;
+    }
+    v = strtoul(s, &end, 0);
+    if (end != s && *end == '\0' && v <= 0xFFFFFF) {
+        if (rgb_mode != NULL) *rgb_mode = true;
+        if (rgb_out != NULL) *rgb_out = (uint32_t)v;
+        return true;
+    }
+    return false;
+}
+
 bool shell_command_draw(int argc, char **argv)
 {
     if (argc < 2) {
         shell_transcript_appendf_ansi(SH_ERR "draw: missing subcommand\n" SH_RST);
-        shell_transcript_appendf_ansi("Usage: draw box|text|line|fill|clear|save|restore|cursor|bar|table|list|hold|alt-screen <args>\n");
+        shell_transcript_appendf_ansi("Usage: draw box|text|line|fill|clear|save|restore|cursor|bar|table|list|hold|alt-screen|image|run|sprite <args>\n");
         batch_set_errorlevel(2);
         return false;
     }
@@ -122,6 +164,8 @@ bool shell_command_draw(int argc, char **argv)
                       shell_text_equals_ignore_case(argv[1], "table") ||
                       shell_text_equals_ignore_case(argv[1], "list") ||
                       shell_text_equals_ignore_case(argv[1], "image") ||
+                      shell_text_equals_ignore_case(argv[1], "run") ||
+                      shell_text_equals_ignore_case(argv[1], "sprite") ||
                       shell_text_equals_ignore_case(argv[1], "clear"))) {
         if (tui_init()) use_tui = true;
     }
@@ -986,6 +1030,116 @@ bool shell_command_draw(int argc, char **argv)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[1], "run")) {
+        /* draw run <x> <y> <text> [/fg COLOR] [/bg COLOR]
+         * COLOR: dos:N | N (0-16) | #rrggbb | rgb()/rgba() | CSS name.
+         * CSS goes through the ONE css_color_parse(), then the ONE DOS palette.
+         * No colour flags means DOS 7 on default: the classic DOS look is kept. */
+        const char *text;
+        const char *fg_s = NULL;
+        const char *bg_s = NULL;
+        uint8_t fg = 7;
+        uint8_t bg = 16;
+        uint32_t fg_rgb = 0xAAAAAA;
+        uint32_t bg_rgb = 0x000000;
+        bool has_bg = false;
+
+        if (argc < 5) {
+            shell_transcript_appendf_ansi(SH_ERR "draw run: usage: draw run <x> <y> <text> [/fg COLOR] [/bg COLOR]\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        text = argv[4];
+        for (int i = 5; i < argc - 1; i++) {
+            if (shell_text_equals_ignore_case(argv[i], "/fg")) fg_s = argv[i + 1];
+            if (shell_text_equals_ignore_case(argv[i], "/bg")) bg_s = argv[i + 1];
+        }
+        /* Resolve once, outside the LVGL branch: DOS indices pass through,
+         * CSS/RGB is quantised through the ONE palette, and the original RGB
+         * is retained for the transcript fallback. */
+        {
+            uint8_t dos = 16;
+            uint32_t rgb = 0;
+            bool rgb_mode = false;
+
+            if (fg_s == NULL || !draw_ext_color(fg_s, &dos, &rgb, &rgb_mode)) {
+                fg = 7;
+                fg_rgb = tui_dos_color_rgb(fg);
+            } else if (rgb_mode) {
+                fg = tui_frame_rgb_to_dos(rgb);
+                fg_rgb = rgb;
+            } else {
+                fg = dos;
+                fg_rgb = tui_dos_color_rgb(fg);
+            }
+            if (bg_s != NULL && draw_ext_color(bg_s, &dos, &rgb, &rgb_mode)) {
+                bg = rgb_mode ? tui_frame_rgb_to_dos(rgb) : dos;
+                bg_rgb = rgb_mode ? rgb : tui_dos_color_rgb(bg);
+                has_bg = true;
+            } else {
+                bg = 16;
+                bg_rgb = tui_dos_color_rgb(bg);
+            }
+        }
+        if (use_tui) {
+            /* tui_print_rgb quantises again through the same palette (a DOS
+             * index round-trips exactly), writes the working grid, and the
+             * caller's draw_maybe_flush() presents it once. */
+            tui_print_rgb(atoi(argv[2]), atoi(argv[3]), text, fg_rgb, bg_rgb,
+                          has_bg);
+            draw_maybe_flush();
+        } else {
+            shell_transcript_appendf_ansi("\033[s\033[%d;%dH#%06X#%06X%s\033[u\n",
+                                          atoi(argv[3]), atoi(argv[2]),
+                                          (unsigned)(fg_rgb & 0xFFFFFF),
+                                          (unsigned)(bg_rgb & 0xFFFFFF), text);
+        }
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "sprite")) {
+        /* draw sprite <x> <y> <w> <h> [checker|ramp]: a tiny procedural
+         * RGB565 sprite sampled through the ONE image-to-cell sampler. No
+         * second sampler, ramp or palette; the caller flushes once. */
+        uint16_t px[64];
+        gfx_surface_t sprite;
+        bool checker;
+
+        if (argc < 6) {
+            shell_transcript_appendf_ansi(SH_ERR "draw sprite: usage: draw sprite <x> <y> <w> <h> [checker|ramp]\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        checker = (argc < 7) ||
+                  shell_text_equals_ignore_case(argv[6], "checker");
+        for (int i = 0; i < 64; i++) {
+            int sx = i % 8;
+            int sy = i / 8;
+            int r, g, b;
+
+            if (checker) {
+                bool white = ((sx / 2 + sy / 2) & 1) != 0;
+
+                r = g = b = white ? 255 : 0;
+                if (!white && (sx & 1)) r = 255;
+            } else {
+                r = g = b = sx * 255 / 7;
+            }
+            px[i] = (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+        }
+        sprite.px = px;
+        sprite.w = 8;
+        sprite.h = 8;
+        if (use_tui) {
+            tui_draw_sprite(atoi(argv[2]), atoi(argv[3]),
+                            atoi(argv[4]), atoi(argv[5]), &sprite);
+            draw_maybe_flush();
+        }
+        batch_set_errorlevel(0);
+        return true;
+    }
+
     shell_transcript_appendf_ansi(SH_ERR "draw: unknown subcommand %s\n" SH_RST, argv[1]);
     batch_set_errorlevel(2);
     return false;
@@ -1645,7 +1799,7 @@ void shell_command_locate(int argc, char **argv)
 void shell_command_tui(int argc, char **argv)
 {
     if (argc < 2) {
-        shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear | tui selftest | tui dump [from] [to]");
+        shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear | tui selftest | tui dump [from] [to] [/a] | tui frame status|diff|flush|reset | tui focus <name|next|prev> | tui layout <row|column|grid> ... | tui scroll <name> <viewport> <content> [delta] | tui route <key>");
         batch_set_errorlevel(2);
         return;
     }
@@ -1895,8 +2049,128 @@ void shell_command_tui(int argc, char **argv)
         shell_transcript_appendf("tui.dump.end\n");
         batch_set_errorlevel(0);
         return;
+    } else if (shell_text_equals_ignore_case(argv[1], "frame")) {
+        /* Double-buffer + dirty-rect diagnostics for the ONE cell renderer. */
+        if (argc < 3) {
+            shell_print_usage("Usage: tui frame status|diff|flush|reset");
+            batch_set_errorlevel(2);
+            return;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "status")) {
+            const tui_frame_t *frame = tui_live_frame();
+
+            shell_print_field("frame", "%s",
+                              tui_frame_valid(frame) ? "bound" : "unbound");
+            shell_print_field("frame.cols/rows", "%d x %d",
+                              tui_frame_valid(frame) ? frame->cols : 0,
+                              tui_frame_valid(frame) ? frame->rows : 0);
+        } else if (shell_text_equals_ignore_case(argv[2], "diff")) {
+            tui_dirty_t d = tui_live_frame_dirty();
+
+            shell_print_field("frame.dirty", "%s", d.any ? "yes" : "no");
+            if (d.any) {
+                shell_print_field("frame.rect", "%d,%d .. %d,%d",
+                                  d.min_col, d.min_row, d.max_col, d.max_row);
+            }
+        } else if (shell_text_equals_ignore_case(argv[2], "flush")) {
+            tui_flush();
+        } else if (shell_text_equals_ignore_case(argv[2], "reset")) {
+            tui_clear();
+            tui_flush();
+        } else {
+            shell_print_usage("Usage: tui frame status|diff|flush|reset");
+            batch_set_errorlevel(2);
+            return;
+        }
+        batch_set_errorlevel(0);
+        return;
+    } else if (shell_text_equals_ignore_case(argv[1], "focus")) {
+        /* Focusable widgets: a ring on top of the existing pane/widget layer. */
+        const char *name = NULL;
+
+        if (argc >= 3 && shell_text_equals_ignore_case(argv[2], "next")) {
+            tui_widget_focus_step(1);
+        } else if (argc >= 3 && shell_text_equals_ignore_case(argv[2], "prev")) {
+            tui_widget_focus_step(-1);
+        } else if (argc >= 3) {
+            tui_widget_focus_set(argv[2]);
+        } else {
+            shell_print_usage("Usage: tui focus <name|next|prev>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        name = tui_widget_focus_current();
+        shell_print_field("focus", "%s", name != NULL ? name : "(none)");
+        shell_print_field("focus.count", "%d", tui_widget_focus_count());
+        batch_set_errorlevel(0);
+        return;
+    } else if (shell_text_equals_ignore_case(argv[1], "layout")) {
+        /* Pure row/column/grid geometry, printed for scripts and tests. */
+        tui_layout_t kind;
+        tui_rect_t bounds;
+        int count;
+        int cols = 0;
+        int gap = 0;
+
+        if (argc < 9) {
+            shell_print_usage("Usage: tui layout <row|column|grid> <x> <y> <w> <h> <count> [cols] [gap]");
+            batch_set_errorlevel(2);
+            return;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "row")) kind = TUI_LAYOUT_ROW;
+        else if (shell_text_equals_ignore_case(argv[2], "column")) kind = TUI_LAYOUT_COLUMN;
+        else if (shell_text_equals_ignore_case(argv[2], "grid")) kind = TUI_LAYOUT_GRID;
+        else {
+            shell_print_usage("Usage: tui layout <row|column|grid> <x> <y> <w> <h> <count> [cols] [gap]");
+            batch_set_errorlevel(2);
+            return;
+        }
+        bounds.x = atoi(argv[3]);
+        bounds.y = atoi(argv[4]);
+        bounds.w = atoi(argv[5]);
+        bounds.h = atoi(argv[6]);
+        count = atoi(argv[7]);
+        if (argc > 8) cols = atoi(argv[8]);
+        if (argc > 9) gap = atoi(argv[9]);
+        for (int i = 0; i < count; i++) {
+            tui_rect_t r;
+
+            if (!tui_layout_rect(kind, bounds, i, count, cols, gap, &r)) break;
+            shell_transcript_appendf("%03d|%d,%d %dx%d\n", i, r.x, r.y, r.w, r.h);
+        }
+        batch_set_errorlevel(0);
+        return;
+    } else if (shell_text_equals_ignore_case(argv[1], "scroll")) {
+        /* Named scroll regions use the ONE shared workspace state. */
+        if (argc < 5) {
+            shell_print_usage("Usage: tui scroll <name> <viewport> <content> [delta]");
+            batch_set_errorlevel(2);
+            return;
+        }
+        if (!tui_scroll_region_add(argv[2], atoi(argv[3]), atoi(argv[4]))) {
+            shell_print_error("tui scroll: cannot create region %s", argv[2]);
+            batch_set_errorlevel(1);
+            return;
+        }
+        if (argc >= 6) (void)tui_scroll_region_step(argv[2], atoi(argv[5]));
+        shell_print_field("scroll.offset", "%d", tui_scroll_region_get(argv[2]));
+        batch_set_errorlevel(0);
+        return;
+    } else if (shell_text_equals_ignore_case(argv[1], "route")) {
+        /* Route a key through the EXISTING modal chord resolver. */
+        char label[128] = {0};
+
+        if (argc < 3) {
+            shell_print_usage("Usage: tui route <key>");
+            batch_set_errorlevel(2);
+            return;
+        }
+        (void)tui_widgets_route_key(argv[2], label, sizeof(label));
+        shell_print_field("route.label", "%s", label[0] ? label : "(unresolved)");
+        batch_set_errorlevel(0);
+        return;
     }
-    shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear | tui selftest | tui dump [from] [to] [/a]");
+    shell_print_usage("Usage: tui fullscreen <on|off> | tui status | tui stats | tui clear | tui selftest | tui dump [from] [to] [/a] | tui frame status|diff|flush|reset | tui focus <name|next|prev> | tui layout <row|column|grid> ... | tui scroll <name> <viewport> <content> [delta] | tui route <key>");
     batch_set_errorlevel(2);
 }
 

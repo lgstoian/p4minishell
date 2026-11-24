@@ -1,0 +1,11 @@
+tui.scene.begin name=dos cols=80 rows=25
+tui.scene.dump name=dos
+001|Hel     DOS
+002|Gre    Pla
+003|Bri
+001@1-1:7 2-6:16 7-7:12 8-10:16
+002@1-1:2 2-10:16
+003@1-1:15 2-10:16
+tui.scene.dirty any=yes rect=1,1-7,3
+tui.scene.clean any=no
+tui.scene.end name=dos

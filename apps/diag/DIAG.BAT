@@ -199,11 +199,28 @@ gosub :probe "network" "wifi status"
 gosub :probe "usb" "usb status"
 gosub :probe "sync" "sync status"
 gosub :probe "events" "net status"
+rem ---- v1.6 richer-language capability tour ----------------------------
+rem [M-RICH-DIAG] runs the new batch surfaces through the SAME interpreter;
+rem the hardware-only surfaces are listed as capabilities above, not faked.
+echo [M-RICH-DIAG] v1.6 language capabilities
+map /set RICHCAP str str
+map /set RICHCAP map map
+map /set RICHCAP func func
+for /K %%k in (RICHCAP) do echo [M-RICH-DIAG-K] %%k=%%l
+set DSTEP=diagnostics
+str /count DSTEP i DC
+str /pad DSTEP 14 DP .
+func :diagsum 100 58
+echo [M-RICH-DIAG-F] total=%RESULT%
+echo [M-RICH-DIAG-S] i=%DC% pad=%DP%
 echo capabilities checked
 return
 
 rem %1 = feature label (quoted), %2 = command line (quoted). Runs it, records
 rem the resulting errorlevel to the report. The command is executed live.
+:diagsum
+return %1+%2
+
 :probe
 echo --- %~1 ---
 %~2

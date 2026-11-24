@@ -21,10 +21,12 @@ struct dom_tree *g_dom_tree = NULL;
 void jsengine_set_dom_tree(struct dom_tree *tree)
 {
     if (tree != NULL && g_dom_tree != tree) {
-        /* Binding a new page: canvas bitmaps belong to the previous page's
-         * nodes. Unbinding (NULL) after <script> execution must NOT clear
-         * them - the renderer still needs the bitmaps the scripts drew. */
+        /* Binding a new page: canvas bitmaps and document-level event
+         * listeners belong to the previous page's nodes. Unbinding (NULL)
+         * after <script> execution must NOT clear them - the renderer still
+         * needs the bitmaps the scripts drew. */
         js_canvas_clear_registry();
+        js_dom_clear_page_state();
     }
     g_dom_tree = tree;
 }
@@ -192,6 +194,7 @@ bool jsengine_init(void)
 
 void jsengine_deinit(void)
 {
+    jsengine_timers_clear();
     if (s_ctx) {
         JS_FreeContext(s_ctx);
         s_ctx = NULL;
@@ -275,4 +278,169 @@ void jsengine_set_heap_limit(size_t bytes)
     if (s_rt) {
         JS_SetMemoryLimit(s_rt, bytes);
     }
+}
+
+/* ---- Async timers: one bounded queue on the one QuickJS context --------- */
+
+#define JS_TIMER_MAX 16
+#define JS_MICROTASK_MAX 32
+
+/** Drain Promise reaction jobs on the ONE runtime. Browsers run a microtask
+ *  checkpoint after each task; here the task is a due timer callback (or the
+ *  explicit `timers.run()` pump), so Promise `.then()` handlers observe timer
+ *  and event ordering on the same queue - no second scheduler. */
+static void jsengine_run_microtasks(void)
+{
+    if (s_rt == NULL) return;
+    for (int i = 0; i < JS_MICROTASK_MAX; i++) {
+        JSContext *ctx = NULL;
+        int rc = JS_ExecutePendingJob(s_rt, &ctx);
+
+        if (rc <= 0) {
+            if (rc < 0 && ctx != NULL) {
+                JS_FreeValue(ctx, JS_GetException(ctx));
+            }
+            break;
+        }
+    }
+}
+
+typedef struct {
+    uint32_t id;
+    JSContext *ctx;
+    JSValue callback;
+    uint32_t delay_ms;
+    int64_t due_ms;
+    bool repeat;
+    bool active;
+} js_timer_t;
+
+static js_timer_t s_timers[JS_TIMER_MAX];
+static uint32_t s_next_timer_id = 1;
+static int64_t (*s_clock_fn)(void) = NULL;
+
+int64_t jsengine_now_ms(void)
+{
+    if (s_clock_fn != NULL) return s_clock_fn();
+    return (int64_t)(esp_timer_get_time() / 1000);
+}
+
+void jsengine_set_clock_fn(int64_t (*now_ms_fn)(void))
+{
+    s_clock_fn = now_ms_fn;
+}
+
+uint32_t jsengine_timer_add(JSContext *ctx, const void *callback_value,
+                            uint32_t delay_ms, bool repeat)
+{
+    js_timer_t *slot = NULL;
+    JSValueConst callback = *(const JSValue *)callback_value;
+
+    if (ctx == NULL || callback_value == NULL) return 0;
+    if (!JS_IsFunction(ctx, callback)) return 0;
+    for (int i = 0; i < JS_TIMER_MAX; i++) {
+        if (!s_timers[i].active) { slot = &s_timers[i]; break; }
+    }
+    if (slot == NULL) return 0;
+    if (delay_ms > 60000) delay_ms = 60000;
+    slot->id = s_next_timer_id++;
+    if (s_next_timer_id == 0) s_next_timer_id = 1;
+    slot->ctx = ctx;
+    slot->callback = JS_DupValue(ctx, callback);
+    slot->delay_ms = delay_ms;
+    slot->due_ms = jsengine_now_ms() + delay_ms;
+    slot->repeat = repeat;
+    slot->active = true;
+    return slot->id;
+}
+
+bool jsengine_timer_cancel(uint32_t id)
+{
+    if (id == 0) return false;
+    for (int i = 0; i < JS_TIMER_MAX; i++) {
+        if (s_timers[i].active && s_timers[i].id == id) {
+            JS_FreeValue(s_timers[i].ctx, s_timers[i].callback);
+            memset(&s_timers[i], 0, sizeof(s_timers[i]));
+            return true;
+        }
+    }
+    return false;
+}
+
+int jsengine_timers_pending(void)
+{
+    int count = 0;
+
+    for (int i = 0; i < JS_TIMER_MAX; i++) {
+        if (s_timers[i].active) count++;
+    }
+    return count;
+}
+
+void jsengine_timers_clear(void)
+{
+    for (int i = 0; i < JS_TIMER_MAX; i++) {
+        if (s_timers[i].active) {
+            JS_FreeValue(s_timers[i].ctx, s_timers[i].callback);
+        }
+        memset(&s_timers[i], 0, sizeof(s_timers[i]));
+    }
+}
+
+int jsengine_timers_run_due(int64_t now_ms)
+{
+    int fired = 0;
+
+    for (int i = 0; i < JS_TIMER_MAX; i++) {
+        js_timer_t *slot = &s_timers[i];
+        JSContext *ctx;
+        JSValue callback;
+        JSValue this_val;
+        JSValue result;
+
+        if (!slot->active || slot->due_ms > now_ms) continue;
+        ctx = slot->ctx;
+        callback = slot->callback;
+        /* Detach before calling: callbacks may schedule or cancel timers. */
+        memset(slot, 0, sizeof(*slot));
+        this_val = JS_GetGlobalObject(ctx);
+        result = JS_Call(ctx, callback, this_val, 0, NULL);
+        JS_FreeValue(ctx, this_val);
+        if (JS_IsException(result)) {
+            JS_FreeValue(ctx, JS_GetException(ctx));
+        }
+        JS_FreeValue(ctx, result);
+        JS_FreeValue(ctx, callback);
+        fired++;
+        jsengine_run_microtasks();  /* checkpoint after every task */
+        if (fired >= JS_TIMER_MAX) break;   /* one bounded batch per pump */
+    }
+    if (fired == 0) {
+        /* A script can queue Promise jobs without scheduling a timer. The
+         * pump still has to drain them, or `.then()` never runs. */
+        jsengine_run_microtasks();
+    }
+    return fired;
+}
+
+bool jsengine_eval_event(const char *source, const char *event_type,
+                         const char *target_id, char *result, size_t result_size)
+{
+    char code[1400];
+
+    if (source == NULL || result == NULL || result_size == 0) return false;
+    {
+        char safe_type[48] = { 0 };
+        char safe_id[96] = { 0 };
+
+        snprintf(safe_type, sizeof(safe_type), "%s", event_type != NULL ? event_type : "");
+        snprintf(safe_id, sizeof(safe_id), "%s", target_id != NULL ? target_id : "");
+        for (char *p = safe_type; *p; p++) if (*p == '\'' || *p == '\\') *p = '_';
+        for (char *p = safe_id; *p; p++) if (*p == '\'' || *p == '\\') *p = '_';
+        snprintf(code, sizeof(code),
+                 "(function(event){%s})({type:'%s',target:{id:'%s'},"
+                 "preventDefault:function(){},stopPropagation:function(){}});",
+                 source, safe_type, safe_id);
+    }
+    return js_eval_internal(code, "<event>", result, result_size);
 }

@@ -45,6 +45,7 @@ static char s_trap_msg[TRAP_MSG_BYTES]; /* TRAP_MSG content */
 /* Per-bg-slot trap state (same pattern as other bg context) */
 typedef struct {
     char handler[TRAP_DEPTH_MAX][TRAP_NAME_BYTES];
+    int events[TRAP_DEPTH_MAX];      /**< BATCH_TRAP_* bit mask per handler. */
     int level;
 } trap_bg_state_t;
 
@@ -63,6 +64,96 @@ static trap_bg_state_t *trap_state(void)
     /* Use a slot-0 wrapper static (fg) */
     static trap_bg_state_t fg_wrap;
     return &fg_wrap;
+}
+
+/* ========================================================================
+ * EVENT MASK + SHARED FIRE PATH (used by /on, /raise and the frame loop)
+ * ======================================================================== */
+
+int batch_trap_parse_events(const char *text)
+{
+    const char *cursor = text;
+    int events = 0;
+
+    if (text == NULL || text[0] == '\0') {
+        return 0;
+    }
+    while (cursor != NULL && *cursor != '\0') {
+        const char *end = strchr(cursor, ',');
+        size_t len = (end != NULL) ? (size_t)(end - cursor) : strlen(cursor);
+
+        if (len == 10 && strncasecmp(cursor, "errorlevel", 10) == 0) {
+            events |= BATCH_TRAP_ERRORLEVEL;
+        } else if (len == 4 && strncasecmp(cursor, "exit", 4) == 0) {
+            events |= BATCH_TRAP_EXIT;
+        } else if (len == 3 && strncasecmp(cursor, "int", 3) == 0) {
+            events |= BATCH_TRAP_INT;
+        } else {
+            return 0;  /* unknown event word: refuse the whole install */
+        }
+        cursor = (end != NULL) ? end + 1 : NULL;
+    }
+    return events;
+}
+
+bool batch_trap_on_event(int events, const char *label)
+{
+    trap_bg_state_t *st = trap_state();
+
+    if (events == 0 || label == NULL || label[0] == '\0') {
+        return false;
+    }
+    if (st->level >= TRAP_DEPTH_MAX) {
+        shell_print_error("trap: handler nesting too deep (max %d)", TRAP_DEPTH_MAX);
+        batch_set_errorlevel(1);
+        return false;
+    }
+    snprintf(st->handler[st->level], TRAP_NAME_BYTES, "%s", label);
+    st->events[st->level] = events;
+    st->level++;
+    batch_set_errorlevel(0);
+    return true;
+}
+
+bool batch_trap_fire_event(int event)
+{
+    trap_bg_state_t *st = trap_state();
+    char label[TRAP_NAME_BYTES];
+    char code_buf[16];
+
+    if (event == 0 || st->level <= 0) {
+        return false;
+    }
+    if ((st->events[st->level - 1] & event) == 0 ||
+        st->handler[st->level - 1][0] == '\0') {
+        return false;
+    }
+
+    /* Copy out BEFORE the one-shot pop clears the slot: batch_goto_label
+     * refuses an empty label, so passing the live slot would silently drop
+     * the jump. */
+    snprintf(label, sizeof(label), "%s", st->handler[st->level - 1]);
+    snprintf(code_buf, sizeof(code_buf), "%d", batch_get_errorlevel());
+    (void)shell_env_set("TRAP_CODE", code_buf);
+    if (event & BATCH_TRAP_INT) {
+        snprintf(s_trap_msg, sizeof(s_trap_msg), "int, errorlevel %s", code_buf);
+    } else if (event & BATCH_TRAP_EXIT) {
+        snprintf(s_trap_msg, sizeof(s_trap_msg), "exit, errorlevel %s", code_buf);
+    } else {
+        /* Existing documented contract for the default errorlevel trap. */
+        snprintf(s_trap_msg, sizeof(s_trap_msg), "errorlevel %s", code_buf);
+    }
+    (void)shell_env_set("TRAP_MSG", s_trap_msg);
+
+    /* One-shot: pop before the jump so an error inside the handler cannot
+     * re-enter the same handler forever. */
+    st->handler[st->level - 1][0] = '\0';
+    st->events[st->level - 1] = 0;
+    st->level--;
+
+    batch_goto_label(label);
+    batch_set_errorlevel(0);
+    return true;
 }
 
 /* ========================================================================
@@ -99,12 +190,33 @@ void shell_command_trap(int argc, char **argv)
             return;
         }
 
+        /* /on EVENT[,EVENT...] :label — subscribe a handler to explicit
+         * events instead of the implicit errorlevel-only default. */
+        if (flag == 'O' && argc >= 4) {
+            int events = batch_trap_parse_events(argv[2]);
+            const char *label = argv[3];
+
+            if (events == 0) {
+                shell_print_error("trap /on: expected errorlevel|exit|int");
+                batch_set_errorlevel(2);
+                return;
+            }
+            if (label[0] != ':') {
+                shell_print_error("trap /on: handler must be a :label");
+                batch_set_errorlevel(2);
+                return;
+            }
+            (void)batch_trap_on_event(events, label);
+            return;
+        }
+
         /* /clear - remove handler */
         if (flag == 'C') {
             trap_bg_state_t *st = trap_state();
             if (st->level > 0) {
                 st->level--;
                 st->handler[st->level][0] = '\0';
+                st->events[st->level] = 0;
             }
             batch_set_errorlevel(0);
             return;
@@ -115,24 +227,15 @@ void shell_command_trap(int argc, char **argv)
         return;
     }
 
-    /* Install handler: trap :label */
+    /* Install handler: trap :label (implicit errorlevel event). */
     const char *label = argv[1];
+
     if (label[0] != ':') {
         shell_print_error("trap: handler must be a :label");
         batch_set_errorlevel(2);
         return;
     }
-
-    trap_bg_state_t *st = trap_state();
-    if (st->level >= TRAP_DEPTH_MAX) {
-        shell_print_error("trap: handler nesting too deep (max %d)", TRAP_DEPTH_MAX);
-        batch_set_errorlevel(1);
-        return;
-    }
-
-    snprintf(st->handler[st->level], TRAP_NAME_BYTES, "%s", label);
-    st->level++;
-    batch_set_errorlevel(0);
+    (void)batch_trap_on_event(BATCH_TRAP_ERRORLEVEL, label);
 }
 
 /* ========================================================================
@@ -163,6 +266,7 @@ void trap_handler_pop(void)
     if (st->level > 0) {
         st->level--;
         st->handler[st->level][0] = '\0';
+        st->events[st->level] = 0;
     }
 }
 
@@ -176,32 +280,13 @@ void trap_set_message(const char *msg)
 
 bool batch_trap_maybe_fire(void)
 {
-    trap_bg_state_t *st;
-    const char *label;
-    char code_buf[16];
-
+    /* The default frame-loop hook: only a handler subscribed to ERRORLEVEL
+     * fires, exactly as before. /on exit and /on int are fired explicitly by
+     * the frame loop through batch_trap_fire_event(). */
     if (batch_get_errorlevel() < 2) {
         return false;
     }
-    st = trap_state();
-    if (st->level <= 0 || st->handler[st->level - 1][0] == '\0') {
-        return false;
-    }
-
-    label = st->handler[st->level - 1];
-    snprintf(code_buf, sizeof(code_buf), "%d", batch_get_errorlevel());
-    (void)shell_env_set("TRAP_CODE", code_buf);
-    snprintf(s_trap_msg, sizeof(s_trap_msg), "errorlevel %s", code_buf);
-    (void)shell_env_set("TRAP_MSG", s_trap_msg);
-
-    /* One-shot: pop before the jump so an error inside the handler cannot
-     * re-enter the same handler forever. */
-    st->handler[st->level - 1][0] = '\0';
-    st->level--;
-
-    batch_goto_label(label);
-    batch_set_errorlevel(0);
-    return true;
+    return batch_trap_fire_event(BATCH_TRAP_ERRORLEVEL);
 }
 
 void trap_init(void)

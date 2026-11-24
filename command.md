@@ -2,12 +2,20 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
-> **Applies to firmware v1.5.0** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
+> **Applies to firmware v1.6.0** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
 > the authoritative command reference; the on-device `help /all` mirrors it.
 > Current verified test baselines live in [`test/README.md`](test/README.md).
-> Two hardware-free pre-gates (`tools/host_batch_run.py` for real `.bat`
-> fixtures and `tools/host_webapp_gate.py` for the shared render path) check the
+> Hardware-free pre-gates (`tools/host_batch_run.py` for real `.bat` fixtures,
+> `tools/host_webapp_gate.py` for the shared render path,
+> `tools/host_tui_gate.py` for TUI frames, `tools/host_modal_gate.py` for modal
+> transitions and `tools/gfx_toolkit_test.py --host` for gfx wiring) check the
 > host build only; the on-device suites remain authoritative (`harness.md` §2.2).
+> **Marker contract (v1.6):** all 33 updated reference apps emit additive
+> `[M-RICH-*]` markers for the new batch/GFX/TUI/modal/webapp surfaces; every
+> pre-existing `[M-*]` marker is preserved. `tools/host_apps_gate.py --check`
+> proves 33/33 apps on the host (363 assertions, 40 honest hardware SKIPs).
+> The new transcript lines require a board rebaseline of
+> `tools/appdiff/baseline/*.transcript.txt`.
 > Related docs: [`readme.md`](readme.md) (overview),
 > [`documentation.md`](documentation.md) (architecture),
 > [`SDK.md`](SDK.md) (integration).
@@ -332,7 +340,7 @@ project's `managed_components/` directories.
 ### Header long-press
 
 Pressing and holding anywhere on the top status bar shows a transient banner
-with the build identity: `P4MiniShell v1.5.0 | built <date> <time> | git
+with the build identity: `P4MiniShell v1.6.0 | built <date> <time> | git
 <hash>`. The same identity is reported by `version`, `about`, and `sysinfo`.
 
 ### header — responsive status bar
@@ -1480,7 +1488,7 @@ html https://example.com/
 
 ERRORLEVEL: 0 rendered, 1 fetch/parse/render error, 2 usage.
 
-### webapp open [/no] <file|url> | dump [from] [to] [/a] | css | js <code>
+### webapp open [/no] <file|url> | dump [from] [to] [/a] | css | js <code> | event <id> <type> | tick
 
 A thin **batch-facing facade** over the same page engine: every subcommand
 forwards to an existing verb and returns its ERRORLEVEL. No second renderer, JS
@@ -1492,13 +1500,22 @@ runtime, colour model or surface is introduced.
 | `webapp dump [from] [to] [/a]` | `tui dump ...` | Read the rendered grid back; `/a` appends the `NNN@start-end:fg` colour runs the suites assert. |
 | `webapp css` | `browser css` | Show parsed rules and computed styles. |
 | `webapp js <code>` | `js eval <code>` | Evaluate code in the existing page engine. |
+| `webapp event <id> <click\|load\|input\|change\|submit>` (v1.6) | the page engine's one DOM event dispatcher | Dispatch a scripted event to the element with that id, running its `onclick`/`addEventListener` handler. |
+| `webapp tick` (v1.6) | the page engine's JS timer queue | Run all due `setTimeout`/`setInterval` callbacks and repaint the page; use it to advance timers in a headless batch app. |
 
 ```
 webapp open /no %APPDRIVE%/WEB/INDEX.HTML
 webapp dump 1 8 /a
 webapp css
 webapp js "document.title"
+webapp event btn click
+webapp tick
 ```
+
+The shipped HTML5 fixture `tools/host/fixtures/webapp/features.html` exercises
+semantic elements, forms/inputs, a grid, table `colspan`, CSS gradients/opacity,
+canvas gradients/shadows and JS timers/events. Its exact text/colour-run
+baseline is in `baseline/features.txt`; the host gate is a pre-gate only.
 
 The reference app `apps/webapp/WEBAPP.BAT` (`WEBAPP.APPINFO`) uses this facade
 and emits `[M-WEBAPP]` / `[M-WEBAPP-DONE]` / `[M-WEBAPP-FAIL]` markers; the
@@ -1715,7 +1732,8 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | call :label [args] | Run a `:label` block in the current file as a subroutine; returns on `return` / `exit /b` / `goto :eof` / EOF |
 | gosub :label [args] | BASIC-named sibling of `call :label` |
 | gosub <file.bat>::<routine> [args] | BASIC-named sibling of `call <file.bat>::<routine>` |
-| return [code] | Return from a `call`/`gosub` scope (or, at the top level of a file, end the frame like `goto :eof`); an optional code sets errorlevel |
+| return [code] \| return <expr> | Return from a `call`/`gosub` scope (or, at the top level of a file, end the frame like `goto :eof`); an optional numeric code sets errorlevel. Inside a `func NAME` routine, `return <expr>` evaluates the `set /a` expression and publishes the result as `%RESULT%` in the frame-local class (an undefined bare name is returned as text). |
+| func NAME [args] | Named local routine: a thin front door over `call :label` that binds `%1..%9` and jumps to `:NAME`; pair with `return <expr>` to publish `%RESULT%` (no second dispatcher or frame stack) |
 | on <expr> goto <label>[,<label>...] | BASIC computed jump: the integer `expr` (via the `set /a` evaluator) selects the 1-based target; out of range falls through |
 | on <expr> gosub <label>[,<label>...] | As above, but `gosub`-calls the selected target (`on … call` is an alias) |
 | switch <value> <m>:<label> [...] [/d:<label>] | String-match dispatch: first case-insensitive match jumps, else the `/d:` default, else fallthrough with ERRORLEVEL 1 |
@@ -1729,10 +1747,11 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | for /f "opts" %%v in (file-set) do cmd | Loop over the lines of a file (or the active `< file`/pipe input); options: `eol=c` (default `;`, empty disables), `skip=n` (empty skips nothing), `delims=xyz`, `tokens=a,b,m-n,*`; a single-quoted set `in ('command')` iterates command output |
 | for /L %%v in (start,step,end) do cmd | Count inclusively (negative step counts down; cap `P4_CONFIG_FORL_ITER_MAX`) |
 | for /A %%k in (PREFIX) do cmd | Iterate one `PREFIX[...]` array: `%%k` binds the index, the next letter the live value |
+| for /K %%k in (MAP) do cmd | Iterate a `map` created with `map /set`: `%%k` binds the key, the next letter (`%%l`) the live value. Shares the one hash-slot collector with `map /keys` and `map /values` |
 | dim NAME SIZE [DEFAULT] | Declare a bounds-checked 1D/2D array; element N is `%NAME[N]%` and a read past the end is a trapped error. Switches: `/len` `/info` `/push` `/pop` `/shift` `/unshift` `/ins` `/rem` `/slice` `/copy` `/fill` `/reverse` `/sort` `/find` `/sum` `/avg` `/min` `/max` `/cmp`, plus `/ref` `/get` `/set` for C-like pointer access |
-| str /len VAR \| /sub VAR START LEN DEST \| /find VAR NEEDLE [IDX_VAR] \| /upper VAR DEST \| /lower VAR DEST \| /trim VAR DEST \| /rep VAR OLD NEW DEST \| /split VAR DELIM DEST \| /join VAR DELIM DEST \| /fmt DEST "format" args... | String-operation suite: length, substring, search, case conversion, trim, replace, split/join and formatted output; results go to a DEST variable |
-| map /set MAPNAME KEY VALUE \| /get MAPNAME KEY DEST \| /has MAPNAME KEY \| /del MAPNAME KEY \| /keys MAPNAME DEST \| /size MAPNAME \| /clear MAPNAME | Hash map layered on the flat slot table: keyed set/get/has/del, list keys into DEST, count entries, or clear the map |
-| trap :label \| trap /raise CODE "message" \| trap /clear | Per-frame **one-shot** error handler: install a `:label` handler, raise one manually (sets ERRORLEVEL and publishes `TRAP_CODE`/`TRAP_MSG`), or clear it. A line leaving ERRORLEVEL ≥ 2 fires the handler and jumps to its label through the existing pending-goto slot. (`/on ...` is reserved in the usage text but not implemented.) |
+| str /len VAR \| /sub VAR START LEN DEST \| /find VAR NEEDLE [IDX_VAR] \| /upper VAR DEST \| /lower VAR DEST \| /trim VAR DEST \| /rep VAR OLD NEW DEST \| /split VAR DELIM DEST \| /join VAR DELIM DEST \| /fmt DEST "format" args... \| /rev VAR DEST \| /count VAR NEEDLE [DEST] \| /pad VAR WIDTH DEST [CHAR] | String-operation suite: length, substring, search, case conversion, trim, replace, split/join and formatted output; the v1.6 additions reverse a value (`/rev`), count non-overlapping occurrences (`/count`) and right-pad to a width (`/pad`, default fill char is a space). Results go to a DEST variable |
+| map /set MAPNAME KEY VALUE \| /get MAPNAME KEY DEST \| /has MAPNAME KEY \| /del MAPNAME KEY \| /keys MAPNAME DEST \| /values MAPNAME DEST \| /incr MAPNAME KEY [STEP] \| /size MAPNAME \| /clear MAPNAME | Hash map layered on the flat slot table: keyed set/get/has/del, list keys and (v1.6) values into DEST through the ONE collector, in-place numeric increment (`/incr`, missing key starts at 0, default step 1), count entries, or clear the map |
+| trap :label \| trap /on errorlevel\|exit\|int :label \| trap /raise CODE "message" \| trap /clear | Per-frame **one-shot** error handler: install a `:label` handler, subscribe it to explicit events (`/on`, v1.6 — no longer reserved), raise one manually (sets ERRORLEVEL and publishes `TRAP_CODE`/`TRAP_MSG`), or clear it. A line leaving ERRORLEVEL ≥ 2 fires an errorlevel handler and jumps through the existing pending-goto slot; `exit` fires on nonzero `exit /b`, `int` on a foreground break. All events publish `TRAP_CODE`/`TRAP_MSG`. |
 | for /D %%v in (set) do cmd | Loop over directory names (wildcards match dirs; literals pass through) |
 | for /R [path] %%v in (set) do cmd | Recursively loop over files matching the set under `path` (cwd default; depth cap `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`) |
 | while <expr> do cmd | Re-run while a `set /a` expression is nonzero (`EQU NEQ LSS LEQ GTR GEQ` keywords; bare names or `%%n%%` stay live; cap `P4_CONFIG_WHILE_ITER_MAX`) |
@@ -1985,6 +2004,9 @@ pops the handler and jumps to its label through the **same pending-goto slot
 
 ```
 trap :recover              rem install a :label handler for this frame
+trap /on errorlevel :onerr  rem v1.6: subscribe the handler to explicit events
+trap /on errorlevel,exit :onerr
+trap /on int :onbreak      rem foreground ^C / Stop
 trap /raise 3 "bad input"  rem raise by hand: ERRORLEVEL=3, publish the variables
 trap /clear                rem remove the top handler without firing it
 ```
@@ -1997,9 +2019,12 @@ failing line fires the handler, those two variables hold the line's ERRORLEVEL
 and an `errorlevel N` message. `TRAP_MSG` is an **ordinary** variable, while
 `ERR`/`ERRMSG` are virtual, read-only slots and are no longer written by
 `trap`. `trap_init()` runs from `batch_init()` and resets the per-slot handler
-state once at startup. The `trap /on errorlevel|exit|int` line in the usage text
-is reserved but not implemented (it reports `unknown switch`, ERRORLEVEL 2).
-See [`batch.md`](batch.md) §11.1 for a full example.
+state once at startup. **`trap /on` (v1.6)** installs the handler for the listed
+events (`errorlevel`, `exit`, `int`) instead of the implicit errorlevel-only
+default; the label must start with `:`, the event list is comma-separated, and
+an unknown event is a usage error. `exit` fires on `exit /b N` with a nonzero
+code, `int` turns a foreground break into a jump; all publish the same
+`TRAP_CODE`/`TRAP_MSG`. See [`batch.md`](batch.md) §11.1 for a full example.
 
 ### set /p — prompted input
 
@@ -3010,6 +3035,41 @@ set theme=amber
 form "Preferences" "Theme=select:default|amber|ice|mono:theme" "Lock=check:lock"
 ```
 
+### mpick — focusable scrollable picker (v1.6)
+
+`mpick /items A|B|C [/title T] [/selected N] [/t:SECS] [/v:VAR]` is a
+focusable picker on the ONE modal runtime (not a second surface). An item is
+selected with the keyboard/touch focus ring; `/selected N` preselects a 0-based
+item. The 0-based index lands in `VAR` (default `MPICK_RESULT`) and becomes the
+ERRORLEVEL; cancel/Esc/timeout sets `255` (usage `2`).
+
+### mprog — async progress surface (v1.6)
+
+`mprog /run TITLE [/total N] [/step N] [/tick MS] [/t:SECS] [/v:VAR]` shows a
+progress panel that advances from a batch loop without owning the input.
+Percentage math is pure and clamped; cancel is distinct from done (the chosen
+variable reports one of `done`/`cancel`/`timeout`, ERRORLEVEL `0`/`1`/`255`).
+The LVGL/FreeRTOS paint half is the same modal runtime; the state transitions
+are host-gated through the real `modal_args.c`.
+
+### mformx — extended form (v1.6)
+
+`mformx /run TITLE SPEC [/accept S] [/cancel S] [/t:SECS] [/v:VAR]` extends
+`form` with focus walking across text, password and check fields. Each spec is
+`LABEL?` (text), `LABEL!` (password) or `LABEL*` (check); `/accept` and
+`/cancel` bind the two actions. Accepted values land in `VAR` with ERRORLEVEL
+`0`, cancel/timeout `255`, usage `2`. It uses the shared modal form machinery,
+never a private input loop.
+
+### mstack — suspended modal sessions (v1.6)
+
+`mstack /push NAME | /pop | /suspend | /resume | /switch NAME | /top | /list |
+/depth | /find NAME | /focus N | /alpha PANEL SCRIM | /clear` manages a stack
+of suspended modal sessions used for app switching. Push saves the current
+panel/scrim state, switch rotates sessions, and `/alpha` adjusts the panel and
+backdrop opacity through the ONE transparency model. The stack lives in the
+shared modal runtime; no second window manager, no private event loop.
+
 ### screen
 
 `screen run <file.frm>` renders one declarative screen from a flat
@@ -3164,6 +3224,8 @@ nesting depth 64, single JSON value per file (trailing data is an error).
 | `draw line <x1> <y1> <x2> <y2> [fg] [bg]` | Draw H/V line (only horizontal `y1==y2` or vertical `x1==x2`). |
 | `draw fill <x> <y> <w> <h> <char> [fg] [bg]` | Fill rect at x,y,w,h with `<char>` (required) using current fg/bg. |
 | `draw text <x> <y> <text> [fg] [bg]` | Print text at x,y (UTF-8 aware, respects cell `utf8[4]`). |
+| `draw run <x> <y> <text> [/fg COLOR] [/bg COLOR]` (v1.6) | Print a coloured text run; colours accept DOS 0-15, CSS names/`#rrggbb`/`rgb()` or 24-bit `0xRRGGBB` and are quantised through the ONE DOS palette. `has_bg` false keeps the default background. |
+| `draw sprite <x> <y> <w> <h> [checker\|ramp]` (v1.6) | Stamp a small procedural sprite into the cell grid (foreground only) through the ONE image-to-cell sampler. |
 | `draw bar <x> <y> <w> <pct> [fillch] [emptych] [fg] [bg]` | Progress bar `[fill...empty...]` of width w at x,y, pct clamped 0..100 (defaults `#`/`-`). Redraw with a new pct for animations. |
 | `draw table <x> <y> <fg> <bg> "h1\|h2\|..." [row "c1\|c2\|..." ...] [/cursor:N] [/sel:a,b,...]` | Bordered table with T-junctions; first row is the header (bold on TUI). Column widths auto-fit content (max 40 each, table must fit 80 cols, max 16 cols × 32 rows). Short rows pad with empty cells; extra cells glue to the last column. `/cursor:N` (1-based data row, header excluded) renders that row bright-white bold; `/sel:a,b` renders those data rows bold (both clip silently out of range). |
 | `draw list <x> <y> <w> <h> <file> [fg] [bg] [/top:N] [/cursor:N] [/sel:a,b] [/title:T] [/count:NAME] [/countonly]` | Renders a file's lines in a bordered, selectable panel — the file-manager primitive (`dir /b > file` + `draw list`). `/top` is the 1-based first line shown (scroll), `/cursor` the 1-based highlighted line (bright), `/sel` marks lines with `*`, `/title` sets the box title. `/count:NAME` publishes the total line count to env var `NAME`; `/countonly` does just that and skips drawing (batch's `set /a` echoes and floods, so this is the non-flooding counter). Off-TUI it prints `>`/`*`-marked plain lines. Caps: 256 lines, 96 bytes/line; an empty file returns ERRORLEVEL `1`. Hardware-verified (`apps/tcmd/TCMD.BAT`). |
@@ -3233,6 +3295,11 @@ A literal `#` in cell text (e.g. bar `#` fills) is recolor-escaped by
 | `tui copy` / `tui select clear` | Copy the pointer selection to the shell clipboard, or clear it. On the page, long-press then drag to select; a tap inside the selection copies it. Works in the browser/TUI page and `html`; the editor has its own selection. |
 | `tui dump [from] [to] [/a]` | Read-only text dump of the logical page (1-based rows). `/a` (or `attrs`) appends one `NNN@start-end:fg ...` colour-run line per row, so a suite can assert link/heading colouring without pixels. |
 | `tui selftest` | Run pure headless checks (palette spec, glyph coverage, metrics) and report per-group PASS/FAIL with location. Safe in background jobs; zero display dependency. Returns ERRORLEVEL 0 on clean, 1 on any failure. |
+| `tui frame status\|diff\|flush\|reset` (v1.6) | Inspect/flush/reset the ONE double-buffered cell frame. `status` reports bound grid + presented/working state; `diff` prints the inclusive 1-based dirty rect; `flush` commits the dirty rect to the LVGL label once; `reset` clears the frame. |
+| `tui focus <name\|next\|prev>` (v1.6) | Focus a registered widget by name, or step through the focus ring. Uses the existing pane/focus state; no second window manager. |
+| `tui layout <row\|column\|grid> <x> <y> <w> <h> <count> [cols] [gap]` (v1.6) | Pure geometry for item rectangles in a row, column or grid; returns the rect for a 0-based item through the shared widget layer. |
+| `tui scroll <name> <viewport> <content> [delta]` (v1.6) | Create/step a named scroll region (viewport/content in rows); offsets clamp to `[0, content-viewport]` through ONE scroll core. |
+| `tui route <key>` (v1.6) | Route a key stroke through the existing modal chord resolver and workspace event queue; reports the bound label. No private input loop. |
 
 `tui` and `draw fullscreen` both route to `components/tui/tui.c:417` `tui_enter_fullscreen`/`tui_exit_fullscreen`; `tui` is the per-app alias, `draw fullscreen` is the global batch verb. Screenshot debug: `grab_screenshot.py --port COM11 --out out.png --crop-transcript` + `capture_tui.py` crops to transcript rect for pixel-perfect verification.
 
@@ -3497,6 +3564,10 @@ pixels are ignored, never an error).
 | `gfx line <x1> <y1> <x2> <y2> <color>` | Bresenham line. |
 | `gfx rect <x> <y> <w> <h> <color> [fill]` | Rectangle outline, or filled with `fill`. |
 | `gfx circle <x> <y> <r> <color> [fill]` | Midpoint circle outline (`r=0` plots one pixel), or filled disc with `fill`. |
+| `gfx lineaa <x1> <y1> <x2> <y2> <color>` (v1.6) | Coverage anti-aliased line (smooth 1px stroke). |
+| `gfx circleaa <cx> <cy> <r> <color>` (v1.6) | Coverage anti-aliased 1px circle outline. |
+| `gfx rectaa <x> <y> <w> <h> <color>` (v1.6) | Coverage anti-aliased 1px rectangle outline. |
+| `gfx gradient <x> <y> <w> <h> <color0> <color1> [h\|v]` (v1.6) | Linear gradient fill (default horizontal; `v` = vertical) with exact RGB565 endpoints. |
 | `gfx hline <x> <y> <w> <color>` | Filled horizontal span (clipped in one call). |
 | `gfx vline <x> <y> <h> <color>` | Filled vertical span (clipped). |
 | `gfx triangle <x1> <y1> <x2> <y2> <x3> <y3> <color> [fill]` | Triangle outline, or edge-function filled interior with `fill` (degenerate triangles fall back to the outline). |
@@ -3508,7 +3579,8 @@ pixels are ignored, never an error).
 | `gfx image <path> [x y [w h]]` | Decode a 24/32-bit `BI_RGB` BMP (either orientation) straight to the target rect and blit it onto the canvas. Defaults to native size aspect-fit to the canvas at 0,0. Reuses the shared decoder; ERRORLEVEL `1` on a bad file, `2` usage. |
 | `gfx load <slot 0..7> <path>` | Ingest a 24/32-bit uncompressed BMP (`BI_RGB`, the exact format `screenshot <file>` writes, at most 64×64) into a sprite slot (PSRAM). Rejects other bit depths, RLE, and oversize art with ERRORLEVEL `1`. |
 | `gfx blit <slot> <x> <y> [transparent]` | Stamp a sprite onto the canvas (clipped; needs `gfx show`). Optional transparent color skips matching pixels. ERRORLEVEL `1` when the slot is empty. |
-| `gfx blitmany <slot> [/s:N] [/r:deg] <x1> <y1> [<x2> <y2> ...] [transparent]` | Stamp one sprite at up to `P4_CONFIG_GFX_BLITMANY_MAX` (64) positions in a single command — a whole formation per line for batch games. `/s:1..4` upscales every stamp, `/r:0|90|180|270` rotates clockwise first (refused when the transformed sprite exceeds the canvas). A trailing odd token is the transparent color (same as `blit`). |
+| `gfx blitmany <slot> [/s:N] [/r:deg] [/a:<cols>,<cw>,<ch>] <x1> <y1> [<x2> <y2> ...] [transparent]` | Stamp one sprite at up to `P4_CONFIG_GFX_BLITMANY_MAX` (64) positions in a single command — a whole formation per line for batch games. `/s:1..4` upscales every stamp, `/r:0|90|180|270` rotates clockwise first (refused when the transformed sprite exceeds the canvas). `/a:<cols>,<cw>,<ch>` (v1.6) treats the slot as a sprite sheet and each x/y pair as an atlas cell index; it cannot be combined with `/r:`. A trailing odd token is the transparent color (same as `blit`). |
+| `gfx composite <slot> <x> <y> <alpha 0..256> [transparent]` (v1.6) | Alpha-blend a loaded sprite slot onto the canvas as a translucent layer; an optional transparent colour key skips matching source pixels. |
 | `gfx free <slot>` | Release one sprite slot. |
 | `gfx slots` | List live slots as `gfx.slot: <n> <w>x<h>` (batch `for /f`-friendly). |
 | `gfx save <path>` | Write the canvas as a 24-bit BMP (same layout `screenshot <file>` produces: shared `screenshot_write_bmp_headers`, guarded SD session, free-space precheck, partial removed on failure). |
@@ -3681,6 +3753,30 @@ missing/corrupt/untrusted/empty-manifest, `2` usage or bad app name. Full
 trust rules in [`ABI.md`](ABI.md) §4; Companion UI: **Live System ‣ Packages**
 in `apps/companion/SYS.BAT`; HW driver `tools/pkg_test.py`; host signer
 `tools/pkg_sign.py`.
+
+### native — signed payload diagnostics (v1.6)
+
+`native` is the read-only diagnostics front door for the opt-in signed native
+payload format. It never maps or executes anything.
+
+| Form | Meaning |
+|------|---------|
+| `native info` / `native status` | Show ABI tag, envelope/loader versions, whether the crypto hooks, trusted key, verifier, API provider and map hook are installed, the supported API mask, the max payload bytes and export count. |
+| `native verify <APP>` | Read `NATIVE/<APP>.P4X`, verify magic/version/arch, size bounds, CRC-32, SHA-256 over the ABI canonical bytes and ECDSA P-256 signature, then inspect the fixed export table and required API bits. Prints `verified; api=…; entry=… (not executed)` on success; never executes. |
+
+The app name is restricted to `[A-Za-z0-9_.-]+`; a missing file, bad name,
+missing key/verifier or failed trust gate is a non-success verdict. ERRORLEVEL:
+`0` verified, `1` missing/unreadable/failed verification, `2` usage.
+
+**Launching** is a separate, single front door: `natrun <APP> [args]` is an
+`applib` app registered via `app_register` for the one `.bat` shim to call. It
+uses the same run core as `native verify` but, after verification succeeds, maps
+the payload with the executable-memory hook and calls the one fixed entry ABI
+`int entry(const native_exec_api_t *api, int argc, char **argv)`. The payload's
+return value becomes ERRORLEVEL. There is no direct launch from a card path,
+no ELF parsing, no relocation, no MMU isolation and no second key store — the
+firmware trusts only the single `p4sign` NVS key installed by `pkg key install`.
+See [`SECURITY.md`](SECURITY.md) and [`ABI.md`](ABI.md) §4.1.
 
 ### store - remote app store (index over HTTP)
 

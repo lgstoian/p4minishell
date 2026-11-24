@@ -9,7 +9,7 @@ one additive opt-in exception: a signed envelope may be launched by a `.bat`
 shim through the single loader path (see [`ABI.md`](../ABI.md) §1 and §4.1).
 This document is the packaging walk-through; the frozen contract is `ABI.md`.
 
-- **Packaging spec:** v1.3 (firmware v1.5.0) · **Target:** ESP32-P4 + ESP32-C6
+- **Packaging spec:** v1.3 (firmware v1.6.0) · **Target:** ESP32-P4 + ESP32-C6
 - Related: [`ABI.md`](../ABI.md) (the contract), [`command.md`](../command.md)
   (`pkg`, `asset`, `store`, `launch`), [`SDK.md`](../SDK.md) (applib ABI),
   `tools/pkg_sign.py`, `tools/make_pkg.py`, `apps/push_pkgs.py`.
@@ -77,11 +77,18 @@ needs native code keeps the same single front door — its `.bat` shim:
 2. The blob carries the envelope in [`ABI.md`](../ABI.md) §4.1: a fixed header
    (magic, version, `esp32p4`, `applib-1`, size, CRC-32, SHA-256, `r||s`
    signature, entry ordinal, required API set) followed by the payload bytes.
-   The host signer signs SHA-256 over the header without the signature field
+   The host signer signs SHA-256 over the header without the SHA-256 and
+   signature fields (see `ABI.md` §4.1 for the exact canonical spans)
    plus the payload; the firmware's format-only core
    (`components/nativepay`) checks the header and CRC and delegates SHA-256
-   and ECDSA to hooks installed at boot.
-3. The shim asks the **one** firmware loader path for the verified envelope.
+   and ECDSA to hooks installed at boot. v1.6 corrected the canonical-byte
+   stream: the digest is computed over the exact ABI §4.1 ranges and the
+   signature is checked against that digest, never over a reassembled buffer.
+3. The shim asks the **one** firmware loader path for the verified envelope:
+   `natrun <APP> [args]` is the sole `.bat`-facing launch app, registered with
+   `app_register`. `native info|status|verify <APP>` is a read-only diagnostics
+   front door. Both share one run core and the single `native_exec_launch()`
+   sequence (inspect → required-API check → map → call → unmap).
    A **pure native** app hands off directly; a **hybrid** app runs batch
    setup, the native payload, and a webapp page (or any other batch step) from
    the same shim. There is no new extension, no new `type=` value, and no
@@ -89,11 +96,16 @@ needs native code keeps the same single front door — its `.bat` shim:
 4. Trust gates are unchanged: install-time manifest CRC and the `SIGN` verdict
    plus the single `p4sign` key remain authoritative. A missing verifier or
    trust key is an explicit non-success verdict, never a pass. Unsigned blobs
-   and arbitrary `.bin` files are never launched.
+   and arbitrary `.bin` files are never launched. The map hook is an
+   executable-heap capability request, **not** an MMU address space — there is
+   no `dlopen`, relocation or per-app isolation (`SECURITY.md`).
 
-Only the envelope parser/verifier exists today; the loader and its launch
-surface are a later, hardware-verified step ([`roadmap.md`](../roadmap.md)).
-Pure-batch, hybrid, and webapp apps are not modified or removed.
+As of v1.6.0 the loader and both front doors exist; the format/verifier core is
+in `components/nativepay`, the loader in `components/nativeexec`, and the boot
+wiring in `components/command/native_commands.c`. On-device launch remains a
+hardware-verified step, so no board proof is claimed for this release candidate
+([`roadmap.md`](../roadmap.md)). Pure-batch, hybrid, and webapp apps are not
+modified or removed.
 
 ### Multitasking and app switching (design credit only)
 

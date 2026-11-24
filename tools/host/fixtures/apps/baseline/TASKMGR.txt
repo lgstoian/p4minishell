@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=TASKMGR
+[M-RICH-TMGR] host language extract
+W=tasks
+2
+[M-RICH-TMGR-K] host=p4
+[M-RICH-TMGR-K] port=80
+[M-RICH-TMGR-F] result=42
+[M-RICH-TMGR-S] rev=sksat count=2 pad=tasks----- vals=p4,80
+[M-RICH-TMGR-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

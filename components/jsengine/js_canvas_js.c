@@ -32,6 +32,27 @@
 #include "js_canvas.h"
 
 static JSClassID s_canvas_class_id;
+static JSClassID s_gradient_class_id;
+
+/** A JS-visible CanvasGradient object. The C gradient is the same type CSS
+ *  uses, so there is still one colour/gradient parser and one DOS palette. */
+typedef struct {
+    js_canvas_gradient_t gradient;
+} canvas_gradient_holder_t;
+
+static void canvas_gradient_finalizer(JSRuntime *rt, JSValue val)
+{
+    canvas_gradient_holder_t *holder;
+
+    (void)rt;
+    holder = (canvas_gradient_holder_t *)JS_GetOpaque(val, s_gradient_class_id);
+    free(holder);
+}
+
+static JSClassDef s_gradient_class = {
+    "CanvasGradient",
+    .finalizer = canvas_gradient_finalizer,
+};
 
 static void canvas_js_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -88,9 +109,23 @@ static JSValue canvas_set_fill_style(JSContext *ctx, JSValueConst this_val,
     if (canvas == NULL) {
         return JS_UNDEFINED;
     }
+    if (JS_IsObject(val)) {
+        canvas_gradient_holder_t *holder =
+            (canvas_gradient_holder_t *)JS_GetOpaque(val, s_gradient_class_id);
+
+        if (holder != NULL) {
+            js_canvas_set_gradient(canvas, &holder->gradient);
+            return JS_UNDEFINED;
+        }
+    }
     text = JS_ToCString(ctx, val);
     if (text != NULL) {
-        if (js_canvas_parse_color(text, &color)) {
+        js_canvas_gradient_t gradient;
+
+        if (js_canvas_gradient_parse(text, &gradient)) {
+            js_canvas_set_gradient(canvas, &gradient);
+        } else if (js_canvas_parse_color(text, &color)) {
+            js_canvas_clear_gradient(canvas);
             js_canvas_set_fill(canvas, color);
         }
         JS_FreeCString(ctx, text);
@@ -492,6 +527,165 @@ static JSValue canvas_measure_text(JSContext *ctx, JSValueConst this_val, int ar
     return result;
 }
 
+/* ---- Additive Canvas 2D subset: gradients, rounded rects, shadows ------- */
+
+static JSValue canvas_gradient_add_stop(JSContext *ctx, JSValueConst this_val,
+                                        int argc, JSValueConst *argv)
+{
+    canvas_gradient_holder_t *holder =
+        (canvas_gradient_holder_t *)JS_GetOpaque(this_val, s_gradient_class_id);
+    const char *text;
+    js_canvas_rgba_t color;
+    double position = 0.0;
+
+    if (holder == NULL || argc < 2 || holder->gradient.count >= CSS_GRADIENT_MAX_STOPS) {
+        return JS_UNDEFINED;
+    }
+    (void)JS_ToFloat64(ctx, &position, argv[0]);
+    if (position < 0.0) position = 0.0;
+    if (position > 1.0) position = 1.0;
+    text = JS_ToCString(ctx, argv[1]);
+    if (text == NULL) return JS_UNDEFINED;
+    if (js_canvas_parse_color(text, &color)) {
+        int index = holder->gradient.count++;
+
+        holder->gradient.stops[index] = color;
+        holder->gradient.positions[index] = (uint8_t)(position * 255.0 + 0.5);
+        /* Keep positions monotonic so sampling stays deterministic. */
+        for (int i = 1; i < holder->gradient.count; i++) {
+            if (holder->gradient.positions[i] < holder->gradient.positions[i - 1]) {
+                holder->gradient.positions[i] = holder->gradient.positions[i - 1];
+            }
+        }
+    }
+    JS_FreeCString(ctx, text);
+    return JS_UNDEFINED;
+}
+
+static JSValue canvas_create_linear_gradient(JSContext *ctx, JSValueConst this_val,
+                                             int argc, JSValueConst *argv)
+{
+    canvas_gradient_holder_t *holder;
+    JSValue object;
+
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    if (s_gradient_class_id == 0) {
+        JS_NewClassID(&s_gradient_class_id);
+    }
+    if (!JS_IsRegisteredClass(JS_GetRuntime(ctx), s_gradient_class_id)) {
+        JS_NewClass(JS_GetRuntime(ctx), s_gradient_class_id, &s_gradient_class);
+    }
+    holder = calloc(1, sizeof(*holder));
+    if (holder == NULL) return JS_NULL;
+    holder->gradient.angle = (uint16_t)90;  /* horizontal by default */
+    object = JS_NewObjectClass(ctx, s_gradient_class_id);
+    if (JS_IsException(object)) {
+        free(holder);
+        return JS_EXCEPTION;
+    }
+    JS_SetOpaque(object, holder);
+    JS_SetPropertyStr(ctx, object, "addColorStop",
+                      JS_NewCFunction(ctx, canvas_gradient_add_stop,
+                                      "addColorStop", 2));
+    return object;
+}
+
+static JSValue canvas_round_rect(JSContext *ctx, JSValueConst this_val,
+                                 int argc, JSValueConst *argv)
+{
+    js_canvas_t *canvas = canvas_of(ctx, this_val);
+
+    if (canvas == NULL || argc < 4) return JS_UNDEFINED;
+    js_canvas_fill_rounded_rect(canvas, arg_number(ctx, argc, argv, 0),
+                                arg_number(ctx, argc, argv, 1),
+                                arg_number(ctx, argc, argv, 2),
+                                arg_number(ctx, argc, argv, 3),
+                                arg_number(ctx, argc, argv, 4));
+    return JS_UNDEFINED;
+}
+
+static JSValue canvas_get_shadow_color(JSContext *ctx, JSValueConst this_val)
+{
+    char buf[40];
+
+    canvas_format_color(buf, sizeof(buf), js_canvas_get_shadow_color(canvas_of(ctx, this_val)));
+    return JS_NewString(ctx, buf);
+}
+
+static JSValue canvas_set_shadow_color(JSContext *ctx, JSValueConst this_val,
+                                       JSValueConst val)
+{
+    js_canvas_t *canvas = canvas_of(ctx, this_val);
+    const char *text;
+    js_canvas_rgba_t color;
+    int dx = 0;
+    int dy = 0;
+    int blur = 0;
+
+    if (canvas == NULL) return JS_UNDEFINED;
+    text = JS_ToCString(ctx, val);
+    if (text == NULL) return JS_UNDEFINED;
+    if (js_canvas_parse_color(text, &color)) {
+        dx = js_canvas_get_shadow_offset_x(canvas);
+        dy = js_canvas_get_shadow_offset_y(canvas);
+        blur = js_canvas_get_shadow_blur(canvas);
+        js_canvas_set_shadow(canvas, color, (float)dx, (float)dy, (float)blur);
+    }
+    JS_FreeCString(ctx, text);
+    return JS_UNDEFINED;
+}
+
+static JSValue canvas_get_shadow_offset_x(JSContext *ctx, JSValueConst this_val)
+{
+    return JS_NewInt32(ctx, js_canvas_get_shadow_offset_x(canvas_of(ctx, this_val)));
+}
+
+static JSValue canvas_set_shadow_offset_x(JSContext *ctx, JSValueConst this_val,
+                                          JSValueConst val)
+{
+    js_canvas_t *canvas = canvas_of(ctx, this_val);
+
+    if (canvas != NULL) {
+        js_canvas_set_shadow_offset(canvas, (float)arg_number(ctx, 1, &val, 0),
+                                    (float)js_canvas_get_shadow_offset_y(canvas));
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue canvas_get_shadow_offset_y(JSContext *ctx, JSValueConst this_val)
+{
+    return JS_NewInt32(ctx, js_canvas_get_shadow_offset_y(canvas_of(ctx, this_val)));
+}
+
+static JSValue canvas_set_shadow_offset_y(JSContext *ctx, JSValueConst this_val,
+                                          JSValueConst val)
+{
+    js_canvas_t *canvas = canvas_of(ctx, this_val);
+
+    if (canvas != NULL) {
+        js_canvas_set_shadow_offset(canvas,
+                                    (float)js_canvas_get_shadow_offset_x(canvas),
+                                    (float)arg_number(ctx, 1, &val, 0));
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue canvas_get_shadow_blur(JSContext *ctx, JSValueConst this_val)
+{
+    return JS_NewInt32(ctx, js_canvas_get_shadow_blur(canvas_of(ctx, this_val)));
+}
+
+static JSValue canvas_set_shadow_blur(JSContext *ctx, JSValueConst this_val,
+                                      JSValueConst val)
+{
+    js_canvas_t *canvas = canvas_of(ctx, this_val);
+
+    if (canvas != NULL) js_canvas_set_shadow_blur(canvas, (float)arg_number(ctx, 1, &val, 0));
+    return JS_UNDEFINED;
+}
+
 /* Unsupported Canvas 2D features: present so a page keeps running. */
 static JSValue canvas_noop(JSContext *ctx, JSValueConst this_val, int argc,
                            JSValueConst *argv)
@@ -522,6 +716,10 @@ static const JSCFunctionListEntry s_canvas_funcs[] = {
     JS_CGETSET_DEF("font", canvas_get_font, canvas_set_font),
     JS_CGETSET_DEF("textAlign", canvas_get_text_align, canvas_set_text_align),
     JS_CGETSET_DEF("textBaseline", canvas_get_text_baseline, canvas_set_text_baseline),
+    JS_CGETSET_DEF("shadowColor", canvas_get_shadow_color, canvas_set_shadow_color),
+    JS_CGETSET_DEF("shadowOffsetX", canvas_get_shadow_offset_x, canvas_set_shadow_offset_x),
+    JS_CGETSET_DEF("shadowOffsetY", canvas_get_shadow_offset_y, canvas_set_shadow_offset_y),
+    JS_CGETSET_DEF("shadowBlur", canvas_get_shadow_blur, canvas_set_shadow_blur),
     JS_CFUNC_DEF("save", 0, canvas_save),
     JS_CFUNC_DEF("restore", 0, canvas_restore),
     JS_CFUNC_DEF("translate", 2, canvas_translate),
@@ -532,6 +730,7 @@ static const JSCFunctionListEntry s_canvas_funcs[] = {
     JS_CFUNC_DEF("fillRect", 4, canvas_fill_rect),
     JS_CFUNC_DEF("clearRect", 4, canvas_clear_rect),
     JS_CFUNC_DEF("strokeRect", 4, canvas_stroke_rect),
+    JS_CFUNC_DEF("roundRect", 4, canvas_round_rect),
     JS_CFUNC_DEF("beginPath", 0, canvas_begin_path),
     JS_CFUNC_DEF("moveTo", 2, canvas_move_to),
     JS_CFUNC_DEF("lineTo", 2, canvas_line_to),
@@ -543,14 +742,14 @@ static const JSCFunctionListEntry s_canvas_funcs[] = {
     JS_CFUNC_DEF("fillText", 3, canvas_fill_text),
     JS_CFUNC_DEF("strokeText", 3, canvas_stroke_text),
     JS_CFUNC_DEF("measureText", 1, canvas_measure_text),
-    /* Documented no-ops (no images/patterns/gradients/clipping/pixels). */
+    JS_CFUNC_DEF("createLinearGradient", 4, canvas_create_linear_gradient),
+    /* Documented no-ops (no images/patterns/radial gradients/clipping/pixels). */
     JS_CFUNC_DEF("drawImage", 3, canvas_noop),
     JS_CFUNC_DEF("putImageData", 3, canvas_noop),
     JS_CFUNC_DEF("clip", 0, canvas_noop),
     JS_CFUNC_DEF("setLineDash", 1, canvas_noop),
     JS_CFUNC_DEF("getLineDash", 0, canvas_noop),
     JS_CFUNC_DEF("isPointInPath", 2, canvas_false),
-    JS_CFUNC_DEF("createLinearGradient", 4, canvas_null),
     JS_CFUNC_DEF("createRadialGradient", 6, canvas_null),
     JS_CFUNC_DEF("createPattern", 2, canvas_null),
     JS_CFUNC_DEF("getImageData", 4, canvas_null),

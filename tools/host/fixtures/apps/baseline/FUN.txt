@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=FUN
+[M-RICH-FUN] host language extract
+W=melody
+1
+[M-RICH-FUN-K] host=p4
+[M-RICH-FUN-K] port=80
+[M-RICH-FUN-F] result=42
+[M-RICH-FUN-S] rev=ydolem count=1 pad=melody---- vals=p4,80
+[M-RICH-FUN-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

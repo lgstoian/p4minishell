@@ -339,6 +339,7 @@ static void browser_page_release(void)
         p4heap_free(s_page_rules);
         s_page_rules = NULL;
     }
+    css_style_cache_clear();    /* the cached ruleset pointer is now dangling */
     s_page_base[0] = '\0';
 }
 
@@ -825,6 +826,11 @@ int browser_render_html(const char *html, const char *base_url) {
         (void)jsengine_eval("if (typeof window !== 'undefined' && typeof window.onload === 'function') window.onload();",
                             result, sizeof(result));
         jsengine_set_dom_tree(NULL);
+        /* In-page JS may have changed class/id/style. The cache epoch makes
+         * this a no-op when nothing style-related was mutated. */
+        if (rules != NULL) {
+            css_compute_styles(tree, rules);
+        }
     }
     browser_page_render();
     /* Remember the rendered page so back/forward restores it from PSRAM by
@@ -1067,6 +1073,35 @@ static int browser_follow_link(int index)
     return shell_execute_command_core(line) ? 0 : 1;
 }
 
+/** Batch-facing event dispatch on the already-rendered page. No second DOM
+ *  registry and no second JS runtime: the node is looked up in s_page_tree and
+ *  dom_dispatch_event() invokes the registered engine hook. */
+int browser_dispatch_dom_event(const char *id, const char *event)
+{
+    dom_node_t *node;
+
+    if (id == NULL || event == NULL || s_page_tree == NULL) return 1;
+    node = dom_find_by_id(s_page_tree, id);
+    if (node == NULL) return 1;
+    jsengine_set_dom_tree(s_page_tree);
+    dom_dispatch_event(node, event);
+    jsengine_set_dom_tree(NULL);
+    browser_page_render();
+    return 0;
+}
+
+int browser_tick_timers(void)
+{
+    int fired;
+
+    if (s_page_tree == NULL) return 0;
+    jsengine_set_dom_tree(s_page_tree);
+    fired = jsengine_timers_run_due(jsengine_now_ms());
+    jsengine_set_dom_tree(NULL);
+    if (fired > 0) browser_page_render();
+    return fired;
+}
+
 int shell_command_browser(int argc, char **argv) {
     if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "links")) {
         int rc = browser_list_links();
@@ -1090,11 +1125,13 @@ int shell_command_browser(int argc, char **argv) {
                                  (void *)s_page_tree);
         if (s_page_rules != NULL) {
             for (int i = 0; i < s_page_rules->count && i < 24; i++) {
-                shell_transcript_appendf("  %s { %s: %s } spec=%d\n",
-                                         s_page_rules->rules[i].selector,
-                                         s_page_rules->rules[i].property,
-                                         s_page_rules->rules[i].value,
-                                         s_page_rules->rules[i].specificity);
+                const css_rule_t *r = &s_page_rules->rules[i];
+
+                shell_transcript_appendf(
+                    "  %s { %s: %s } spec=%d.%d.%d imp=%d order=%d\n",
+                    r->selector, r->property, r->value,
+                    css_specificity_id(r), css_specificity_class(r),
+                    css_specificity_type(r), r->important ? 1 : 0, r->order);
             }
         }
         if (s_page_tree != NULL && s_page_tree->body != NULL) {
@@ -1107,6 +1144,30 @@ int shell_command_browser(int argc, char **argv) {
             if (h1 != NULL) {
                 shell_transcript_appendf("h1 fg=%u bold=%d\n",
                                          (unsigned)h1->fg, h1->bold);
+            }
+            /* The inspector resolves the winning `color` rule with the SAME
+             * comparator css_apply() uses - no second cascade. */
+            if (h1 != NULL && s_page_rules != NULL) {
+                const css_rule_t *best = NULL;
+
+                for (int i = 0; i < s_page_rules->count; i++) {
+                    const css_rule_t *r = &s_page_rules->rules[i];
+
+                    if (strcmp(r->property, "color") != 0 ||
+                        !css_selector_matches(r->selector, h1)) {
+                        continue;
+                    }
+                    if (best == NULL || css_rule_compare(r, best) > 0) {
+                        best = r;
+                    }
+                }
+                if (best != NULL) {
+                    shell_transcript_appendf(
+                        "h1 color winner: %s (spec=%d.%d.%d imp=%d order=%d)\n",
+                        best->selector, css_specificity_id(best),
+                        css_specificity_class(best), css_specificity_type(best),
+                        best->important ? 1 : 0, best->order);
+                }
             }
             if (th != NULL) {
                 shell_transcript_appendf("th fg=%u bg=%u\n",

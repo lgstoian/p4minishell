@@ -19,6 +19,7 @@ setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-SNAKE]
 title "Snake"
+gosub :rich_snake
 draw hold on
 if errorlevel 1 goto nogfx
 rem Full screen: reclaim the header and on-screen keyboard rows so the whole
@@ -56,6 +57,24 @@ set /a S[1]=%hh%-1 > NUL
 set /a S[2]=%hh%-2 > NUL
 goto newfood
 
+rem ---- v1.6 richer-language showcase -----------------------------------
+rem [M-RICH-SNAKE]: func/return packs a board coordinate, str /pad formats
+rem the HUD and map /incr tracks food. The 12-slot game state is untouched.
+:rich_snake
+echo [M-RICH-SNAKE] board language tour
+func :snakepack 12 20
+echo [M-RICH-SNAKE-F] coord=%RESULT%
+set SHUD=score
+str /pad SHUD 10 SH .
+map /set FOODS eaten 0
+map /incr FOODS eaten 3
+for /K %%k in (FOODS) do echo [M-RICH-SNAKE-K] %%k=%%l
+echo [M-RICH-SNAKE-S] pad=%SH%
+return
+
+:snakepack
+return %1*128+%2
+
 :newfood
 set /a fx=%RANDOM% / 820 + 3
 set /a fy=%RANDOM% %% %YSPAN% + 4
@@ -72,6 +91,7 @@ goto frame
 draw clear
 draw box 1 2 %TUICOLS% %SH% double "SNAKE ★"
 draw text 48 4 "Score %score%"
+draw run 48 2 "[M-RICH-SNAKE] v1.6" /fg 11 /bg 0
 draw text 48 6 "Length %len%"
 draw text 48 8 "wasd move"
 draw text 48 9 "Enter on serial"

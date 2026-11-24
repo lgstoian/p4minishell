@@ -312,12 +312,14 @@ static bool shell_env_name_is_valid(const char *name)
     }
 
     /* Alphanumerics plus underscore, plus `[`/`]` so batch apps can keep
-     * indexed arrays (`set SPR[3]=...` / `%SPR[3]%`). Brackets are only
+     * indexed arrays (`set SPR[3]=...` / `%SPR[3]%`), and `#` for the hash
+     * slot names the `map` core writes (`CFG#<hash>#<chain>`). These are only
      * name characters here — the value side is untouched — so existing
      * names keep working and no new storage is introduced. */
     for (index = 0; name[index] != '\0'; index++) {
         if (!(isalnum((unsigned char)name[index]) || name[index] == '_' ||
-              name[index] == '[' || name[index] == ']')) {
+              name[index] == '[' || name[index] == ']' || name[index] == '#' ||
+              name[index] == '.')) {
             return false;
         }
     }
@@ -437,6 +439,73 @@ size_t shell_env_class_used(shell_env_class_t class_tag)
             count++;
         }
     }
+    return count;
+}
+
+/**
+ * Enumerate the one slot table by a name prefix (the shared primitive behind
+ * the map key collector). No new storage or matcher: names are copied out
+ * under the same lock the array collector uses, and values stay live because
+ * callers re-read them with shell_env_get().
+ */
+int shell_env_collect_prefix(const char *prefix,
+                             char names[][P4_CONFIG_ENV_NAME_BYTES], int max)
+{
+    size_t prefix_len;
+    size_t index;
+    int count = 0;
+
+    if (prefix == NULL || prefix[0] == '\0' || names == NULL || max <= 0) {
+        return 0;
+    }
+    prefix_len = strlen(prefix);
+    batch_shared_take();
+    for (index = 0; index < SHELL_POOL_TOTAL && count < max; index++) {
+        const char *name;
+
+        if (!s_shell_env_vars[index].used) {
+            continue;
+        }
+        name = s_shell_env_vars[index].name;
+        if (strlen(name) < prefix_len ||
+            strncasecmp(name, prefix, prefix_len) != 0) {
+            continue;
+        }
+        snprintf(names[count], P4_CONFIG_ENV_NAME_BYTES, "%s", name);
+        count++;
+    }
+    /* A background job's private slots live in its overlay, not the pool. */
+    {
+        shell_env_var_t *overlay = batch_bg_overlay(false);
+
+        if (overlay != NULL) {
+            for (index = 0; index < P4_CONFIG_BG_ENV_SLOTS && count < max; index++) {
+                const char *name;
+                int seen = 0;
+
+                if (!overlay[index].used) {
+                    continue;
+                }
+                name = overlay[index].name;
+                if (strlen(name) < prefix_len ||
+                    strncasecmp(name, prefix, prefix_len) != 0) {
+                    continue;
+                }
+                for (int k = 0; k < count; k++) {
+                    if (strcasecmp(names[k], name) == 0) {
+                        seen = 1;
+                        break;
+                    }
+                }
+                if (seen) {
+                    continue;
+                }
+                snprintf(names[count], P4_CONFIG_ENV_NAME_BYTES, "%s", name);
+                count++;
+            }
+        }
+    }
+    batch_shared_give();
     return count;
 }
 

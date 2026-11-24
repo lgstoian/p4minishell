@@ -421,6 +421,8 @@
         "rss",
         "mcp",
         "browser",
+        "nativepay",
+        "nativeexec",
         "zip"
       ],
       "rules": [
@@ -908,6 +910,23 @@
       "status": "stable",
       "tests": [
         "test/main/test_modal.c"
+      ]
+    },
+    "nativeexec": {
+      "domain": "app",
+      "header": "components/nativeexec/nativeexec.h",
+      "layer": "leaf",
+      "path": "components/nativeexec",
+      "provides": "the one fixed-ABI loader for opted-in signed native payloads",
+      "requires": [
+        "nativepay"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "experimental",
+      "tests": [
+        "test/main/test_native_exec.c"
       ]
     },
     "nativepay": {

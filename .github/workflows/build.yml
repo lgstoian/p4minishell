@@ -4,7 +4,8 @@
 # errors and zero warnings. Add a board by adding its profile under boards/
 # (see PORTING.md): the matrix below discovers it automatically, so no
 # workflow edit is needed. The `host-unit` job runs the hardware-free Unity
-# subset (harness.md §2.2); hardware suites
+# subset plus the v1.6 host surface/app gates (harness.md §2.2); a host pass is
+# never hardware sign-off. Hardware suites
 # (tools/p4test_run.py, tools/regression.py, tools/capture_docs.py) stay
 # local (see readme.md).
 name: build
@@ -89,6 +90,16 @@ jobs:
           # at it explicitly (the batch gate auto-discovers only build-* dirs).
           python3 tools/host_batch_run.py --elf test/host/build/host_batch_run.elf --check
           python3 tools/host_webapp_gate.py --renderer test/host/build/host_webapp_render.elf --check
+      - name: Host surface and app pre-gates (no board, v1.6)
+        run: |
+          . $IDF_PATH/export.sh
+          # These compile/drive the shipped cores with a plain C compiler or
+          # the same real interpreter ELF. They open no serial port and are
+          # never hardware sign-off (harness.md 0 / 2.2).
+          python3 tools/host_tui_gate.py --check
+          python3 tools/host_modal_gate.py --check
+          python3 tools/gfx_toolkit_test.py --host
+          python3 tools/host_apps_gate.py --check
 
   lint:
     runs-on: ubuntu-latest

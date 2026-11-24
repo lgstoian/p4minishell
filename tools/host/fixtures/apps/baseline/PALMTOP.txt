@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=PALMTOP
+[M-RICH-PALM] host language extract
+W=palmtop
+2
+[M-RICH-PALM-K] host=p4
+[M-RICH-PALM-K] port=80
+[M-RICH-PALM-F] result=42
+[M-RICH-PALM-S] rev=potmlap count=2 pad=palmtop--- vals=p4,80
+[M-RICH-PALM-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

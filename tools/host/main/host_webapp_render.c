@@ -36,9 +36,11 @@
 #include "dom.h"
 #include "dom_render.h"
 #include "css.h"
+#include "html.h"
 #include "js_canvas.h"
 
 #include <stdbool.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,7 +65,26 @@ typedef struct {
 
 static page_probe_t s_page;
 static css_ruleset_t s_rules;
-static char s_canvas_line[192];
+static char s_canvas_line[384];
+static char s_meta_line[192];
+static char s_css_line[192];
+static char s_events_line[192];
+static char s_cascade_line[192];
+static char s_entity_line[192];
+
+/** Append one key=value pair to a fixed report line (bounded, deterministic). */
+static void report_add(char *buf, size_t cap, const char *fmt, ...)
+{
+    va_list ap;
+    size_t used = strlen(buf);
+    int n;
+
+    if (used + 1 >= cap) return;
+    va_start(ap, fmt);
+    n = vsnprintf(buf + used, cap - used, fmt, ap);
+    va_end(ap);
+    if (n < 0) buf[used] = '\0';
+}
 
 /** Start every row as an 80-cell grid with the default foreground, matching
  *  the page buffer `tui dump /a` reads on the board. */
@@ -198,6 +219,179 @@ static void probe_canvas(dom_tree_t *tree)
                    px[0], px[1], px[2], px[3],
                    px[(size_t)half * 4u], px[(size_t)half * 4u + 1u],
                    px[(size_t)half * 4u + 2u], px[(size_t)half * 4u + 3u]);
+
+    /* The SAME rasterizer also serves gradients, rounded rects and shadows.
+     * All samples are raw RGBA bytes; no second pixel model is introduced. */
+    {
+        js_canvas_gradient_t gradient;
+
+        if (js_canvas_gradient_parse(
+                "linear-gradient(90deg, #ff0000 0%, #0000ff 100%)", &gradient)) {
+            js_canvas_t *gc = js_canvas_new(8, 4);
+
+            if (gc != NULL) {
+                const uint8_t *gpx;
+
+                js_canvas_fill_gradient_rect(gc, &gradient, 0, 0, 8, 4, false);
+                gpx = js_canvas_pixels(gc);
+                if (gpx != NULL) {
+                    report_add(s_canvas_line, sizeof(s_canvas_line),
+                               " grad0=%02x%02x%02x%02x grad1=%02x%02x%02x%02x",
+                               gpx[0], gpx[1], gpx[2], gpx[3],
+                               gpx[7u * 4u], gpx[7u * 4u + 1u],
+                               gpx[7u * 4u + 2u], gpx[7u * 4u + 3u]);
+                }
+                js_canvas_free(gc);
+            }
+        }
+    }
+    {
+        js_canvas_t *rc = js_canvas_new(8, 8);
+
+        if (rc != NULL) {
+            const uint8_t *rpx;
+
+            js_canvas_set_fill(rc, (js_canvas_rgba_t){ 255, 255, 255, 255 });
+            js_canvas_fill_rounded_rect(rc, 1, 1, 6, 6, 2);
+            rpx = js_canvas_pixels(rc);
+            if (rpx != NULL) {
+                const uint8_t *corner = rpx + (size_t)1 * 8u * 4u + 1u * 4u;
+                const uint8_t *centre = rpx + (size_t)4 * 8u * 4u + 4u * 4u;
+
+                report_add(s_canvas_line, sizeof(s_canvas_line),
+                           " round_corner=%02x round_centre=%02x",
+                           corner[3], centre[3]);
+            }
+            js_canvas_free(rc);
+        }
+    }
+    {
+        js_canvas_t *sc = js_canvas_new(12, 12);
+
+        if (sc != NULL) {
+            const uint8_t *spx;
+
+            js_canvas_set_shadow(sc, (js_canvas_rgba_t){ 255, 0, 0, 255 }, 2, 0, 0);
+            js_canvas_set_fill(sc, (js_canvas_rgba_t){ 0, 0, 255, 255 });
+            js_canvas_fill_rect(sc, 1, 1, 3, 3);
+            spx = js_canvas_pixels(sc);
+            if (spx != NULL) {
+                const uint8_t *shadow = spx + (size_t)2 * 12u * 4u + 4u * 4u;
+
+                report_add(s_canvas_line, sizeof(s_canvas_line),
+                           " shadow=%02x%02x%02x%02x",
+                           shadow[0], shadow[1], shadow[2], shadow[3]);
+            }
+            js_canvas_free(sc);
+        }
+    }
+}
+
+/** Report the ONE entity decoder on fixed probes: longest/named, legacy
+ *  no-semicolon, numeric hex/decimal, clamped and C1-remapped. No second
+ *  decoder is introduced - this calls html_entity_decode() directly. */
+static void probe_entities(void)
+{
+    static const char *PROBES[] = {
+        "&amp;", "&reg", "&#x41;", "&#1114112;", "&#x80;", "&hellip;"
+    };
+
+    snprintf(s_entity_line, sizeof(s_entity_line), "webapp.entity");
+    for (size_t i = 0; i < sizeof(PROBES) / sizeof(PROBES[0]); i++) {
+        unsigned long cp = 0;
+        size_t used = 0;
+
+        if (html_entity_decode(PROBES[i], PROBES[i] + strlen(PROBES[i]),
+                               &cp, &used)) {
+            report_add(s_entity_line, sizeof(s_entity_line), " %s=%04lX/%u",
+                       PROBES[i], cp, (unsigned)used);
+        }
+    }
+}
+
+/** Report which `color` rule wins for <h1> using the SAME css_rule_compare()
+ *  and css_selector_matches() the cascade uses in css_apply(). */
+static void probe_cascade(const dom_tree_t *tree)
+{
+    dom_node_t *h1 = dom_find_first_by_tag((dom_tree_t *)tree, "h1");
+    const css_rule_t *best = NULL;
+
+    s_cascade_line[0] = '\0';
+    if (h1 == NULL) return;
+    for (int i = 0; i < s_rules.count; i++) {
+        const css_rule_t *r = &s_rules.rules[i];
+
+        if (strcmp(r->property, "color") != 0 ||
+            !css_selector_matches(r->selector, h1)) {
+            continue;
+        }
+        if (best == NULL || css_rule_compare(r, best) > 0) best = r;
+    }
+    if (best != NULL) {
+        snprintf(s_cascade_line, sizeof(s_cascade_line),
+                 "webapp.cascade h1_color=%s spec=%d.%d.%d imp=%d order=%d fg=%u",
+                 best->selector, css_specificity_id(best),
+                 css_specificity_class(best), css_specificity_type(best),
+                 best->important ? 1 : 0, best->order, (unsigned)h1->fg);
+    }
+}
+
+/** Recursive feature walk over the ONE parsed tree (bounded by DOM depth). */
+static void count_feature_node(dom_node_t *n, int *semantic, int *controls,
+                               int *grids, int *canvases, int *handlers,
+                               dom_node_t **card, int depth)
+{
+    if (n == NULL || depth > 64) return;
+    if (n->type == DOM_NODE_ELEMENT) {
+        if (strcmp(n->tag, "header") == 0 || strcmp(n->tag, "nav") == 0 ||
+            strcmp(n->tag, "main") == 0 || strcmp(n->tag, "section") == 0 ||
+            strcmp(n->tag, "article") == 0 || strcmp(n->tag, "footer") == 0 ||
+            strcmp(n->tag, "details") == 0 || strcmp(n->tag, "summary") == 0 ||
+            strcmp(n->tag, "dialog") == 0) {
+            (*semantic)++;
+        }
+        if (strcmp(n->tag, "form") == 0 || strcmp(n->tag, "input") == 0 ||
+            strcmp(n->tag, "select") == 0 || strcmp(n->tag, "option") == 0 ||
+            strcmp(n->tag, "button") == 0 || strcmp(n->tag, "label") == 0) {
+            (*controls)++;
+        }
+        if (n->display == DOM_DISPLAY_GRID || n->display == DOM_DISPLAY_FLEX) (*grids)++;
+        if (strcmp(n->tag, "canvas") == 0) (*canvases)++;
+        if (n->onclick[0] != '\0' || n->onload[0] != '\0') (*handlers)++;
+        if (*card == NULL && strcmp(n->id, "card") == 0) *card = n;
+    }
+    for (dom_node_t *ch = n->first_child; ch != NULL; ch = ch->next_sibling) {
+        count_feature_node(ch, semantic, controls, grids, canvases, handlers,
+                           card, depth + 1);
+    }
+}
+
+/** Count the new HTML5/CSS constructs by walking the ONE parsed tree, and
+ *  report the computed visual state of the first element with id="card". */
+static void probe_features(const dom_tree_t *tree)
+{
+    int semantic = 0;
+    int controls = 0;
+    int grids = 0;
+    int canvases = 0;
+    int handlers = 0;
+    dom_node_t *card = NULL;
+
+    s_meta_line[0] = s_css_line[0] = s_events_line[0] = '\0';
+    count_feature_node(tree->root, &semantic, &controls, &grids, &canvases,
+                       &handlers, &card, 0);
+    (void)snprintf(s_meta_line, sizeof(s_meta_line),
+                   "webapp.meta semantic=%d controls=%d grids=%d canvases=%d",
+                   semantic, controls, grids, canvases);
+    (void)snprintf(s_events_line, sizeof(s_events_line),
+                   "webapp.events handlers=%d", handlers);
+    if (card != NULL) {
+        (void)snprintf(s_css_line, sizeof(s_css_line),
+                       "webapp.css id=card radius=%u shadow=%d gradient=%d "
+                       "opacity=%u",
+                       (unsigned)card->border_radius, card->shadow_set ? 1 : 0,
+                       card->gradient_set ? 1 : 0, (unsigned)card->opacity);
+    }
 }
 
 /** Read a whole fixture as bytes; bounded so a malformed file cannot exhaust
@@ -261,6 +455,8 @@ int main(int argc, char **argv)
     probe_reset();
     memset(&s_rules, 0, sizeof(s_rules));
     s_canvas_line[0] = '\0';
+    s_meta_line[0] = s_css_line[0] = s_events_line[0] = '\0';
+    s_cascade_line[0] = s_entity_line[0] = '\0';
     js_canvas_clear_registry();
 
     tree = dom_parse(html);
@@ -280,6 +476,9 @@ int main(int argc, char **argv)
     css_compute_styles(tree, &s_rules);
 
     probe_canvas(tree);
+    probe_features(tree);
+    probe_entities();
+    probe_cascade(tree);
 
     memset(&ops, 0, sizeof(ops));
     ops.put_cell = probe_put_cell;
@@ -294,6 +493,11 @@ int main(int argc, char **argv)
     printf("webapp.render.begin fixture=%s cols=%d rows=%d\n",
            name, WEBAPP_COLS, WEBAPP_ROWS);
     print_dump();
+    if (s_meta_line[0] != '\0') printf("%s\n", s_meta_line);
+    if (s_css_line[0] != '\0') printf("%s\n", s_css_line);
+    if (s_events_line[0] != '\0') printf("%s\n", s_events_line);
+    if (s_cascade_line[0] != '\0') printf("%s\n", s_cascade_line);
+    if (s_entity_line[0] != '\0') printf("%s\n", s_entity_line);
     if (s_canvas_line[0] != '\0') printf("%s\n", s_canvas_line);
     printf("webapp.render.end fixture=%s rows=%d runs=%d\n",
            name, WEBAPP_ROWS, WEBAPP_ROWS);

@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=BOUNCE
+[M-RICH-BOUNCE] host language extract
+W=bounce
+1
+[M-RICH-BOUNCE-K] host=p4
+[M-RICH-BOUNCE-K] port=80
+[M-RICH-BOUNCE-F] result=42
+[M-RICH-BOUNCE-S] rev=ecnuob count=1 pad=bounce---- vals=p4,80
+[M-RICH-BOUNCE-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

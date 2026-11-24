@@ -15,6 +15,7 @@ rem  [M-FEAT-*] markers s19_app_features.py asserts.
 rem
 rem  Routines (call with `gosub %APPROOT%/APPLIB.BAT::<name> [args]`):
 rem    :probe          feature exercise, opt-in via P4_APP_FEATURES=1
+rem    :rich           v1.6 language showcase, unconditional, [M-RICH-LIB-*]
 rem    :paths          default APPDRIVE/APPROOT when a script runs outside
 rem                    the shell's .bat launcher (apps use %APPDRIVE% instead
 rem                    of a hardcoded sd:/ so they run from SD or USB)
@@ -42,6 +43,31 @@ call :browser_demo
 call :cookie_show
 echo [M-FEAT-DONE]
 goto :eof
+
+rem ---- v1.6 richer-language showcase ----------------------------------
+rem Deliberately SEPARATE from :probe: the opt-in probe above is unchanged.
+rem Any app can call `gosub %APPROOT%/APPLIB.BAT::rich <TAG>` and get a visible
+rem [M-RICH-LIB-*] proof that the new batch surfaces are live: str, map,
+rem for /K, func/return and %RESULT%. All values are library-scope temporaries.
+:rich
+echo [M-RICH-LIB]
+set RTAG=%1
+if "%RTAG%"=="" set RTAG=APP
+set RWORD=p4mini
+str /rev RWORD RR
+str /count RWORD i RC
+str /pad RWORD 10 RP -
+map /set RCFG host p4
+map /set RCFG port 80
+for /K %%k in (RCFG) do echo [M-RICH-LIB-K] %%k=%%l
+map /values RCFG RV
+func :libscore 7 6
+echo [M-RICH-LIB-F] result=%RESULT%
+echo [M-RICH-LIB-S] %RTAG% rev=%RR% count=%RC% pad=%RP% vals=%RV[0]%,%RV[1]%
+goto :eof
+
+:libscore
+return %1*10+%2
 
 rem ---- app paths -------------------------------------------------------
 rem The shell publishes APPDRIVE ("sd:" or "usb:") and APPROOT (the app's

@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=SYS
+[M-RICH-SYS] host language extract
+W=sysinfo
+2
+[M-RICH-SYS-K] host=p4
+[M-RICH-SYS-K] port=80
+[M-RICH-SYS-F] result=42
+[M-RICH-SYS-S] rev=ofnisys count=2 pad=sysinfo--- vals=p4,80
+[M-RICH-SYS-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

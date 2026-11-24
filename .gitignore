@@ -28,6 +28,10 @@ test/managed_components/
 # only to hold the generated files at run time; every other entry is ignored.
 screenshots/*
 !screenshots/.gitkeep
+# Checked host-browser proofs under screenshots/web are committed documentation,
+# not local hardware scratch (every file carries a HOST PROOF caption).
+!screenshots/web/
+!screenshots/web/*.png
 spikes/*
 !spikes/.gitkeep
 assets_out/

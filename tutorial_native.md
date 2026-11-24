@@ -6,9 +6,17 @@ cannot do: timing-critical loops, large data handling, direct use of a
 component API, or a polished LVGL surface. Native apps are linked into the
 firmware and run through the `applib` runtime and the native-app ABI.
 
-This tutorial covers the ABI and the runtime groups. For the full function
-reference see [`API.md`](API.md) and [`SDK.md`](SDK.md); for the invariants you
-must obey see [`ai-context.md`](ai-context.md).
+This tutorial covers the ABI and the runtime groups (firmware v1.6.0). For the
+full function reference see [`API.md`](API.md) and [`SDK.md`](SDK.md); for the
+invariants you must obey see [`ai-context.md`](ai-context.md).
+
+> **v1.6 signed payloads (additive, opt-in).** A linked native app keeps the
+> `app_register` contract above. The separate `.P4X` capability adds **one**
+> loader (`components/nativeexec`) reached only by the `natrun` `.bat` app;
+> `native info|status|verify <APP>` is read-only diagnostics. No unsigned blob
+> executes, there is no MMU isolation, and the firmware trusts the single
+> `p4sign` key. See [`SECURITY.md`](SECURITY.md) and
+> [`docs/native_packaging.md`](docs/native_packaging.md).
 
 ---
 

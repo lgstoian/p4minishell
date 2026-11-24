@@ -12,7 +12,7 @@ See [`readme.md`](readme.md) for the feature tour and
 
 ---
 
-## Deferred (after v1.5.0)
+## Deferred (after v1.6.0)
 
 ### Tear-free partial presents on the DSI panels
 
@@ -39,16 +39,18 @@ This needs no full-frame refresh (which drops the reference board back to
 about 15 fps) and no second full framebuffer (2.4 MB on the JC1060, 3.7 MB on
 the Tab5); the staging buffer is `width * changed_rows * 2`.
 
-### Opt-in signed native payloads (contract amendment, loader still deferred)
+### Opt-in signed native payloads (one loader landed, board proof open)
 
-The app contract now admits one additive capability ([`ABI.md`](ABI.md) §1 and
+The app contract admits one additive capability ([`ABI.md`](ABI.md) §1 and
 §4.1): a `.bat` shim may launch the reserved `NATIVE/<APP>.P4X` blob when it
 carries a signed envelope and passes every trust gate. No ABI tag bump
 (`applib-1` stays), no new executable format, and no removal of batch, hybrid,
-or webapp apps. The format-only core `components/nativepay` (parse, bounds,
-CRC, hook-based SHA-256/ECDSA) and its on-target unit tests are in tree; the
-loader and its launch surface are **not** implemented and remain a
-hardware-verified step before any release claim.
+or webapp apps. v1.6.0 added the **one** loader (`components/nativeexec`) and
+its two front doors (`native info|status|verify` diagnostics and the `natrun`
+`.bat` app), corrected the canonical signed-byte stream, and kept the pure
+verifier (`components/nativepay`) free of file I/O or control transfer. On-device
+execution remains a hardware-verified step: no board proof is claimed for this
+release candidate.
 
 - **Workflow.** `payload=NATIVE/<APP>.P4X` is additive APPINFO metadata; the
   shim is still the only front door. Pure native = batch shim hands off to the
@@ -307,6 +309,31 @@ documented path), and a pack picker UI. `s24` documents a stale-surface quirk
 on long sessions that needs a power-cycle; investigate when the TUI surface
 is next touched.
 
+### 17. Additive expansion, one loader, and host proofs (v1.6.0)
+
+**Status: board-free release candidate.** Nothing in this milestone was
+verified on hardware; host/static gates are pre-flight only.
+
+- **One signed native path:** `nativepay` (pure verifier) + `nativeexec` (one
+  loader) + `native_commands.c` (the single `p4sign` key and mbedTLS/API/map
+  hooks). `native info|status|verify` is read-only; `natrun` is the only `.bat`
+  launch app. No second loader, ELF parser, relocator, MMU claim or key store.
+- **Gfx toolkit:** coverage AA (`lineaa`/`circleaa`/`rectaa`), `gradient`,
+  alpha `composite` and `blitmany /a:` atlas stamps on the one RGB565 core.
+- **Batch:** `func`/`return <expr>`/`%RESULT%`, `for /K`, `trap /on`,
+  `str /rev|count|pad`, `map /values|incr` — additive to every existing verb.
+- **HTML5/CSS/JS, TUI and modals:** semantic forms/grid/table colspan, CSS
+  units/selectors/gradients/opacity, JS timers/events/console and canvas
+  gradients/shadows; one double-buffered TUI frame with widgets/focus/layout/
+  scroll/route; `mpick`/`mprog`/`mformx`/`mstack` on the shared modal runtime;
+  `webapp event`/`tick` on the one DOM/JS engine.
+- **Proofs:** host gates for batch, webapp, gfx, tui, modal and **33 enriched
+  apps** (`tools/host_apps_gate.py --check`: 363 host assertions, 40 honest
+  hardware SKIPs, 7 canaries). All pre-existing `[M-*]` markers preserved;
+  `[M-RICH-*]` lines are additive. Host-generated webapp/TUI/gfx proofs are
+  labelled as such. **Open:** the new transcripts need a board rebaseline of
+  `tools/appdiff/baseline/*.transcript.txt`; no hardware sign-off is claimed.
+
 ## Part 2 — Where we are going
 
 Realistic directions grouped by device class. Priorities are suggestions, not
@@ -320,7 +347,9 @@ commitments.
 | Build-tree hygiene | Release-ready tree | Done: `build-tab5/` + `test/build-tab5/` untracked from git (were committed before the ignore rules); `git ls-files` shows no build output. See [`release.md`](release.md) §0 |
 | Single capability-query style | One way to ask | Done: runtime code queries `board_caps_*` (battery ADC/INA226, RTC BSP-I2C, keyboard RGB routing); preprocessor `#if BOARD_CFG` remains only where required (macro definitions, includes, table entries, value defaults). Both boards + `test/` build clean |
 | CI board auto-discovery | Scaling | Done: `build.yml` discovers `boards/*/` for the matrix and completeness lint — adding a profile needs no workflow edit |
-| Hardware-free host unit lane | PR-time logic coverage | Done: `test/host/` on the IDF `linux` target, **285 cases** (last run), CI `host-unit` job; manifest + generator + prelude + guard classification. Hardware sign-off unchanged ([`harness.md`](harness.md) 2.2) |
+| Hardware-free host unit lane | PR-time logic coverage | Done: `test/host/` on the IDF `linux` target, **375 generated cases** (manifest count; refresh the last-run count), CI `host-unit` job; manifest + generator + prelude + guard classification. Hardware sign-off unchanged ([`harness.md`](harness.md) 2.2) |
+| Host gate ladder (v1.6) | PR-time surface coverage | Done: batch, webapp, tui, modal, gfx wiring, native payload checker and the 33-app host proof gate; all compile/drive shipped code, honest SKIPs for hardware surfaces, never a board sign-off ([`harness.md`](harness.md) 2.2) |
+| App transcript rebaseline | Hardware parity | Open: `[M-RICH-*]` lines changed all 33 apps, so `tools/appdiff/baseline/*.transcript.txt` needs a board rebaseline before hardware parity can be green |
 | Remaining hardware-coupled models | More host coverage | Open: `batch_expr` needs `shell_sd_begin/end` and `svc` needs `storage_ini_file_foreach` (a file-I/O seam); `tui` is NO-GO - the selftest needs real `lv_font_t` metrics and `tui_font_cell_t` embeds an LVGL pointer. LVGL-on-host is rejected (esp_lcd/esp_vfs_fat) |
 | Per-board release artifacts | Shippable images | Done: `make_release.py bins` verified for both boards (`p4minishell-<board>.bin` merge; `release/` stays ignored) |
 | Two-board stability gate | Exit criterion | Closed: `bugs.md` F27 (transient Tab5 crash under long mixed sweeps) must close with three clean full sweeps on both boards + a `dogfood` soak before this chapter is declared complete |

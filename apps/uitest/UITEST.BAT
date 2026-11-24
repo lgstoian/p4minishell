@@ -23,5 +23,14 @@ ui hit 500 20 /v:UIHIT
 echo hit at 500,20: %UIHIT%
 ui tap 500 20
 ui state
+rem ---- v1.6 TUI layout/focus/route showcase -----------------------------
+rem [M-RICH-UITEST] drives the new focus/layout/scroll/route surfaces, all
+rem read-only geometry here, so the transcript is an honest capability proof.
+echo [M-RICH-UITEST] focus+layout+scroll+route
+tui focus next
+tui layout row 1 1 80 4 2
+tui scroll richlog 4 12 1
+tui route j
+tui frame status
 echo [M-UITEST-DONE]
 return

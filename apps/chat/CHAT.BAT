@@ -21,6 +21,27 @@ setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-CHAT]
 title "Chat"
+gosub :rich_chat
+goto :menu
+
+rem ---- v1.6 richer-language showcase -----------------------------------
+rem [M-RICH-CHAT]: str /count|/pad, map /set|/incr + for /K and func/return
+rem preview the message housekeeping without touching the live chat session.
+:rich_chat
+echo [M-RICH-CHAT] message language tour
+set MSG=p4
+str /count MSG p CP
+str /pad MSG 8 MP .
+map /set CHATSEQ sent 0
+map /incr CHATSEQ sent 1
+for /K %%k in (CHATSEQ) do echo [M-RICH-CHAT-K] %%k=%%l
+func :chatseq 40 2
+echo [M-RICH-CHAT-F] seq=%RESULT%
+echo [M-RICH-CHAT-S] p=%CP% pad=%MP%
+return
+
+:chatseq
+return %1+%2
 
 :menu
 draw clear screen
@@ -45,6 +66,7 @@ set /a R13=7+6*%CS% > NUL
 set /a R14=7+7*%CS% > NUL
 set /a R15=7+8*%CS% > NUL
 gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "P4 CHAT 🎵"
+draw run 54 2 "[M-RICH-CHAT] seq+str" /fg 11 /bg 0
 draw text 24 2 "Board-to-board chat over the local link" 14
 gosub %APPROOT%/APPLIB.BAT::panel 5 13 single "Menu"
 draw text 5 %R7% "1  Host      start/stop the SoftAP host"

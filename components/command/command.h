@@ -357,6 +357,10 @@ void shell_command_browse(int argc, char **argv);
 void shell_command_dialog(int argc, char **argv);
 void shell_command_list(int argc, char **argv);
 void shell_command_ask(int argc, char **argv);
+bool shell_command_mpick(int argc, char **argv);
+bool shell_command_mprog(int argc, char **argv);
+bool shell_command_mformx(int argc, char **argv);
+bool shell_command_mstack(int argc, char **argv);
 void shell_command_form(int argc, char **argv);
 void shell_command_screen(int argc, char **argv);   /* screen run|info <file.frm> | flow <file.flow> */
 /**
@@ -1022,6 +1026,15 @@ int shell_command_math(int argc, char **argv);
  * ERRORLEVEL 0 ok / 1 some failure / 2 usage.
  */
 void shell_command_pkg(int argc, char **argv);
+
+/** `native info|status|verify <APP>` - inspect a signed NATIVE/<APP>.P4X
+ *  envelope without mapping or executing it. One diagnostics front door. */
+void shell_command_native(int argc, char **argv);
+
+/** Install the single signed-payload launcher app (native app `natrun`) and
+ *  initialise the crypto/map hooks from the existing p4sign trust store. */
+bool native_launcher_register(void);
+int native_commands_init(void);
 
 /**
  * Install a bundle by app name (pkg_commands.c). The `store` verb calls this

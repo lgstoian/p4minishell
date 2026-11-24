@@ -73,6 +73,10 @@ set(HOST_PROD_SRCS
     # Emoji core: pure detection + the retro DOS fallback map (no LVGL,
     # no storage). The pack loader and image decode are on-target only.
     "${HOST_COMPONENTS}/font/emoji_core.c"
+    # Opt-in signed native payload envelope + the one pure loader plan core.
+    # No filesystem, no ELF and no control transfer on the host lane.
+    "${HOST_COMPONENTS}/nativepay/native_payload.c"
+    "${HOST_COMPONENTS}/nativeexec/native_exec.c"
     # Host-lane backing for two storage-backed spellchecker calls (the lane
     # has no SD card), plus the batch I/O bridge. Never in a firmware image.
     "host_spell_storage.c"
@@ -104,6 +108,8 @@ set(HOST_TEST_SRCS
     "${HOST_TEST_DIR}/test_macro.c"
     "${HOST_TEST_DIR}/test_error_strings.c"
     "${HOST_TEST_DIR}/test_trap.c"
+    "${HOST_TEST_DIR}/test_native_payload.c"
+    "${HOST_TEST_DIR}/test_native_exec.c"
     "${HOST_TEST_DIR}/test_shell_variables.c"
     "${HOST_TEST_DIR}/test_shell_pipeline.c"
     "${HOST_TEST_DIR}/test_svc.c"
@@ -137,6 +143,8 @@ idf_component_register(
         "${HOST_COMPONENTS}/tui"
         "${HOST_COMPONENTS}/usb"
         "${HOST_COMPONENTS}/jsengine/include"
+        "${HOST_COMPONENTS}/nativepay"
+        "${HOST_COMPONENTS}/nativeexec"
     REQUIRES
         unity
         strutil
@@ -207,6 +215,8 @@ target_include_directories(host_batch_run.elf PRIVATE
     "${HOST_COMPONENTS}/p4heap/include"
     "${HOST_COMPONENTS}/strutil/include"
     "${HOST_COMPONENTS}/json/include"
+    "${HOST_COMPONENTS}/nativepay"
+    "${HOST_COMPONENTS}/nativeexec"
     "${HOST_COMPONENTS}/markdown"
     "${HOST_COMPONENTS}/ansi"
     "${HOST_COMPONENTS}/gfx"

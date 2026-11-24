@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=PICS
+[M-RICH-PICS] host language extract
+W=picture
+1
+[M-RICH-PICS-K] host=p4
+[M-RICH-PICS-K] port=80
+[M-RICH-PICS-F] result=42
+[M-RICH-PICS-S] rev=erutcip count=1 pad=picture--- vals=p4,80
+[M-RICH-PICS-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

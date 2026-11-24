@@ -1,0 +1,33 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: 2026 Stoian Alexandru -->
+<!-- SPDX-License-Identifier: MIT -->
+<!--
+  Deterministic host fixture for bounded parse recovery: implied end tags for
+  <p>/<li>/<td>, a duplicate attribute (first wins), and a source that ends
+  inside a quoted attribute. The chunk-fed recovery buffer closes the dangling
+  construct in PSRAM and feeds the ONE parser; no second tree builder exists.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Parse recovery host proof</title>
+<style>
+  body { color: #aaaaaa; }
+  h1 { color: #00ffff; }
+  p { color: #55ff55; }
+  li { color: #ffff55; }
+  td { color: #ff5555; }
+  #dup { color: #ff00ff; }
+</style>
+</head>
+<body>
+<main>
+<h1>Truncated markup recovers</h1>
+<p>First paragraph<p>Second paragraph
+<ul><li>alpha<li>beta</ul>
+<div id="dup" id="ignored">Duplicate id keeps first</div>
+<table><tr><td>left<td>right</tr></table>
+<p title="dangling attribute value
+</main>
+</body>
+</html>

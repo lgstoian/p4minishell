@@ -101,6 +101,25 @@ extern void test_trap_raise_publishes_ordinary_variables(void);
 extern void test_trap_fire_is_one_shot(void);
 extern void test_trap_ignores_success(void);
 
+/* --- test_native_payload.c ----------------------------------- */
+extern void test_native_payload_header_parse(void);
+extern void test_native_payload_bounds_rejection(void);
+extern void test_native_payload_arch_abi_mismatch(void);
+extern void test_native_payload_truncated_payload(void);
+extern void test_native_payload_no_verifier_degradation(void);
+extern void test_native_payload_crc_rejection(void);
+extern void test_native_payload_verifier_queries(void);
+extern void test_native_payload_full_verify_with_hooks(void);
+extern void test_native_payload_hash_and_signature_rejection(void);
+extern void test_native_payload_reserved_and_api_set(void);
+
+/* --- test_native_exec.c -------------------------------------- */
+extern void test_native_exec_export_table_parse(void);
+extern void test_native_exec_export_table_rejects(void);
+extern void test_native_exec_api_bits(void);
+extern void test_native_exec_plan_header_and_abi_verdicts(void);
+extern void test_native_exec_inspect_full_verify(void);
+
 /* --- test_shell_variables.c ---------------------------------- */
 extern void test_variable_expansion_env_var(void);
 extern void test_variable_expansion_empty_name(void);
@@ -282,6 +301,13 @@ extern void test_gfx_view_line_draws(void);
 extern void test_gfx_view_nice_step(void);
 extern void test_gfx_frame_stats_intervals(void);
 extern void test_gfx_frame_stats_dropped(void);
+extern void test_gfx_blend_565(void);
+extern void test_gfx_line_aa(void);
+extern void test_gfx_circle_aa(void);
+extern void test_gfx_rect_aa(void);
+extern void test_gfx_gradient(void);
+extern void test_gfx_blit_atlas(void);
+extern void test_gfx_composite(void);
 
 /* --- test_header.c ------------------------------------------- */
 extern void test_header_layout_all_full(void);
@@ -349,6 +375,12 @@ extern void test_dom_render_text_alpha_composited(void);
 extern void test_html_long_attribute_does_not_leak(void);
 extern void test_dom_raw_text_script_style(void);
 extern void test_css_comments_are_skipped(void);
+extern void test_dom_html5_form_controls(void);
+extern void test_dom_html5_semantic_and_grid(void);
+extern void test_css_visual_subset(void);
+extern void test_css_extended_selectors(void);
+extern void test_dom_event_dispatch_hook(void);
+extern void test_html_reader_form_controls(void);
 
 /* --- test_json.c --------------------------------------------- */
 extern void test_json_validate_ok(void);
@@ -450,6 +482,8 @@ extern void test_js_canvas_text_and_measure(void);
 extern void test_js_canvas_resize_resets_bitmap(void);
 extern void test_js_canvas_snapshot_downsample(void);
 extern void test_js_canvas_parse_color(void);
+extern void test_js_canvas_linear_gradient_rect(void);
+extern void test_js_canvas_rounded_rect_shadow(void);
 
 void app_main(void)
 {
@@ -524,6 +558,25 @@ void app_main(void)
     RUN_TEST(test_trap_raise_publishes_ordinary_variables);
     RUN_TEST(test_trap_fire_is_one_shot);
     RUN_TEST(test_trap_ignores_success);
+
+    /* test_native_payload.c */
+    RUN_TEST(test_native_payload_header_parse);
+    RUN_TEST(test_native_payload_bounds_rejection);
+    RUN_TEST(test_native_payload_arch_abi_mismatch);
+    RUN_TEST(test_native_payload_truncated_payload);
+    RUN_TEST(test_native_payload_no_verifier_degradation);
+    RUN_TEST(test_native_payload_crc_rejection);
+    RUN_TEST(test_native_payload_verifier_queries);
+    RUN_TEST(test_native_payload_full_verify_with_hooks);
+    RUN_TEST(test_native_payload_hash_and_signature_rejection);
+    RUN_TEST(test_native_payload_reserved_and_api_set);
+
+    /* test_native_exec.c */
+    RUN_TEST(test_native_exec_export_table_parse);
+    RUN_TEST(test_native_exec_export_table_rejects);
+    RUN_TEST(test_native_exec_api_bits);
+    RUN_TEST(test_native_exec_plan_header_and_abi_verdicts);
+    RUN_TEST(test_native_exec_inspect_full_verify);
 
     /* test_shell_variables.c */
     RUN_TEST(test_variable_expansion_env_var);
@@ -706,6 +759,13 @@ void app_main(void)
     RUN_TEST(test_gfx_view_nice_step);
     RUN_TEST(test_gfx_frame_stats_intervals);
     RUN_TEST(test_gfx_frame_stats_dropped);
+    RUN_TEST(test_gfx_blend_565);
+    RUN_TEST(test_gfx_line_aa);
+    RUN_TEST(test_gfx_circle_aa);
+    RUN_TEST(test_gfx_rect_aa);
+    RUN_TEST(test_gfx_gradient);
+    RUN_TEST(test_gfx_blit_atlas);
+    RUN_TEST(test_gfx_composite);
 
     /* test_header.c */
     RUN_TEST(test_header_layout_all_full);
@@ -773,6 +833,12 @@ void app_main(void)
     RUN_TEST(test_html_long_attribute_does_not_leak);
     RUN_TEST(test_dom_raw_text_script_style);
     RUN_TEST(test_css_comments_are_skipped);
+    RUN_TEST(test_dom_html5_form_controls);
+    RUN_TEST(test_dom_html5_semantic_and_grid);
+    RUN_TEST(test_css_visual_subset);
+    RUN_TEST(test_css_extended_selectors);
+    RUN_TEST(test_dom_event_dispatch_hook);
+    RUN_TEST(test_html_reader_form_controls);
 
     /* test_json.c */
     RUN_TEST(test_json_validate_ok);
@@ -874,6 +940,8 @@ void app_main(void)
     RUN_TEST(test_js_canvas_resize_resets_bitmap);
     RUN_TEST(test_js_canvas_snapshot_downsample);
     RUN_TEST(test_js_canvas_parse_color);
+    RUN_TEST(test_js_canvas_linear_gradient_rect);
+    RUN_TEST(test_js_canvas_rounded_rect_shadow);
 
     failures = UNITY_END();
 

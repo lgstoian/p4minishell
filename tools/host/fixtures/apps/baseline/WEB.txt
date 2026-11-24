@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=WEB
+[M-RICH-WEB] host language extract
+W=browser
+2
+[M-RICH-WEB-K] host=p4
+[M-RICH-WEB-K] port=80
+[M-RICH-WEB-F] result=42
+[M-RICH-WEB-S] rev=resworb count=2 pad=browser--- vals=p4,80
+[M-RICH-WEB-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

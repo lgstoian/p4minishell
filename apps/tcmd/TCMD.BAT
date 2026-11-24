@@ -18,6 +18,7 @@ setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-TCMD]
 title "Commander"
+gosub :rich_tcmd
 set LD=/
 set RD=/APPS
 set LCUR=1
@@ -46,6 +47,26 @@ rem Full screen: reclaim the header and on-screen keyboard rows so the
 rem 80x25 manager grid is fully visible. Restored on exit (`:end`).
 draw fullscreen on
 goto refresh
+
+rem ---- v1.6 richer-language showcase -----------------------------------
+rem [M-RICH-TCMD] exercises map /set|/values, for /K, str /count|/pad and
+rem func/return with the real batch interpreter; pane state is not altered.
+:rich_tcmd
+echo [M-RICH-TCMD] language tour
+map /set PANES left /
+map /set PANES right /APPS
+for /K %%k in (PANES) do echo [M-RICH-TCMD-K] %%k=%%l
+map /values PANES PV
+set LBL=commander
+str /count LBL m CM
+str /pad LBL 14 PL .
+func :tcolsum 39 2
+echo [M-RICH-TCMD-F] width=%RESULT%
+echo [M-RICH-TCMD-S] panes=%PV[0]%,%PV[1]% m=%CM% pad=%PL%
+return
+
+:tcolsum
+return %1+%2
 
 :refresh
 rem Relist a pane only when its directory changed since the last frame:
@@ -85,6 +106,8 @@ if %PA%==L set LAC=15
 if %PA%==R set RAC=15
 rem Frame.
 gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "Commander ★"
+rem [M-RICH-TCMD] styled status uses the v1.6 `draw run /fg /bg` colour path.
+draw run 40 2 "[M-RICH-TCMD] map/forK/str/func" /fg 11 /bg 1
 draw text 3 2 "dual-pane commander  (%APPNAME% on %APPDRIVE%)"
 draw text %HX% 2 "1:/ 2:/APPS"
 draw list 1 4 %LW% %LH% %APPDRIVE%/tmp/_LT.txt %LAC% 16 /top:%LTOP% /cursor:%LCUR% /title:%LD%

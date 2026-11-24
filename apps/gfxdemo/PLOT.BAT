@@ -13,6 +13,12 @@ calc /rad
 gfx init 320 200
 if errorlevel 1 goto :nofx
 gfx clear 0
+rem [M-RICH-PLOT] v1.6 canvas tour: a vertical gradient backdrop under the
+rem plot plus a func/return-computed scale (%%RESULT%%).
+echo [M-RICH-PLOT] gradient backdrop + computed scale
+gfx gradient 0 0 320 200 0x000000 0x101820 v
+func :plotscale 6 8
+echo [M-RICH-PLOT-F] scale=%RESULT%
 rem Nudge the x window just past 2 full periods: at exactly +/-6.28 the
 rem sine endpoints land on the rightmost/leftmost tick labels ("6"/"-6")
 rem and overdraw them. Ending at +/-6.8 lifts the endpoints off the axis.
@@ -33,6 +39,9 @@ gfx save %APPDRIVE%/PLOT.BMP
 gfx close
 echo [M-PLOT-DONE]
 return
+
+:plotscale
+return %1*%2
 
 :scatter
 rem %1 = 1..48: x sweeps -6..6 in 0.25 steps, y rides around sin(x).

@@ -369,15 +369,35 @@ def scan_python_text(text, label):
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "check" and len(node.args) >= 2):
+                and len(node.args) >= 2):
             continue
-        arg = node.args[1]
-        if _const(arg) in (True, 1):
-            continue  # already reported by the literal regex above
-        if _computed_tautology(arg):
-            seg = ast.get_source_segment(text, arg) or ast.dump(arg)
-            errors.append("%s: computed tautology in .check %r"
-                          % (label, seg[:100]))
+        attr = node.func.attr
+        if attr == "check":
+            arg = node.args[1]
+            if _const(arg) in (True, 1):
+                continue  # already reported by the literal regex above
+            # A literal True would green-wash; a literal False is a deliberate,
+            # loud failure record used by existing error paths, so it stays.
+            const = _const(arg)
+            if const is not None and bool(const):
+                seg = ast.get_source_segment(text, arg) or ast.dump(arg)
+                errors.append("%s: constant condition in .check %r (can never "
+                              "report a broken product)" % (label, seg[:100]))
+            elif _computed_tautology(arg):
+                seg = ast.get_source_segment(text, arg) or ast.dump(arg)
+                errors.append("%s: computed tautology in .check %r"
+                              % (label, seg[:100]))
+        elif attr == "expect" and len(node.args) >= 3:
+            # c.expect(name, x, x) can never fail, whatever x evaluates to.
+            if ast.dump(node.args[1]) == ast.dump(node.args[2]):
+                seg = ast.get_source_segment(text, node) or ast.dump(node)
+                errors.append("%s: tautological expect (needle == text) %r"
+                              % (label, seg[:100]))
+        elif attr == "equals" and len(node.args) >= 3:
+            if ast.dump(node.args[1]) == ast.dump(node.args[2]):
+                seg = ast.get_source_segment(text, node) or ast.dump(node)
+                errors.append("%s: tautological equals (got == want) %r"
+                              % (label, seg[:100]))
     return errors, warnings
 
 
@@ -472,6 +492,14 @@ def self_test():
          'c.check("n", ok or True)', "computed tautology"),
         ("constant comparison rejected",
          'c.check("n", 2 > 1)', "computed tautology"),
+        ("truthy string condition rejected",
+         'c.check("n", "yes")', "constant condition"),
+        ("truthy numeric condition rejected",
+         'c.check("n", 2)', "constant condition"),
+        ("self-comparing expect rejected",
+         'c.expect("n", text, text)', "tautological expect"),
+        ("self-comparing equals rejected",
+         'c.equals("n", value, value)', "tautological equals"),
         ("tautological assert rejected",
          'assert True', "tautological assert"),
     ]

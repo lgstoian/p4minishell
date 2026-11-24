@@ -7,8 +7,9 @@ every detail. This file is deliberately **views, not details**: it never
 restates a module's feature list, a C prototype, a command's syntax, or a
 config value. Those live in the docs named below.
 
-- **Version:** v1.5.0 · **Status:** board-free release candidate (no hardware
-  sign-off for this version; the host gates are pre-flight only).
+- **Version:** v1.6.0 · **Status:** board-free release candidate (no hardware
+  sign-off for this version; the host gates are pre-flight only). This is an
+  **additive expansion**: no existing feature was removed or replaced.
 
 | Question | Owning document |
 |----------|-----------------|
@@ -67,7 +68,22 @@ no socket and no parser. The **browser** uses one DOM renderer
 images, and in-page JS are layered on the existing DOM/CSS/gfx/jsengine modules.
 The **native payload core** (`components/nativepay/`) is a format-only leaf:
 a `.bat` shim is its sole front door, one loader path consumes its verdict,
-and no second runtime or package format is introduced (§2.4).
+and no second runtime or package format is introduced (§2.4). The **loader**
+(`components/nativeexec/`) is that one path: a fixed-ABI, position-independent
+blob with an export table and a versioned API struct supplied only by the boot
+provider. It parses no ELF, relocates nothing, creates no MMU address space and
+offers no second dispatcher.
+
+**v1.6 rendering/event seams.** The gfx toolkit, double-buffered TUI, modal
+surfaces and webapp facade are additive layers over the existing engines:
+`components/gfx/` owns the one RGB565 raster core (AA spans, gradients, atlas
+and alpha composite are new primitives there); `components/tui/tui_frame.h`
+owns the one cell renderer, dirty-rect diff and image sampler, and
+`components/tui/tui_widgets.h` owns focus/layout/scroll/routing over the
+existing pane/modal/event state; `components/command/modal_commands.c`
+(`mpick`/`mprog`/`mformx`/`mstack`) reuses the one modal runtime; and
+`webapp` delegates every verb to the existing HTML/CSS/DOM/JS engine. All new
+surface state stays behind those seams (ADR-15..17).
 
 **Emoji, colour and alpha (v1.4.3).** `components/font/emoji_core.c` is the one
 emoji decision point (retro DOS/CP437 fallback map); the TUI/HTML text path and
@@ -203,8 +219,15 @@ signed NATIVE/<APP>.P4X envelope        (one reserved blob path, no new format)
   re-expressed with existing facilities (the `start` pool, env overlays,
   `himem` ownership, shared modal/browser surfaces); design credit only, no
   second scheduler or app manager. See [`licence.md`](licence.md).
-- The loader and its launch surface are a later, hardware-verified step; only
-  the format/verification core exists today. Contract: [`ABI.md`](ABI.md) §4.1;
+- As of v1.6.0 the one loader and both front doors exist: `native
+  info|status|verify <APP>` inspects without mapping or calling anything, and
+  `natrun <APP> [args]` (registered via `app_register`) is the only launch app,
+  reachable from an ordinary `.bat` shim. Both funnel through `native_run_app`
+  and the single `native_exec_launch()` path; verification happens exactly once
+  before mapping. There is still no SD code execution for ordinary apps, no
+  MMU isolation and no second key: the verifier uses the one `p4sign` NVS key.
+  Board execution remains a hardware-verified step; no on-device launch is
+  claimed for this release candidate. Contract: [`ABI.md`](ABI.md) §4.1;
   packaging: [`docs/native_packaging.md`](docs/native_packaging.md) §2.1.
 
 ---
@@ -472,3 +495,27 @@ decision is enforced.
   removes no existing feature. Trust gates are unchanged and crypto is an
   installed hook seam with explicit degradation. Enforced by the pure core
   (`components/nativepay/`) and specified in [`ABI.md`](ABI.md) §1/§4.1/§5.
+- **ADR-15 (v1.6) - One native loader path.** `components/nativeexec` is the
+  only component that maps and calls a verified payload. `nativepay` is a pure
+  verifier, `native_commands.c` installs the single `p4sign` key plus the
+  mbedTLS/API/map hooks, and both front doors (`native` diagnostics, `natrun`
+  app) share one `native_run_app` core. No second loader, ELF parser,
+  relocator, address space, key store or package format. Enforced in
+  `components/nativeexec/`, `components/command/native_commands.c` and
+  [`SECURITY.md`](SECURITY.md).
+- **ADR-16 (v1.6) - One renderer.** HTML/CSS/canvas pages use the single
+  DOM/CSS/canvas engine; TUI scenes use the one cell renderer and sampler in
+  `tui_frame.h` and the one DOS palette; gfx primitives live in the one RGB565
+  raster core; colours come from the one CSS colour parser. `webapp`,
+  `draw run`, `tui frame` and the new modal verbs are facades over those
+  engines. Host render gates compile the same production code, never a
+  parallel implementation. Enforced in `components/markdown/`,
+  `components/jsengine/`, `components/gfx/`, `components/tui/` and
+  [`ai-context.md`](ai-context.md) §Hard Rules.
+- **ADR-17 (v1.6) - One event model.** Key chords, taps, focus changes, modal
+  sessions, batch `trap` events and webapp `event`/`tick` all route through the
+  existing modal chord resolver, hotspot table, event queue and pending-goto
+  slot. New surfaces register with those seams; none creates a private input
+  loop, mode stack, notification loop or dispatcher. Enforced in
+  `components/modal/`, `components/tui/tui_widgets.h`,
+  `components/command/webapp_commands.c` and `components/batch/batch_trap.c`.

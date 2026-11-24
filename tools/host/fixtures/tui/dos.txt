@@ -1,0 +1,10 @@
+# Default DOS look: bare indices pass through, no colours are re-mapped.
+scene dos
+cols 10
+rows 3
+set 1 1 dos:7 Hello
+set 7 1 dos:12 DOS
+set 1 2 dos:2 Green
+set 6 2 dos:16 Plain
+set 1 3 dos:15 Bright
+render

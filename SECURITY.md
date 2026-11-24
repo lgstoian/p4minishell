@@ -4,7 +4,7 @@ How P4MiniShell protects secrets, what the device lock actually enforces,
 and what is still missing. Read this before exposing a device to an
 untrusted network.
 
-- **Version:** v1.5.0 · **License:** MIT (see [`licence.md`](licence.md))
+- **Version:** v1.6.0 · **License:** MIT (see [`licence.md`](licence.md))
 - Related docs: [`command.md`](command.md) (`security`, `crypt`, `httpd`,
   `pkg`), [`ABI.md`](ABI.md) (package signing), [`readme.md`](readme.md),
   [`roadmap.md`](roadmap.md) (platform/security row).
@@ -114,24 +114,43 @@ report. There is no bug-bounty program.
   install`); CRC-32 is integrity only, never authenticity. A missing verifier
   or trusted key is an explicit non-success verdict, never an implicit pass.
   There is no revocation list or online trust ([`ABI.md`](ABI.md) §4.1).
+- **Canonical bytes are the signed bytes.** v1.6 corrected the digest path:
+  SHA-256 is computed over the exact ABI §4.1 canonical byte ranges and the
+  signature is verified against that pre-computed digest (raw `r||s`, raw
+  `X||Y`, P-256), never against a reassembled buffer. CRC-32 is integrity only
+  and is attacker-recomputable; it never replaces the signature. The loader
+  verifies exactly once, after which it checks the export table and the
+  required API mask before mapping anything.
 - **No unsigned execution.** Unsigned `.P4X`/`.bin` files and any blob failing
-  the CRC, SHA-256, arch/ABI-tag, size or signature gates stay inert data. The
-  format-only core (`components/nativepay`) parses a memory buffer; it never
-  reads a file or transfers control. The loader is **not** implemented in
-  v1.5.0, so no payload executes today; when it lands it will be one loader
-  path, not a second runtime (`docs/native_packaging.md` §2.1).
+  the CRC, SHA-256, arch/ABI-tag, export-table, required-API, size or signature
+  gates stay inert data. The verifier (`components/nativepay`) parses a memory
+  buffer; it never reads a file, maps memory or transfers control. v1.6 adds
+  the **one** loader (`components/nativeexec`) and the `natrun` launch app; it
+  is still a single path, not a second runtime (`docs/native_packaging.md` §2.1).
+  A missing verifier, key, API provider or map hook is an explicit non-success
+  verdict — never an implicit pass.
+- **Single key, no revocation.** The firmware trusts exactly one raw P-256
+  public key in the `p4sign` NVS namespace, installed with `pkg key install`,
+  shared with package manifest verification. There is no second key store, no
+  embedded key and no revocation list: rotating the key means re-signing and
+  reinstalling it. Anyone with USB serial control can replace the key (that is
+  full control by design).
 - **No MMU isolation.** There is no `dlopen`, relocator, per-app address space
-  or memory isolation: a verified payload would run in the shell's single
-  address space with the firmware's privileges. Treat signed payload code as
-  trusted code, not as a sandbox boundary.
-- **`.bat` shim is the only front door.** A payload is launched only by the
-  app's ordinary `.bat` shim through the one loader path (pure native, or a
-  hybrid of batch setup + native payload + webapp page). There is no new verb,
-  no direct launch from a card path, and no bypass of the install-time
-  manifest CRC/`SIGN` checks.
-- **Board-free proof status.** The verifier has on-target unit cases
-  (`test/main/test_native_payload.c`); no on-device launch or hardware run is
-  claimed for this v1.5.0 release candidate.
+  or memory isolation: a verified payload runs in the shell's single address
+  space with the firmware's privileges. The map hook requests executable heap
+  and fences the instruction cache; it is a capability request, **not** an MMU
+  mapping. Treat signed payload code as trusted code, not as a sandbox boundary.
+- **`.bat` shim is the only front door.** `native info|status|verify <APP>` is
+  read-only diagnostics; `natrun <APP> [args]` is the only launch app and is
+  reached from an ordinary `.bat` shim (pure native, or a hybrid of batch setup
+  + native payload + webapp page). There is no direct launch from a card path,
+  no new executable format for ordinary apps, and no bypass of the install-time
+  manifest CRC/`SIGN` checks. The app name is restricted to `[A-Za-z0-9_.-]+`.
+- **Board-free proof status.** The verifier and loader have on-target unit cases
+  (`test/main/test_native_payload.c`, `test/main/test_native_exec.c`) and a
+  host checker red canary over test-only keys in `tools/host/fixtures/native/`;
+  no on-device launch or hardware run is claimed for this v1.6.0 release
+  candidate. Test keys are never installed on a board.
 
 ## HTTP file server (`httpd`)
 
@@ -202,7 +221,7 @@ and keep their contract; prefer `link` for anything destructive.
   jobs run, and restores Wi-Fi afterwards.
 - SoftAP is station-only except the captive portal (`wifi setup on`, open AP
   `P4MiniShell-Setup` by config, TX-capped) and **board-to-board chat** (`chat host on`, open AP `P4MiniShell-Chat` by config, TX-capped); there is no open AP by default.
-- Secure boot / flash encryption: no provisioned profile ships in v1.5.0
+- Secure boot / flash encryption: no provisioned profile ships in v1.6.0
   (see `roadmap.md` platform row). Enable them via your own ESP-IDF signing
   flow if your deployment needs them.
 
@@ -244,9 +263,11 @@ and keep their contract; prefer `link` for anything destructive.
   remote content and must be treated as untrusted. `P4_CONFIG_BROWSER_JS=0`
   disables execution entirely.
 - **The `webapp` facade adds no second trust boundary.** `webapp open`, `dump`,
-  `css` and `js` delegate to the existing `html` / `tui dump` / `browser css`
-  / `js eval` surfaces, so page JavaScript runs in that same QuickJS sandbox
-  with the same limits. `apps/webapp/WEBAPP.BAT` opens the local
+  `css`, `js`, `event` and `tick` delegate to the existing `html` / `tui dump` /
+  `browser css` / `js eval` surfaces and the page engine's one DOM event
+  dispatcher and JS timer queue, so page JavaScript — including handlers fired
+  by `webapp event` and timers advanced by `webapp tick` — runs in that same
+  QuickJS sandbox with the same limits. `apps/webapp/WEBAPP.BAT` opens the local
   `%APPDRIVE%/WEB/INDEX.HTML`; a page reached through `webapp open <url>` is
   remote content and untrusted. `tools/host_webapp_gate.py` is a host render
   pre-check, not a security boundary or a hardware proof.

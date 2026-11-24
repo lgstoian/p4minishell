@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=ELITE
+[M-RICH-ELITE] host language extract
+W=trader
+2
+[M-RICH-ELITE-K] host=p4
+[M-RICH-ELITE-K] port=80
+[M-RICH-ELITE-F] result=42
+[M-RICH-ELITE-S] rev=redart count=2 pad=trader---- vals=p4,80
+[M-RICH-ELITE-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

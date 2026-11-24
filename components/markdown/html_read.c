@@ -101,7 +101,52 @@ size_t html_utf8_encode(unsigned long cp, char *buf)
 
 /* ========================================================================
  * ENTITIES
+ *
+ * One flash-resident table, one decoder. The table is `static const`, so on
+ * the device it lives in flash (not in the scarce internal-DRAM budget).
+ * Matching is longest-first across the whole table, and the handful of legacy
+ * entities that HTML allows without a trailing ';' are flagged individually
+ * instead of getting a second decoder. Numeric references are clamped to
+ * Unicode and remapped through the HTML5 C1/Windows-1252 table below. The DOM
+ * parser and the ANSI reader both call html_entity_decode(), so there is one
+ * entity table in the tree.
  * ======================================================================== */
+
+typedef struct {
+    const char *name;
+    unsigned long cp;
+    bool legacy_nosemi;     /**< HTML legacy set: '&amp' may omit the ';' */
+} html_entity_t;
+
+static const html_entity_t HTML_ENTITIES[] = {
+    { "amp", '&', true },       { "lt", '<', true },        { "gt", '>', true },
+    { "quot", '"', true },      { "apos", '\'', true },     { "nbsp", ' ', true },
+    { "copy", 0xA9, true },     { "reg", 0xAE, true },
+    { "trade", 0x2122, false }, { "hellip", 0x2026, false },
+    { "mdash", 0x2014, false }, { "ndash", 0x2013, false },
+    { "lsquo", 0x2018, false }, { "rsquo", 0x2019, false },
+    { "ldquo", 0x201C, false }, { "rdquo", 0x201D, false },
+    { "laquo", 0xAB, false },   { "raquo", 0xBB, false },
+    { "bull", 0x2022, false },  { "middot", 0xB7, false },
+    { "deg", 0xB0, false },     { "plusmn", 0xB1, false },
+    { "times", 0xD7, false },   { "divide", 0xF7, false },
+    { "frac12", 0xBD, false },  { "frac14", 0xBC, false },
+    { "frac34", 0xBE, false },  { "micro", 0xB5, false },
+    { "sect", 0xA7, false },    { "para", 0xB6, false },
+    { "euro", 0x20AC, false },  { "pound", 0xA3, false },
+    { "yen", 0xA5, false },     { "cent", 0xA2, false },
+    { "not", 0xAC, false },     { "shy", 0xAD, false },
+};
+
+/** HTML5 numeric-reference overrides for the C1 range 0x80..0x9F. A missing
+ *  entry is an invalid reference and becomes U+FFFD rather than a control
+ *  glyph the 12x20 cell font cannot draw. */
+static const unsigned long HTML_C1_REMAP[0x20] = {
+    0x20AC, 0xFFFD, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0xFFFD, 0x017D, 0xFFFD,
+    0xFFFD, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD, 0x017E, 0x0178,
+};
 
 /** True for a codepoint the renderer treats as collapsible whitespace. */
 static bool html_cp_is_space(unsigned long cp)
@@ -109,93 +154,130 @@ static bool html_cp_is_space(unsigned long cp)
     return cp == ' ' || cp == '\t' || cp == '\n' || cp == '\r' || cp == '\f' || cp == 0xA0;
 }
 
+/** Clamp/remap a decoded numeric codepoint to something drawable. */
+static unsigned long html_numeric_cp(unsigned long cp)
+{
+    if (cp == 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+        return 0xFFFD;
+    }
+    if (cp >= 0x80 && cp <= 0x9F) {
+        return HTML_C1_REMAP[cp - 0x80];
+    }
+    if (cp == 0xA0) {
+        return ' ';             /* one collapsible cell, like the named form */
+    }
+    if (cp < 0x20 || cp == 0x7F) {
+        return 0xFFFD;
+    }
+    return cp;
+}
+
 /**
  * Match an entity at @p p (which points at '&'). On success writes the
- * decoded codepoint to @p cp_out and the bytes consumed (including '&' and
- * ';') to @p consumed_out. Returns false when there is no valid entity here.
+ * decoded codepoint to @p cp_out and the bytes consumed (including '&' and an
+ * optional ';') to @p consumed_out. Named matching is longest-first; legacy
+ * entities without a semicolon are accepted when the next byte cannot extend
+ * the name. Returns false when there is no valid entity here.
  */
 bool html_entity_decode(const char *p, const char *end, unsigned long *cp_out,
                         size_t *consumed_out)
 {
-    const char *semi;
-    size_t n;
+    const char *q = p + 1;
+    size_t avail;
 
-    /* Find the terminating ';' within a bounded span. */
-    for (semi = p + 1; semi < end && (size_t)(semi - p) <= 32; semi++) {
-        if (*semi == ';') {
-            break;
-        }
-    }
-    if (semi >= end || *semi != ';' || semi == p + 1) {
+    if (p == NULL || cp_out == NULL || consumed_out == NULL || q >= end) {
         return false;
     }
-    n = (size_t)(semi - (p + 1));
-
-    if (n >= 2 && p[1] == '#') {
-        unsigned long cp = 0;
-        size_t i = 2;
-
-        if (i < n + 1 && (p[i] == 'x' || p[i] == 'X')) {
-            i++;
-            if (i > n) {
-                return false;
-            }
-            for (; i <= n; i++) {
-                char c = p[i];
-                int d;
-                if (c >= '0' && c <= '9') {
-                    d = c - '0';
-                } else if (c >= 'a' && c <= 'f') {
-                    d = c - 'a' + 10;
-                } else if (c >= 'A' && c <= 'F') {
-                    d = c - 'A' + 10;
-                } else {
-                    return false;
-                }
-                cp = cp * 16 + (unsigned long)d;
-                if (cp > 0x10FFFF) {
-                    cp = 0xFFFD;
-                }
-            }
-        } else {
-            for (; i <= n; i++) {
-                char c = p[i];
-                if (c < '0' || c > '9') {
-                    return false;
-                }
-                cp = cp * 10 + (unsigned long)(c - '0');
-                if (cp > 0x10FFFF) {
-                    cp = 0xFFFD;
-                }
-            }
-        }
-        *cp_out = cp;
-        *consumed_out = (size_t)(semi - p) + 1;
-        return true;
+    avail = (size_t)(end - q);
+    if (avail > 32) {
+        avail = 32;             /* one bounded span, never scan the whole page */
     }
 
-    /* Named entities. */
-    {
-        static const struct {
-            const char *name;
-            unsigned long cp;
-        } ENTITIES[] = {
-            { "amp", '&' }, { "lt", '<' }, { "gt", '>' }, { "quot", '"' },
-            { "apos", '\'' }, { "nbsp", ' ' }, { "copy", 0xA9 }, { "reg", 0xAE },
-            { "hellip", 0x2026 }, { "mdash", 0x2014 }, { "ndash", 0x2013 },
-            { "lsquo", 0x2018 }, { "rsquo", 0x2019 }, { "ldquo", 0x201C },
-            { "rdquo", 0x201D }, { "bull", 0x2022 }, { "middot", 0xB7 },
-            { "deg", 0xB0 }, { "times", 0xD7 },
-        };
-        size_t i;
+    /* Numeric reference: &#123; or &#x7B;. The semicolon is optional at the
+     * end of a text run, matching what browsers do for truncated markup. */
+    if (*q == '#') {
+        unsigned long cp = 0;
+        size_t i = 1;
+        bool hex = false;
+        bool any = false;
+        bool overflow = false;
 
-        for (i = 0; i < sizeof(ENTITIES) / sizeof(ENTITIES[0]); i++) {
-            if (strlen(ENTITIES[i].name) == n &&
-                strncmp(p + 1, ENTITIES[i].name, n) == 0) {
-                *cp_out = ENTITIES[i].cp;
-                *consumed_out = (size_t)(semi - p) + 1;
-                return true;
+        if (i < avail && (q[i] == 'x' || q[i] == 'X')) {
+            hex = true;
+            i++;
+        }
+        for (; i < avail; i++) {
+            char c = q[i];
+            int d;
+
+            if (hex) {
+                if (c >= '0' && c <= '9') d = c - '0';
+                else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+                else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+                else break;
+            } else {
+                if (c < '0' || c > '9') break;
+                d = c - '0';
             }
+            any = true;
+            if (cp > 0x10FFFFul / (unsigned long)(hex ? 16 : 10)) {
+                overflow = true;
+            } else {
+                cp = cp * (unsigned long)(hex ? 16 : 10) + (unsigned long)d;
+            }
+        }
+        if (!any) {
+            return false;
+        }
+        {
+            size_t used = i;
+            bool semi = (i < avail && q[i] == ';');
+
+            if (semi) used++;
+            *cp_out = overflow ? 0xFFFD : html_numeric_cp(cp);
+            *consumed_out = 1u + used;   /* '&' plus the q bytes we took */
+            return true;
+        }
+    }
+
+    /* Named: scan the whole table and keep the longest full match. */
+    {
+        const html_entity_t *best = NULL;
+        size_t best_len = 0;
+        size_t k;
+
+        for (k = 0; k < sizeof(HTML_ENTITIES) / sizeof(HTML_ENTITIES[0]); k++) {
+            const char *name = HTML_ENTITIES[k].name;
+            size_t len = strlen(name);
+
+            if (len > avail || len <= best_len || strncmp(q, name, len) != 0) {
+                continue;
+            }
+            {
+                const char *after = q + len;
+                bool semi = (after < q + avail && *after == ';');
+
+                if (!semi && !HTML_ENTITIES[k].legacy_nosemi) {
+                    continue;       /* a non-legacy entity needs its ';' */
+                }
+                if (!semi && after < end &&
+                    ((*after >= 'a' && *after <= 'z') ||
+                     (*after >= 'A' && *after <= 'Z') ||
+                     (*after >= '0' && *after <= '9') || *after == '=')) {
+                    /* '&copycat' is not '&copy' + 'cat': leave it alone. */
+                    continue;
+                }
+                best = &HTML_ENTITIES[k];
+                best_len = len;
+            }
+        }
+        if (best != NULL) {
+            size_t used = best_len;
+
+            if (q + used < end && q[used] == ';') used++;
+            *cp_out = best->cp;
+            *consumed_out = 1u + used;
+            return true;
         }
     }
     return false;
@@ -212,6 +294,9 @@ typedef struct {
     bool decl;          /**< <!doctype ...> or <?...> */
     char href[512];     /**< href attribute (a), "" when absent */
     char alt[128];      /**< alt attribute (img), "" when absent */
+    char input_type[16];/**< type attribute (input/button) */
+    char value[128];    /**< value attribute (form controls) */
+    bool checked;       /**< checked/selected attribute */
 } html_tag_t;
 
 /** ASCII lower for tag names. */
@@ -320,6 +405,12 @@ static const char *html_scan_tag(const char *p, const char *end, html_tag_t *tag
                     html_attr_value(v, q, tag->href, sizeof(tag->href));
                 } else if (strcmp(attr, "alt") == 0) {
                     html_attr_value(v, q, tag->alt, sizeof(tag->alt));
+                } else if (strcmp(attr, "type") == 0) {
+                    html_attr_value(v, q, tag->input_type, sizeof(tag->input_type));
+                } else if (strcmp(attr, "value") == 0) {
+                    html_attr_value(v, q, tag->value, sizeof(tag->value));
+                } else if (strcmp(attr, "checked") == 0 || strcmp(attr, "selected") == 0) {
+                    tag->checked = true;
                 }
                 if (q < end) {
                     q++; /* closing quote */
@@ -334,8 +425,16 @@ static const char *html_scan_tag(const char *p, const char *end, html_tag_t *tag
                     html_attr_value(v, q, tag->href, sizeof(tag->href));
                 } else if (strcmp(attr, "alt") == 0) {
                     html_attr_value(v, q, tag->alt, sizeof(tag->alt));
+                } else if (strcmp(attr, "type") == 0) {
+                    html_attr_value(v, q, tag->input_type, sizeof(tag->input_type));
+                } else if (strcmp(attr, "value") == 0) {
+                    html_attr_value(v, q, tag->value, sizeof(tag->value));
+                } else if (strcmp(attr, "checked") == 0 || strcmp(attr, "selected") == 0) {
+                    tag->checked = true;
                 }
             }
+        } else if (strcmp(attr, "checked") == 0 || strcmp(attr, "selected") == 0) {
+            tag->checked = true;   /* valueless boolean attribute */
         }
     }
     return (q < end && *q == '>') ? q + 1 : end;
@@ -508,6 +607,7 @@ static bool html_is_block(const char *name)
     static const char *BLOCKS[] = {
         "p", "div", "section", "article", "header", "footer", "main",
         "nav", "aside", "figure", "figcaption", "form", "fieldset",
+        "details", "summary", "dialog", "caption", "legend",
     };
     size_t i;
     for (i = 0; i < sizeof(BLOCKS) / sizeof(BLOCKS[0]); i++) {
@@ -653,6 +753,35 @@ static void html_open_tag(html_ctx_t *c, const html_tag_t *tag)
         }
         return;
     }
+    if (strcmp(name, "input") == 0) {
+        html_line_start(c);
+        html_flush_space(c);
+        if (strcmp(tag->input_type, "checkbox") == 0 ||
+            strcmp(tag->input_type, "radio") == 0) {
+            hw_str(&c->w, tag->checked ? "[x]" : "[ ]");
+        } else {
+            const char *shown = tag->value[0] ? tag->value : tag->alt;
+
+            hw_ch(&c->w, '[');
+            hw_str(&c->w, shown[0] ? shown : tag->input_type);
+            hw_ch(&c->w, ']');
+        }
+        return;
+    }
+    if (strcmp(name, "button") == 0) {
+        html_line_start(c);
+        hw_str(&c->w, "[ ");
+        return;
+    }
+    if (strcmp(name, "select") == 0) {
+        html_line_start(c);
+        hw_ch(&c->w, '[');
+        return;
+    }
+    if (strcmp(name, "option") == 0 && tag->checked) {
+        hw_sgr(c, "\x1b[1m");   /* the selected option is the bold one */
+        return;
+    }
     if (strcmp(name, "img") == 0) {
         html_line_start(c);
         html_flush_space(c);
@@ -761,6 +890,18 @@ static void html_close_tag(html_ctx_t *c, const html_tag_t *tag)
             c->in_a = false;
             c->url[0] = '\0';
         }
+        return;
+    }
+    if (strcmp(name, "button") == 0) {
+        hw_str(&c->w, " ]");
+        return;
+    }
+    if (strcmp(name, "select") == 0) {
+        hw_ch(&c->w, ']');
+        return;
+    }
+    if (strcmp(name, "option") == 0) {
+        hw_sgr(c, "\x1b[22m");
         return;
     }
     if (strcmp(name, "b") == 0 || strcmp(name, "strong") == 0) {

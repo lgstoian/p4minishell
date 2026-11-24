@@ -87,6 +87,14 @@ void browser_page_cache_clear(void);
 int  browser_page_cache_count(void);
 size_t browser_page_cache_bytes(void);
 
+/** Dispatch a DOM event (click/load/input/change/submit) to an element by id.
+ *  The event goes through the same dom_dispatch_event hook as `node.click()`,
+ *  so a batch caller and in-page JS share one event model. */
+int browser_dispatch_dom_event(const char *id, const char *event);
+/** Run due QuickJS timers on the page's ONE runtime and repaint if anything
+ *  changed. Returns the number of callbacks fired. */
+int browser_tick_timers(void);
+
 #ifdef __cplusplus
 }
 #endif

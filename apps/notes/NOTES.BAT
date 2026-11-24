@@ -12,6 +12,7 @@ setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-NOTE]
 title "Zettelkasten"
+gosub :rich_note
 rem The `db` record store is SD-owned by design (sd:/DBS/zettel.DB); everything
 rem else this app writes uses %APPDRIVE% so the shell and editor data follow
 rem the drive the app was launched from.
@@ -19,6 +20,26 @@ db info zettel > %APPDRIVE%/_zinit.txt
 if errorlevel 1 goto first_run
 del /p %APPDRIVE%/_zinit.txt > NUL
 goto menu
+
+rem ---- v1.6 richer-language showcase -----------------------------------
+rem [M-RICH-NOTE] previews category labels with map /set + for /K, string
+rem counting/padding and func/return; the db store is not touched.
+:rich_note
+echo [M-RICH-NOTE] category language tour
+map /set CATS 0 Fleeting
+map /set CATS 1 Permanent
+for /K %%k in (CATS) do echo [M-RICH-NOTE-K] %%k=%%l
+set NT=Zettelkasten
+str /count NT e CE
+str /pad NT 16 NP .
+func :notelen 12 34
+echo [M-RICH-NOTE-F] len=%RESULT%
+echo [M-RICH-NOTE-S] e=%CE% pad=%NP%
+return
+
+:notelen
+return %1+%2
+
 :first_run
 del /p %APPDRIVE%/_zinit.txt > NUL
 db create zettel /cr:NOTE /tp:ZTL /vr:1
@@ -31,6 +52,7 @@ dialog "Notes" "Created the zettel store." "OK"
 :menu
 draw clear screen
 gosub %APPROOT%/APPLIB.BAT::page double "ZETTELKASTEN ★"
+draw run 52 2 "[M-RICH-NOTE] map/str/func" /fg 11 /bg 0
 draw text 5 2 "linked notes on the db store" 14
 echo [M-NOTE-MENU]
 list "Zettelkasten" "New note" "List notes" "View note" "Search" "Delete note" "Export" "Import" "Back"

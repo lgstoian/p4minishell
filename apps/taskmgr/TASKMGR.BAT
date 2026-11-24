@@ -18,6 +18,33 @@ if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 title "Task Manager"
 echo [M-TMGR]
 tui fullscreen on
+gosub :rich_tmgr
+goto :refresh
+
+rem ---- v1.6 richer-language + modal showcase ----------------------------
+rem [M-RICH-TMGR] proves the stacked/suspended session and frame diagnostics
+rem are wired, plus map /set + for /K, func/return and str /pad. All state is
+rem scoped to this gosub; the pool/services views are not changed.
+:rich_tmgr
+echo [M-RICH-TMGR] stacked sessions + language tour
+mstack /push TMGR
+mstack /list
+mstack /depth
+tui frame status
+map /set TMGRJOBS refresh 1
+map /set TMGRJOBS kill 2
+for /K %%k in (TMGRJOBS) do echo [M-RICH-TMGR-K] %%k=%%l
+set TJ=taskmgr
+str /pad TJ 12 TP .
+func :tmgrjob 2 3
+echo [M-RICH-TMGR-F] jobs=%RESULT%
+echo [M-RICH-TMGR-S] pad=%TP%
+mstack /pop
+return
+
+:tmgrjob
+return %1+%2
+
 :refresh
 draw clear screen
 gosub %APPROOT%/APPLIB.BAT::page double "TASK MANAGER ★"
@@ -25,8 +52,8 @@ draw text 5 5 "Jobs, services and events (mem reports heap + PSRAM). Pick an act
 start
 ps /O:C
 service list
-list "Tasks" "Refresh view" "Kill job" "Suspend job" "Resume job" "Job priority" "Services" "Events" "Save snapshot" "Back"
-on %errorlevel%+1 goto :do_refresh,:tm_kill,:tm_susp,:tm_res,:tm_nice,:tm_svc,:tm_events,:tm_save,:tm_back
+list "Tasks" "Refresh view" "Kill job" "Suspend job" "Resume job" "Job priority" "Services" "Events" "Save snapshot" "Back" "Rich modal"
+on %errorlevel%+1 goto :do_refresh,:tm_kill,:tm_susp,:tm_res,:tm_nice,:tm_svc,:tm_events,:tm_save,:tm_back,:tm_rich
 goto :tm_back
 
 :do_refresh
@@ -94,6 +121,14 @@ ps /b >> %APPDRIVE%/TMGR_SNAP.TXT
 service list >> %APPDRIVE%/TMGR_SNAP.TXT
 echo [M-TMGR-SAVED]
 dialog "Saved" "Snapshot saved to %APPDRIVE%/TMGR_SNAP.TXT" "OK"
+goto :refresh
+
+:tm_rich
+rem [M-RICH-TMGR-MODAL] interactive picker + async progress on the ONE modal runtime.
+echo [M-RICH-TMGR-MODAL] picker/progress
+mpick /items Refresh^|Kill^|Suspend^|Resume /title "Rich picker" /v:RICHSELECT
+mprog /run "Working" /total 3 /step 1 /t:2 /v:RICHPROG
+echo [M-RICH-TMGR-MODAL] picked %RICHSELECT%
 goto :refresh
 
 :tm_back

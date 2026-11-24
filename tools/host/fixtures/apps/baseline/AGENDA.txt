@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=AGENDA
+[M-RICH-AGENDA] host language extract
+W=agenda
+2
+[M-RICH-AGENDA-K] host=p4
+[M-RICH-AGENDA-K] port=80
+[M-RICH-AGENDA-F] result=42
+[M-RICH-AGENDA-S] rev=adnega count=2 pad=agenda---- vals=p4,80
+[M-RICH-AGENDA-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

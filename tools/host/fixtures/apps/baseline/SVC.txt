@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=SVC
+[M-RICH-SVC] host language extract
+W=service
+2
+[M-RICH-SVC-K] host=p4
+[M-RICH-SVC-K] port=80
+[M-RICH-SVC-F] result=42
+[M-RICH-SVC-S] rev=ecivres count=2 pad=service--- vals=p4,80
+[M-RICH-SVC-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

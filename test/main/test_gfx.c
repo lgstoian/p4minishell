@@ -905,3 +905,195 @@ void test_gfx_frame_stats_dropped(void)
     TEST_ASSERT_EQUAL_INT(0, gfx_frame_stats_format(NULL, text, sizeof(text)));
     TEST_ASSERT_EQUAL_INT(0, gfx_frame_stats_format(&s, NULL, 0));
 }
+
+/* Additive toolkit extensions: each new raster entry point gets its own case.
+ * The originals above are untouched, so their exact-pixel expectations stay
+ * valid while these cover the new blended/sheet/layer behaviour. */
+
+void test_gfx_blend_565(void)
+{
+    TEST_ASSERT_EQUAL_UINT16(0x1234, gfx_blend_565(0x1234, 0xFFFF, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_blend_565(0x1234, 0xFFFF, 256));
+    TEST_ASSERT_EQUAL_UINT16(0x8410, gfx_blend_565(0x0000, 0xFFFF, 128));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_blend_565(0x0000, 0xFFFF, 1));
+    TEST_ASSERT_EQUAL_UINT16(0xC000, gfx_blend_565(0x0000, 0xF800, 200));
+}
+
+void test_gfx_line_aa(void)
+{
+    gfx_surface_t s = {NULL, 0, 0};
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&s, 8, 8));
+    /* Horizontal: gradient zero, so only the sampled row is covered. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_line_aa(&s, 0, 2, 7, 2, 0xFFFF);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 0, 2));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 3, 2));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 7, 2));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 3, 1));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 3, 3));
+    /* 45 degrees: interior samples are half-covered on two rows; the two
+     * endpoints are forced fully opaque. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_line_aa(&s, 0, 0, 4, 4, 0xFFFF);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x8410, gfx_surface_get(&s, 1, 1));
+    TEST_ASSERT_EQUAL_UINT16(0x8410, gfx_surface_get(&s, 1, 2));
+    TEST_ASSERT_EQUAL_UINT16(0x8410, gfx_surface_get(&s, 2, 2));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 4, 4));
+    /* Degenerate point and NULL surface are safe. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_line_aa(&s, 3, 3, 3, 3, 0xFFFF);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 3, 3));
+    gfx_surface_line_aa(NULL, 0, 0, 4, 4, 0xFFFF);
+    gfx_surface_free(&s);
+}
+
+void test_gfx_circle_aa(void)
+{
+    gfx_surface_t s = {NULL, 0, 0};
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&s, 16, 16));
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_circle_aa(&s, 8, 8, 3, 0xFFFF);
+    /* The ring peaks between radii r and r+1; cardinal r pixels are half. */
+    TEST_ASSERT_EQUAL_UINT16(0x8410, gfx_surface_get(&s, 11, 8));
+    TEST_ASSERT_EQUAL_UINT16(0x8410, gfx_surface_get(&s, 5, 8));
+    TEST_ASSERT_TRUE(gfx_surface_get(&s, 11, 9) != 0x0000);
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 8, 8));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 0, 0));
+    /* r=0 paints one full pixel; a negative radius is ignored. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_circle_aa(&s, 3, 3, 0, 0xFFFF);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&s, 3, 3));
+    gfx_surface_circle_aa(&s, 3, 3, -2, 0xFFFF);
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 4, 4));
+    gfx_surface_circle_aa(NULL, 8, 8, 3, 0xFFFF);
+    gfx_surface_free(&s);
+}
+
+void test_gfx_rect_aa(void)
+{
+    gfx_surface_t s = {NULL, 0, 0};
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&s, 8, 8));
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_rect_aa(&s, 2, 2, 4, 3, 0xFFFF);
+    /* Edge column and its outside neighbour share half coverage. */
+    TEST_ASSERT_EQUAL_UINT16(0x8410, gfx_surface_get(&s, 2, 2));
+    TEST_ASSERT_EQUAL_UINT16(0x8410, gfx_surface_get(&s, 1, 3));
+    TEST_ASSERT_EQUAL_UINT16(0x8410, gfx_surface_get(&s, 5, 4));
+    /* Interior farther than one pixel from every border stays clear. */
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 3, 3));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 0, 0));
+    /* Degenerate rect and NULL surface are ignored. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_rect_aa(&s, 0, 0, 0, 5, 0xFFFF);
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 0, 0));
+    gfx_surface_rect_aa(NULL, 2, 2, 4, 3, 0xFFFF);
+    gfx_surface_free(&s);
+}
+
+void test_gfx_gradient(void)
+{
+    gfx_surface_t s = {NULL, 0, 0};
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&s, 4, 4));
+    /* Horizontal: endpoints exact, one-third sample blended. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_gradient(&s, 0, 0, 4, 4, 0xF800, 0x001F, false);
+    TEST_ASSERT_EQUAL_UINT16(0xF800, gfx_surface_get(&s, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xA80A, gfx_surface_get(&s, 1, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x001F, gfx_surface_get(&s, 3, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xF800, gfx_surface_get(&s, 0, 3));
+    /* Vertical: the same ramp runs down columns instead. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_gradient(&s, 0, 0, 4, 4, 0xF800, 0x001F, true);
+    TEST_ASSERT_EQUAL_UINT16(0xF800, gfx_surface_get(&s, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xA80A, gfx_surface_get(&s, 3, 1));
+    TEST_ASSERT_EQUAL_UINT16(0x001F, gfx_surface_get(&s, 0, 3));
+    TEST_ASSERT_EQUAL_UINT16(0xF800, gfx_surface_get(&s, 3, 0));
+    /* Clipped rect: the ramp still spans the requested (partly offscreen)
+     * rect, so visible pixel (0,0) sits at t=2/3 rather than at c0. */
+    gfx_surface_clear(&s, 0x0000);
+    gfx_surface_gradient(&s, -2, -2, 4, 4, 0xF800, 0x001F, false);
+    TEST_ASSERT_EQUAL_UINT16(0x5015, gfx_surface_get(&s, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&s, 3, 3));
+    gfx_surface_gradient(&s, 0, 0, 0, 4, 0xF800, 0x001F, false);
+    gfx_surface_gradient(NULL, 0, 0, 4, 4, 0xF800, 0x001F, false);
+    gfx_surface_free(&s);
+}
+
+void test_gfx_blit_atlas(void)
+{
+    gfx_surface_t sheet = {NULL, 0, 0};
+    gfx_surface_t dst = {NULL, 0, 0};
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&sheet, 4, 4));
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&dst, 4, 4));
+    gfx_surface_clear(&sheet, 0x0000);
+    gfx_surface_pixel(&sheet, 0, 2, 0x1234);
+    gfx_surface_pixel(&sheet, 1, 2, 0x5678);
+    gfx_surface_pixel(&sheet, 0, 3, 0x9ABC);
+    gfx_surface_pixel(&sheet, 1, 3, 0xDEF0);
+    /* 2x2 cells in a 2-column grid: index 2 is the bottom-left cell, whose
+     * four pixels are sheet rows 2..3, columns 0..1. */
+    gfx_surface_clear(&dst, 0x0000);
+    gfx_surface_blit_atlas(&dst, &sheet, 2, 2, 2, 2, 0, 0, false, 0);
+    TEST_ASSERT_EQUAL_UINT16(0x1234, gfx_surface_get(&dst, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x5678, gfx_surface_get(&dst, 1, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x9ABC, gfx_surface_get(&dst, 0, 1));
+    TEST_ASSERT_EQUAL_UINT16(0xDEF0, gfx_surface_get(&dst, 1, 1));
+    /* Transparency uses the one blit rule: the key cell pixel is skipped. */
+    gfx_surface_clear(&dst, 0x7777);
+    gfx_surface_blit_atlas(&dst, &sheet, 2, 2, 2, 2, 0, 0, true, 0x1234);
+    TEST_ASSERT_EQUAL_UINT16(0x7777, gfx_surface_get(&dst, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x5678, gfx_surface_get(&dst, 1, 0));
+    /* Out-of-range index / bad geometry / NULL are all no-ops. */
+    gfx_surface_clear(&dst, 0x0000);
+    gfx_surface_blit_atlas(&dst, &sheet, 2, 2, 2, 4, 0, 0, false, 0);
+    gfx_surface_blit_atlas(&dst, &sheet, 2, 2, 0, 0, 0, 0, false, 0);
+    gfx_surface_blit_atlas(NULL, &sheet, 2, 2, 2, 0, 0, 0, false, 0);
+    gfx_surface_blit_atlas(&dst, NULL, 2, 2, 2, 0, 0, 0, false, 0);
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&dst, 0, 0));
+    gfx_surface_free(&dst);
+    gfx_surface_free(&sheet);
+}
+
+void test_gfx_composite(void)
+{
+    gfx_surface_t dst = {NULL, 0, 0};
+    gfx_surface_t src = {NULL, 0, 0};
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&dst, 2, 2));
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&src, 2, 2));
+    gfx_surface_clear(&src, 0xFFFF);
+    /* Alpha 0 leaves the layer alone; half alpha blends to the shared
+     * 0x8410 midpoint; full alpha replaces it. */
+    gfx_surface_clear(&dst, 0x0000);
+    gfx_surface_composite(&dst, &src, 0, 0, 0);
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&dst, 0, 0));
+    gfx_surface_composite(&dst, &src, 0, 0, 128);
+    TEST_ASSERT_EQUAL_UINT16(0x8410, gfx_surface_get(&dst, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x8410, gfx_surface_get(&dst, 1, 1));
+    gfx_surface_composite(&dst, &src, 0, 0, 256);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&dst, 0, 0));
+    /* Offset + clipping: only the overlapping cells change. */
+    gfx_surface_clear(&dst, 0x0000);
+    gfx_surface_composite(&dst, &src, 1, 1, 256);
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&dst, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&dst, 1, 1));
+    /* Keyed layer: the key pixel is skipped, the rest is blended. */
+    gfx_surface_clear(&dst, 0x1234);
+    gfx_surface_clear(&src, 0xFFFF);
+    gfx_surface_pixel(&src, 0, 0, 0x0000);
+    gfx_surface_composite_keyed(&dst, &src, 0, 0, 256, 0x0000);
+    TEST_ASSERT_EQUAL_UINT16(0x1234, gfx_surface_get(&dst, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&dst, 1, 0));
+    /* NULL surfaces are safe. */
+    gfx_surface_composite(NULL, &src, 0, 0, 128);
+    gfx_surface_composite(&dst, NULL, 0, 0, 128);
+    gfx_surface_composite_keyed(NULL, &src, 0, 0, 128, 0);
+    gfx_surface_free(&src);
+    gfx_surface_free(&dst);
+}

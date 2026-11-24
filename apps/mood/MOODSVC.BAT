@@ -13,6 +13,18 @@ rem  job-private environment cannot leak into the dashboard either way).
 rem  Runs headless (mem/for/set/signal/delay only). Markers: [M-MOODSVC].
 rem =====================================================================
 echo [M-MOODSVC]  sampler started
+rem ---- v1.6 richer-language showcase -----------------------------------
+rem [M-RICH-MOODSVC] one-shot headless str/map/forK/func tour; the sampling
+rem loop and the SD-only store are unchanged.
+echo [M-RICH-MOODSVC] headless language tour
+set SW=sampler
+str /rev SW WS
+str /pad SW 9 SP .
+map /set MSAMPLE pct 0
+for /K %%k in (MSAMPLE) do echo [M-RICH-MOODSVC-K] %%k=%%l
+func :msum 20 30
+echo [M-RICH-MOODSVC-F] sum=%RESULT%
+echo [M-RICH-MOODSVC-S] rev=%WS% pad=%SP%
 :loop
 rem Scratch follows the app/service drive; MOODLAST.INI stays on SD because
 rem the service registry and its published store are SD-only by design.
@@ -42,3 +54,7 @@ if errorlevel 1 goto stopped
 goto loop
 :stopped
 echo [M-MOODSVC] sampler stopped
+goto :eof
+
+:msum
+return %1+%2

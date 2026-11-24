@@ -12,7 +12,7 @@
   ],
   "phase": 1,
   "target": "linux",
-  "expected_cases": 345,
+  "expected_cases": 375,
   "prelude": [
     {
       "name": "batch_env_pool_init",
@@ -34,7 +34,9 @@
     "clock",
     "editor",
     "storage",
-    "batch"
+    "batch",
+    "nativepay",
+    "nativeexec"
   ],
   "tests": [
     "test_ansi_format.c",
@@ -44,6 +46,8 @@
     "test_macro.c",
     "test_error_strings.c",
     "test_trap.c",
+    "test_native_payload.c",
+    "test_native_exec.c",
     "test_shell_variables.c",
     "test_shell_pipeline.c",
     "test_browser_cache.c",
@@ -98,7 +102,6 @@
     "test_keyboard.c": "keyboard: REQUIRES display, LVGL and the on-screen keyboard font",
     "test_locale.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_main.c": "on-target Unity runner (its app_main); not a suite",
-    "test_native_payload.c": "native payload envelope verifier: on-target only until the firmware signature/loader ops table is installed; host lane must not accept a payload with no verifier",
     "test_mcp.c": "command layer: REQUIRES storage, display and networking at link time",
     "test_modal.c": "modal: REQUIRES shell, storage, windows, keyboard and LVGL",
     "test_netsvc.c": "networking/radio: REQUIRES ESP-Hosted C6 transport (no emulated radio)",

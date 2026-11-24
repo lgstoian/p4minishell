@@ -45,7 +45,16 @@ goto menu
 :canvas
 draw close
 gfx init 320 240
+rem [M-RICH-PICS] v1.6 canvas tour: gradient backdrop, a translucent
+rem composite layer and a sprite-sheet blitmany /a stamp row.
+echo [M-RICH-PICS] gradient + composite + atlas
+gfx gradient 0 160 320 80 0x101820 0x3A6EA5 h
 gfx image %APPDRIVE%/PHOTO.BMP 0 0 320 160
+gfx load 0 %APPDRIVE%/BALL.BMP
+if errorlevel 1 goto picsshow
+gfx composite 0 280 170 128
+gfx blitmany 0 /a:1,16,16 8 170 28 170 48 170
+:picsshow
 gfx show
 list "gfx" "PHOTO.BMP blitted onto the canvas" "Back"
 gfx close

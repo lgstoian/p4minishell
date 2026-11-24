@@ -9,6 +9,26 @@ setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 title "P4 Companion"
 gosub %APPROOT%/LIB.BAT::load_settings
+gosub :rich_companion
+goto :main_menu
+
+rem ---- v1.6 richer-language showcase ------------------------------------
+rem [M-RICH-COMPANION] exercises map /set + for /K, str /pad and func/return
+rem through the real interpreter; no menu state is changed.
+:rich_companion
+echo [M-RICH-COMPANION] menu language tour
+map /set CENTRY system SYS
+map /set CENTRY files FILES
+for /K %%k in (CENTRY) do echo [M-RICH-COMPANION-K] %%k=%%l
+set CW=companion
+str /pad CW 12 CP .
+func :csplit 20 4
+echo [M-RICH-COMPANION-F] value=%RESULT%
+echo [M-RICH-COMPANION-S] pad=%CP%
+return
+
+:csplit
+return %1/%2
 
 :main_menu
 draw clear screen
@@ -39,6 +59,7 @@ gosub %APPROOT%/APPLIB.BAT::footer 20 3 single
 if "%TUIROWS%"=="" set TUIROWS=25
 set /a FY=%TUIROWS%-3 > NUL
 draw text 5 %FY% "Use list to select, ESC to cancel"
+draw run 55 2 "[M-RICH-COMPANION]" /fg 11 /bg 0
 echo [C-MENU]
 list "P4 Companion" "Live System" "File Tools" "Network Tools" "Fun / Demos" "Settings" "Exit"
 on %errorlevel%+1 goto :opt_sys,:opt_files,:opt_net,:opt_fun,:opt_settings,:opt_exit

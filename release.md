@@ -16,7 +16,7 @@ in their owning docs and are linked, not repeated:
 | Change/verification workflow | [`ai-context.md`](ai-context.md) |
 | Open defects | [`bugs.md`](bugs.md) |
 
-Current target version: **v1.5.0** (`P4_CONFIG_VERSION_*` in
+Current target version: **v1.6.0** (`P4_CONFIG_VERSION_*` in
 `p4minishell_config.h`). This is a **board-free release candidate**: the
 hardware rows in §2-§3 and the on-board boxes in §8 are **not** signed off for
 this version; the host/static gates are pre-flight only. Substitute your
@@ -75,7 +75,16 @@ last campaign:
    python tools/green_guard.py --strict
    python tools/gallery_audit.py           # gallery identity + uniqueness
    python tools/gallery_audit_selftest.py  # red canary for that identity gate
+   python tools/host_batch_run.py --check
+   python tools/host_webapp_gate.py --check
+   python tools/host_tui_gate.py --check
+   python tools/host_modal_gate.py --check
+   python tools/gfx_toolkit_test.py --host
+   python tools/host_apps_gate.py --check  # 33 apps, 363 host assertions, 40 SKIPs, 7 canaries
    ```
+
+   These v1.6 host gates compile or drive shipped code and open no serial
+   port; a pass is a pre-gate only (`harness.md` §0/§2.2).
 3. **Version freeze** — update, in one change:
    - `p4minishell_config.h` `P4_CONFIG_VERSION_{MAJOR,MINOR,PATCH}` (+ the
      string macro) and `p4minishell_config.yaml` `config_version`;
@@ -127,12 +136,13 @@ a raw serial port.
 |---|------|---------|----------------|
 | 0 | Static gates | `python tools/p4test_run.py --static` | green guard + comment index + breadcrumbs all OK |
 | 0b | Host unit lane (pre-gate) | `python3 tools/host_gen_runner.py --check && python3 tools/host_unit_run.py --static && python3 tools/host_unit_run.py --build` | up to date, manifest OK, 0 failures. Needs Linux/WSL2; **never** a substitute for step 2 |
+| 0c | v1.6 host gates (pre-gate) | `python tools/host_batch_run.py --check`, `host_webapp_gate.py --check`, `host_tui_gate.py --check`, `host_modal_gate.py --check`, `gfx_toolkit_test.py --host`, `host_apps_gate.py --check` | 33/33 apps, 363 host assertions PASS, 40 honest SKIPs, 7 canaries; no serial port, no hardware sign-off |
 | 1 | Static checks | `python -m compileall tools apps` | no errors |
 | 2 | On-target unit tests | `python tools/unit_run.py COM3 COM6` | `=== All tests completed ===`, 0 failures on both; **refresh `test/README.md` count** |
 | 3 | Hardware suites | `python tools/p4test_run.py --boards COM3,COM6 --tier full --fail-fast --retry 1` | merged PASS table (both boards) + no board differential |
 | 4 | Host regression | `python tools/regression.py <COMx>` | PASS (release runner) |
 | 5 | Boot soak | `python tools/boot_regression.py COM3 20 COM6` | 20/20 clean per board (no panic, one AUTOEXEC, SD ready, no stray W/E) |
-| 6 | Transcript parity | `python tools/appdiff.py` | no diff vs baseline (re-baseline only with intent) |
+| 6 | Transcript parity | `python tools/appdiff.py` | no diff vs baseline (re-baseline only with intent). **Open for v1.6.0:** the new `[M-RICH-*]` lines change app transcripts; `tools/appdiff/baseline/*.transcript.txt` must be regenerated on a board first |
 | 7 | Dogfood soak | `python tools/dogfood.py <COMx> --minutes 15` | no anomalies |
 | 8 | Visual (optional) | `tools/display_glitch_watch.py`, `tools/led_watch.py` | no BSOD frames / LED table matches |
 
@@ -213,7 +223,7 @@ python tools/make_release.py push <COMx> [--sign NAME.priv.pem]
 ([`ABI.md`](ABI.md)).
 
 **Complete SD payload archive.** `python tools/make_sd_archive.py` builds
-`release/p4minishell-sd-v1.5.0.zip` from the same `apps/app_manifest.py` list
+`release/p4minishell-sd-v1.6.0.zip` from the same `apps/app_manifest.py` list
 plus templates, dictionaries and the DejaVu reading fonts - the exact tree the
 pushers deploy. It is the public "copy to the card root" artifact; every file
 is a repository asset, nothing is invented.
@@ -285,6 +295,9 @@ Release is ready when **all** boxes below are true:
       section updated; `bugs.md` header current.
 - [ ] Zero build warnings on both boards (firmware + `test/`).
 - [ ] Unit suite green on both boards; `test/README.md` count refreshed.
+- [ ] v1.6 host gates green (batch/webapp/tui/modal/gfx/apps, 33 apps) and
+      `tools/appdiff/baseline/*.transcript.txt` rebaselined on a board for the
+      new `[M-RICH-*]` lines.
 - [ ] Documentation screenshots refreshed and pixel-checked
       (`python tools/screenshot_gate.py --update`, then
       `python tools/screenshot_gate.py`; the browser dashboard shot comes from

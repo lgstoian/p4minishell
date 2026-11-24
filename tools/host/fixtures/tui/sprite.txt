@@ -1,0 +1,6 @@
+# Sprite cells sampled through the ONE image-to-cell sampler.
+scene sprite
+cols 8
+rows 3
+sprite 1 1 8 3 checker
+render

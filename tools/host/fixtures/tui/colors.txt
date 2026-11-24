@@ -1,0 +1,13 @@
+# 24-bit / CSS / 256 colours all quantised through the ONE DOS palette.
+scene colors
+cols 12
+rows 4
+set 1 1 css:#ff5555 RED
+set 5 1 rgb:0x00aa00 GRN
+set 9 1 idx:46 CUBE
+set 1 2 css:blue BLUE
+set 6 2 dos:7 bold
+attr 6 2 1
+set 1 3 css:rgba(255,255,85,1) YELLOW
+set 1 4 dos:16 default
+render

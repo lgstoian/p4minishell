@@ -8,9 +8,31 @@ rem =====================================================================
 
 :main
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
+goto :files_menu
+
+rem ---- v1.6 richer-language showcase ------------------------------------
+rem [M-RICH-FILES] lists file tools with map /set + for /K, str /count|/pad
+rem and func/return. It never touches the browser or note files.
+:rich_files
+echo [M-RICH-FILES] tools language tour
+map /set FTOOLS view view
+map /set FTOOLS hex hexview
+for /K %%k in (FTOOLS) do echo [M-RICH-FILES-K] %%k=%%l
+set FW=files
+str /count FW e CF
+str /pad FW 10 FP .
+func :ftotal 3 6
+echo [M-RICH-FILES-F] total=%RESULT%
+echo [M-RICH-FILES-S] e=%CF% pad=%FP%
+return
+
+:ftotal
+return %1*%2
+
 :files_menu
 title "File Tools"
 echo [M-FILES]
+gosub :rich_files
 rem Layout: the shell publishes the grid (80x25 landscape, 80x97 portrait).
 rem The Tools panel grows into the extra rows; the Status panel stays on the
 rem bottom (rows 17..24 of the classic grid).
@@ -25,6 +47,7 @@ draw text 5 6 "Browse the app drive with the full TUI file browser"
 draw text 5 7 "Quick dir, search, trash, clipboard, notes"
 gosub %APPROOT%/APPLIB.BAT::footer 17 8 single "Status"
 draw text 5 %SY% "Use Browse for full-screen file picker  (%APPDRIVE%)"
+draw run 50 2 "[M-RICH-FILES] map/forK" /fg 11 /bg 0
 list "File Tools" "Browse SD (TUI)" "Quick dir" "Search files" "Trash browser" "Clipboard" "Note pad" "Hexview demo" "Commander" "Back"
 on %errorlevel%+1 goto :browse,:dir,:search,:trash,:clipboard,:notes,:hex_demo,:tcmd,:back
 goto :back

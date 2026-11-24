@@ -225,3 +225,55 @@ void test_js_canvas_parse_color(void)
     TEST_ASSERT_EQUAL_UINT8(0, c.a);
     TEST_ASSERT_FALSE(js_canvas_parse_color("not-a-colour", &c));
 }
+
+/** The Canvas gradient is the CSS gradient parser in disguise: one colour
+ *  model, one DOS quantisation path, deterministic sampled pixels. */
+void test_js_canvas_linear_gradient_rect(void)
+{
+    js_canvas_t *canvas = js_canvas_new(8, 4);
+    js_canvas_gradient_t gradient;
+    uint8_t p[4];
+
+    TEST_ASSERT_NOT_NULL(canvas);
+    TEST_ASSERT_TRUE(js_canvas_gradient_parse(
+        "linear-gradient(90deg, #ff0000 0%, #0000ff 100%)", &gradient));
+    TEST_ASSERT_EQUAL_INT(2, gradient.count);
+    TEST_ASSERT_EQUAL_INT(90, gradient.angle);
+    TEST_ASSERT_EQUAL_UINT8(255, js_canvas_gradient_at(&gradient, 0.0f).r);
+    TEST_ASSERT_EQUAL_UINT8(255, js_canvas_gradient_at(&gradient, 1.0f).b);
+    js_canvas_fill_gradient_rect(canvas, &gradient, 0, 0, 8, 4, false);
+    px(canvas, 0, 1, p);
+    TEST_ASSERT_EQUAL_UINT8(255, p[0]);
+    TEST_ASSERT_EQUAL_UINT8(0, p[2]);
+    px(canvas, 7, 1, p);
+    TEST_ASSERT_EQUAL_UINT8(255, p[2]);
+    TEST_ASSERT_EQUAL_UINT8(255, p[3]);
+    js_canvas_free(canvas);
+}
+
+/** Rounded rect masks its corners; the shadow is a deterministic offset copy
+ *  with no blur kernel or additional rasterizer. */
+void test_js_canvas_rounded_rect_shadow(void)
+{
+    js_canvas_t *canvas = js_canvas_new(12, 12);
+    uint8_t p[4];
+
+    TEST_ASSERT_NOT_NULL(canvas);
+    js_canvas_set_fill(canvas, rgba(255, 255, 255, 255));
+    js_canvas_fill_rounded_rect(canvas, 2, 2, 8, 8, 3);
+    px(canvas, 6, 6, p);
+    TEST_ASSERT_EQUAL_UINT8(255, p[3]);
+    px(canvas, 2, 2, p);
+    TEST_ASSERT_EQUAL_UINT8(0, p[3]);   /* outside the quarter-circle */
+
+    js_canvas_clear(canvas);
+    js_canvas_set_shadow(canvas, rgba(255, 0, 0, 255), 2, 0, 0);
+    js_canvas_set_fill(canvas, rgba(0, 0, 255, 255));
+    js_canvas_fill_rect(canvas, 1, 1, 3, 3);
+    px(canvas, 4, 2, p);
+    TEST_ASSERT_EQUAL_UINT8(255, p[0]);   /* red shadow, outside the blue rect */
+    TEST_ASSERT_EQUAL_UINT8(0, p[2]);
+    TEST_ASSERT_EQUAL_INT(2, js_canvas_get_shadow_offset_x(canvas));
+    js_canvas_clear_shadow(canvas);
+    js_canvas_free(canvas);
+}

@@ -330,6 +330,37 @@ void test_calc_base_and_units(void)
     expect_num("val('42')", 42);
 }
 
+/**
+ * v1.6 map-core surface. `for /K` and `map /keys|/values` share these two
+ * readers with the `map` verb, so one assertion block covers them all.
+ */
+static void check_map_core_helpers(void)
+{
+    char keys[16][P4_CONFIG_ENV_NAME_BYTES];
+    char value[64];
+    int count;
+    char *set_host[] = { "map", "/set", "CALCMAP", "host", "p4" };
+    char *set_port[] = { "map", "/set", "CALCMAP", "port", "80" };
+    char *clear[] = { "map", "/clear", "CALCMAP" };
+
+    shell_command_map(3, clear);
+    shell_command_map(5, set_host);
+    shell_command_map(5, set_port);
+
+    count = shell_map_collect_keys("CALCMAP", keys, 16);
+    TEST_ASSERT_EQUAL_INT(2, count);
+    TEST_ASSERT_TRUE(shell_map_lookup("CALCMAP", "host", value, sizeof(value)));
+    TEST_ASSERT_EQUAL_STRING("p4", value);
+    TEST_ASSERT_TRUE(shell_map_lookup("CALCMAP", "port", value, sizeof(value)));
+    TEST_ASSERT_EQUAL_STRING("80", value);
+    TEST_ASSERT_FALSE(shell_map_lookup("CALCMAP", "missing", value, sizeof(value)));
+    TEST_ASSERT_EQUAL_INT(0, shell_map_collect_keys("CALCMAP", NULL, 16));
+
+    shell_command_map(3, clear);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, shell_map_collect_keys("CALCMAP", keys, 16),
+                                  "map /clear must remove every key slot");
+}
+
 /* ========================================================================
  * VARIABLES, ASSIGNMENT, AND POL/REC SIDE EFFECTS
  * ======================================================================== */
@@ -341,6 +372,8 @@ void test_calc_env_variables(void)
     expect_num("calctst + calctst", 24);
     expect_num("undefined_var", 0);       /* DOS: undefined reads as 0 */
     (void)shell_env_set("CALCTST", "");
+
+    check_map_core_helpers();
 }
 
 void test_calc_command_assignment(void)

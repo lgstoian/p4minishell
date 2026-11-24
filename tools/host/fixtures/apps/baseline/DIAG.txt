@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=DIAG
+[M-RICH-DIAG] host language extract
+W=diagnostics
+2
+[M-RICH-DIAG-K] host=p4
+[M-RICH-DIAG-K] port=80
+[M-RICH-DIAG-F] result=42
+[M-RICH-DIAG-S] rev=scitsongaid count=2 pad=diagnostics vals=p4,80
+[M-RICH-DIAG-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

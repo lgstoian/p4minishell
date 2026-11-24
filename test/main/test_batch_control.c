@@ -19,6 +19,44 @@
 
 #include <string.h>
 
+/**
+ * v1.6 trap /on event surface. Folded into an existing registered suite since
+ * test_main.c owns the RUN_TEST list and is not part of this change.
+ */
+static void check_trap_event_helpers(void)
+{
+    TEST_ASSERT_EQUAL_INT(BATCH_TRAP_ERRORLEVEL,
+                         batch_trap_parse_events("errorlevel"));
+    TEST_ASSERT_EQUAL_INT(BATCH_TRAP_EXIT | BATCH_TRAP_INT,
+                         batch_trap_parse_events("exit,int"));
+    TEST_ASSERT_EQUAL_INT(BATCH_TRAP_INT, batch_trap_parse_events("INT"));
+    TEST_ASSERT_EQUAL_INT(0, batch_trap_parse_events("bogus"));
+    TEST_ASSERT_EQUAL_INT(0, batch_trap_parse_events(NULL));
+
+    trap_init();
+    batch_set_errorlevel(0);
+    TEST_ASSERT_TRUE(batch_trap_on_event(BATCH_TRAP_ERRORLEVEL | BATCH_TRAP_INT,
+                                        ":recover"));
+    TEST_ASSERT_TRUE(trap_handler_installed());
+    TEST_ASSERT_EQUAL_STRING(":recover", trap_handler_label());
+
+    /* A handler for other events stays armed (one-shot fires only on match). */
+    TEST_ASSERT_FALSE(batch_trap_fire_event(BATCH_TRAP_EXIT));
+    TEST_ASSERT_TRUE(trap_handler_installed());
+
+    batch_set_errorlevel(3);
+    TEST_ASSERT_TRUE(batch_trap_fire_event(BATCH_TRAP_INT));
+    TEST_ASSERT_FALSE(trap_handler_installed());
+    TEST_ASSERT_EQUAL_INT(0, batch_get_errorlevel());
+    {
+        const char *code = shell_env_get("TRAP_CODE");
+
+        TEST_ASSERT_NOT_NULL(code);
+        TEST_ASSERT_EQUAL_STRING("3", code);
+    }
+    trap_init();
+}
+
 /* ========================================================================
  * LABEL SCANNING
  * ======================================================================== */
@@ -203,6 +241,8 @@ void test_batch_on_dispatch_selection(void)
     TEST_ASSERT_TRUE(shell_expr_evaluate("9", &index, &error));
     char none[] = ":one,:two,:three";
     TEST_ASSERT_NULL(batch_on_select(none, (int)index));
+
+    check_trap_event_helpers();
 }
 
 /* ========================================================================

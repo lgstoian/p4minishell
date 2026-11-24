@@ -144,9 +144,11 @@ int native_pay_verify(const native_pay_view_t *view)
         return NATIVE_PAY_ERR_NO_VERIFIER;
     }
 
-    /* Canonical bytes: header without the signature field, then payload. */
+    /* Canonical bytes: header without BOTH self-referential fields (SHA-256
+     * and signature), then payload. Including the digest field would make the
+     * digest circular and no real signed blob could ever verify. */
     spans[0].data = parsed.header + NATIVE_PAY_OFF_MAGIC;
-    spans[0].len = NATIVE_PAY_OFF_SIGNATURE - NATIVE_PAY_OFF_MAGIC;
+    spans[0].len = NATIVE_PAY_OFF_SHA256 - NATIVE_PAY_OFF_MAGIC;
     spans[1].data = parsed.header + NATIVE_PAY_OFF_ENTRY;
     spans[1].len = NATIVE_PAY_HEADER_LEN - NATIVE_PAY_OFF_ENTRY;
     spans[2].data = parsed.payload;
@@ -195,6 +197,21 @@ void native_pay_set_trusted_key(const uint8_t pubkey[NATIVE_PAY_PUBKEY_BYTES])
         memset(s_key, 0, sizeof(s_key));
         s_key_installed = false;
     }
+}
+
+bool native_pay_crypto_installed(void)
+{
+    return s_ops.sha256_spans != NULL && s_ops.ecdsa_verify_p256 != NULL;
+}
+
+bool native_pay_key_installed(void)
+{
+    return s_key_installed;
+}
+
+bool native_pay_verifier_ready(void)
+{
+    return native_pay_crypto_installed() && s_key_installed;
 }
 
 const char *native_pay_status_name(native_pay_status_t status)

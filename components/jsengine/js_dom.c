@@ -14,7 +14,20 @@
 
 /* The browser binds the page's DOM here for the duration of <script>
  * execution (jsengine_set_dom_tree). There is no second DOM registry. */
+extern dom_tree_t *g_dom_tree;
+
 static JSClassID s_dom_node_class_id;
+
+/** Document-level listeners live here (one registry, cleared on page load). */
+#define JS_DOM_DOC_LISTENERS 8
+typedef struct {
+    char event[24];
+    JSContext *ctx;
+    JSValue callback;
+    bool active;
+} js_doc_listener_t;
+
+static js_doc_listener_t s_doc_listeners[JS_DOM_DOC_LISTENERS];
 
 static void js_dom_node_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -153,7 +166,9 @@ static JSValue js_node_set_style(JSContext *ctx, JSValueConst this_val,
     text = JS_ToCString(ctx, argv[0]);
     if (text != NULL) {
         snprintf(node->style, sizeof(node->style), "%s", text);
-        css_apply_inline_text(node, text);
+        dom_mark_style_dirty();
+        css_propagate_mutation(node);   /* re-resolves inline + cached rules */
+        css_apply_inline_text(node, node->style);  /* also works with no cache */
         JS_FreeCString(ctx, text);
     }
     return JS_UNDEFINED;
@@ -210,6 +225,11 @@ static JSValue js_node_add_listener(JSContext *ctx, JSValueConst this_val,
             snprintf(node->onclick, sizeof(node->onclick), "%s", handler);
         } else if (strcmp(event, "load") == 0) {
             snprintf(node->onload, sizeof(node->onload), "%s", handler);
+        } else if (strcmp(event, "input") == 0 || strcmp(event, "change") == 0 ||
+                   strcmp(event, "submit") == 0) {
+            /* The cell DOM stores one interaction handler per node; document
+             * listeners keep their own registry for the full event set. */
+            snprintf(node->onclick, sizeof(node->onclick), "%s", handler);
         }
     }
     if (event != NULL) JS_FreeCString(ctx, event);
@@ -311,6 +331,43 @@ static JSValue js_node_set_height(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/** node.dispatchEvent(new Event('click')) and node.click() go through the
+ *  ONE dom_dispatch_event hook, so the browser and any batch caller agree. */
+static JSValue js_node_dispatch_event(JSContext *ctx, JSValueConst this_val,
+                                      int argc, JSValueConst *argv)
+{
+    dom_node_t *node = js_node_of(ctx, this_val);
+
+    if (node == NULL || argc < 1 || !JS_IsObject(argv[0])) return JS_FALSE;
+    /* Read the type into a bounded C buffer (JS strings are transient). */
+    {
+        JSValue prop = JS_GetPropertyStr(ctx, argv[0], "type");
+        const char *text = JS_ToCString(ctx, prop);
+
+        if (text != NULL) {
+            char event[32];
+
+            snprintf(event, sizeof(event), "%s", text);
+            dom_dispatch_event(node, event);
+            JS_FreeCString(ctx, text);
+        }
+        JS_FreeValue(ctx, prop);
+    }
+    return JS_TRUE;
+}
+
+static JSValue js_node_click(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv)
+{
+    dom_node_t *node = js_node_of(ctx, this_val);
+
+    (void)argc;
+    (void)argv;
+    if (node == NULL) return JS_FALSE;
+    dom_dispatch_event(node, "click");
+    return JS_TRUE;
+}
+
 static JSValue js_dom_node_obj(JSContext *ctx, dom_node_t *node)
 {
     JSValue obj = JS_NewObjectClass(ctx, (int)s_dom_node_class_id);
@@ -324,6 +381,10 @@ static JSValue js_dom_node_obj(JSContext *ctx, dom_node_t *node)
                       JS_NewCFunction(ctx, js_node_get_attr, "getAttribute", 1));
     JS_SetPropertyStr(ctx, obj, "addEventListener",
                       JS_NewCFunction(ctx, js_node_add_listener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, obj, "dispatchEvent",
+                      JS_NewCFunction(ctx, js_node_dispatch_event, "dispatchEvent", 1));
+    JS_SetPropertyStr(ctx, obj, "click",
+                      JS_NewCFunction(ctx, js_node_click, "click", 0));
     JS_SetPropertyStr(ctx, obj, "getContext",
                       JS_NewCFunction(ctx, js_node_get_context, "getContext", 1));
 
@@ -447,13 +508,124 @@ static JSValue js_document_set_title(JSContext *ctx, JSValueConst this_val,
 static JSValue js_console_log(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
 {
-    (void)ctx;
     (void)this_val;
-    (void)argc;
-    (void)argv;
-    /* The browser owns a TUI surface; console output would corrupt the page.
-     * Diagnostics go through the shell debug log, not the transcript. */
+    shell_transcript_appendf("[console] ");
+    for (int i = 0; i < argc; i++) {
+        const char *text = JS_ToCString(ctx, argv[i]);
+
+        if (text != NULL) {
+            shell_transcript_appendf("%s%s", i > 0 ? " " : "", text);
+            JS_FreeCString(ctx, text);
+        }
+    }
+    shell_transcript_appendf("\n");
     return JS_UNDEFINED;
+}
+
+/* ---- console levels: diagnostics go to the transcript, never the page --- */
+
+static JSValue js_noop_event(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv)
+{
+    (void)ctx; (void)this_val; (void)argc; (void)argv;
+    return JS_UNDEFINED;
+}
+
+static JSValue js_console_level(JSContext *ctx, JSValueConst this_val,
+                                int argc, JSValueConst *argv, const char *prefix)
+{
+    (void)this_val;
+    shell_transcript_appendf("%s", prefix);
+    for (int i = 0; i < argc; i++) {
+        const char *text = JS_ToCString(ctx, argv[i]);
+
+        if (text != NULL) {
+            shell_transcript_appendf("%s%s", i > 0 ? " " : "", text);
+            JS_FreeCString(ctx, text);
+        }
+    }
+    shell_transcript_appendf("\n");
+    return JS_UNDEFINED;
+}
+
+static JSValue js_console_warn(JSContext *ctx, JSValueConst this_val,
+                                int argc, JSValueConst *argv)
+{
+    return js_console_level(ctx, this_val, argc, argv, "[warn] ");
+}
+
+static JSValue js_console_error(JSContext *ctx, JSValueConst this_val,
+                                 int argc, JSValueConst *argv)
+{
+    return js_console_level(ctx, this_val, argc, argv, "[error] ");
+}
+
+/* ---- Event dispatch: document + node listeners on the one runtime ------ */
+
+static JSValue js_event_object(JSContext *ctx, const char *type,
+                               const char *target_id)
+{
+    JSValue object = JS_NewObject(ctx);
+
+    JS_SetPropertyStr(ctx, object, "type", JS_NewString(ctx, type != NULL ? type : ""));
+    {
+        JSValue target = JS_NewObject(ctx);
+
+        JS_SetPropertyStr(ctx, target, "id", JS_NewString(ctx, target_id != NULL ? target_id : ""));
+        JS_SetPropertyStr(ctx, object, "target", target);
+    }
+    JS_SetPropertyStr(ctx, object, "preventDefault",
+                      JS_NewCFunction(ctx, js_noop_event, "preventDefault", 0));
+    JS_SetPropertyStr(ctx, object, "stopPropagation",
+                      JS_NewCFunction(ctx, js_noop_event, "stopPropagation", 0));
+    return object;
+}
+
+static void js_doc_dispatch(JSContext *ctx, const char *event,
+                            dom_node_t *node)
+{
+    for (int i = 0; i < JS_DOM_DOC_LISTENERS; i++) {
+        js_doc_listener_t *listener = &s_doc_listeners[i];
+        JSValue evt;
+        JSValue result;
+
+        if (!listener->active || listener->ctx != ctx ||
+            strcmp(listener->event, event) != 0) {
+            continue;
+        }
+        evt = js_event_object(ctx, event, node != NULL ? node->id : "");
+        result = JS_Call(ctx, listener->callback, JS_UNDEFINED, 1, &evt);
+        JS_FreeValue(ctx, evt);
+        if (JS_IsException(result)) {
+            JS_FreeValue(ctx, JS_GetException(ctx));
+        }
+        JS_FreeValue(ctx, result);
+    }
+}
+
+void js_dom_clear_page_state(void)
+{
+    for (int i = 0; i < JS_DOM_DOC_LISTENERS; i++) {
+        if (s_doc_listeners[i].active) {
+            JS_FreeValue(s_doc_listeners[i].ctx, s_doc_listeners[i].callback);
+        }
+        memset(&s_doc_listeners[i], 0, sizeof(s_doc_listeners[i]));
+    }
+}
+
+/** The one DOM event hook, registered by js_dom_bindings_register(). */
+static void js_dom_event_hook(void *ctx, dom_node_t *node, const char *event,
+                              const char *handler)
+{
+    JSContext *js = (JSContext *)ctx;
+    char result[128];
+
+    if (js == NULL || event == NULL) return;
+    if (handler != NULL && handler[0] != '\0') {
+        (void)jsengine_eval_event(handler, event, node != NULL ? node->id : "",
+                                  result, sizeof(result));
+    }
+    js_doc_dispatch(js, event, node);
 }
 
 static JSValue js_fetch(JSContext *ctx, JSValueConst this_val,
@@ -473,6 +645,75 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val,
     JSValue body = JS_NewStringLen(ctx, (const char *)result.body, result.body_size);
     free(result.body);
     return body;
+}
+
+static JSValue js_document_add_listener(JSContext *ctx, JSValueConst this_val,
+                                        int argc, JSValueConst *argv)
+{
+    const char *event;
+
+    (void)this_val;
+    if (argc < 2 || !JS_IsFunction(ctx, argv[1])) return JS_UNDEFINED;
+    event = JS_ToCString(ctx, argv[0]);
+    if (event == NULL) return JS_UNDEFINED;
+    for (int i = 0; i < JS_DOM_DOC_LISTENERS; i++) {
+        js_doc_listener_t *listener = &s_doc_listeners[i];
+
+        if (listener->active && listener->ctx == ctx &&
+            strcmp(listener->event, event) == 0) {
+            JS_FreeValue(ctx, listener->callback);
+            listener->callback = JS_DupValue(ctx, argv[1]);
+            JS_FreeCString(ctx, event);
+            return JS_UNDEFINED;
+        }
+        if (!listener->active) {
+            snprintf(listener->event, sizeof(listener->event), "%s", event);
+            listener->ctx = ctx;
+            listener->callback = JS_DupValue(ctx, argv[1]);
+            listener->active = true;
+            break;
+        }
+    }
+    JS_FreeCString(ctx, event);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_document_dispatch_event(JSContext *ctx, JSValueConst this_val,
+                                          int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    if (argc < 1 || !JS_IsObject(argv[0])) return JS_FALSE;
+    {
+        JSValue prop = JS_GetPropertyStr(ctx, argv[0], "type");
+        const char *text = JS_ToCString(ctx, prop);
+
+        if (text != NULL) {
+            char event[32];
+
+            snprintf(event, sizeof(event), "%s", text);
+            js_doc_dispatch(ctx, event, g_dom_tree != NULL ? g_dom_tree->body : NULL);
+            JS_FreeCString(ctx, text);
+        }
+        JS_FreeValue(ctx, prop);
+    }
+    return JS_TRUE;
+}
+
+static JSValue js_make_event(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv)
+{
+    char type[32] = { 0 };
+
+    (void)this_val;
+    if (argc >= 1) {
+        const char *text = JS_ToCString(ctx, argv[0]);
+
+        if (text != NULL) {
+            snprintf(type, sizeof(type), "%s", text);
+            JS_FreeCString(ctx, text);
+        }
+    }
+    return js_event_object(ctx, type, "");
 }
 
 void js_dom_bindings_register(JSContext *ctx, struct dom_tree *tree)
@@ -495,6 +736,10 @@ void js_dom_bindings_register(JSContext *ctx, struct dom_tree *tree)
                       JS_NewCFunction(ctx, js_document_getElementById, "getElementById", 1));
     JS_SetPropertyStr(ctx, document, "write",
                       JS_NewCFunction(ctx, js_document_write, "write", 1));
+    JS_SetPropertyStr(ctx, document, "addEventListener",
+                      JS_NewCFunction(ctx, js_document_add_listener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, document, "dispatchEvent",
+                      JS_NewCFunction(ctx, js_document_dispatch_event, "dispatchEvent", 1));
     atom = JS_NewAtom(ctx, "body");
     JS_DefinePropertyGetSet(ctx, document, atom,
                             JS_NewCFunction(ctx, js_document_body, "body", 0),
@@ -512,9 +757,21 @@ void js_dom_bindings_register(JSContext *ctx, struct dom_tree *tree)
         JSValue console = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, console, "log",
                           JS_NewCFunction(ctx, js_console_log, "log", 1));
+        JS_SetPropertyStr(ctx, console, "warn",
+                          JS_NewCFunction(ctx, js_console_warn, "warn", 1));
+        JS_SetPropertyStr(ctx, console, "error",
+                          JS_NewCFunction(ctx, js_console_error, "error", 1));
+        JS_SetPropertyStr(ctx, console, "info",
+                          JS_NewCFunction(ctx, js_console_log, "info", 1));
         JS_SetPropertyStr(ctx, global, "console", console);
     }
+    JS_SetPropertyStr(ctx, global, "Event",
+                      JS_NewCFunction(ctx, js_make_event, "Event", 1));
     JS_SetPropertyStr(ctx, global, "fetch",
                       JS_NewCFunction(ctx, js_fetch, "fetch", 1));
+    /* The DOM dispatches through this one hook; QuickJS stays private to
+     * jsengine/js_dom, and no other component learns about JS values. */
+    dom_set_event_hook(js_dom_event_hook, ctx);
+    js_dom_clear_page_state();
     JS_FreeValue(ctx, global);
 }

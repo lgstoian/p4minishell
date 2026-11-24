@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=TCMD
+[M-RICH-TCMD] host language extract
+W=commander
+2
+[M-RICH-TCMD-K] host=p4
+[M-RICH-TCMD-K] port=80
+[M-RICH-TCMD-F] result=42
+[M-RICH-TCMD-S] rev=rednammoc count=2 pad=commander- vals=p4,80
+[M-RICH-TCMD-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

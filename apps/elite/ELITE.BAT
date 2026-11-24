@@ -17,6 +17,7 @@ setlocal enabledelayedexpansion
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-ELITE]
 title "Elite"
+gosub :rich_elite
 if exist %APPDRIVE%/ELITE.SAV call %APPDRIVE%/ELITE.SAV
 if not defined credits set credits=100
 if not defined sys set sys=0
@@ -50,6 +51,27 @@ draw hold on
 if errorlevel 1 goto nogfx
 goto dock
 
+rem ---- v1.6 richer-language showcase -----------------------------------
+rem [M-RICH-ELITE] previews the market with map /set|/values + for /K,
+rem str /count|/pad and func/return; the save/load state is not touched.
+:rich_elite
+echo [M-RICH-ELITE] market language tour
+map /set GOODS food 10
+map /set GOODS textiles 40
+map /set GOODS computers 120
+for /K %%k in (GOODS) do echo [M-RICH-ELITE-K] %%k=%%l
+map /values GOODS GV
+set GNAME=textiles
+str /count GNAME t CT
+str /pad GNAME 12 GP .
+func :cargoval 3 40
+echo [M-RICH-ELITE-F] cargo=%RESULT%
+echo [M-RICH-ELITE-S] vals=%GV[0]%,%GV[1]%,%GV[2]% t=%CT% pad=%GP%
+return
+
+:cargoval
+return %1*%2
+
 :dock
 set sname=!SYSNAME[%sys%]!
 set /a mult=MULT[%sys%]
@@ -59,6 +81,7 @@ set /a PRICE[2]=120-%mult%*3
 echo [M-ELITE-DOCKED] %sname%
 draw clear
 gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "ELITE 🚀"
+draw run 55 2 "[M-RICH-ELITE] market" /fg 14 /bg 0
 draw text 3 2 %sname% station
 draw table 3 %TY% 14 0 "Good|Price|Hold" "Food|%PRICE[0]%|%HOLD[0]%" "Textiles|%PRICE[1]%|%HOLD[1]%" "Computers|%PRICE[2]%|%HOLD[2]%"
 draw text 3 %EY1% Credits %credits%

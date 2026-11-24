@@ -17,6 +17,18 @@ rem =====================================================================
 echo [M-SVC]  service started
 title "Companion Service"
 notify /t:3 "background service running"
+rem ---- v1.6 richer-language showcase -----------------------------------
+rem [M-RICH-SVC] one-shot headless str/map/forK/func tour; the tick loop is
+rem unchanged and no display verb is used in this background service.
+echo [M-RICH-SVC] headless language tour
+set SW=service
+str /rev SW WS
+str /pad SW 9 SP .
+map /set SVCJOBS tick 1
+for /K %%k in (SVCJOBS) do echo [M-RICH-SVC-K] %%k=%%l
+func :svcrate 20 3
+echo [M-RICH-SVC-F] rate=%RESULT%
+echo [M-RICH-SVC-S] rev=%WS% pad=%SP%
 :loop
 rem Each tick: report the next scheduled alarm and keep the record store
 rem warm. Output lands in the shared transcript (bg-safe deferred writes).
@@ -27,3 +39,7 @@ if errorlevel 1 goto stopped
 goto loop
 :stopped
 echo [M-SVC] service stopped
+goto :eof
+
+:svcrate
+return %1/%2

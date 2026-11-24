@@ -211,7 +211,7 @@ holder per port.
   (`icon/icon-512.png`, `main/assets/icon_splash.c/.h`) from the git-ignored
   `icon/icon.png` master.
 - `make_sd_archive.py` - assemble the complete public SD payload
-  (`release/p4minishell-sd-v1.5.0.zip`) from the same `apps/app_manifest.py`
+  (`release/p4minishell-sd-v1.6.0.zip`) from the same `apps/app_manifest.py`
   list plus templates, dictionaries and the DejaVu reading fonts. No invented
   files; it mirrors what the pushers deploy.
 - `size_budget.py` - static DIRAM gate over the built ELF/map (fails above the
@@ -299,7 +299,7 @@ holder per port.
   host subset of the same Unity sources on ESP-IDF's `linux` target, parses the
   same summaries, and (with `--static`) enforces `host_test_manifest.json`:
   every `test_*.c` included or excluded-with-reason, and the case count
-  unchanged (345 cases in the current tree). The lane compiles the **real**
+  unchanged (375 cases in the current tree). The lane compiles the **real**
   batch interpreter (`batch.c`, `batch_trap.c`, `batch_dim.c`, `batch_str.c`,
   `batch_map.c`, `error_strings.c`), not a second implementation;
   `test/host/main/host_batch_bridge.c` supplies the firmware/board symbols it
@@ -316,8 +316,10 @@ holder per port.
   `fixtures/webapp/baseline/`. The ELF is discovered under `test/host/build*`
   (no hardcoded path; `--renderer` overrides) and a POSIX ELF is routed through
   WSL on Windows. `--check` (default), `--update` rebaselines, `--self-test` is
-  the red canary, `--no-png` is text-only. Verified: 1 fixture, 51 assertions OK.
-  No serial port, no device; `apps/webapp/WEBAPP.BAT` is the board-facing
+  the red canary, `--no-png` is text-only. The v1.6 fixture set adds
+  `features.html` (forms/semantics/grid/table/CSS/canvas/JS timers); refresh
+  the exact assertion count with `--check`. No serial port, no device;
+  `apps/webapp/WEBAPP.BAT` is the board-facing
   reference shim for the same `webapp` facade. See `harness.md` §2.2.
 - `host_batch_run.py` — host-only **real `.bat` fixture pre-gate, never hardware
   sign-off**: runs `tools/host/fixtures/batch/HELLO.BAT` through the real
@@ -332,8 +334,46 @@ holder per port.
   (default `tools/host/fixtures/batch`), and a missing root fails honestly.
   `--fixture`, `--check` (default), `--update` and `--self-test` (7 canaries);
   ELFs are discovered under the repo build dirs and POSIX ELFs route through
-  WSL on Windows. Verified: 1 fixture, 7 assertions OK. Both host pre-gates are
+  WSL on Windows. Both host pre-gates are
   hardware-free and never sign off a board — see `harness.md` §2.2.
+- `host_tui_gate.py` — v1.6 host-only **TUI frame pre-gate**: compiles the ONE
+  cell renderer (`components/tui/tui_frame.h`), the ONE ANSI palette and the
+  ONE CSS colour parser with a plain C compiler, drives the scene fixtures in
+  `tools/host/fixtures/tui/` and compares normalised text rows, `NNN@start-end:fg`
+  colour runs and the inclusive dirty rect against `baseline/`. `--check`
+  (default), `--update`, `--self-test` (red canary). No second renderer; no
+  serial port; never hardware sign-off.
+- `host_modal_gate.py` — v1.6 host-only **modal state-transition pre-gate**:
+  generates a small C harness from `tools/host/fixtures/modal/transitions.json`,
+  compiles it together with the **real** `components/modal/modal_args.c`, runs
+  it natively and checks `modal.check` lines and markers for `focus`, `progress`
+  and `sessions` (push/pop/suspend/resume/switch/find/focus/bounds).
+  `--check`, `--fixture`, `--cc`, `--self-test`. The LVGL/FreeRTOS paint half
+  stays on-target.
+- `gfx_toolkit_test.py --host` — v1.6 board-free **gfx wiring/contract
+  pre-gate**: checks that the exact RGB565 constants in `test/main/test_gfx.c`
+  still match `tools/host/fixtures/gfx/expected.json` and that the
+  `GFXAA.BAT` fixture still exercises every new gfx verb. Pixel assertions
+  live in the host Unity lane; no hardware capture is claimed here.
+- `make_native_payload.py build|check|selftest` — host-only builder/checker for
+  the signed `NATIVE/<APP>.P4X` fixture in `tools/host/fixtures/native/`.
+  `check` never maps or runs the payload; the throwaway P-256 key is test-only
+  and never installed on a board (`SECURITY.md`).
+- `host_apps_gate.py` — v1.6 host-only **reference-app pre-gate**: drives all
+  **33 updated `.bat` apps** through the SAME real interpreter ELF by loading
+  `host_batch_run.py` as a library (fixtures in `tools/host/fixtures/apps/`,
+  exact baselines in `baseline/`). Every app carries an additive `[M-RICH-*]`
+  block; all pre-existing `[M-*]` markers are preserved. Current result:
+  **33/33 apps, 363 host assertions PASS, 40 hardware-dependent surfaces SKIP
+  with a named reason (gfx/TUI/modal/webapp/native — never faked), 7 canaries**.
+  `--check` (default), `--update` and `--self-test`. No serial port, no
+  hardware sign-off. Because the new markers intentionally change app
+  transcripts, `tools/appdiff/baseline/*.transcript.txt` goldens **must be
+  regenerated on a board** before hardware transcript parity can pass.
+- **App identity proofs** — `gallery_audit.py` plus `gallery_audit_selftest.py`
+  (red canary) reject a shell screenshot published as an app image, and
+  `appdiff.py` gates app transcript parity (pending the v1.6 board rebaseline
+  above). Host-generated app proofs are labelled as such in `docs/apps.md`.
 - `regression.py` — one-command host regression: one reset, then the full
   p4test suite plus the unique-coverage drivers (companion deep/db/alarm,
   package deploy/install, large-editor soak, touch sweep, TX integrity, boot

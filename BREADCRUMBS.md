@@ -76,6 +76,7 @@ invert the only upward edges. Never add a trampoline.
 | math_disp | leaf | app | natural-display math editor + CAS/math command surface | [t](test/main/test_calc.c) | `ai-context.md#module-layering-rules` | `components/math_disp` |
 | mcp | leaf | net | MCP (Model Context Protocol) JSON-RPC client: initialize, tools/list, tools/call | [t](test/main/test_mcp.c) | `ai-context.md#module-layering-rules` | `components/mcp` |
 | modal | leaf | ui | shared modal runtime + surfaces (dialog/list/ask/view) | [t](test/main/test_modal.c) | `ai-context.md#module-layering-rules` | `components/modal` |
+| nativeexec | leaf | app | the one fixed-ABI loader for opted-in signed native payloads | [t](test/main/test_native_exec.c) | `ai-context.md#module-layering-rules` | `components/nativeexec` |
 | nativepay | leaf | app | opt-in signed native payload envelope parsing and verification | [t](test/main/test_native_payload.c) | `ai-context.md#module-layering-rules` | `components/nativepay` |
 | networking | leaf | net | Wi-Fi/BLE host, HTTP server, MQTT event service | [t](test/main/test_wifi_state.c), [t](test/main/test_netsvc.c), [t](test/main/test_tcpterm.c) | `ai-context.md#module-layering-rules` | `components/networking` |
 | p4heap | leaf | core | PSRAM-first heap allocator | - | `ai-context.md#module-layering-rules` | `components/p4heap` |
@@ -207,6 +208,7 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/command/mcp_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/md_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/modal_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
+- `components/command/native_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/netsvc_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/periph_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
 - `components/command/pim_commands.c` :: module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules
@@ -359,6 +361,8 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/modal/modal_args.c` :: module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules
 - `components/modal/modal_surf.c` :: module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules
 - `components/modal/modal_surf.h` :: module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules
+- `components/nativeexec/native_exec.c` :: module=nativeexec :: layer=leaf :: domain=app :: status=experimental :: tests=test/main/test_native_exec.c :: rules=ai-context.md#module-layering-rules
+- `components/nativeexec/nativeexec.h` :: module=nativeexec :: layer=leaf :: domain=app :: status=experimental :: tests=test/main/test_native_exec.c :: rules=ai-context.md#module-layering-rules
 - `components/nativepay/native_payload.c` :: module=nativepay :: layer=leaf :: domain=app :: status=experimental :: tests=test/main/test_native_payload.c :: rules=ai-context.md#module-layering-rules
 - `components/nativepay/native_payload.h` :: module=nativepay :: layer=leaf :: domain=app :: status=experimental :: tests=test/main/test_native_payload.c :: rules=ai-context.md#module-layering-rules
 - `components/networking/bluetooth.c` :: module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules
@@ -439,12 +443,14 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/tui/tui.h` :: module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules
 - `components/tui/tui_fonts.c` :: module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules
 - `components/tui/tui_fonts.h` :: module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules
+- `components/tui/tui_frame.h` :: module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules
 - `components/tui/tui_modal.c` :: module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules
 - `components/tui/tui_modal.h` :: module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules
 - `components/tui/tui_page_shot.c` :: module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules
 - `components/tui/tui_page_shot_internal.h` :: module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules
 - `components/tui/tui_pane.c` :: module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules
 - `components/tui/tui_pane.h` :: module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules
+- `components/tui/tui_widgets.h` :: module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules
 - `components/uitest/include/ui_test.h` :: module=uitest :: layer=leaf :: domain=ui :: status=stable :: rules=ai-context.md#module-layering-rules
 - `components/uitest/ui_test.c` :: module=uitest :: layer=leaf :: domain=ui :: status=stable :: rules=ai-context.md#module-layering-rules
 - `components/usb/usb.c` :: module=usb :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_userial.c :: rules=ai-context.md#module-layering-rules

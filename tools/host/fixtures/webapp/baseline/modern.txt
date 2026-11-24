@@ -1,0 +1,59 @@
+# webapp-baseline-v1 fixture=modern.html
+webapp.render.begin fixture=modern.html cols=80 rows=25
+tui.dump cols=80 from=1 to=25
+001|
+001@1-80:7
+002|Entities & CSS (c) (r)EUR " A
+002@1-23:14 24-80:7
+003|=============================
+003@1-29:14 30-80:7
+004|
+004@1-80:7
+005|Source order and specificity
+005@1-28:1 29-80:7
+006|
+006@1-80:7
+007|Eleven classes, one id
+007@1-22:4 23-80:7
+008|
+008@1-80:7
+009|Duplicate attribute
+009@1-19:4 20-80:7
+010|
+010@1-80:7
+011|Named ... and legacy (r)(c) without semicolons
+011@1-40:1 41-80:7
+012|
+012@1-80:7
+013|Numeric $ B clamped ? and remapped EUR
+013@1-36:1 37-80:7
+014|[ Event ]
+014@1-80:7
+015|
+015@1-80:7
+016|
+016@1-80:7
+017|
+017@1-80:7
+018|
+018@1-80:7
+019|
+019@1-80:7
+020|
+020@1-80:7
+021|
+021@1-80:7
+022|
+022@1-80:7
+023|
+023@1-80:7
+024|
+024@1-80:7
+025|
+025@1-80:7
+tui.dump.end
+webapp.meta semantic=1 controls=1 grids=0 canvases=0
+webapp.events handlers=1
+webapp.cascade h1_color=.win spec=0.1.0 imp=1 order=5 fg=14
+webapp.entity &amp;=0026/5 &reg=00AE/4 &#x41;=0041/6 &#1114112;=FFFD/10 &#x80;=20AC/6 &hellip;=2026/8
+webapp.render.end fixture=modern.html rows=25 runs=25

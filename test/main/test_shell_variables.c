@@ -354,6 +354,40 @@ void test_variable_expansion_substring(void)
     shell_env_set("SUB", "");
 }
 
+/**
+ * v1.6 string helpers (`str /rev`, `/count`, `/pad`). These are pure servants
+ * of the one `str` verb, so they are asserted here beside the other string
+ * surgery rather than in a new file needing test_main.c wiring.
+ */
+static void check_string_helpers(void)
+{
+    char out[32];
+
+    shell_str_reverse("abc", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("cba", out);
+    shell_str_reverse("", out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("", out);
+    /* Output truncation keeps the first out_size-1 source characters. */
+    shell_str_reverse("abcdef", out, 4);
+    TEST_ASSERT_EQUAL_STRING("cba", out);
+    shell_str_reverse("abc", NULL, 0);  /* NULL-safe */
+
+    TEST_ASSERT_EQUAL_INT(2, shell_str_count("abcabc", "bc"));
+    /* Non-overlapping: "aaa" holds a single "aa" match. */
+    TEST_ASSERT_EQUAL_INT(1, shell_str_count("aaa", "aa"));
+    TEST_ASSERT_EQUAL_INT(0, shell_str_count("abc", ""));
+    TEST_ASSERT_EQUAL_INT(0, shell_str_count(NULL, "a"));
+
+    shell_str_pad("abc", 5, '-', out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("abc--", out);
+    shell_str_pad("abc", 5, '\0', out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("abc  ", out);
+    shell_str_pad("abcdef", 3, '-', out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("abcdef", out);
+    shell_str_pad("abc", 5, '-', out, 4);
+    TEST_ASSERT_EQUAL_STRING("abc", out);
+}
+
 void test_variable_expansion_replace(void)
 {
     char out[256];
@@ -369,6 +403,8 @@ void test_variable_expansion_replace(void)
     shell_expand_variables("%NOPE_XYZ:a=b%", out, sizeof(out));
     TEST_ASSERT_EQUAL_STRING("", out);
     shell_env_set("REP", "");
+
+    check_string_helpers();
 }
 
 void test_variable_expansion_array_names(void)

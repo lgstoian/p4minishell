@@ -16,6 +16,8 @@
 #include "command.h"
 #include "shell.h"
 #include "batch.h"
+#include "browser.h"
+#include "jsengine.h"
 #include <string.h>
 
 #define WEBAPP_MAX_ARGV 16
@@ -76,7 +78,9 @@ int shell_command_webapp(int argc, char **argv)
             "Usage: webapp open [/no] <file|url>   present a page (html engine)\n"
             "       webapp dump [from] [to] [/a]   read the rendered cell grid\n"
             "       webapp css                      show computed CSS\n"
-            "       webapp js <code>                evaluate JS in the page engine");
+            "       webapp js <code>                evaluate JS in the page engine\n"
+            "       webapp event <id> <type>        dispatch click/input/change/submit\n"
+            "       webapp tick                     run due JS timers, repaint");
         batch_set_errorlevel(2);
         return 2;
     }
@@ -95,6 +99,25 @@ int shell_command_webapp(int argc, char **argv)
         args[0] = "browser";
         args[1] = "css";
         return shell_command_browser(2, args);
+    }
+    if (strcmp(argv[1], "event") == 0) {
+        int rc;
+
+        if (argc < 4) {
+            shell_print_usage("webapp event <id> <click|load|input|change|submit>");
+            batch_set_errorlevel(2);
+            return 2;
+        }
+        rc = browser_dispatch_dom_event(argv[2], argv[3]);
+        batch_set_errorlevel((uint8_t)rc);
+        return rc;
+    }
+    if (strcmp(argv[1], "tick") == 0) {
+        int fired = browser_tick_timers();
+
+        shell_transcript_appendf("webapp: %d timer(s) fired\n", fired);
+        batch_set_errorlevel(0);
+        return 0;
     }
 
     shell_print_error("webapp: unknown subcommand '%s'", argv[1]);

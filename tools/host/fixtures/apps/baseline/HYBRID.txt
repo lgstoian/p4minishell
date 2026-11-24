@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=HYBRID
+[M-RICH-HYBRID] host language extract
+W=hybrid
+1
+[M-RICH-HYBRID-K] host=p4
+[M-RICH-HYBRID-K] port=80
+[M-RICH-HYBRID-F] result=42
+[M-RICH-HYBRID-S] rev=dirbyh count=1 pad=hybrid---- vals=p4,80
+[M-RICH-HYBRID-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

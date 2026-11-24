@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=MOODSVC
+[M-RICH-MOODSVC] host language extract
+W=sampler
+1
+[M-RICH-MOODSVC-K] host=p4
+[M-RICH-MOODSVC-K] port=80
+[M-RICH-MOODSVC-F] result=42
+[M-RICH-MOODSVC-S] rev=relpmas count=1 pad=sampler--- vals=p4,80
+[M-RICH-MOODSVC-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

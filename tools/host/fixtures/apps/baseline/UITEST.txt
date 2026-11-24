@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=UITEST
+[M-RICH-UITEST] host language extract
+W=target
+2
+[M-RICH-UITEST-K] host=p4
+[M-RICH-UITEST-K] port=80
+[M-RICH-UITEST-F] result=42
+[M-RICH-UITEST-S] rev=tegrat count=2 pad=target---- vals=p4,80
+[M-RICH-UITEST-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

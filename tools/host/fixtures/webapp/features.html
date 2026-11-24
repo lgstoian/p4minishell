@@ -1,0 +1,65 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: 2026 Stoian Alexandru -->
+<!-- SPDX-License-Identifier: MIT -->
+<!--
+  Deterministic host feature fixture. No network, clock or randomness.
+  Exercises semantic elements, forms/inputs, a responsive grid, table
+  colspan + alignment, extended selectors, CSS gradients/shadow/radius/
+  opacity, and the one canvas rasterizer's gradient/rounded/shadow path.
+  The inline script documents the browser-only bindings; the host harness
+  renders the DOM/CSS path and probes the pure rasterizer through its API.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Webapp feature gate</title>
+<style>
+body { color: #aaaaaa; }
+h1 { color: #00ffff; }
+#card {
+  border-radius: 3px;
+  box-shadow: 1px 1px #000000;
+  opacity: 0.5;
+  background: linear-gradient(90deg, #ff0000 0%, #0000ff 100%);
+}
+input[type=text] { color: #ffff55; }
+li:first-child { color: #ff5555; }
+p + p { color: #55ff55; }
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); }
+</style>
+</head>
+<body>
+<header><nav><a href="#go">Go</a></nav></header>
+<main>
+<h1>HTML5 gate</h1>
+<section id="card">Gradient card</section>
+<form id="go">
+<label>Name</label><input id="n" type="text" value="Ada" placeholder="Name">
+<input id="ok" type="checkbox" checked>
+<select><option>One</option><option selected>Two</option></select>
+<button id="btn" onclick="console.log('run')">Run</button>
+</form>
+<div class="grid"><div>A</div><div>B</div></div>
+<ul><li id="first">First</li><li>Second</li></ul>
+<p id="p1">One</p><p id="p2">Two</p>
+<table><tr><th>Head A</th><th>Head B</th></tr>
+<tr><td colspan="2" id="merged">Merged</td></tr>
+<tr><td style="text-align:right">Right</td><td>End</td></tr></table>
+<details><summary>More</summary><p>Detail</p></details>
+<canvas id="c" width="32" height="16">Fallback pixels</canvas>
+</main>
+<footer>Footer</footer>
+<script>
+document.addEventListener('click', function (e) {
+  console.log('click', e.type);
+});
+setTimeout(function () { document.getElementById('n').value = 'Ready'; }, 100);
+var g = document.getElementById('c').getContext('2d');
+var grad = g.createLinearGradient(0, 0, 32, 0);
+grad.addColorStop(0, '#ff0000');
+grad.addColorStop(1, '#0000ff');
+g.fillStyle = grad;
+g.fillRect(0, 0, 32, 16);
+</script>
+</body>
+</html>

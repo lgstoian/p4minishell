@@ -142,6 +142,16 @@ launch TCMD                   (translucent-by-default demo: APPINFO alpha=96%)
   same apps on a USB stick; `launch` discovers them and they keep their data
   on the stick. See `batch.md` 5 for `%APPDRIVE%`.
 
+**New in v1.6.0 (additive):** the same one-line style reaches the new surfaces
+(`func`/`return`, `for /K`, `trap /on`, gfx AA/gradient/composite, TUI frame/
+focus/layout/scroll, modal `mpick`/`mprog`/`mformx`/`mstack`, and `webapp
+event`/`tick`). Every updated reference app prints an `[M-RICH-*]` marker block;
+the pre-existing `[M-*]` markers are unchanged. Without a board you can prove
+all 33 enriched apps with `python tools/host_apps_gate.py --check` (363 host
+assertions, 40 hardware surfaces honestly SKIP). The marker lines change app
+transcripts, so `tools/appdiff/baseline/*.transcript.txt` awaits a board
+rebaseline. See `readme.md` for the shipped HTML examples and screenshot proofs.
+
 ## 7. Install a packaged app
 
 Packages are CRC-checked bundles under `PKGS/<APP>/`. Build and push the sample

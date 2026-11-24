@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=PKGTEST
+[M-RICH-PKGTEST] host language extract
+W=package
+2
+[M-RICH-PKGTEST-K] host=p4
+[M-RICH-PKGTEST-K] port=80
+[M-RICH-PKGTEST-F] result=42
+[M-RICH-PKGTEST-S] rev=egakcap count=2 pad=package--- vals=p4,80
+[M-RICH-PKGTEST-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

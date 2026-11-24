@@ -12,6 +12,7 @@ setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-PALM]
 title "PalmTop"
+gosub :rich_palm
 rem The sheet/TCP "Press any key" lines are authored at rows 15/20 of the
 rem 80x25 grid. Anchor them just inside the bottom edge on a taller panel.
 if "%TUIROWS%"=="" set TUIROWS=25
@@ -19,9 +20,28 @@ set /a PY15=%TUIROWS%-10 > NUL
 set /a PY20=%TUIROWS%-5 > NUL
 goto menu
 
+rem ---- v1.6 richer-language showcase -----------------------------------
+rem [M-RICH-PALM]: func/return computes a conversion, str /pad formats it and
+rem map /set + for /K lists the unit aliases. No sheet/TCP state is changed.
+:rich_palm
+echo [M-RICH-PALM] conversion language tour
+func :c2f 100
+echo [M-RICH-PALM-F] c2f=%RESULT%
+set PUNIT=mm
+str /pad PUNIT 8 PP .
+map /set UNITS c celsius
+map /set UNITS f fahrenheit
+for /K %%k in (UNITS) do echo [M-RICH-PALM-K] %%k=%%l
+echo [M-RICH-PALM-S] pad=%PP%
+return
+
+:c2f
+return %1*9/5+32
+
 :menu
 draw clear screen
 gosub %APPROOT%/APPLIB.BAT::page double "PALMTOP ★"
+draw run 52 2 "[M-RICH-PALM] func/str/map" /fg 14 /bg 0
 draw text 5 2 "palmtop-parity primitives demo  (%APPNAME% on %APPDRIVE%)" 14
 draw text 45 2 "local %TIME%" 7
 list "PalmTop" "Calculator + conversions" "Stopwatch" "CSV sheet (=EXPR)" "Encrypt a note" "Bind an F-key" "TCP probe" "Back"

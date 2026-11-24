@@ -1,12 +1,30 @@
 #include "dom.h"
+#include "css.h"
 #include "css_color.h"
 #include "html.h"
 #include "strutil.h"
+#include "p4heap.h"
 #include "p4minishell_config.h"
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <stdio.h>
+
+/** DOM mutation epoch. It starts at 1 so a zero-initialised tree never looks
+ *  "already computed". Only mutations that can change a computed style bump
+ *  it; the cascade itself writes styles through dom_set_style() and must not. */
+static uint32_t s_style_epoch = 1;
+
+uint32_t dom_style_epoch(void)
+{
+    return s_style_epoch;
+}
+
+void dom_mark_style_dirty(void)
+{
+    s_style_epoch++;
+    if (s_style_epoch == 0) s_style_epoch = 1;
+}
 
 /** Alpha/opacity defaults: 255 means "fully opaque, nothing set". A node's
  *  fg_alpha is honoured only when the node also sets a colour, bg_alpha only
@@ -99,6 +117,7 @@ void dom_node_free(dom_node_t *node) {
 
 void dom_node_append_child(dom_node_t *parent, dom_node_t *child) {
     if (!parent || !child) return;
+    dom_mark_style_dirty();     /* a new subtree needs the cascade/inherit pass */
     child->parent = parent;
     child->next_sibling = NULL;
     if (parent->last_child) {
@@ -114,6 +133,7 @@ void dom_node_append_child(dom_node_t *parent, dom_node_t *child) {
 
 void dom_node_remove_child(dom_node_t *parent, dom_node_t *child) {
     if (!parent || !child) return;
+    dom_mark_style_dirty();
     if (child->prev_sibling) {
         child->prev_sibling->next_sibling = child->next_sibling;
     } else {
@@ -177,16 +197,35 @@ static void parse_tag_name(const char **p, char *out, size_t out_size) {
 }
 
 static void parse_attributes(const char **p, dom_node_t *node) {
+    /* HTML keeps the FIRST occurrence of a duplicate attribute. The scanner
+     * still consumes every value, so a repeated name cannot leak its text. */
+    char seen[12][32];
+    int nseen = 0;
+
     skip_whitespace(p);
     while (**p && **p != '>' && **p != '/') {
         char attr_name[64] = {0};
         char attr_value[512] = {0};
+        bool duplicate = false;
         size_t i = 0;
         while (**p && !isspace((unsigned char)**p) && **p != '=' && **p != '>' && **p != '/' && i < sizeof(attr_name) - 1) {
             attr_name[i++] = tolower((unsigned char)**p);
             (*p)++;
         }
         attr_name[i] = '\0';
+        if (attr_name[0] != '\0') {
+            for (int k = 0; k < nseen; k++) {
+                if (strcmp(seen[k], attr_name) == 0) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate && nseen < (int)(sizeof(seen) / sizeof(seen[0]))) {
+                strncpy(seen[nseen], attr_name, sizeof(seen[0]) - 1);
+                seen[nseen][sizeof(seen[0]) - 1] = '\0';
+                nseen++;
+            }
+        }
         while (**p && !isspace((unsigned char)**p) && **p != '=' && **p != '>' &&
                **p != '/') {
             (*p)++;   /* over-long name: consume the rest, keep the prefix */
@@ -224,6 +263,7 @@ static void parse_attributes(const char **p, dom_node_t *node) {
                 }
             }
         }
+        if (!duplicate) {
         if (strcmp(attr_name, "id") == 0) {
             strncpy(node->id, attr_value, sizeof(node->id) - 1);
         } else if (strcmp(attr_name, "class") == 0) {
@@ -250,6 +290,24 @@ static void parse_attributes(const char **p, dom_node_t *node) {
         } else if (strcmp(attr_name, "height") == 0 &&
                    strcmp(node->tag, "canvas") == 0) {
             node->canvas_h = atoi(attr_value);
+        } else if (strcmp(attr_name, "type") == 0) {
+            strncpy(node->input_type, attr_value, sizeof(node->input_type) - 1);
+        } else if (strcmp(attr_name, "value") == 0) {
+            strncpy(node->value, attr_value, sizeof(node->value) - 1);
+        } else if (strcmp(attr_name, "placeholder") == 0) {
+            strncpy(node->placeholder, attr_value, sizeof(node->placeholder) - 1);
+        } else if (strcmp(attr_name, "checked") == 0 ||
+                   strcmp(attr_name, "selected") == 0) {
+            node->checked = true;
+        } else if (strcmp(attr_name, "disabled") == 0) {
+            node->disabled = true;
+        } else if (strcmp(attr_name, "required") == 0) {
+            node->required = true;
+        } else if (strcmp(attr_name, "colspan") == 0) {
+            node->col_span = atoi(attr_value);
+        } else if (strcmp(attr_name, "rowspan") == 0) {
+            node->row_span = atoi(attr_value);
+        }
         }
         skip_whitespace(p);
     }
@@ -264,11 +322,69 @@ static bool is_void_element(const char *tag) {
 }
 
 static bool is_block_element(const char *tag) {
-    static const char *block_tags[] = {"address","article","aside","blockquote","body","br","dd","div","dl","dt","fieldset","figcaption","figure","footer","form","canvas","h1","h2","h3","h4","h5","h6","header","hr","html","li","main","nav","ol","p","pre","section","table","tbody","td","tfoot","th","thead","tr","ul",NULL};
+    static const char *block_tags[] = {"address","article","aside","blockquote","body","br","caption","dd","details","dialog","div","dl","dt","fieldset","figcaption","figure","footer","form","canvas","h1","h2","h3","h4","h5","h6","header","hr","html","legend","li","main","nav","ol","p","pre","section","summary","table","tbody","td","tfoot","th","thead","tr","ul",NULL};
     for (int i = 0; block_tags[i]; i++) {
         if (strcmp(tag, block_tags[i]) == 0) return true;
     }
     return false;
+}
+
+/** Implied end tags the parser recovers without a DTD: a new <p>/<li>/<td>/
+ *  <tr>/<option> closes the open one instead of nesting inside it. Kept small
+ *  and explicit - a full HTML5 tree builder would be a second parser. */
+static bool dom_auto_close(const char *open, const char *incoming)
+{
+    if (strcmp(open, "p") == 0) {
+        static const char *p_closers[] = {
+            "p", "div", "section", "article", "header", "footer", "main",
+            "nav", "aside", "ul", "ol", "table", "blockquote", "pre", "hr",
+            "h1", "h2", "h3", "h4", "h5", "h6", "form", "details", "figure",
+            NULL
+        };
+        for (int i = 0; p_closers[i]; i++) {
+            if (strcmp(incoming, p_closers[i]) == 0) return true;
+        }
+        return false;
+    }
+    if (strcmp(open, "li") == 0) return strcmp(incoming, "li") == 0;
+    if (strcmp(open, "td") == 0 || strcmp(open, "th") == 0) {
+        return strcmp(incoming, "td") == 0 || strcmp(incoming, "th") == 0 ||
+               strcmp(incoming, "tr") == 0;
+    }
+    if (strcmp(open, "tr") == 0) return strcmp(incoming, "tr") == 0;
+    if (strcmp(open, "option") == 0) return strcmp(incoming, "option") == 0;
+    return false;
+}
+
+void dom_node_reset_style(dom_node_t *node)
+{
+    if (node == NULL) return;
+    /* Only computed-style fields: attributes, text, event handlers and the
+     * raw style attribute survive, so re-resolving the cascade is idempotent. */
+    node->display = is_block_element(node->tag) ? DOM_DISPLAY_BLOCK : DOM_DISPLAY_INLINE;
+    node->fg = 16;
+    node->bg = 16;
+    node->fg_alpha = 255;
+    node->bg_alpha = 255;
+    node->opacity = 255;
+    node->bg_set = false;
+    node->align = 0;
+    node->font_scale = 1;
+    node->bold = false;
+    node->italic = false;
+    node->underline = false;
+    node->border = false;
+    node->margin_top = node->margin_bottom = node->margin_left = node->margin_right = 0;
+    node->padding_top = node->padding_bottom = node->padding_left = node->padding_right = 0;
+    node->border_radius = 0;
+    node->shadow_set = false;
+    node->shadow_dos = 0;
+    node->shadow_x = node->shadow_y = 0;
+    node->shadow_alpha = 0;
+    node->gradient_set = false;
+    memset(&node->gradient, 0, sizeof(node->gradient));
+    node->grid_columns = 0;
+    node->bg_src[0] = '\0';
 }
 
 /* Consume the remainder of an element whose nesting limit was reached. Tracks
@@ -414,6 +530,27 @@ static dom_node_t *parse_element(const char **p, dom_node_t *parent, int depth,
                 if (**p == '>') (*p)++;
                 break;
             }
+            /* An ancestor's close tag closes THIS element implicitly. Leave
+             * the tag for the parent: consuming it here made every following
+             * sibling (e.g. a <div> after </ul>) a child of this element. */
+            break;
+        }
+        /* Implied end tags: `<p>one<p>two` must produce two siblings, not a
+         * nested p. The parent loop re-parses the same tag as a sibling. */
+        if (**p == '<' && *(*p + 1) != '/' && *(*p + 1) != '!' &&
+            *(*p + 1) != '?') {
+            const char *q = *p + 1;
+            char incoming[32] = {0};
+            size_t il = 0;
+
+            while (*q && isalnum((unsigned char)*q) && il < sizeof(incoming) - 1) {
+                incoming[il++] = tolower((unsigned char)*q);
+                q++;
+            }
+            incoming[il] = '\0';
+            if (incoming[0] != '\0' && dom_auto_close(node->tag, incoming)) {
+                break;
+            }
         }
         if (**p == '<') {
             dom_node_t *child = parse_element(p, node, depth + 1, arena, node_count);
@@ -449,7 +586,37 @@ static dom_node_t *parse_element(const char **p, dom_node_t *parent, int depth,
     return node;
 }
 
-dom_tree_t *dom_parse(const char *html) {
+/* ---- bounded chunk-fed recovery for truncated markup --------------------
+ * The linear scanner needs a NUL-terminated, tag-balanced source. When a page
+ * is cut inside a tag or an attribute value, one bounded PSRAM buffer is filled
+ * in fixed chunks, the dangling construct is closed and a short set of implied
+ * end tags is appended. The public signature is unchanged and the ONE arena
+ * cap still allocates every node; there is no second parser. */
+#define DOM_PARSE_CHUNK_BYTES 512u
+#define DOM_PARSE_RECOVERY_MAX_BYTES (256u * 1024u)
+
+static bool dom_tail_truncated(const char *html, size_t len)
+{
+    const char *lt = NULL;
+    char quote = 0;
+
+    for (size_t i = 0; i < len; i++) {
+        char c = html[i];
+
+        if (quote != 0) {
+            if (c == quote) quote = 0;
+        } else if (c == '<') {
+            lt = html + i;
+        } else if (c == '>') {
+            lt = NULL;
+        } else if (lt != NULL && (c == '"' || c == '\'')) {
+            quote = c;
+        }
+    }
+    return lt != NULL || quote != 0;
+}
+
+static dom_tree_t *dom_parse_impl(const char *html) {
     size_t node_count = 0;
 
     if (!html) return NULL;
@@ -508,8 +675,61 @@ dom_tree_t *dom_parse(const char *html) {
     return tree;
 }
 
+dom_tree_t *dom_parse(const char *html)
+{
+    static const char TAIL[] =
+        "</td></tr></li></p></ul></ol></table></body></html>";
+    size_t len;
+    char *buf;
+    dom_tree_t *tree;
+
+    if (html == NULL) return NULL;
+    len = strnlen(html, DOM_PARSE_RECOVERY_MAX_BYTES);
+    if (len == 0 || !dom_tail_truncated(html, len)) {
+        return dom_parse_impl(html);
+    }
+
+    buf = p4heap_alloc_psram(len + 2u + sizeof(TAIL));
+    if (buf == NULL) {
+        buf = malloc(len + 2u + sizeof(TAIL));
+    }
+    if (buf == NULL) {
+        return dom_parse_impl(html);    /* OOM: parse what we have */
+    }
+    for (size_t off = 0; off < len; ) {
+        size_t n = len - off;
+
+        if (n > DOM_PARSE_CHUNK_BYTES) n = DOM_PARSE_CHUNK_BYTES;
+        memcpy(buf + off, html + off, n);
+        off += n;
+    }
+    {
+        size_t extra = 0;
+        char quote = 0;
+
+        for (size_t i = 0; i < len; i++) {
+            if (quote != 0) {
+                if (html[i] == quote) quote = 0;
+            } else if (html[i] == '"' || html[i] == '\'') {
+                quote = html[i];
+            }
+        }
+        if (quote != 0) {
+            buf[len + extra++] = quote; /* close the dangling attribute value */
+        }
+        buf[len + extra++] = '>';       /* close the dangling tag */
+        memcpy(buf + len + extra, TAIL, sizeof(TAIL) - 1);
+        extra += sizeof(TAIL) - 1;
+        buf[len + extra] = '\0';
+    }
+    tree = dom_parse_impl(buf);
+    p4heap_free(buf);
+    return tree;
+}
+
 void dom_free(dom_tree_t *tree) {
     if (!tree) return;
+    css_forget_tree(tree);      /* never leave the cache pointing at freed nodes */
     /* Release every individually-owned node first (JS-created text nodes), then
      * hand the arena's blocks back. dom_node_free() unlinks arena-owned nodes
      * instead of freeing them, so a single recursive walk covers both. */
@@ -570,21 +790,57 @@ const char *dom_get_attribute(const dom_node_t *node, const char *name) {
     if (strcmp(name, "href") == 0) return node->href;
     if (strcmp(name, "src") == 0) return node->src;
     if (strcmp(name, "alt") == 0) return node->alt;
+    if (strcmp(name, "style") == 0) return node->style;
+    if (strcmp(name, "onclick") == 0) return node->onclick;
+    if (strcmp(name, "onload") == 0) return node->onload;
+    if (strcmp(name, "type") == 0) return node->input_type;
+    if (strcmp(name, "value") == 0) return node->value;
+    if (strcmp(name, "placeholder") == 0) return node->placeholder;
+    if (strcmp(name, "checked") == 0) return node->checked ? "checked" : "";
+    if (strcmp(name, "disabled") == 0) return node->disabled ? "disabled" : "";
     return NULL;
 }
 
 void dom_set_attribute(dom_node_t *node, const char *name, const char *value) {
+    bool style_selector = false;
+
     if (!node || !name || !value) return;
     if (strcmp(name, "id") == 0) {
         strncpy(node->id, value, sizeof(node->id) - 1);
+        style_selector = true;
     } else if (strcmp(name, "class") == 0) {
         strncpy(node->class, value, sizeof(node->class) - 1);
+        style_selector = true;
     } else if (strcmp(name, "href") == 0) {
         strncpy(node->href, value, sizeof(node->href) - 1);
     } else if (strcmp(name, "src") == 0) {
         strncpy(node->src, value, sizeof(node->src) - 1);
     } else if (strcmp(name, "alt") == 0) {
         strncpy(node->alt, value, sizeof(node->alt) - 1);
+    } else if (strcmp(name, "style") == 0) {
+        snprintf(node->style, sizeof(node->style), "%s", value);
+        css_apply_inline_text(node, value);
+    } else if (strcmp(name, "onclick") == 0) {
+        strncpy(node->onclick, value, sizeof(node->onclick) - 1);
+    } else if (strcmp(name, "onload") == 0) {
+        strncpy(node->onload, value, sizeof(node->onload) - 1);
+    } else if (strcmp(name, "type") == 0) {
+        strncpy(node->input_type, value, sizeof(node->input_type) - 1);
+    } else if (strcmp(name, "value") == 0) {
+        strncpy(node->value, value, sizeof(node->value) - 1);
+    } else if (strcmp(name, "placeholder") == 0) {
+        strncpy(node->placeholder, value, sizeof(node->placeholder) - 1);
+    } else if (strcmp(name, "checked") == 0) {
+        node->checked = (value[0] != '\0' && strcmp(value, "false") != 0);
+    } else if (strcmp(name, "disabled") == 0) {
+        node->disabled = (value[0] != '\0' && strcmp(value, "false") != 0);
+    }
+    if (style_selector) {
+        /* A class/id change can promote or demote selector matches. Re-resolve
+         * this subtree from the last stylesheet immediately so the next render
+         * sees the new computed style without a full-tree recompute. */
+        dom_mark_style_dirty();
+        css_propagate_mutation(node);
     }
 }
 
@@ -692,8 +948,92 @@ void dom_set_style(dom_node_t *node, const char *property, const char *value) {
     if (!node || !property || !value) return;
     if (strcmp(property, "display") == 0) {
         if (strcmp(value, "none") == 0) node->display = DOM_DISPLAY_NONE;
+        else if (strcmp(value, "grid") == 0) node->display = DOM_DISPLAY_GRID;
+        else if (strcmp(value, "flex") == 0) node->display = DOM_DISPLAY_FLEX;
         else if (strcmp(value, "block") == 0) node->display = DOM_DISPLAY_BLOCK;
         else if (strcmp(value, "inline") == 0) node->display = DOM_DISPLAY_INLINE;
+    } else if (strcmp(property, "grid-template-columns") == 0 ||
+               strcmp(property, "grid-auto-flow") == 0) {
+        /* One responsive mapping: count the declared tracks, clamp to the
+         * smallest grid that still fits an 80-column page (8 cells/track). */
+        int tracks = 1;
+        const char *p = value;
+
+        while (*p) {
+            if (*p == 'r' && strncmp(p, "repeat", 6) == 0) {
+                const char *n = strchr(p, '(');
+                if (n != NULL) {
+                    int count = atoi(n + 1);
+
+                    tracks = count > 0 ? count : tracks;
+                }
+                break;
+            }
+            if (*p == ')' || *p == '(') { p++; continue; }
+            if (*p >= '0' && *p <= '9' && (p == value || !isdigit((unsigned char)p[-1]))) {
+                int n = atoi(p);
+                if (n > tracks) tracks = n;
+            }
+            p++;
+        }
+        if (tracks > 10) tracks = 10;
+        if (tracks > 0) node->grid_columns = (uint8_t)tracks;
+    } else if (strcmp(property, "border-radius") == 0) {
+        int radius = css_length_px(value, 4);
+
+        if (radius < 0) radius = 0;
+        if (radius > 8) radius = 8;         /* cell grid: beyond 8 is a pill */
+        node->border_radius = (uint8_t)radius;
+    } else if (strcmp(property, "box-shadow") == 0) {
+        css_rgba_t shadow;
+        const char *q;
+        const char *colour = NULL;
+
+        q = value;
+        while (*q) {
+            if (*q == '#' || strncmp(q, "rgb", 3) == 0 ||
+                strncmp(q, "red", 3) == 0 || strncmp(q, "black", 5) == 0 ||
+                strncmp(q, "white", 5) == 0 || strncmp(q, "transparent", 11) == 0) {
+                const char *end = q;
+
+                while (*end && *end != ' ' && *end != ',') end++;
+                if (colour == NULL || *q == '#') colour = q;
+                {
+                    char token[64] = { 0 };
+                    size_t n = (size_t)(end - q);
+
+                    if (n >= sizeof(token)) n = sizeof(token) - 1;
+                    memcpy(token, q, n);
+                    if (css_color_parse(token, &shadow)) {
+                        node->shadow_dos = css_color_to_dos(&shadow);
+                        node->shadow_alpha = shadow.a;
+                        node->shadow_set = true;
+                    }
+                }
+                q = end;
+                continue;
+            }
+            q++;
+        }
+        (void)colour;
+        /* Offsets are the first one or two numeric tokens (px/em/unitless). */
+        {
+            int nums[2] = { 1, 1 };
+            int n = 0;
+            const char *p = value;
+
+            while (*p && n < 2) {
+                if (*p == '-' || (*p >= '0' && *p <= '9')) {
+                    nums[n++] = css_length_px(p, 1);
+                    while (*p && *p != ' ' && *p != ',') p++;
+                } else {
+                    p++;
+                }
+            }
+            node->shadow_x = nums[0];
+            node->shadow_y = nums[1];
+        }
+        if (!node->shadow_set) node->shadow_x = node->shadow_y = 0;
     } else if (strcmp(property, "color") == 0) {
         css_rgba_t color;
 
@@ -710,10 +1050,16 @@ void dom_set_style(dom_node_t *node, const char *property, const char *value) {
         node->opacity = (uint8_t)(amount * 255.0 + 0.5);
     } else if (strcmp(property, "background-color") == 0) {
         dom_css_background_colour(node, value);
-    } else if (strcmp(property, "background-image") == 0) {
-        dom_css_background(node, value);
-    } else if (strcmp(property, "background") == 0) {
-        dom_css_background(node, value);
+    } else if (strcmp(property, "background-image") == 0 ||
+               strcmp(property, "background") == 0) {
+        css_gradient_t gradient;
+
+        if (css_gradient_parse(value, &gradient)) {
+            node->gradient = gradient;
+            node->gradient_set = true;
+        } else {
+            dom_css_background(node, value);
+        }
     } else if (strcmp(property, "text-align") == 0) {
         if (strcmp(value, "center") == 0) node->align = 1;
         else if (strcmp(value, "right") == 0) node->align = 2;
@@ -722,6 +1068,11 @@ void dom_set_style(dom_node_t *node, const char *property, const char *value) {
         if (strstr(value, "3") != NULL || strstr(value, "x-large") != NULL) node->font_scale = 3;
         else if (strstr(value, "2") != NULL || strstr(value, "large") != NULL) node->font_scale = 2;
         else node->font_scale = 1;
+        if (strchr(value, 'p') != NULL || strchr(value, 'e') != NULL) {
+            int px = css_length_px(value, 8);
+
+            node->font_scale = px >= 16 ? 3 : (px >= 11 ? 2 : 1);
+        }
     } else if (strcmp(property, "border") == 0) {
         node->border = (strcmp(value, "none") != 0 && strcmp(value, "0") != 0);
     } else if (strcmp(property, "border-width") == 0) {
@@ -733,25 +1084,27 @@ void dom_set_style(dom_node_t *node, const char *property, const char *value) {
     } else if (strcmp(property, "text-decoration") == 0) {
         node->underline = (strcmp(value, "underline") == 0);
     } else if (strcmp(property, "margin") == 0) {
-        node->margin_top = node->margin_bottom = node->margin_left = node->margin_right = atoi(value);
+        node->margin_top = node->margin_bottom = node->margin_left =
+            node->margin_right = css_length_px(value, 8);
     } else if (strcmp(property, "margin-top") == 0) {
-        node->margin_top = atoi(value);
+        node->margin_top = css_length_px(value, 8);
     } else if (strcmp(property, "margin-bottom") == 0) {
-        node->margin_bottom = atoi(value);
+        node->margin_bottom = css_length_px(value, 8);
     } else if (strcmp(property, "margin-left") == 0) {
-        node->margin_left = atoi(value);
+        node->margin_left = css_length_px(value, 8);
     } else if (strcmp(property, "margin-right") == 0) {
-        node->margin_right = atoi(value);
+        node->margin_right = css_length_px(value, 8);
     } else if (strcmp(property, "padding") == 0) {
-        node->padding_top = node->padding_bottom = node->padding_left = node->padding_right = atoi(value);
+        node->padding_top = node->padding_bottom = node->padding_left =
+            node->padding_right = css_length_px(value, 8);
     } else if (strcmp(property, "padding-top") == 0) {
-        node->padding_top = atoi(value);
+        node->padding_top = css_length_px(value, 8);
     } else if (strcmp(property, "padding-bottom") == 0) {
-        node->padding_bottom = atoi(value);
+        node->padding_bottom = css_length_px(value, 8);
     } else if (strcmp(property, "padding-left") == 0) {
-        node->padding_left = atoi(value);
+        node->padding_left = css_length_px(value, 8);
     } else if (strcmp(property, "padding-right") == 0) {
-        node->padding_right = atoi(value);
+        node->padding_right = css_length_px(value, 8);
     }
 }
 
@@ -760,6 +1113,8 @@ const char *dom_get_style(const dom_node_t *node, const char *property) {
     static char buf[64];
     if (strcmp(property, "display") == 0) {
         if (node->display == DOM_DISPLAY_NONE) return "none";
+        if (node->display == DOM_DISPLAY_GRID) return "grid";
+        if (node->display == DOM_DISPLAY_FLEX) return "flex";
         if (node->display == DOM_DISPLAY_BLOCK) return "block";
         return "inline";
     } else if (strcmp(property, "color") == 0) {
@@ -786,6 +1141,15 @@ const char *dom_get_style(const dom_node_t *node, const char *property) {
         return buf;
     } else if (strcmp(property, "padding") == 0) {
         snprintf(buf, sizeof(buf), "%d", node->padding_top);
+        return buf;
+    } else if (strcmp(property, "opacity") == 0) {
+        snprintf(buf, sizeof(buf), "%.3f", (double)node->opacity / 255.0);
+        return buf;
+    } else if (strcmp(property, "border-radius") == 0) {
+        snprintf(buf, sizeof(buf), "%upx", (unsigned)node->border_radius);
+        return buf;
+    } else if (strcmp(property, "grid-template-columns") == 0) {
+        snprintf(buf, sizeof(buf), "%u", (unsigned)node->grid_columns);
         return buf;
     }
     return "";
@@ -820,7 +1184,33 @@ void dom_add_event_listener(dom_node_t *node, const char *event, const char *han
     }
 }
 
-void dom_dispatch_event(dom_node_t *node, const char *event) {
-    (void)node;
-    (void)event;
+/* Event dispatch is inverted through one registration hook: the DOM leaf owns
+ * no JS runtime, but a registered engine can evaluate the handler source. */
+static dom_event_hook_t s_event_hook = NULL;
+static void *s_event_hook_ctx = NULL;
+
+void dom_set_event_hook(dom_event_hook_t hook, void *ctx)
+{
+    s_event_hook = hook;
+    s_event_hook_ctx = ctx;
+}
+
+void dom_dispatch_event(dom_node_t *node, const char *event)
+{
+    const char *handler = NULL;
+
+    if (node == NULL || event == NULL) return;
+    if (strcmp(event, "click") == 0 || strcmp(event, "input") == 0 ||
+        strcmp(event, "change") == 0 || strcmp(event, "submit") == 0) {
+        handler = node->onclick;
+    } else if (strcmp(event, "load") == 0) {
+        handler = node->onload;
+    }
+    if (s_event_hook != NULL && handler != NULL && handler[0] != '\0') {
+        s_event_hook(s_event_hook_ctx, node, event, handler);
+    }
+    /* Document-level listeners see bubbling events from any node. */
+    if (s_event_hook != NULL) {
+        s_event_hook(s_event_hook_ctx, node, event, NULL);
+    }
 }

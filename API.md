@@ -3,7 +3,7 @@
 This document lists the C API each component exposes to the rest of the
 firmware, organized by module and mirroring the headers under `components/`.
 
-> **Current public API reference (v1.5.0).** For the working rules and
+> **Current public API reference (v1.6.0).** For the working rules and
 > invariants behind these functions see [`ai-context.md`](ai-context.md); for
 > integration examples see [`SDK.md`](SDK.md); for the user-facing command
 > surface see [`command.md`](command.md). Current verified test baselines live
@@ -3085,6 +3085,48 @@ void usb_mouse_click_enable/disable(void);
 - OTA success text remains `C6 OTA completed successfully! Type reboot to activate new firmware.`.
 - OTA progress text remains `C6 OTA: XX% (YYYY KB / ZZZZ KB)`.
 - OTA continues to validate ESP-IDF app-image magic `0xE9` and ESP32-C6 chip ID `0x000D` before transfer.
+
+## Additive v1.6 APIs
+
+These are new seams on existing engines; none replaces an earlier API or adds
+a second implementation of a renderer, loader, palette or event model.
+
+### Gfx toolkit (`components/gfx/gfx.h`)
+
+- `void gfx_surface_lineaa(gfx_surface_t *s, int x1, int y1, int x2, int y2, uint16_t color)` — coverage anti-aliased line.
+- `void gfx_surface_circleaa(...)` / `void gfx_surface_rectaa(...)` — coverage anti-aliased 1px outlines.
+- `void gfx_surface_gradient(gfx_surface_t *s, int x, int y, int w, int h, uint16_t c0, uint16_t c1, bool vertical)` — linear RGB565 fill.
+- `void gfx_surface_blit_atlas(gfx_surface_t *dst, const gfx_surface_t *sheet, int cell, int cols, int cw, int ch, int x, int y, bool transparent)` — one sprite-sheet cell.
+- `void gfx_surface_composite(gfx_surface_t *dst, const gfx_surface_t *src, int x, int y, int alpha)` and `gfx_surface_composite_keyed(..., uint16_t transparent)` — alpha blend, optionally keyed.
+- Exact RGB565 expectations are shared with `test/main/test_gfx.c` and
+  `tools/host/fixtures/gfx/expected.json`.
+
+### TUI frame and widgets (`components/tui/tui_frame.h`, `tui_widgets.h`)
+
+- `tui_frame_t` / `tui_frame_bind()` / `tui_frame_set()` / `tui_frame_clear()` — caller-owned double-buffered cell grids (no allocation, no LVGL).
+- `tui_frame_diff()` / `tui_frame_diff_rect()` -> `tui_dirty_t` — inclusive 1-based bounding rect of changed cells; `tui_frame_commit()` publishes working to presented.
+- `tui_frame_render_span()` / `tui_frame_render_full()` — the ONE recolor-markup formatter; `tui_frame_render_runs()` emits `tui dump /a`-style runs. `tui_frame_markup_cap()` sizes the buffer.
+- `tui_rgb_to_dos()` / `tui_frame_set_rgb()` / `tui_256_rgb()` / `tui_frame_256_to_dos()` — the ONE DOS palette quantiser plus an xterm-256 index decoder (an index decoder, not a second parser).
+- `tui_sample_image_cells()` with `tui_pixel_sink_t` / `tui_frame_sprite_sink()` / `tui_frame_draw_sprite()` — the ONE image-to-cell sampler shared by grid, page and sprite paths.
+- Live bridge (implemented in `tui.c`): `tui_live_frame()`, `tui_live_frame_dirty()`, `tui_draw_sprite()`, `tui_print_rgb()`.
+- `tui_layout_rect()` (row/column/grid pure geometry), `tui_scroll_clamp()` / `tui_scroll_step()`, `tui_focus_wrap()`; shared state in `tui_widget_focus_add/set/step/current/count/clear`, `tui_widget_get_label`, `tui_scroll_region_add/step/get/remove`, `tui_widgets_route_key/tap`, `tui_widgets_activate_focused()` — all over the existing pane/modal/event state.
+
+### Signed native payload (`components/nativepay/`, `components/nativeexec/`)
+
+- `native_pay_parse()` / `native_pay_check()` / `native_pay_status_name()` — pure envelope parse and trust verdict over exact canonical bytes; `native_pay_set_crypto_ops()` / `native_pay_set_trusted_key()` install the mbedTLS hooks and the single key.
+- `native_exec_abi_validate()` / `native_exec_plan()` / `native_exec_inspect()` — structural and fully verified inspection into `native_exec_plan_t`; `native_exec_api_supported()` checks the required API mask.
+- `native_exec_set_api()` / `native_exec_set_map_ops()` install the boot provider and executable-memory seam; `native_exec_launch()` is the only verify → map → call → unmap path. `native_exec_status_name()` gives stable diagnostics.
+- `native_exec_api_t` / `native_exec_entry_t` — the stable versioned API table and single entry ABI. No ELF, relocation, MMU or second dispatcher.
+
+### HTML5/CSS/JS additions (`components/markdown/`, `components/jsengine/`)
+
+- `css_color.h` — one `css_gradient_t` parser shared by CSS `linear-gradient()` and Canvas `createLinearGradient()`, plus opacity/shadow/radius parsing; `css.c` adds semantic/forms/grid/table-colspan handling and extended selectors/units in the one DOM/CSS pass.
+- `js_canvas.h` — `js_canvas_gradient_parse/at`, `js_canvas_set_gradient/clear_gradient`, `js_canvas_fill_gradient_rect`, `js_canvas_fill_rounded_rect`, `js_canvas_set_shadow/clear_shadow` and the shadow getters/setters. The pure rasterizer remains the only canvas core; the JS bindings in `js_canvas_js.c` and the browser's pixel-to-cell conversion are unchanged in shape.
+- `webapp` verbs `event`/`tick` route through the existing DOM event dispatcher and JS timer queue; no new runtime.
+
+### Modal surfaces (`components/command/modal_commands.c`, `components/modal/`)
+
+- `shell_command_mpick()`, `shell_command_mprog()`, `shell_command_mformx()`, `shell_command_mstack()` — thin command surfaces over the shared modal runtime; session stack, focus/progress/form state and transitions live in `modal.c` / `modal_args.c` (pure, host-gated). No second window manager.
 
 ## Hardware module APIs (v1.4.3)
 

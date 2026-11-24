@@ -94,6 +94,16 @@ The runner also treats a zero-assertion `Checklist`/`SuiteResult` as a failure
 at run time, so a vacuous suite can never report green. Run the guard before
 committing test changes; `release.md` gates on it.
 
+For v1.6.0, the hardware-free pre-gate set also includes the real-code host
+gates — `tools/host_batch_run.py --check`, `tools/host_webapp_gate.py --check`,
+`tools/host_tui_gate.py --check`, `tools/host_modal_gate.py --check`,
+`tools/gfx_toolkit_test.py --host` and `tools/host_apps_gate.py --check`
+(33 enriched apps, 363 host assertions, 40 honest hardware SKIPs, 7 canaries).
+They compile or drive shipped code, never a fake backend, and a pass is never
+hardware sign-off (`harness.md` §0/§2.2). The v1.6 `[M-RICH-*]` transcript lines
+change app output, so `tools/appdiff/baseline/*.transcript.txt` must be
+rebaselined on a board before hardware parity is green.
+
 ---
 
 ## 5. Definition of done

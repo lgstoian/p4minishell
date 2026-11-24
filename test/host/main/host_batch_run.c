@@ -81,8 +81,11 @@ static void host_batch_execute_command(char *command)
         return;
     }
 
-    /* Comments are opaque through end of line (cmd.exe parity). */
+    /* Comments are opaque through end of line (cmd.exe parity): `rem` with
+     * trailing text is a comment too, not an unknown command. */
     if (shell_text_equals_ignore_case(trimmed, "rem") ||
+        strncasecmp(trimmed, "rem ", 4) == 0 ||
+        strncasecmp(trimmed, "rem\t", 4) == 0 ||
         strncmp(trimmed, "::", 2) == 0) {
         return;
     }
@@ -123,6 +126,16 @@ static void host_batch_execute_command(char *command)
         shell_command_call(argc, argv);
     } else if (shell_text_equals_ignore_case(first, "gosub")) {
         shell_command_gosub(argc, argv);
+    } else if (shell_text_equals_ignore_case(first, "func")) {
+        /* `func` is a front door over the real `call :label` frame machinery;
+         * no second dispatcher is introduced on this lane either. */
+        shell_command_func(argc, argv);
+    } else if (shell_text_equals_ignore_case(first, "trap")) {
+        shell_command_trap(argc, argv);
+    } else if (shell_text_equals_ignore_case(first, "str")) {
+        shell_command_str(argc, argv);
+    } else if (shell_text_equals_ignore_case(first, "map")) {
+        shell_command_map(argc, argv);
     } else if (shell_text_equals_ignore_case(first, "return")) {
         shell_command_return(argc, argv);
     } else if (shell_text_equals_ignore_case(first, "path")) {

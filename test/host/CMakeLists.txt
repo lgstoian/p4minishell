@@ -52,6 +52,8 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../../components/p4heap
     ${CMAKE_CURRENT_SOURCE_DIR}/../../components/filetype
     ${CMAKE_CURRENT_SOURCE_DIR}/../../components/markdown
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../components/nativepay
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../components/nativeexec
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

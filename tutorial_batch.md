@@ -205,7 +205,25 @@ already link every app name the same way.
 
 ## 7b. Emoji, transparency and web pages
 
-Three v1.4.3 surfaces are one line each from batch.
+Three v1.4.3 surfaces are one line each from batch; the v1.6 additions are
+equally small and additive:
+
+```bat
+str /rev NAME OUT
+map /set CFG host p4
+for /K %%k in (CFG) do echo %%k=%%l
+func double 21
+echo %RESULT%
+trap /on errorlevel :onerr
+webapp event btn click
+webapp tick
+```
+
+All 33 updated reference apps emit `[M-RICH-*]` markers exercising these
+surfaces; pre-existing `[M-*]` markers are preserved. `python
+tools/host_apps_gate.py --check` proves them on the host (363 assertions, 40
+honest hardware SKIPs). The new transcript lines require a board rebaseline of
+`tools/appdiff/baseline/*.transcript.txt`.
 
 **Emoji.** Text renders emoji with a retro MS-DOS/CP437 look by default - no
 SD card or network needed - in the TUI and in LVGL. To use colour artwork,

@@ -177,6 +177,86 @@ void test_native_payload_crc_rejection(void)
     TEST_ASSERT_EQUAL(NATIVE_PAY_ERR_CRC, native_pay_check(s_blob, len, &view));
 }
 
+/* Mock crypto hooks: test-only stand-ins so the full verify path can be
+ * exercised without mbedTLS on the unit lane. They deliberately produce the
+ * fixed values build_blob() writes; no real trust is claimed. */
+static int mock_sha256_spans(const native_pay_span_t *spans, size_t span_count,
+                             uint8_t digest_out[NATIVE_PAY_SHA256_BYTES])
+{
+    if (spans == NULL || digest_out == NULL || span_count == 0u ||
+        span_count > NATIVE_PAY_SPANS_MAX) {
+        return 1;
+    }
+    memset(digest_out, 0x5A, NATIVE_PAY_SHA256_BYTES);
+    return 0;
+}
+
+static int mock_ecdsa_verify(const uint8_t digest[NATIVE_PAY_SHA256_BYTES],
+                             const uint8_t signature[NATIVE_PAY_SIG_BYTES],
+                             const uint8_t pubkey[NATIVE_PAY_PUBKEY_BYTES])
+{
+    if (digest == NULL || signature == NULL || pubkey == NULL) {
+        return 1;
+    }
+    return (digest[0] == 0x5Au && signature[0] == 0x11u) ? 0 : 1;
+}
+
+static void install_mock_crypto(void)
+{
+    static const native_pay_crypto_ops_t ops = {
+        mock_sha256_spans, mock_ecdsa_verify
+    };
+    static const uint8_t key[NATIVE_PAY_PUBKEY_BYTES] = { 0x42u };
+
+    native_pay_set_crypto_ops(&ops);
+    native_pay_set_trusted_key(key);
+}
+
+void test_native_payload_verifier_queries(void)
+{
+    clear_crypto();
+    TEST_ASSERT_FALSE(native_pay_crypto_installed());
+    TEST_ASSERT_FALSE(native_pay_key_installed());
+    TEST_ASSERT_FALSE(native_pay_verifier_ready());
+
+    install_mock_crypto();
+    TEST_ASSERT_TRUE(native_pay_crypto_installed());
+    TEST_ASSERT_TRUE(native_pay_key_installed());
+    TEST_ASSERT_TRUE(native_pay_verifier_ready());
+
+    native_pay_set_trusted_key(NULL);
+    TEST_ASSERT_TRUE(native_pay_crypto_installed());
+    TEST_ASSERT_FALSE(native_pay_verifier_ready());
+    clear_crypto();
+}
+
+void test_native_payload_full_verify_with_hooks(void)
+{
+    size_t len = build_blob(TEST_PAYLOAD_BYTES);
+    native_pay_view_t view;
+
+    install_mock_crypto();
+    TEST_ASSERT_EQUAL(NATIVE_PAY_OK, native_pay_check(s_blob, len, &view));
+    TEST_ASSERT_EQUAL_UINT32(TEST_PAYLOAD_BYTES, view.payload_size);
+    clear_crypto();
+}
+
+void test_native_payload_hash_and_signature_rejection(void)
+{
+    size_t len = build_blob(TEST_PAYLOAD_BYTES);
+    native_pay_view_t view;
+
+    install_mock_crypto();
+    s_blob[NATIVE_PAY_OFF_SHA256] ^= 0x01u;
+    TEST_ASSERT_EQUAL(NATIVE_PAY_ERR_SHA, native_pay_check(s_blob, len, &view));
+
+    build_blob(TEST_PAYLOAD_BYTES);
+    install_mock_crypto();
+    s_blob[NATIVE_PAY_OFF_SIGNATURE] ^= 0x01u;
+    TEST_ASSERT_EQUAL(NATIVE_PAY_ERR_SIGNATURE, native_pay_check(s_blob, len, &view));
+    clear_crypto();
+}
+
 void test_native_payload_reserved_and_api_set(void)
 {
     size_t len = build_blob(TEST_PAYLOAD_BYTES);

@@ -5,7 +5,7 @@ How to extend and integrate P4MiniShell. This is the practical companion to the
 registration tables, the modal/native-app patterns, and how to add commands,
 files, and boot hooks.
 
-- **Version:** v1.5.0 (ESP-IDF v5.5.5)
+- **Version:** v1.6.0 (ESP-IDF v5.5.5)
 - **Working rules and invariants:** [`ai-context.md`](ai-context.md)
 - **Architecture:** [`documentation.md`](documentation.md)
 - **User-facing commands:** [`command.md`](command.md)
@@ -332,6 +332,55 @@ The app/package contract is frozen in [`ABI.md`](ABI.md). In short:
 - **Extending it:** new metadata keys are optional and additive; a breaking
   change to the entry ABI or a metadata key bumps `P4_CONFIG_NATIVE_ABI`, and
   `ABI.md` / `docs/native_packaging.md` / the changelog move together.
+
+## Signed native payload seams (v1.6, additive)
+
+The opt-in `.P4X` capability adds **one** loader path and no new app model.
+Extend it through these seams only:
+
+- `components/nativepay/` — the **pure verifier**: envelope parse, bounds,
+  CRC-32, SHA-256 over the ABI §4.1 canonical bytes, and hook-based ECDSA P-256.
+  It never reads a file, maps memory or calls an entry. A missing verifier or
+  key is an explicit non-success verdict (`native_pay_check()` reports it).
+- `components/nativeexec/` — the **single loader**: `native_exec_plan()` /
+  `native_exec_inspect()` for diagnostics, `native_exec_launch()` for the one
+  verify → API-bit check → map → entry call → unmap sequence. The fixed export
+  table (`P4EX`, version, count, u32 offsets) is validated without forming a
+  function pointer; the entry ABI is
+  `int entry(const native_exec_api_t *api, int argc, char **argv)`.
+- `components/command/native_commands.c` — the **only boot wiring**: installs
+  the mbedTLS SHA-256/ECDSA hooks, the single `p4sign` key loaded through
+  `pkg_sign_pubkey_load()`, the executable-memory map hook and the versioned
+  API table. The `native` verb and the `natrun` app are two thin front doors
+  over `native_run_app()`; no other command may launch a payload.
+- **Rules.** No ELF parser, relocator, MMU claim, second dispatcher, second key
+  store or second package format. `apps/` shims remain the only front door,
+  install-time manifest trust is unchanged, and board execution still needs
+  on-device proof. Host fixtures (`tools/host/fixtures/native/`) are test-only
+  keys and payloads, never device trust material ('SECURITY.md').
+
+## Rendering and event seams (v1.6, additive)
+
+- **Gfx** (`components/gfx/gfx.h`): add primitives to the one RGB565 raster
+  core (`gfx_surface_lineaa`/`circleaa`/`rectaa`, `gfx_surface_gradient`,
+  `gfx_surface_blit_atlas`, `gfx_surface_composite[_keyed]`). Exact RGB565
+  values are asserted by `test/main/test_gfx.c` and mirrored in
+  `tools/host/fixtures/gfx/expected.json`; never reimplement a raster op in a
+  command or a host gate.
+- **TUI** (`components/tui/tui_frame.h`, `tui_widgets.h`): `tui_frame_*` owns
+  the double-buffered grid, dirty-rect diff, the one cell renderer and the one
+  image sampler; `tui_widgets_*` owns focus, pure layout geometry, scroll
+  regions and key/tap routing through the existing modal chord/hotspot/event
+  seams. `tui frame|focus|layout|scroll|route` and `draw run|sprite` are thin
+  verbs over them. No second window manager, colour parser or palette.
+- **Modal** (`components/command/modal_commands.c`): `mpick`, `mprog`,
+  `mformx` and `mstack` register surfaces on the shared modal runtime; add
+  state transitions to `components/modal/modal_args.c` (pure, host-gated) and
+  keep the LVGL/FreeRTOS half in `modal.c`/`modal_surf.c`.
+- **Webapp** (`components/command/webapp_commands.c`): `event` and `tick`
+  delegate to the page engine's one DOM event dispatcher and JS timer queue.
+  Host render gates compile the shipped DOM/CSS/TUI cores; a pass is a
+  pre-gate only (harness.md 2.2).
 
 ## Writerdeck surfaces (v1.2.0)
 

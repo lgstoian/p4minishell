@@ -14,7 +14,7 @@
 #
 # Version: 1.5.0
 # Last updated: 2026-10-01 (1.3.1: Tab5 white-noise fix - amp gating, mic diagnostics)
-config_version: "1.5.0"  # LED2 follows CPU usage on two-LED boards (v1.4.4)  # LED2 follows CPU usage on two-LED boards (v1.4.4)
+config_version: "1.6.0"  # LED2 follows CPU usage on two-LED boards (v1.4.4)  # LED2 follows CPU usage on two-LED boards (v1.4.4)
 
 # ---- Shell Identity ----
 shell_identity:
@@ -2305,6 +2305,16 @@ batch_env:
     type: size_t
     description: "Largest verified payload body accepted by the pure envelope parser; the blob stays data until a signed payload is launched by a .bat shim (P4_CONFIG_NATPAY_MAX_PAYLOAD_BYTES, see ABI.md 4.1)"
     range: "1..16777216"
+  native_max_exports:
+    value: 16
+    type: int
+    description: "Maximum exported entries in one signed .P4X payload; bounds the single loader's export table (P4_CONFIG_NATIVE_MAX_EXPORTS)"
+    range: "1..64"
+  native_api_supported_mask:
+    value: 135
+    type: uint32
+    description: "Bitmask of applib API groups the single native payload loader may supply (console|env initially); unsupported bits refuse launch (P4_CONFIG_NATIVE_API_SUPPORTED_MASK)"
+    range: "0..511"
   pkg_require_sign:
     value: 0
     type: int

@@ -1,0 +1,16 @@
+# batch-baseline-v1 fixture=FEATURES
+S=abc
+1
+[M-HOST-STR] rev=cba count=1 pad=abc--
+[M-HOST-FORK] host=p4
+[M-HOST-FORK] port=80
+[M-HOST-MAP] vals=p4,80
+3
+[M-HOST-MAP] hits=3
+[M-HOST-FUNC] result=42
+[M-HOST-TRAP] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 7)
+[M-HOST-EXIT] code=7
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

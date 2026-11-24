@@ -3,9 +3,12 @@
 Committed, curated screenshots for the public docs. This folder is the
 **only** screenshot location that ships with the repository.
 
-`proof-index.html` is the checked, board-free proof set for v1.5.0: it shows
+`proof-index.html` is the checked, board-free proof set for v1.6.0: it shows
 only captures verified by visual inspection and the identity/colour gates, with
-host-generated proofs labelled as such. It is not hardware sign-off.
+host-generated proofs labelled as such. It is not hardware sign-off. The
+`web/` subfolder holds copies of the committed `screenshots/web/*.png` browser
+proofs (modern-site fixtures, entity/cascade detail and parse recovery) so the
+index can display them.
 
 - `screenshots/` (repo root) is git-ignored scratch from test runs — never
   link docs to it. It should stay empty (only `.gitkeep`) on a clean checkout.

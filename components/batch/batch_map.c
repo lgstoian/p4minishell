@@ -53,19 +53,30 @@ static void map_meta_name(const char *map_name, char *out, size_t out_size)
     snprintf(out, out_size, "%s.__size", map_name);
 }
 
+static bool map_parse_entry(const char *entry, char *key_out, size_t key_size,
+                             char *val_out, size_t val_size);
+
 /** Find a key in the map's collision chain. Returns the chain index or -1.
- *  On match, writes the slot name to `slot_out`. */
+ *  On match, writes the slot name to `slot_out`. Slots store "key=value", so
+ *  the stored entry must be split before the key can be compared (the old
+ *  whole-entry compare never matched a real key). */
 static int map_find_key(const char *map_name, const char *key, char *slot_out, size_t slot_size)
 {
     unsigned int h = map_hash(key);
     for (int i = 0; i < MAP_MAX_CHAIN; i++) {
         char slot[MAP_NAME_BYTES];
         map_slot_name(map_name, h, i, slot, sizeof(slot));
-        const char *stored_key = shell_env_get(slot);
-        if (stored_key == NULL) {
+        const char *entry = shell_env_get(slot);
+        char stored_key[MAP_KEY_BYTES];
+        char stored_value[MAP_VALUE_BYTES];
+
+        if (entry == NULL) {
             return -1; /* empty slot, key not found */
         }
-        /* Slot stores "key\0value" or just "key" at start */
+        if (!map_parse_entry(entry, stored_key, sizeof(stored_key),
+                             stored_value, sizeof(stored_value))) {
+            continue;
+        }
         if (strcmp(stored_key, key) == 0) {
             if (slot_out != NULL) {
                 snprintf(slot_out, slot_size, "%s", slot);
@@ -131,6 +142,100 @@ static bool map_parse_entry(const char *entry, char *key_out, size_t key_size,
 }
 
 /* ========================================================================
+ * SHARED ENUMERATION / LOOKUP (used by /keys, /values and `for /K`)
+ * ======================================================================== */
+
+int shell_map_collect_keys(const char *map_name,
+                           char keys[][P4_CONFIG_ENV_NAME_BYTES], int max)
+{
+    char prefix[MAP_NAME_BYTES];
+    /* Scratch slot names are line-sized in aggregate: heap, never stack, on
+     * the recursive batch path (32 KB worker stack rule). */
+    char (*slots)[P4_CONFIG_ENV_NAME_BYTES] = NULL;
+    int slot_count;
+    int count = 0;
+
+    if (map_name == NULL || map_name[0] == '\0' || keys == NULL || max <= 0) {
+        return 0;
+    }
+    slots = malloc(sizeof(*slots) * (P4_CONFIG_ENV_MAP_SLOTS + 8));
+    if (slots == NULL) {
+        return 0;
+    }
+    snprintf(prefix, sizeof(prefix), "%s#", map_name);
+    slot_count = shell_env_collect_prefix(prefix, slots, P4_CONFIG_ENV_MAP_SLOTS + 8);
+    for (int i = 0; i < slot_count && count < max; i++) {
+        const char *entry = shell_env_get(slots[i]);
+        char key[MAP_KEY_BYTES];
+        char value[MAP_VALUE_BYTES];
+
+        if (entry == NULL ||
+            !map_parse_entry(entry, key, sizeof(key), value, sizeof(value)) ||
+            key[0] == '\0') {
+            continue;
+        }
+        snprintf(keys[count], P4_CONFIG_ENV_NAME_BYTES, "%s", key);
+        count++;
+    }
+    free(slots);
+    return count;
+}
+
+/** Emit the collected keys (or their values, in the same order) into a
+ *  DEST[0..n-1] array plus DEST.__len. One writer behind /keys and /values. */
+static void map_emit_slots(const char *dest_name,
+                           char keys[][P4_CONFIG_ENV_NAME_BYTES], int count,
+                           const char *map_name, bool emit_values)
+{
+    char len_name[MAP_NAME_BYTES];
+    char len_buf[12];
+
+    snprintf(len_name, sizeof(len_name), "%s.__len", dest_name);
+    shell_env_set(len_name, NULL);
+    for (int i = 0; i < count; i++) {
+        char slot[MAP_NAME_BYTES];
+        char value[MAP_VALUE_BYTES];
+
+        if (emit_values && map_name != NULL) {
+            if (!shell_map_lookup(map_name, keys[i], value, sizeof(value))) {
+                value[0] = '\0';
+            }
+        } else {
+            snprintf(value, sizeof(value), "%s", keys[i]);
+        }
+        snprintf(slot, sizeof(slot), "%s[%d]", dest_name, i);
+        shell_env_set(slot, value);
+    }
+    snprintf(len_buf, sizeof(len_buf), "%d", count);
+    shell_env_set(len_name, len_buf);
+}
+
+bool shell_map_lookup(const char *map_name, const char *key,
+                      char *out, size_t out_size)
+{
+    char slot[MAP_NAME_BYTES];
+    const char *entry;
+    char parsed_key[MAP_KEY_BYTES];
+    char value[MAP_VALUE_BYTES];
+
+    if (out == NULL || out_size == 0 || key == NULL) {
+        return false;
+    }
+    out[0] = '\0';
+    if (map_find_key(map_name, key, slot, sizeof(slot)) < 0) {
+        return false;
+    }
+    entry = shell_env_get(slot);
+    if (entry == NULL ||
+        !map_parse_entry(entry, parsed_key, sizeof(parsed_key),
+                         value, sizeof(value))) {
+        return false;
+    }
+    snprintf(out, out_size, "%s", value);
+    return true;
+}
+
+/* ========================================================================
  * VERB IMPLEMENTATION
  * ======================================================================== */
 
@@ -143,6 +248,8 @@ void shell_command_map(int argc, char **argv)
             "       MAP /has MAPNAME KEY\n"
             "       MAP /del MAPNAME KEY\n"
             "       MAP /keys MAPNAME DEST\n"
+            "       MAP /values MAPNAME DEST\n"
+            "       MAP /incr MAPNAME KEY [STEP]\n"
             "       MAP /size MAPNAME\n"
             "       MAP /clear MAPNAME");
         batch_set_errorlevel(2);
@@ -248,49 +355,80 @@ void shell_command_map(int argc, char **argv)
         return;
     }
 
-    /* /keys MAPNAME DEST - emit keys into DEST[0..n-1] */
+    /* /keys MAPNAME DEST - emit keys into DEST[0..n-1]. The one collector is
+     * shared with `for /K`, so there is no second hash-slot enumeration. */
     if (flag == 'K' && argc >= 4) {
         const char *dest_name = argv[3];
-        int sz = map_size(map_name);
+        char (*keys)[P4_CONFIG_ENV_NAME_BYTES] =
+            malloc(sizeof(*keys) * (P4_CONFIG_ENV_MAP_SLOTS + 8));
+        int count;
 
-        /* Clear destination */
-        char dest_len[MAP_NAME_BYTES];
-        snprintf(dest_len, sizeof(dest_len), "%s.__len", dest_name);
-        shell_env_set(dest_len, NULL);
+        if (keys == NULL) {
+            shell_print_error("map /keys: out of memory");
+            batch_set_errorlevel(1);
+            return;
+        }
+        count = shell_map_collect_keys(map_name, keys, P4_CONFIG_ENV_MAP_SLOTS + 8);
+        map_emit_slots(dest_name, keys, count, NULL, false);
+        free(keys);
+        batch_set_errorlevel(0);
+        return;
+    }
 
-        int count = 0;
-        unsigned int h = 0;
-        /* We need to scan all possible hash slots. Since we can't enumerate
-         * by hash directly, we use a different approach: scan for slots
-         * matching "MAPNAME#*" pattern by trying common hashes.
-         * For simplicity, we scan the env table for slots starting with
-         * "MAPNAME#". */
-        char prefix[MAP_NAME_BYTES];
-        snprintf(prefix, sizeof(prefix), "%s#", map_name);
+    /* /values MAPNAME DEST - emit the values of the same keys, in the same
+     * order as /keys (so `"map /keys" then "map /values"` line up). */
+    if (flag == 'V' && argc >= 4) {
+        const char *dest_name = argv[3];
+        char (*keys)[P4_CONFIG_ENV_NAME_BYTES] =
+            malloc(sizeof(*keys) * (P4_CONFIG_ENV_MAP_SLOTS + 8));
+        int count;
 
-        /* Collect keys by scanning the MAP class slots */
-        /* Note: We iterate a reasonable range of hash values */
-        for (h = 0; h < 65536 && count < sz; h++) {
-            for (int i = 0; i < MAP_MAX_CHAIN && count < sz; i++) {
-                char slot[MAP_NAME_BYTES];
-                map_slot_name(map_name, h, i, slot, sizeof(slot));
-                const char *entry = shell_env_get(slot);
-                if (entry != NULL) {
-                    char key[MAP_KEY_BYTES], value[MAP_VALUE_BYTES];
-                    if (map_parse_entry(entry, key, sizeof(key), value, sizeof(value))) {
-                        char dest_slot[MAP_NAME_BYTES];
-                        char key_buf[MAP_VALUE_BYTES];
-                        snprintf(dest_slot, sizeof(dest_slot), "%s[%d]", dest_name, count);
-                        snprintf(key_buf, sizeof(key_buf), "%s", key);
-                        shell_env_set(dest_slot, key_buf);
-                        count++;
-                    }
-                }
+        if (keys == NULL) {
+            shell_print_error("map /values: out of memory");
+            batch_set_errorlevel(1);
+            return;
+        }
+        count = shell_map_collect_keys(map_name, keys, P4_CONFIG_ENV_MAP_SLOTS + 8);
+        map_emit_slots(dest_name, keys, count, map_name, true);
+        free(keys);
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    /* /incr MAPNAME KEY [STEP] - numeric increment in place. A missing key
+     * starts at 0; the new value is printed and ERRORLEVEL is 0/1. */
+    if (flag == 'I' && argc >= 4) {
+        char value[MAP_VALUE_BYTES];
+        bool existed;
+        long current = 0;
+        long step = (argc >= 5) ? strtol(argv[4], NULL, 10) : 1;
+        char numbuf[24];
+
+        if (map_name[0] == '\0' || argv[3][0] == '\0') {
+            shell_print_error("map /incr: needs a map name and key");
+            batch_set_errorlevel(2);
+            return;
+        }
+        existed = shell_map_lookup(map_name, argv[3], value, sizeof(value));
+        if (existed) {
+            char *end = NULL;
+
+            current = strtol(value, &end, 10);
+            if (end == value) {
+                current = 0;
             }
         }
-        char len_buf[12];
-        snprintf(len_buf, sizeof(len_buf), "%d", count);
-        shell_env_set(dest_len, len_buf);
+        current += step;
+        snprintf(numbuf, sizeof(numbuf), "%ld", current);
+        if (map_store_slot(map_name, argv[3], numbuf) != ESP_OK) {
+            shell_print_error("map /incr: hash chain full");
+            batch_set_errorlevel(1);
+            return;
+        }
+        if (!existed) {
+            (void)map_set_size(map_name, map_size(map_name) + 1);
+        }
+        shell_transcript_appendf("%s\n", numbuf);
         batch_set_errorlevel(0);
         return;
     }
@@ -304,24 +442,29 @@ void shell_command_map(int argc, char **argv)
         return;
     }
 
-    /* /clear MAPNAME */
+    /* /clear MAPNAME — enumerate through the one shared collector. The old
+     * bounded 0..65535 hash scan silently missed djb2 hashes above that range
+     * (even a one-character key hashes larger), so entries survived /clear. */
     if (flag == 'C' && argc >= 3) {
-        /* Clear all slots by scanning */
-        unsigned int h;
-        for (h = 0; h < 65536; h++) {
-            for (int i = 0; i < MAP_MAX_CHAIN; i++) {
-                char slot[MAP_NAME_BYTES];
-                map_slot_name(map_name, h, i, slot, sizeof(slot));
-                const char *entry = shell_env_get(slot);
-                if (entry != NULL) {
-                    shell_env_set(slot, NULL);
-                }
-            }
-        }
-        /* Clear metadata */
+        char prefix[MAP_NAME_BYTES];
+        char (*slots)[P4_CONFIG_ENV_NAME_BYTES] =
+            malloc(sizeof(*slots) * (P4_CONFIG_ENV_MAP_SLOTS + 8));
+        int count;
         char meta[MAP_NAME_BYTES];
+
+        if (slots == NULL) {
+            shell_print_error("map /clear: out of memory");
+            batch_set_errorlevel(1);
+            return;
+        }
+        snprintf(prefix, sizeof(prefix), "%s#", map_name);
+        count = shell_env_collect_prefix(prefix, slots, P4_CONFIG_ENV_MAP_SLOTS + 8);
+        for (int i = 0; i < count; i++) {
+            (void)shell_env_set(slots[i], NULL);
+        }
+        free(slots);
         map_meta_name(map_name, meta, sizeof(meta));
-        shell_env_set(meta, NULL);
+        (void)shell_env_set(meta, NULL);
         batch_set_errorlevel(0);
         return;
     }

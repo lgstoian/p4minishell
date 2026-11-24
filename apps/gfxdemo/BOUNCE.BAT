@@ -21,6 +21,17 @@ title "Bounce"
 gfx init 240 180
 if errorlevel 1 goto nogfx
 gfx load 0 %APPDRIVE%/BALL.BMP
+rem [M-RICH-BOUNCE] additive v1.6 gfx tour: smooth primitives, a linear
+rem gradient background, a translucent composite layer and an atlas blitmany.
+echo [M-RICH-BOUNCE] smooth gfx + language tour
+gfx gradient 0 0 240 180 0x101820 0x3A6EA5 h
+gfx lineaa 0 179 239 0 0x00FFFF
+gfx circleaa 120 90 40 0xFFFFFF
+gfx rectaa 4 4 236 176 0x555555
+gfx composite 0 8 8 128
+gfx blitmany 0 /a:1,16,16 0 8
+func :bouncev 3 2
+echo [M-RICH-BOUNCE-F] speed=%RESULT%
 set x=120
 set y=90
 set dx=3
@@ -43,6 +54,9 @@ rem Stop here: a label body that follows is still reachable by fall-through,
 rem and running :frame with the ended scope's variables printed 'set: unexpected
 rem character' / 'gfx: no canvas' after [M-BOUNCE-DONE].
 goto :eof
+
+:bouncev
+return %1*%1+%2*%2
 
 :frame
 set /a n+=1

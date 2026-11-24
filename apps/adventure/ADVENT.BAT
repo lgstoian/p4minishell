@@ -34,7 +34,27 @@ echo [M-ADV]
 title "Adventure"
 draw hold on
 draw fullscreen on
+gosub :rich_adv
 goto room_courtyard
+
+rem ---- v1.6 richer-language showcase -----------------------------------
+rem [M-RICH-ADV] proves str /rev|/count|/pad, map /set + for /K and
+rem func/return publish %RESULT% using the real interpreter. Game state is
+rem untouched: every value below is a local of this gosub frame.
+:rich_adv
+echo [M-RICH-ADV] language tour
+draw text 5 3 "[M-RICH-ADV] str+map+forK+func live" 11
+set RWORD=lantern
+str /rev RWORD RV
+str /count RWORD n CN
+str /pad RWORD 10 RP .
+map /set ROOMMAP hall north
+map /set ROOMMAP garden east
+for /K %%k in (ROOMMAP) do echo [M-RICH-ADV-K] %%k=%%l
+func :advscore 10 20
+echo [M-RICH-ADV-F] result=%RESULT%
+echo [M-RICH-ADV-S] rev=%RV% count=%CN% pad=%RP%
+return
 
 :back_to_room
 switch %room% hall:room_hall library:room_library tower:room_tower cellar:room_cellar garden:room_garden /d:room_courtyard

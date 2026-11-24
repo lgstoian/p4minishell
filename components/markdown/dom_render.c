@@ -36,6 +36,14 @@ typedef struct {
     bool underline;
     uint8_t align;
     uint8_t font_scale;
+    bool gradient_set;
+    css_gradient_t gradient;
+    bool shadow_set;
+    uint8_t shadow_dos;
+    uint8_t shadow_alpha;
+    int shadow_x;
+    int shadow_y;
+    uint8_t border_radius;
 } style_t;
 
 /** One coalesced background run: a rectangle of one colour. */
@@ -70,6 +78,83 @@ static size_t utf8_seq_len(const char *p)
     if ((c & 0xF0) == 0xE0) return 3;
     if ((c & 0xF8) == 0xF0) return 4;
     return 1;
+}
+
+/** Decode the same 1..4 byte sequence utf8_seq_len() measured. */
+static uint32_t utf8_codepoint(const char *p, size_t n)
+{
+    uint32_t cp;
+    size_t i;
+
+    if (n == 1) return (unsigned char)p[0];
+    if (n < 2 || n > 4) return 0;
+    cp = (uint32_t)((unsigned char)p[0] & (0x7F >> n));
+    for (i = 1; i < n; i++) {
+        if (((unsigned char)p[i] & 0xC0) != 0x80) return 0;
+        cp = (cp << 6) | (uint32_t)((unsigned char)p[i] & 0x3F);
+    }
+    return cp;
+}
+
+/**
+ * Presentation fallback for the typographic codepoints the shipped 12x20 cell
+ * font does not cover. This is applied at the ONE text sink (emit_text ->
+ * emit_utf8) that feeds both the TUI cell and ANSI surfaces, so a page shows
+ * an ASCII stand-in instead of an empty box on either surface. The DOM and
+ * html_entity_decode() still hold the real codepoint: only drawing falls
+ * back, the same rule the emoji adapter uses for glyphs outside the font.
+ * No second colour/emoji/glyph map and no font change is involved.
+ */
+static const char *dom_presentation(uint32_t cp)
+{
+    static const struct {
+        uint32_t cp;
+        const char *text;
+    } STAND_INS[] = {
+        { 0x00A2, "c" },        /* ¢  cent */
+        { 0x00A3, "GBP" },      /* £  pound */
+        { 0x00A5, "JPY" },      /* ¥  yen */
+        { 0x00A7, "S" },        /* §  section */
+        { 0x00A9, "(c)" },      /* ©  copyright */
+        { 0x00AB, "<<" },       /* «  left guillemet */
+        { 0x00AC, "!" },        /* ¬  not */
+        { 0x00AD, "" },         /* ­  soft hyphen: no cell */
+        { 0x00AE, "(r)" },      /* ®  registered */
+        { 0x00B0, "deg" },      /* °  degree */
+        { 0x00B1, "+/-" },      /* ±  plus/minus */
+        { 0x00B5, "u" },        /* µ  micro */
+        { 0x00B6, "P" },        /* ¶  pilcrow */
+        { 0x00B7, "." },        /* ·  middle dot */
+        { 0x00BB, ">>" },       /* »  right guillemet */
+        { 0x00BC, "1/4" },      /* ¼  one quarter */
+        { 0x00BD, "1/2" },      /* ½  one half */
+        { 0x00BE, "3/4" },      /* ¾  three quarters */
+        { 0x00D7, "x" },        /* ×  multiplication */
+        { 0x00F7, "/" },        /* ÷  division */
+        { 0x2013, "-" },        /* –  en dash */
+        { 0x2014, "--" },       /* —  em dash */
+        { 0x2018, "'" },        /* ‘  left single quote */
+        { 0x2019, "'" },        /* ’  right single quote */
+        { 0x201A, "'" },        /* ‚  single low quote (C1) */
+        { 0x201C, "\"" },       /* “  left double quote */
+        { 0x201D, "\"" },       /* ”  right double quote */
+        { 0x201E, "\"" },       /* „  double low quote (C1) */
+        { 0x2020, "+" },        /* †  dagger (C1) */
+        { 0x2021, "+" },        /* ‡  double dagger (C1) */
+        { 0x2022, "*" },        /* •  bullet */
+        { 0x2026, "..." },      /* …  ellipsis */
+        { 0x2030, "%" },        /* ‰  per mille (C1) */
+        { 0x2039, "<" },        /* ‹  single left angle (C1) */
+        { 0x203A, ">" },        /* ›  single right angle (C1) */
+        { 0x20AC, "EUR" },      /* €  euro */
+        { 0x2122, "(tm)" },     /* ™  trademark */
+        { 0xFFFD, "?" },        /* replacement: clamp, not a tofu box */
+    };
+
+    for (size_t i = 0; i < sizeof(STAND_INS) / sizeof(STAND_INS[0]); i++) {
+        if (STAND_INS[i].cp == cp) return STAND_INS[i].text;
+    }
+    return NULL;
 }
 
 static bool is_skip_tag(const char *tag)
@@ -116,6 +201,19 @@ static style_t style_merge(const dom_node_t *node, const style_t *parent)
     if (node->underline) s.underline = true;
     if (node->align != 0) s.align = node->align;
     if (node->font_scale > s.font_scale) s.font_scale = node->font_scale;
+    /* Visual paint is per-box (not inherited), like CSS background/box-shadow. */
+    if (node->gradient_set) {
+        s.gradient_set = true;
+        s.gradient = node->gradient;
+    }
+    if (node->shadow_set) {
+        s.shadow_set = true;
+        s.shadow_dos = node->shadow_dos;
+        s.shadow_alpha = node->shadow_alpha;
+        s.shadow_x = node->shadow_x;
+        s.shadow_y = node->shadow_y;
+    }
+    s.border_radius = node->border_radius;
     return s;
 }
 
@@ -248,6 +346,16 @@ static void emit_text(render_ctx_t *c, const char *text, const style_t *st)
                             start += n;
                             continue;
                         }
+                    }
+                }
+                {
+                    const char *stand_in =
+                        dom_presentation(utf8_codepoint(start, n));
+
+                    if (stand_in != NULL) {
+                        emit_utf8(c, stand_in, strlen(stand_in), st);
+                        start += n;
+                        continue;
                     }
                 }
                 emit_utf8(c, start, n, st);
@@ -493,6 +601,59 @@ static void render_inline_node(render_ctx_t *c, dom_node_t *node, style_t st,
         render_image(c, node, &st);
         return;
     }
+    if (strcmp(node->tag, "input") == 0) {
+        char label[300];
+        bool toggler = strcmp(node->input_type, "checkbox") == 0 ||
+                       strcmp(node->input_type, "radio") == 0;
+
+        if (toggler) {
+            snprintf(label, sizeof(label), "[%c]", node->checked ? 'x' : ' ');
+        } else if (node->value[0] != '\0') {
+            snprintf(label, sizeof(label), "[%s]", node->value);
+        } else if (node->placeholder[0] != '\0') {
+            snprintf(label, sizeof(label), "[%s]", node->placeholder);
+        } else {
+            snprintf(label, sizeof(label), "[%s]", node->input_type[0] ? node->input_type : "text");
+        }
+        if (node->disabled) st.fg = 8;
+        emit_text(c, label, &st);
+        if (c->ops->put_link != NULL && node->id[0] != '\0') {
+            char cmd[600];
+
+            snprintf(cmd, sizeof(cmd), "browser js %s", node->id);
+            c->ops->put_link(c->ops->ctx, c->col - (int)strlen(label), c->row,
+                             (int)strlen(label), 1, cmd);
+        }
+        return;
+    }
+    if (strcmp(node->tag, "select") == 0) {
+        dom_node_t *chosen = NULL;
+        char label[300];
+
+        for (dom_node_t *ch = node->first_child; ch != NULL; ch = ch->next_sibling) {
+            if (ch->type == DOM_NODE_ELEMENT && strcmp(ch->tag, "option") == 0) {
+                if (ch->checked) { chosen = ch; break; }
+                if (chosen == NULL) chosen = ch;
+            }
+        }
+        node_plain_text(chosen != NULL ? chosen : node, label, sizeof(label));
+        emit_text(c, "[", &st);
+        emit_text(c, label, &st);
+        emit_text(c, "]", &st);
+        return;
+    }
+    if (strcmp(node->tag, "progress") == 0 || strcmp(node->tag, "meter") == 0) {
+        int percent = atoi(node->value);
+        int filled;
+
+        if (percent < 0) percent = 0;
+        if (percent > 100) percent = 100;
+        filled = (percent * 10) / 100;
+        emit_text(c, "[", &st);
+        for (int i = 0; i < 10; i++) emit_text(c, i < filled ? "#" : "-", &st);
+        emit_text(c, "]", &st);
+        return;
+    }
     if (strcmp(node->tag, "button") == 0) {
         int start_col = c->col;
         int start_row = c->row;
@@ -599,6 +760,9 @@ static void render_table(render_ctx_t *c, dom_node_t *node, style_t st, int inde
     char cells[TABLE_MAX_ROWS][TABLE_MAX_COLS][64];
     style_t cell_styles[TABLE_MAX_ROWS][TABLE_MAX_COLS];
     bool header[TABLE_MAX_ROWS];
+    bool covered[TABLE_MAX_ROWS][TABLE_MAX_COLS];
+    int spans[TABLE_MAX_ROWS][TABLE_MAX_COLS];
+    uint8_t aligns[TABLE_MAX_ROWS][TABLE_MAX_COLS];
     int widths[TABLE_MAX_COLS];
     int rows = 0;
     int cols = 0;
@@ -607,6 +771,9 @@ static void render_table(render_ctx_t *c, dom_node_t *node, style_t st, int inde
     memset(cells, 0, sizeof(cells));
     memset(cell_styles, 0, sizeof(cell_styles));
     memset(header, 0, sizeof(header));
+    memset(covered, 0, sizeof(covered));
+    memset(spans, 0, sizeof(spans));
+    memset(aligns, 0, sizeof(aligns));
     memset(widths, 0, sizeof(widths));
 
     for (row = node->first_child; row != NULL && rows < TABLE_MAX_ROWS; row = row->next_sibling) {
@@ -622,13 +789,21 @@ static void render_table(render_ctx_t *c, dom_node_t *node, style_t st, int inde
         for (dom_node_t *td = tr->first_child; td != NULL && ci < TABLE_MAX_COLS; td = td->next_sibling) {
             if (td->type != DOM_NODE_ELEMENT) continue;
             if (strcmp(td->tag, "td") != 0 && strcmp(td->tag, "th") != 0) continue;
+            int span = td->col_span > 1 ? td->col_span : 1;
+
+            if (span > TABLE_MAX_COLS - ci) span = TABLE_MAX_COLS - ci;
             node_plain_text(td, cells[rows][ci], sizeof(cells[rows][ci]));
             cell_styles[rows][ci] = style_merge(td, &st);
+            aligns[rows][ci] = cell_styles[rows][ci].align;
+            spans[rows][ci] = span;
+            for (int s = 1; s < span && ci + s < TABLE_MAX_COLS; s++) {
+                covered[rows][ci + s] = true;
+            }
             if (strcmp(td->tag, "th") == 0) header[rows] = true;
             if ((int)strlen(cells[rows][ci]) > widths[ci]) {
                 widths[ci] = (int)strlen(cells[rows][ci]);
             }
-            ci++;
+            ci += span;
         }
         if (ci > cols) cols = ci;
         rows++;
@@ -640,6 +815,31 @@ static void render_table(render_ctx_t *c, dom_node_t *node, style_t st, int inde
     for (int x = 0; x < cols; x++) {
         total += widths[x];
         if (x + 1 < cols) total += 2;
+    }
+    /* Responsive mapping: a wide table is squeezed into the live page width,
+     * never truncated mid-cell. This is the same one renderer on every
+     * surface, so narrow TUI panels and 80-column dumps agree. */
+    {
+        int budget = c->ops->cols - 2;
+        int inner;
+        long sum = 0;
+
+        if (budget < cols * 4) budget = cols * 4;
+        inner = budget - 2 * (cols - 1);
+        if (inner < cols * 4) inner = cols * 4;
+        for (int x = 0; x < cols; x++) sum += widths[x];
+        if (sum > 0 && total > budget) {
+            for (int x = 0; x < cols; x++) {
+                int scaled = (int)((long)widths[x] * inner / sum);
+
+                widths[x] = scaled < 4 ? 4 : scaled;
+            }
+            total = 0;
+            for (int x = 0; x < cols; x++) {
+                total += widths[x];
+                if (x + 1 < cols) total += 2;
+            }
+        }
     }
     /* Center the table when the element's CSS text-align is center. Every row
      * (and the header rule) must restart at this column: newline() resets c->col
@@ -654,15 +854,35 @@ static void render_table(render_ctx_t *c, dom_node_t *node, style_t st, int inde
         c->col = start;
         for (int x = 0; x < cols; x++) {
             char padded[80];
-            int len = (int)strlen(cells[r][x]);
-            int pad = widths[x] - len;
+            int len;
+            int pad;
+            int left;
+            int right;
+
+            if (covered[r][x]) continue;   /* consumed by a preceding colspan */
+            len = (int)strlen(cells[r][x]);
+            if (len > (int)sizeof(padded) - 1) len = (int)sizeof(padded) - 1;
+            {
+                int span = spans[r][x] > 0 ? spans[r][x] : 1;
+                int width = widths[x];
+
+                for (int s = 1; s < span && x + s < cols; s++) {
+                    width += 2 + widths[x + s];
+                }
+                pad = width - len;
+            }
             if (pad < 0) pad = 0;
-            if (pad > (int)sizeof(padded) - len - 1) pad = (int)sizeof(padded) - len - 1;
-            memcpy(padded, cells[r][x], (size_t)len);
-            memset(padded + len, ' ', (size_t)pad);
-            padded[len + pad] = '\0';
+            if (pad > (int)sizeof(padded) - 1 - len) {
+                pad = (int)sizeof(padded) - 1 - len;
+            }
+            left = aligns[r][x] == 2 ? pad : (aligns[r][x] == 1 ? pad / 2 : 0);
+            right = pad - left;
+            memset(padded, ' ', (size_t)left);
+            memcpy(padded + left, cells[r][x], (size_t)len);
+            memset(padded + left + len, ' ', (size_t)right);
+            padded[left + len + right] = '\0';
             emit_text(c, padded, &cell_styles[r][x]);
-            if (x + 1 < cols) {
+            if (x + 1 < cols && !covered[r][x + 1]) {
                 emit_text(c, "  ", &st);
             }
         }
@@ -726,6 +946,126 @@ static void render_list(render_ctx_t *c, dom_node_t *node, style_t st,
     c->indent = saved;
 }
 
+/** Sample the shared linear-gradient at a cell position. The angle is mapped
+ *  onto the cell grid (horizontal for 90/270, vertical for 0/180); any other
+ *  angle uses the horizontal axis, which is the closest a cell grid can show. */
+static css_rgba_t box_gradient_at(const css_gradient_t *gradient, int col,
+                                  int row, int cols, int rows)
+{
+    uint8_t t;
+
+    if (gradient->angle == 270 || gradient->angle == 0) {
+        int total = (gradient->angle == 270) ? cols : rows;
+        int axis = (gradient->angle == 270) ? col : row;
+        int pos = (gradient->angle == 270) ? (cols - axis) : (rows - axis);
+        t = (uint8_t)((uint32_t)pos * 255u / (uint32_t)(total > 1 ? total - 1 : 1));
+    } else if (gradient->angle == 180) {
+        t = (uint8_t)((uint32_t)row * 255u / (uint32_t)(rows > 1 ? rows - 1 : 1));
+    } else {
+        t = (uint8_t)((uint32_t)col * 255u / (uint32_t)(cols > 1 ? cols - 1 : 1));
+    }
+    return css_gradient_sample(gradient, t);
+}
+
+/** Paint one CSS box through the ONE fill_bg sink: optional box-shadow (a
+ *  composited offset rectangle), a gradient sampled into <=16 strips, a solid
+ *  background, and four cut corners for the border-radius subset. */
+static void render_box_paint(render_ctx_t *c, const dom_node_t *node,
+                             const style_t *st, int row0, int row1)
+{
+    int height = row1 - row0 + 1;
+
+    if (c->ops->fill_bg == NULL || height < 1 || st->opacity == 0) return;
+    if (st->shadow_set && st->shadow_alpha > 0 && st->shadow_dos < 16) {
+        uint8_t alpha = (uint8_t)(((uint32_t)st->shadow_alpha * st->opacity) / 255u);
+
+        if (alpha > 0) {
+            css_rgba_t composited = css_color_composite(
+                css_color_from_dos(st->shadow_dos),
+                css_color_from_dos((uint8_t)(c->ops->base_bg & 15)));
+
+            c->ops->fill_bg(c->ops->ctx, 1 + st->shadow_x, row0 + st->shadow_y,
+                            c->ops->cols, height,
+                            css_color_to_dos(&composited), alpha);
+        }
+    }
+    if (st->gradient_set) {
+        int strips = c->ops->cols < 16 ? c->ops->cols : 16;
+        int step = strips > 0 ? (c->ops->cols + strips - 1) / strips : 1;
+
+        if (step < 1) step = 1;
+        for (int col = 1; col <= c->ops->cols; col += step) {
+            css_rgba_t sample = box_gradient_at(&st->gradient, col - 1, 0,
+                                                 c->ops->cols, height);
+            uint8_t alpha = (uint8_t)(((uint32_t)sample.a * st->opacity) / 255u);
+            uint8_t dos = css_color_to_dos(&sample);
+
+            if (alpha > 0 && dos < 16) {
+                int w = col + step - 1 <= c->ops->cols ? step : c->ops->cols - col + 1;
+
+                c->ops->fill_bg(c->ops->ctx, col, row0, w, height, dos, alpha);
+            }
+        }
+    } else if (node != NULL && node->bg_set && st->bg != 16 && st->bg_alpha > 0) {
+        uint8_t alpha = (uint8_t)(((uint32_t)st->bg_alpha * st->opacity) / 255u);
+
+        if (alpha > 0) {
+            c->ops->fill_bg(c->ops->ctx, 1, row0, c->ops->cols, height,
+                            st->bg, alpha);
+        }
+    }
+    if (st->border_radius > 0 && c->ops->cols > 2) {
+        uint8_t cut = (uint8_t)(c->ops->base_bg & 15);
+        int r = st->border_radius;
+
+        c->ops->fill_bg(c->ops->ctx, 1, row0, r, 1, cut, 255);
+        c->ops->fill_bg(c->ops->ctx, c->ops->cols - r + 1, row0, r, 1, cut, 255);
+        c->ops->fill_bg(c->ops->ctx, 1, row1, r, 1, cut, 255);
+        c->ops->fill_bg(c->ops->ctx, c->ops->cols - r + 1, row1, r, 1, cut, 255);
+    }
+}
+
+/** CSS grid/flex subset: lay out element children into at most
+ *  @p columns tracks. The track count is responsive - a narrow page shows
+ *  fewer columns - and each cell keeps its own computed style. */
+static void render_grid(render_ctx_t *c, dom_node_t *node, style_t st,
+                        int indent, int columns, bool flex)
+{
+    int used = 0;
+    int index = 0;
+    int width;
+
+    if (columns < 1) columns = 1;
+    if (flex) columns = 1;
+    width = c->ops->cols / columns;
+    if (width < 8) width = 8;
+    newline(c);
+    for (dom_node_t *ch = node->first_child; ch != NULL && !c->done;
+         ch = ch->next_sibling) {
+        if (ch->type != DOM_NODE_ELEMENT || ch->display == DOM_DISPLAY_NONE ||
+            is_skip_tag(ch->tag)) {
+            continue;
+        }
+        if (!flex) {
+            if (index > 0 && index % columns == 0) newline(c);
+            if (index % columns > 0) {
+                c->col = 1 + (index % columns) * width;
+            }
+        } else if (index > 0) {
+            emit_text(c, " ", &st);
+        }
+        {
+            style_t child = style_merge(ch, &st);
+
+            render_children(c, ch, child, indent);
+        }
+        used++;
+        index++;
+    }
+    (void)used;
+    newline(c);
+}
+
 static void render_block(render_ctx_t *c, dom_node_t *node, style_t st, int indent)
 {
     if (node == NULL || c->done) return;
@@ -766,7 +1106,23 @@ static void render_block(render_ctx_t *c, dom_node_t *node, style_t st, int inde
         strcmp(node->tag, "section") == 0 || strcmp(node->tag, "article") == 0 ||
         strcmp(node->tag, "header") == 0 || strcmp(node->tag, "footer") == 0 ||
         strcmp(node->tag, "main") == 0 || strcmp(node->tag, "nav") == 0 ||
-        strcmp(node->tag, "aside") == 0 || strcmp(node->tag, "form") == 0) {
+        strcmp(node->tag, "aside") == 0 || strcmp(node->tag, "form") == 0 ||
+        strcmp(node->tag, "details") == 0 || strcmp(node->tag, "summary") == 0 ||
+        strcmp(node->tag, "dialog") == 0 || strcmp(node->tag, "caption") == 0 ||
+        strcmp(node->tag, "legend") == 0 || strcmp(node->tag, "figure") == 0 ||
+        strcmp(node->tag, "figcaption") == 0) {
+        /* Responsive grid/flex mapping: the computed track count is clamped
+         * to the live page width so a 2-column layout still fits 80 cells. */
+        if (node->display == DOM_DISPLAY_GRID || node->display == DOM_DISPLAY_FLEX) {
+            int columns = node->grid_columns > 0 ? node->grid_columns : 2;
+            int max_columns = c->ops->cols / 8;
+
+            if (max_columns < 1) max_columns = 1;
+            if (columns > max_columns) columns = max_columns;
+            render_grid(c, node, st, indent, columns,
+                        node->display == DOM_DISPLAY_FLEX);
+            return;
+        }
         newline(c);
         for (int pad = 0; pad < node->padding_top; pad++) {
             newline(c);
@@ -785,17 +1141,9 @@ static void render_block(render_ctx_t *c, dom_node_t *node, style_t st, int inde
             for (int pad = 0; pad < node->padding_bottom; pad++) {
                 newline(c);
             }
-            if (node->bg_set && st.bg != 16 && st.bg_alpha > 0 &&
-                c->ops->fill_bg != NULL) {
-                /* CSS block background: the whole box width behind the text,
-                 * not just the glyph cells. fill_bg changes only the colour,
-                 * so text already drawn keeps its glyph and foreground.
-                 * `transparent` (alpha 0) draws no rectangle at all, so the
-                 * page/surface behind shows through. */
-                c->ops->fill_bg(c->ops->ctx, 1, bg_row, c->ops->cols,
-                                c->row - bg_row + 1, st.bg,
-                                (uint8_t)(((uint32_t)st.bg_alpha * st.opacity) / 255u));
-            }
+            /* One box-paint path for solid colours, gradients, box-shadow
+             * opacity composition and the border-radius corner subset. */
+            render_box_paint(c, node, &st, bg_row, c->row);
         }
         newline(c);
         return;

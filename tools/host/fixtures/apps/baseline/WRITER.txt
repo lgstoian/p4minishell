@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=WRITER
+[M-RICH-WRITER] host language extract
+W=writer
+2
+[M-RICH-WRITER-K] host=p4
+[M-RICH-WRITER-K] port=80
+[M-RICH-WRITER-F] result=42
+[M-RICH-WRITER-S] rev=retirw count=2 pad=writer---- vals=p4,80
+[M-RICH-WRITER-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

@@ -32,6 +32,65 @@ static const char *str_read_var(const char *name)
     return val != NULL ? val : name;
 }
 
+void shell_str_reverse(const char *value, char *out, size_t out_size)
+{
+    size_t len;
+
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    len = (value != NULL) ? strlen(value) : 0;
+    if (len > out_size - 1) {
+        len = out_size - 1;
+    }
+    for (size_t i = 0; i < len; i++) {
+        out[i] = value[len - 1 - i];
+    }
+    out[len] = '\0';
+}
+
+int shell_str_count(const char *value, const char *needle)
+{
+    size_t needle_len;
+    int count = 0;
+
+    if (value == NULL || needle == NULL || needle[0] == '\0') {
+        return 0;
+    }
+    needle_len = strlen(needle);
+    for (const char *p = value; *p != '\0'; ) {
+        const char *match = strstr(p, needle);
+
+        if (match == NULL) {
+            break;
+        }
+        count++;
+        p = match + needle_len;
+    }
+    return count;
+}
+
+void shell_str_pad(const char *value, int width, char pad, char *out, size_t out_size)
+{
+    size_t len;
+
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    len = (value != NULL) ? strlen(value) : 0;
+    if (len > out_size - 1) {
+        len = out_size - 1;
+    }
+    memcpy(out, value != NULL ? value : "", len);
+    if (pad == '\0') {
+        pad = ' ';
+    }
+    while (len < (size_t)width && len < out_size - 1) {
+        out[len++] = pad;
+    }
+    out[len] = '\0';
+}
+
 /* ========================================================================
  * VERB IMPLEMENTATION
  * ======================================================================== */
@@ -49,6 +108,9 @@ void shell_command_str(int argc, char **argv)
             "       str /rep VAR OLD NEW DEST\n"
             "       str /split VAR DELIM DEST\n"
             "       str /join VAR DELIM DEST\n"
+            "       str /rev VAR DEST\n"
+            "       str /count VAR NEEDLE [DEST]\n"
+            "       str /pad VAR WIDTH DEST [CHAR]\n"
             "       str /fmt DEST \"format\" args...");
         batch_set_errorlevel(2);
         return;
@@ -61,6 +123,43 @@ void shell_command_str(int argc, char **argv)
     }
 
     char flag = (char)toupper((unsigned char)argv[1][1]);
+    /* `/rev` shares the R first letter with `/rep`, so it is matched by its
+     * full switch text (no new switch table, just the existing argv). */
+    bool is_rev = (strcasecmp(argv[1], "/rev") == 0);
+    /* `/pad` shares P with `/split`: match its full switch text too. */
+    bool is_pad = (strcasecmp(argv[1], "/pad") == 0);
+
+    if (is_pad && argc >= 5) {
+        char *dest = malloc(STR_VALUE_BYTES);
+        int width = (int)strtol(argv[3], NULL, 10);
+        char pad = (argc >= 6 && argv[5][0] != '\0') ? argv[5][0] : '\0';
+
+        if (dest == NULL) {
+            shell_print_error("str /pad: out of memory");
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_str_pad(str_read_var(argv[2]), width, pad, dest, STR_VALUE_BYTES);
+        (void)shell_env_set(argv[4], dest);
+        free(dest);
+        batch_set_errorlevel(0);
+        return;
+    }
+
+    if (is_rev && argc >= 4) {
+        char *dest = malloc(STR_VALUE_BYTES);
+
+        if (dest == NULL) {
+            shell_print_error("str /rev: out of memory");
+            batch_set_errorlevel(1);
+            return;
+        }
+        shell_str_reverse(str_read_var(argv[2]), dest, STR_VALUE_BYTES);
+        (void)shell_env_set(argv[3], dest);
+        free(dest);
+        batch_set_errorlevel(0);
+        return;
+    }
 
     /* /len VAR — length of variable value */
     if (flag == 'L' && argc >= 3) {
@@ -323,6 +422,21 @@ void shell_command_str(int argc, char **argv)
         out[olen] = '\0';
         shell_env_set(argv[3], out);
         batch_set_errorlevel(0);
+        return;
+    }
+
+    /* /count VAR NEEDLE [DEST] — non-overlapping occurrences (the /find
+     * matcher, reused rather than reimplemented). */
+    if (flag == 'C' && argc >= 4) {
+        int count = shell_str_count(str_read_var(argv[2]), argv[3]);
+        char numbuf[12];
+
+        snprintf(numbuf, sizeof(numbuf), "%d", count);
+        shell_transcript_appendf("%s\n", numbuf);
+        if (argc >= 5) {
+            (void)shell_env_set(argv[4], numbuf);
+        }
+        batch_set_errorlevel(count > 0 ? 0 : 1);
         return;
     }
 

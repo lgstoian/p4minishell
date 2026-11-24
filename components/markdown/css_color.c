@@ -194,3 +194,210 @@ css_rgba_t css_color_blend(css_rgba_t fg, css_rgba_t bg, uint8_t alpha)
     out.a = 255;
     return out;
 }
+
+css_rgba_t css_color_composite(css_rgba_t fg, css_rgba_t bg)
+{
+    /* The backdrop of a cell surface is opaque; make it explicit before the
+     * one blend so a translucent CSS colour can never leak its alpha. */
+    bg.a = 255;
+    return css_color_blend(fg, bg, fg.a);
+}
+
+bool css_gradient_parse(const char *text, css_gradient_t *out)
+{
+    char buf[256];
+    const char *open;
+    const char *close;
+    char *p;
+    char *tokens[CSS_GRADIENT_MAX_STOPS + 2];
+    int token_count = 0;
+    int start_token = 0;
+    int stops = 0;
+    int depth = 0;
+    bool positioned[CSS_GRADIENT_MAX_STOPS] = { false };
+    size_t len;
+
+    if (text == NULL || out == NULL) {
+        return false;
+    }
+    while (*text == ' ' || *text == '\t') {
+        text++;
+    }
+    if (strncmp(text, "linear-gradient(", 16) != 0) {
+        return false;
+    }
+    len = strlen(text);
+    if (len >= sizeof(buf)) {
+        return false;
+    }
+    for (size_t i = 0; i < len; i++) {
+        char c = text[i];
+
+        buf[i] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+    }
+    buf[len] = '\0';
+    open = buf + 15;
+    close = strrchr(open, ')');
+    if (close == NULL) {
+        return false;
+    }
+
+    /* Split on top-level commas; rgb()/rgba() stops keep their own commas. */
+    p = (char *)open + 1;
+    {
+        const char *token = p;
+
+        for (; p < close; p++) {
+            if (*p == '(') depth++;
+            else if (*p == ')' && depth > 0) depth--;
+            else if (*p == ',' && depth == 0) {
+                /* NUL-terminate in place so each stop is an independent token. */
+                *p = '\0';
+                if (token_count < (int)(sizeof(tokens) / sizeof(tokens[0]))) {
+                    tokens[token_count++] = (char *)token;
+                }
+                token = p + 1;
+            }
+        }
+        if (token_count < (int)(sizeof(tokens) / sizeof(tokens[0]))) {
+            tokens[token_count++] = (char *)token;
+        }
+    }
+    if (token_count < 2) {
+        return false;
+    }
+    /* Optional angle / direction token. */
+    {
+        char first[32] = { 0 };
+        size_t n = strlen(tokens[0]);
+        char *f = first;
+
+        while (n > 0 && (*tokens[0] == ' ')) { tokens[0]++; n--; }
+        if (n >= sizeof(first)) n = sizeof(first) - 1;
+        memcpy(first, tokens[0], n);
+        first[n] = '\0';
+        while (f > first && isspace((unsigned char)f[-1])) *--f = '\0';
+        if (strstr(first, "deg") != NULL) {
+            int angle = atoi(first);
+
+            out->angle = (uint16_t)((angle % 360 + 360) % 360);
+            start_token = 1;
+        } else if (strncmp(first, "to ", 3) == 0) {
+            if (strstr(first, "left") != NULL) out->angle = (uint16_t)270;
+            else if (strstr(first, "bottom") != NULL) out->angle = (uint16_t)180;
+            else if (strstr(first, "top") != NULL) out->angle = 0;
+            else out->angle = 90;
+            start_token = 1;
+        } else {
+            /* No angle: CSS defaults to `to bottom`. */
+            out->angle = 180;
+        }
+    }
+
+    for (int i = start_token; i < token_count && stops < CSS_GRADIENT_MAX_STOPS; i++) {
+        char token[96] = { 0 };
+        size_t n = strlen(tokens[i]);
+        char *pct = NULL;
+        char *colour_end;
+
+        if (n >= sizeof(token)) n = sizeof(token) - 1;
+        memcpy(token, tokens[i], n);
+        token[n] = '\0';
+        colour_end = token + strlen(token);
+        while (colour_end > token && isspace((unsigned char)colour_end[-1])) colour_end--;
+        *colour_end = '\0';
+        pct = strrchr(token, '%');
+        if (pct != NULL) {
+            char *pos = pct - 1;
+
+            while (pos > token && (isdigit((unsigned char)*pos) || *pos == '.')) pos--;
+            while (pos < pct && isspace((unsigned char)*pos)) pos++;
+            {
+                double value = strtod(pos, NULL);
+
+                if (value < 0.0) value = 0.0;
+                if (value > 100.0) value = 100.0;
+                out->positions[stops] = (uint8_t)(value * 255.0 / 100.0 + 0.5);
+                positioned[stops] = true;
+            }
+            *pos = '\0';
+        } else {
+            out->positions[stops] = 255;   /* filled in after all stops are read */
+        }
+        {
+            char colour[96] = { 0 };
+            size_t ci = 0;
+
+            for (char *q = token; *q != '\0' && ci + 1 < sizeof(colour); q++) {
+                if (!isspace((unsigned char)*q)) colour[ci++] = *q;
+            }
+            colour[ci] = '\0';
+            if (!css_color_parse(colour, &out->stops[stops])) {
+                continue;   /* invalid stop: ignore, matching CSS error handling */
+            }
+        }
+        stops++;
+    }
+    if (stops < 2) {
+        return false;
+    }
+    out->count = stops;
+    /* Even spacing for stops with no explicit position; a positioned stop
+     * next to an unpositioned one interpolates between its neighbours. */
+    {
+        bool any = false;
+
+        for (int i = 0; i < stops; i++) {
+            if (positioned[i]) any = true;
+        }
+        if (!any) {
+            for (int i = 0; i < stops; i++) {
+                out->positions[i] = (uint8_t)((uint32_t)i * 255u / (uint32_t)(stops - 1));
+            }
+        } else {
+            if (!positioned[0]) out->positions[0] = 0;
+            for (int i = 1; i < stops; i++) {
+                if (!positioned[i]) {
+                    out->positions[i] = (uint8_t)(((uint32_t)out->positions[i - 1] +
+                                                   (uint32_t)out->positions[stops - 1]) / 2u);
+                }
+            }
+            if (!positioned[stops - 1]) out->positions[stops - 1] = 255;
+        }
+        for (int i = 1; i < stops; i++) {
+            if (out->positions[i] < out->positions[i - 1]) {
+                out->positions[i] = out->positions[i - 1];
+            }
+        }
+    }
+    return true;
+}
+
+css_rgba_t css_gradient_sample(const css_gradient_t *gradient, uint8_t t)
+{
+    css_rgba_t out;
+
+    if (gradient == NULL || gradient->count < 1) {
+        return (css_rgba_t){ 0, 0, 0, 0 };
+    }
+    if (gradient->count == 1 || t <= gradient->positions[0]) {
+        return gradient->stops[0];
+    }
+    for (int i = 1; i < gradient->count; i++) {
+        if (t <= gradient->positions[i]) {
+            uint8_t lo = gradient->positions[i - 1];
+            uint8_t hi = gradient->positions[i];
+            uint32_t span = (uint32_t)(hi - lo);
+            uint32_t frac = span ? ((uint32_t)(t - lo) * 255u) / span : 0;
+            css_rgba_t a = gradient->stops[i - 1];
+            css_rgba_t b = gradient->stops[i];
+
+            out.r = (uint8_t)(((uint32_t)a.r * (255u - frac) + (uint32_t)b.r * frac) / 255u);
+            out.g = (uint8_t)(((uint32_t)a.g * (255u - frac) + (uint32_t)b.g * frac) / 255u);
+            out.b = (uint8_t)(((uint32_t)a.b * (255u - frac) + (uint32_t)b.b * frac) / 255u);
+            out.a = (uint8_t)(((uint32_t)a.a * (255u - frac) + (uint32_t)b.a * frac) / 255u);
+            return out;
+        }
+    }
+    return gradient->stops[gradient->count - 1];
+}

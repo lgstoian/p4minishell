@@ -49,6 +49,7 @@ APP_PAYLOADS = [
     # Batch + webapp hybrid: same html/css/js engine, .bat front door.
     ("webapp", "WEBAPP.BAT", "root"),
     ("webapp", "WEBAPP.APPINFO", "apps"),
+    ("webapp", "RICH.HTML", "web"),
 
     ("notes", "NOTES.BAT", "root"),
     ("notes", "NOTES.APPINFO", "apps"),

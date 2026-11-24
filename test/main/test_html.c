@@ -16,6 +16,7 @@
 #include "dom.h"
 #include "dom_render.h"
 #include "css.h"
+#include "css_color.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,6 +62,37 @@ void test_html_render_entities(void)
     /* No stray ampersands left from decoded entities. */
     TEST_ASSERT_NULL(strstr(plain, "&amp;"));
     TEST_ASSERT_NULL(strstr(plain, "&#"));
+
+    /* The ONE decoder also handles longest/named, legacy no-semicolon,
+     * numeric clamp and the HTML5 C1 remap. */
+    {
+        unsigned long cp = 0;
+        size_t used = 0;
+
+        TEST_ASSERT_TRUE(html_entity_decode("&amp;", "&amp;" + 5, &cp, &used));
+        TEST_ASSERT_EQUAL_INT('&', (int)cp);
+        TEST_ASSERT_EQUAL_size_t(5, used);
+
+        TEST_ASSERT_TRUE(html_entity_decode("&reg", "&reg" + 4, &cp, &used));
+        TEST_ASSERT_EQUAL_INT(0xAE, (int)cp);
+        TEST_ASSERT_EQUAL_size_t(4, used);
+
+        TEST_ASSERT_FALSE(html_entity_decode("&copycat", "&copycat" + 8,
+                                             &cp, &used));
+        TEST_ASSERT_TRUE(html_entity_decode("&#x41;", "&#x41;" + 6, &cp, &used));
+        TEST_ASSERT_EQUAL_INT('A', (int)cp);
+        TEST_ASSERT_TRUE(html_entity_decode("&#x80;", "&#x80;" + 6, &cp, &used));
+        TEST_ASSERT_EQUAL_INT(0x20AC, (int)cp);       /* C1 -> euro */
+        TEST_ASSERT_TRUE(html_entity_decode("&#1114112;", "&#1114112;" + 10,
+                                            &cp, &used));
+        TEST_ASSERT_EQUAL_INT(0xFFFD, (int)cp);       /* 0x110000 clamps */
+        TEST_ASSERT_TRUE(html_entity_decode("&hellip;", "&hellip;" + 8,
+                                            &cp, &used));
+        TEST_ASSERT_EQUAL_INT(0x2026, (int)cp);       /* longest match */
+    }
+    render_plain("<p>&reg&copy; &#x41; &hellip;</p>", plain, sizeof(plain));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "\xC2\xAE\xC2\xA9"));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "A"));
 }
 
 void test_html_render_lists(void)
@@ -242,6 +274,36 @@ void test_dom_render_main_focus(void)
     TEST_ASSERT_NOT_NULL(strstr(plain, "Article Title"));
     TEST_ASSERT_NOT_NULL(strstr(plain, "Article body."));
     TEST_ASSERT_NULL(strstr(plain, "NAV-CHROME"));
+
+    /* Typographic codepoints the cell font lacks get DOS stand-ins at the ONE
+     * DOM text sink; the decoded DOM text itself keeps the real codepoints. */
+    {
+        dom_tree_t *et = dom_parse(
+            "<html><body><p id='e'>Copyright &copy; &reg; &trade; "
+            "&mdash; &hellip; &#x80;</p></body></html>");
+        char eansi[1024] = { 0 };
+        char eplain[1024];
+        ansi_sink_t esink = { eansi, sizeof(eansi), 0, 0, 0 };
+        dom_render_ops_t eops = {
+            .put_ansi = sink_append_ansi,
+            .ctx = &esink,
+            .cols = 80,
+            .rows = 25,
+            .tui = false,
+        };
+
+        TEST_ASSERT_NOT_NULL(et);
+        TEST_ASSERT_NOT_NULL(strstr(dom_get_text(dom_find_by_id(et, "e")), "\xC2\xA9"));
+        dom_render_tree(et, &eops);
+        dom_free(et);
+        markdown_strip_ansi(eansi, eplain, sizeof(eplain));
+        TEST_ASSERT_NOT_NULL(strstr(eplain, "(c)"));
+        TEST_ASSERT_NOT_NULL(strstr(eplain, "(r)"));
+        TEST_ASSERT_NOT_NULL(strstr(eplain, "(tm)"));
+        TEST_ASSERT_NOT_NULL(strstr(eplain, "--"));
+        TEST_ASSERT_NOT_NULL(strstr(eplain, "..."));
+        TEST_ASSERT_NOT_NULL(strstr(eplain, "EUR"));
+    }
 }
 
 /** The single-pass ANSI HTML reader (editor preview, print, EPUB) has no JS:
@@ -599,6 +661,40 @@ void test_html_long_attribute_does_not_leak(void)
     TEST_ASSERT_EQUAL_STRING("Hello", dom_get_text(p));
     TEST_ASSERT_NULL(strstr(dom_get_text(p), "cite"));
     dom_free(tree);
+
+    /* Implied end tags and duplicate attributes recover into siblings, with
+     * the FIRST duplicate winning (the HTML rule), in the ONE parser. */
+    {
+        dom_tree_t *r = dom_parse(
+            "<html><body><h1>Head</h1><p id='p1'>one<p id='p2'>two"
+            "<ul><li id='l1'>a<li id='l2'>b</ul>"
+            "<table><tr><td id='t1'>x<td id='t2'>y</tr></table>"
+            "<div id='d' class='first' class='second'>Dup</div>"
+            "<p title='dangling value");
+        dom_node_t *first;
+        dom_node_t *second;
+
+        TEST_ASSERT_NOT_NULL(r);
+        first = dom_find_by_id(r, "p1");
+        second = dom_find_by_id(r, "p2");
+        TEST_ASSERT_NOT_NULL(first);
+        TEST_ASSERT_NOT_NULL(second);
+        TEST_ASSERT_EQUAL_STRING("one", dom_get_text(first));
+        TEST_ASSERT_EQUAL_STRING("two", dom_get_text(second));
+        TEST_ASSERT_TRUE(first->next_sibling == second);   /* implied close */
+        TEST_ASSERT_EQUAL_STRING("a", dom_get_text(dom_find_by_id(r, "l1")));
+        TEST_ASSERT_EQUAL_STRING("b", dom_get_text(dom_find_by_id(r, "l2")));
+        TEST_ASSERT_TRUE(dom_find_by_id(r, "l1")->next_sibling ==
+                         dom_find_by_id(r, "l2"));
+        TEST_ASSERT_EQUAL_STRING("x", dom_get_text(dom_find_by_id(r, "t1")));
+        TEST_ASSERT_EQUAL_STRING("y", dom_get_text(dom_find_by_id(r, "t2")));
+        TEST_ASSERT_TRUE(dom_find_by_id(r, "t1")->next_sibling ==
+                         dom_find_by_id(r, "t2"));
+        first = dom_find_by_id(r, "d");
+        TEST_ASSERT_NOT_NULL(first);
+        TEST_ASSERT_EQUAL_STRING("first", first->class);   /* first wins */
+        dom_free(r);
+    }
 }
 
 /** <script>/<style> are raw text: '<' inside JS/CSS is not a tag. */
@@ -632,4 +728,297 @@ void test_css_comments_are_skipped(void)
     TEST_ASSERT_EQUAL_STRING("body", rules.rules[0].selector);
     TEST_ASSERT_EQUAL_STRING("background-color", rules.rules[0].property);
     TEST_ASSERT_EQUAL_STRING(".banner", rules.rules[1].selector);
+}
+
+/** HTML5 form controls keep their attributes in the ONE DOM and render as
+ *  bounded cell glyphs (no second form engine). */
+void test_dom_html5_form_controls(void)
+{
+    dom_tree_t *tree = dom_parse(
+        "<html><body><form><label>Name</label>"
+        "<input id=\"n\" type=\"text\" value=\"Ada\" placeholder=\"Name\">"
+        "<input id=\"ok\" type=\"checkbox\" checked>"
+        "<select><option>One</option><option selected>Two</option></select>"
+        "<button id=\"go\">Go</button></form></body></html>");
+    dom_node_t *node;
+    char ansi[2048] = { 0 };
+    char plain[2048];
+    ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0, 0 };
+    dom_render_ops_t ops = {
+        .put_ansi = sink_append_ansi,
+        .ctx = &sink,
+        .cols = 80,
+        .rows = 25,
+        .tui = false,
+    };
+
+    TEST_ASSERT_NOT_NULL(tree);
+    node = dom_find_by_id(tree, "n");
+    TEST_ASSERT_NOT_NULL(node);
+    TEST_ASSERT_EQUAL_STRING("text", node->input_type);
+    TEST_ASSERT_EQUAL_STRING("Ada", node->value);
+    TEST_ASSERT_EQUAL_STRING("Name", dom_get_attribute(node, "placeholder"));
+    node = dom_find_by_id(tree, "ok");
+    TEST_ASSERT_NOT_NULL(node);
+    TEST_ASSERT_TRUE(node->checked);
+    TEST_ASSERT_EQUAL_STRING("checked", dom_get_attribute(node, "checked"));
+    dom_render_tree(tree, &ops);
+    dom_free(tree);
+    markdown_strip_ansi(ansi, plain, sizeof(plain));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "[Ada]"));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "[x]"));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "[Two]"));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "[ Go ]"));
+}
+
+/** Semantic blocks and the responsive grid mapping use the shared renderer. */
+void test_dom_html5_semantic_and_grid(void)
+{
+    dom_tree_t *tree = dom_parse(
+        "<html><body><main><section id=\"g\" "
+        "style=\"display:grid;grid-template-columns:repeat(2, 1fr)\">"
+        "<div>A</div><div>B</div></section>"
+        "<details><summary>S</summary><p>D</p></details></main></body></html>");
+    dom_node_t *grid;
+    char ansi[2048] = { 0 };
+    char plain[2048];
+    ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0, 0 };
+    dom_render_ops_t ops = {
+        .put_ansi = sink_append_ansi,
+        .ctx = &sink,
+        .cols = 80,
+        .rows = 25,
+        .tui = false,
+    };
+
+    TEST_ASSERT_NOT_NULL(tree);
+    {
+        css_ruleset_t no_rules = { 0 };
+
+        css_compute_styles(tree, &no_rules);   /* applies inline declarations */
+    }
+    grid = dom_find_by_id(tree, "g");
+    TEST_ASSERT_NOT_NULL(grid);
+    TEST_ASSERT_EQUAL_INT(DOM_DISPLAY_GRID, grid->display);
+    TEST_ASSERT_EQUAL_INT(2, grid->grid_columns);
+    dom_render_tree(tree, &ops);
+    dom_free(tree);
+    markdown_strip_ansi(ansi, plain, sizeof(plain));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "A"));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "B"));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "S"));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "D"));
+
+    /* The computed-style cache snapshots the DOM epoch. Re-computing with no
+     * mutation never bumps it; a class mutation does, and is propagated. */
+    {
+        dom_tree_t *ct = dom_parse(
+            "<html><body><div id='g2' class='grid'>x</div></body></html>");
+        dom_node_t *g2 = dom_find_by_id(ct, "g2");
+        css_ruleset_t rules2;
+        uint32_t before;
+
+        TEST_ASSERT_NOT_NULL(ct);
+        TEST_ASSERT_NOT_NULL(g2);
+        memset(&rules2, 0, sizeof(rules2));
+        css_parse_block(".grid { display: grid; }", &rules2);
+        css_compute_styles(ct, &rules2);
+        TEST_ASSERT_EQUAL_INT(DOM_DISPLAY_GRID, g2->display);
+        before = dom_style_epoch();
+        css_compute_styles(ct, &rules2);     /* cached: no DOM work */
+        TEST_ASSERT_EQUAL_UINT32(before, dom_style_epoch());
+        dom_set_attribute(g2, "class", "changed");
+        TEST_ASSERT_GREATER_THAN_UINT32(before, dom_style_epoch());
+        css_compute_styles(ct, &rules2);     /* re-resolves after the mutation */
+        TEST_ASSERT_EQUAL_INT(DOM_DISPLAY_BLOCK, g2->display);
+        dom_free(ct);
+    }
+}
+
+/** Gradients, border-radius, box-shadow and opacity all go through the ONE
+ *  CSS parser and the ONE DOS palette. */
+void test_css_visual_subset(void)
+{
+    css_ruleset_t rules;
+    dom_tree_t *tree;
+    dom_node_t *card;
+    css_rgba_t red;
+    css_rgba_t blue;
+
+    memset(&rules, 0, sizeof(rules));
+    css_parse_block(
+        ".card { background: linear-gradient(90deg, #ff0000 0%, #0000ff 100%);"
+        " border-radius: 3px; box-shadow: 1px 2px #000000; opacity: 0.5; }",
+        &rules);
+    TEST_ASSERT_EQUAL_INT(4, rules.count);
+    tree = dom_parse("<html><body><div id=\"c\" class=\"card\">x</div></body></html>");
+    TEST_ASSERT_NOT_NULL(tree);
+    css_compute_styles(tree, &rules);
+    card = dom_find_by_id(tree, "c");
+    TEST_ASSERT_NOT_NULL(card);
+    TEST_ASSERT_TRUE(card->gradient_set);
+    TEST_ASSERT_EQUAL_INT(2, card->gradient.count);
+    TEST_ASSERT_EQUAL_INT(90, card->gradient.angle);
+    TEST_ASSERT_EQUAL_INT(3, card->border_radius);
+    TEST_ASSERT_TRUE(card->shadow_set);
+    TEST_ASSERT_EQUAL_INT(1, card->shadow_x);
+    TEST_ASSERT_EQUAL_INT(2, card->shadow_y);
+    TEST_ASSERT_UINT8_WITHIN(2, 128, card->opacity);
+    TEST_ASSERT_TRUE(css_color_parse("#ff0000", &red));
+    TEST_ASSERT_TRUE(css_color_parse("#0000ff", &blue));
+    TEST_ASSERT_EQUAL_UINT8(red.r, card->gradient.stops[0].r);
+    TEST_ASSERT_EQUAL_UINT8(blue.b, card->gradient.stops[1].b);
+    {
+        css_rgba_t left = css_gradient_sample(&card->gradient, 0);
+        css_rgba_t right = css_gradient_sample(&card->gradient, 255);
+
+        TEST_ASSERT_EQUAL_UINT8(255, left.r);
+        TEST_ASSERT_EQUAL_UINT8(255, right.b);
+    }
+    dom_free(tree);
+}
+
+/** Child/sibling/attribute/pseudo selectors share the existing ruleset. */
+void test_css_extended_selectors(void)
+{
+    css_ruleset_t rules;
+    dom_tree_t *tree;
+    dom_node_t *first;
+    dom_node_t *second;
+    dom_node_t *input;
+    css_rgba_t red;
+    css_rgba_t green;
+    css_rgba_t blue;
+
+    memset(&rules, 0, sizeof(rules));
+    css_parse_block("ul li:first-child { color: #ff0000; }"
+                    "p + p { color: #00ff00; }"
+                    "input[type=text] { color: #0000ff; }", &rules);
+    TEST_ASSERT_EQUAL_INT(3, rules.count);
+    tree = dom_parse("<html><body><ul><li id=\"a\">A</li><li id=\"b\">B</li></ul>"
+                     "<p id=\"p1\">1</p><p id=\"p2\">2</p>"
+                     "<input id=\"in\" type=\"text\"></body></html>");
+    TEST_ASSERT_NOT_NULL(tree);
+    css_compute_styles(tree, &rules);
+    first = dom_find_by_id(tree, "a");
+    second = dom_find_by_id(tree, "b");
+    input = dom_find_by_id(tree, "in");
+    TEST_ASSERT_NOT_NULL(first);
+    TEST_ASSERT_NOT_NULL(second);
+    TEST_ASSERT_NOT_NULL(input);
+    TEST_ASSERT_TRUE(css_color_parse("#ff0000", &red));
+    TEST_ASSERT_TRUE(css_color_parse("#00ff00", &green));
+    TEST_ASSERT_TRUE(css_color_parse("#0000ff", &blue));
+    TEST_ASSERT_EQUAL_UINT8(css_color_to_dos(&red), first->fg);
+    TEST_ASSERT_TRUE(css_color_to_dos(&red) != second->fg);
+    TEST_ASSERT_EQUAL_UINT8(css_color_to_dos(&green),
+                            dom_find_by_id(tree, "p2")->fg);
+    TEST_ASSERT_EQUAL_UINT8(css_color_to_dos(&blue), input->fg);
+    dom_free(tree);
+
+    /* The packed (id,class,type) triple, !important and source order all go
+     * through the ONE css_rule_compare() used by css_apply(). */
+    {
+        css_ruleset_t cascade;
+        dom_tree_t *ct;
+        css_rgba_t yellow;
+        css_rgba_t red;
+        css_rgba_t blue;
+
+        memset(&cascade, 0, sizeof(cascade));
+        css_parse_block("h1 { color: #00ffff; }"
+                        ".banner { color: #00ff00; }"
+                        "#hero { color: #ff0000; }"
+                        "#hero { color: #ff00ff; }"
+                        ".win { color: #ffff00 !important; }"
+                        "p { color: #00ff00; }"
+                        "p { color: #0000ff; }"
+                        "#one { color: #ff0000; }"
+                        ".a.b.c.d.e.f.g.h.i.j.k { color: #00ff00; }",
+                        &cascade);
+        TEST_ASSERT_EQUAL_INT(9, cascade.count);
+        TEST_ASSERT_TRUE(cascade.rules[4].important);
+        TEST_ASSERT_EQUAL_INT(1, css_specificity_id(&cascade.rules[2]));
+        TEST_ASSERT_EQUAL_INT(0, css_specificity_class(&cascade.rules[2]));
+        TEST_ASSERT_EQUAL_INT(11, css_specificity_class(&cascade.rules[8]));
+
+        ct = dom_parse("<html><body>"
+                       "<h1 id='hero' class='banner win'>A</h1>"
+                       "<p id='order'>B</p>"
+                       "<div id='one' class='a b c d e f g h i j k'>C</div>"
+                       "</body></html>");
+        TEST_ASSERT_NOT_NULL(ct);
+        css_compute_styles(ct, &cascade);
+        TEST_ASSERT_TRUE(css_color_parse("#ffff00", &yellow));
+        TEST_ASSERT_TRUE(css_color_parse("#ff0000", &red));
+        TEST_ASSERT_TRUE(css_color_parse("#0000ff", &blue));
+        TEST_ASSERT_EQUAL_UINT8(css_color_to_dos(&yellow),
+                                dom_find_by_id(ct, "hero")->fg);  /* !important */
+        TEST_ASSERT_EQUAL_UINT8(css_color_to_dos(&blue),
+                                dom_find_by_id(ct, "order")->fg); /* source order */
+        TEST_ASSERT_EQUAL_UINT8(css_color_to_dos(&red),
+                                dom_find_by_id(ct, "one")->fg);   /* id > 11 classes */
+        dom_free(ct);
+    }
+}
+
+/** Event dispatch is one inverted hook: the DOM stays free of QuickJS while a
+ *  registered engine (or this test) receives the handler source. */
+typedef struct {
+    int calls;
+    char last_event[32];
+    char last_handler[128];
+} event_probe_t;
+
+static void record_event(void *ctx, dom_node_t *node, const char *event,
+                         const char *handler)
+{
+    event_probe_t *probe = (event_probe_t *)ctx;
+
+    (void)node;
+    probe->calls++;
+    if (event != NULL) {
+        snprintf(probe->last_event, sizeof(probe->last_event), "%s", event);
+    }
+    if (handler != NULL) {
+        snprintf(probe->last_handler, sizeof(probe->last_handler), "%s", handler);
+    }
+}
+
+void test_dom_event_dispatch_hook(void)
+{
+    event_probe_t probe = { 0 };
+    dom_tree_t *tree = dom_parse(
+        "<html><body><button id=\"b\" onclick=\"go()\" "
+        "onload=\"ready()\">Go</button></body></html>");
+    dom_node_t *button;
+
+    TEST_ASSERT_NOT_NULL(tree);
+    button = dom_find_by_id(tree, "b");
+    TEST_ASSERT_NOT_NULL(button);
+    dom_set_event_hook(record_event, &probe);
+    dom_dispatch_event(button, "click");
+    TEST_ASSERT_EQUAL_INT(2, probe.calls);   /* node handler + document bubble */
+    TEST_ASSERT_EQUAL_STRING("click", probe.last_event);
+    TEST_ASSERT_EQUAL_STRING("go()", probe.last_handler);
+    dom_dispatch_event(button, "load");
+    TEST_ASSERT_EQUAL_STRING("load", probe.last_event);
+    TEST_ASSERT_EQUAL_STRING("ready()", probe.last_handler);
+    dom_set_event_hook(NULL, NULL);
+    dom_free(tree);
+}
+
+/** The single-pass ANSI reader understands the same form controls. */
+void test_html_reader_form_controls(void)
+{
+    char plain[256];
+
+    render_plain("<form><input type=\"text\" value=\"Ada\">"
+                 "<input type=\"checkbox\" checked>"
+                 "<select><option selected>Two</option></select>"
+                 "<button>Go</button></form>", plain, sizeof(plain));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "[Ada]"));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "[x]"));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "[Two]"));
+    TEST_ASSERT_NOT_NULL(strstr(plain, "[ Go ]"));
 }

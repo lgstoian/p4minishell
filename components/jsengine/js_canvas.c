@@ -45,6 +45,13 @@ typedef struct {
     int font_scale;
     int text_align;
     int text_baseline;
+    bool use_gradient;
+    js_canvas_gradient_t gradient;
+    bool use_shadow;
+    js_canvas_rgba_t shadow_color;
+    int shadow_dx;
+    int shadow_dy;
+    int shadow_blur;
 } canvas_state_t;
 
 typedef struct {
@@ -569,6 +576,55 @@ void js_canvas_clear(js_canvas_t *canvas)
     }
 }
 
+/** Paint a band of pixels with the current gradient, sampling the shared
+ *  colour stops along one axis. */
+static void canvas_gradient_band(js_canvas_t *canvas, int x0, int y0,
+                                 int w, int h, bool vertical,
+                                 const js_canvas_gradient_t *gradient)
+{
+    if (gradient == NULL || gradient->count < 2 || w < 1 || h < 1) return;
+    for (int y = y0; y < y0 + h; y++) {
+        for (int x = x0; x < x0 + w; x++) {
+            int axis = vertical ? (y - y0) : (x - x0);
+            int total = (vertical ? h : w) - 1;
+            uint8_t t = (uint8_t)(total > 0 ? (uint32_t)axis * 255u / (uint32_t)total : 0);
+
+            canvas_blend(canvas, x, y, css_gradient_sample(gradient, t), 255);
+        }
+    }
+}
+
+/** Draw the one shadow copy (no blur kernel: blur maps onto alpha spread). */
+static void canvas_shadow_rect(js_canvas_t *canvas, float x, float y,
+                               float w, float h)
+{
+    js_canvas_rgba_t shadow;
+    float sx[4], sy[4], dx[4], dy[4];
+    canvas_state_t saved;
+
+    if (canvas == NULL || !canvas->state.use_shadow) return;
+    shadow = canvas->state.shadow_color;
+    if (shadow.a == 0) return;
+    if (canvas->state.shadow_blur > 0) {
+        int reduction = canvas->state.shadow_blur * 24;
+
+        if (reduction > 200) reduction = 200;
+        shadow.a = (uint8_t)(shadow.a * (255 - reduction) / 255);
+    }
+    saved = canvas->state;
+    canvas->state.fill = shadow;
+    canvas->state.use_gradient = false;
+    canvas->state.use_shadow = false;
+    sx[0] = x + (float)canvas->state.shadow_dx;
+    sy[0] = y + (float)canvas->state.shadow_dy;
+    sx[1] = sx[0] + w; sy[1] = sy[0];
+    sx[2] = sx[0] + w; sy[2] = sy[0] + h;
+    sx[3] = sx[0];     sy[3] = sy[0] + h;
+    canvas_transform_polygon(canvas, sx, sy, dx, dy, 4);
+    canvas_fill_polygon(canvas, dx, dy, 4, false);
+    canvas->state = saved;
+}
+
 void js_canvas_fill_rect(js_canvas_t *canvas, float x, float y, float w, float h)
 {
     float sx[4], sy[4], dx[4], dy[4];
@@ -576,12 +632,184 @@ void js_canvas_fill_rect(js_canvas_t *canvas, float x, float y, float w, float h
     if (canvas == NULL || w == 0.0f || h == 0.0f) return;
     if (w < 0.0f) { x += w; w = -w; }
     if (h < 0.0f) { y += h; h = -h; }
+    canvas_shadow_rect(canvas, x, y, w, h);
+    if (canvas->state.use_gradient) {
+        int x0 = (int)floorf(x);
+        int y0 = (int)floorf(y);
+        int x1 = (int)ceilf(x + w);
+        int y1 = (int)ceilf(y + h);
+
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > canvas->width) x1 = canvas->width;
+        if (y1 > canvas->height) y1 = canvas->height;
+        canvas_gradient_band(canvas, x0, y0, x1 - x0, y1 - y0,
+                             canvas->state.gradient.angle == 0 ||
+                             canvas->state.gradient.angle == 180,
+                             &canvas->state.gradient);
+        return;
+    }
     sx[0] = x;     sy[0] = y;
     sx[1] = x + w; sy[1] = y;
     sx[2] = x + w; sy[2] = y + h;
     sx[3] = x;     sy[3] = y + h;
     canvas_transform_polygon(canvas, sx, sy, dx, dy, 4);
     canvas_fill_polygon(canvas, dx, dy, 4, false);
+}
+
+bool js_canvas_gradient_parse(const char *text, js_canvas_gradient_t *out)
+{
+    return css_gradient_parse(text, out);
+}
+
+js_canvas_rgba_t js_canvas_gradient_at(const js_canvas_gradient_t *gradient,
+                                        float t)
+{
+    uint8_t pos = 0;
+
+    if (t <= 0.0f) pos = 0;
+    else if (t >= 1.0f) pos = 255;
+    else pos = (uint8_t)(t * 255.0f);
+    return css_gradient_sample(gradient, pos);
+}
+
+void js_canvas_set_gradient(js_canvas_t *canvas,
+                            const js_canvas_gradient_t *gradient)
+{
+    if (canvas == NULL || gradient == NULL) return;
+    canvas->state.gradient = *gradient;
+    canvas->state.use_gradient = true;
+}
+
+void js_canvas_clear_gradient(js_canvas_t *canvas)
+{
+    if (canvas != NULL) canvas->state.use_gradient = false;
+}
+
+void js_canvas_fill_gradient_rect(js_canvas_t *canvas,
+                                  const js_canvas_gradient_t *gradient,
+                                  float x, float y, float w, float h,
+                                  bool vertical)
+{
+    int x0, y0, x1, y1;
+
+    if (canvas == NULL || gradient == NULL || w <= 0.0f || h <= 0.0f) return;
+    x0 = (int)floorf(x);
+    y0 = (int)floorf(y);
+    x1 = (int)ceilf(x + w);
+    y1 = (int)ceilf(y + h);
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > canvas->width) x1 = canvas->width;
+    if (y1 > canvas->height) y1 = canvas->height;
+    canvas_gradient_band(canvas, x0, y0, x1 - x0, y1 - y0, vertical, gradient);
+}
+
+void js_canvas_fill_rounded_rect(js_canvas_t *canvas, float x, float y,
+                                 float w, float h, float radius)
+{
+    int x0, y0, x1, y1;
+    float r = radius;
+
+    if (canvas == NULL || w <= 0.0f || h <= 0.0f) return;
+    if (r < 0.0f) r = 0.0f;
+    if (r * 2.0f > w) r = w / 2.0f;
+    if (r * 2.0f > h) r = h / 2.0f;
+    x0 = (int)floorf(x);
+    y0 = (int)floorf(y);
+    x1 = (int)ceilf(x + w);
+    y1 = (int)ceilf(y + h);
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > canvas->width) x1 = canvas->width;
+    if (y1 > canvas->height) y1 = canvas->height;
+    canvas_shadow_rect(canvas, x, y, w, h);
+    for (int py = y0; py < y1; py++) {
+        for (int px = x0; px < x1; px++) {
+            float cx = (float)px + 0.5f;
+            float cy = (float)py + 0.5f;
+            bool inside = true;
+
+            if (px < x + r) cx = x + r;
+            else if (px > x + w - r) cx = x + w - r;
+            if (py < y + r) cy = y + r;
+            else if (py > y + h - r) cy = y + h - r;
+            if (r > 0.0f) {
+                float dx = (float)px + 0.5f - cx;
+                float dy = (float)py + 0.5f - cy;
+
+                inside = (dx * dx + dy * dy) <= r * r;
+            }
+            if (!inside) continue;
+            if (canvas->state.use_gradient) {
+                int axis = canvas->state.gradient.angle == 0 ||
+                           canvas->state.gradient.angle == 180 ? py - y0 : px - x0;
+                int total = (canvas->state.gradient.angle == 0 ||
+                             canvas->state.gradient.angle == 180 ? y1 - y0 : x1 - x0) - 1;
+                uint8_t t = (uint8_t)(total > 0 ? (uint32_t)axis * 255u / (uint32_t)total : 0);
+
+                canvas_blend(canvas, px, py,
+                             css_gradient_sample(&canvas->state.gradient, t), 255);
+            } else {
+                canvas_blend(canvas, px, py, canvas->state.fill, 255);
+            }
+        }
+    }
+}
+
+void js_canvas_set_shadow(js_canvas_t *canvas, js_canvas_rgba_t color,
+                          float offset_x, float offset_y, float blur)
+{
+    if (canvas == NULL) return;
+    canvas->state.shadow_color = color;
+    canvas->state.shadow_dx = (int)lroundf(offset_x);
+    canvas->state.shadow_dy = (int)lroundf(offset_y);
+    canvas->state.shadow_blur = (int)lroundf(blur);
+    if (canvas->state.shadow_blur < 0) canvas->state.shadow_blur = 0;
+    if (canvas->state.shadow_blur > 8) canvas->state.shadow_blur = 8;
+    canvas->state.use_shadow = (color.a > 0);
+}
+
+void js_canvas_clear_shadow(js_canvas_t *canvas)
+{
+    if (canvas == NULL) return;
+    canvas->state.use_shadow = false;
+    canvas->state.shadow_blur = 0;
+}
+
+int js_canvas_get_shadow_offset_x(const js_canvas_t *canvas)
+{
+    return canvas != NULL ? canvas->state.shadow_dx : 0;
+}
+
+int js_canvas_get_shadow_offset_y(const js_canvas_t *canvas)
+{
+    return canvas != NULL ? canvas->state.shadow_dy : 0;
+}
+
+int js_canvas_get_shadow_blur(const js_canvas_t *canvas)
+{
+    return canvas != NULL ? canvas->state.shadow_blur : 0;
+}
+
+js_canvas_rgba_t js_canvas_get_shadow_color(const js_canvas_t *canvas)
+{
+    return canvas != NULL ? canvas->state.shadow_color : (js_canvas_rgba_t){ 0, 0, 0, 0 };
+}
+
+void js_canvas_set_shadow_offset(js_canvas_t *canvas, float x, float y)
+{
+    if (canvas == NULL) return;
+    canvas->state.shadow_dx = (int)lroundf(x);
+    canvas->state.shadow_dy = (int)lroundf(y);
+}
+
+void js_canvas_set_shadow_blur(js_canvas_t *canvas, float blur)
+{
+    if (canvas == NULL) return;
+    js_canvas_set_shadow(canvas, canvas->state.shadow_color,
+                         (float)canvas->state.shadow_dx,
+                         (float)canvas->state.shadow_dy, blur);
 }
 
 void js_canvas_clear_rect(js_canvas_t *canvas, float x, float y, float w, float h)

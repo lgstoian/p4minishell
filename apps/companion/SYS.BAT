@@ -11,6 +11,7 @@ rem =====================================================================
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 title "Live System"
 echo [M-SYS]
+gosub :rich_sys
 rem Layout: the shell publishes the grid (80x25 landscape, 80x97 portrait).
 rem The System panel grows into the extra rows; the Memory/Tasks pair stays
 rem on the bottom rows (15..24), split at the grid's middle column.
@@ -29,6 +30,27 @@ draw box %RX% %BM% %RW% 10 single "Tasks"
 draw text 5 6 "System dashboard ready"
 draw text 5 7 "Use View for the HTML guide"
 draw text 5 8 "Use Save to keep a snapshot on the app drive"
+draw run 48 2 "[M-RICH-SYS] map/func" /fg 11 /bg 0
+goto :refresh
+
+rem ---- v1.6 richer-language showcase ------------------------------------
+rem [M-RICH-SYS] previews the dashboard sections via map /set + for /K,
+rem str /pad and func/return; every reading is still done by the real verbs.
+:rich_sys
+echo [M-RICH-SYS] dashboard language tour
+map /set SECTS identity about
+map /set SECTS system mem
+for /K %%k in (SECTS) do echo [M-RICH-SYS-K] %%k=%%l
+set SW=sysinfo
+str /pad SW 10 SP .
+func :secttotal 8 4
+echo [M-RICH-SYS-F] sections=%RESULT%
+echo [M-RICH-SYS-S] pad=%SP%
+return
+
+:secttotal
+return %1+%2
+
 :refresh
 list "Dashboard" "Refresh" "View details" "Save snapshot" "Services" "Packages" "Back"
 on %errorlevel%+1 goto :do_refresh,:view_details,:save,:services,:packages,:back

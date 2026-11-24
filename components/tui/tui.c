@@ -8,6 +8,7 @@
  */
 
 #include "tui.h"
+#include "tui_frame.h"
 #include "tui_page_shot_internal.h"
 #include "windows.h"
 #include "selection.h"
@@ -30,7 +31,14 @@
 
 #define TUI_TAG "tui"
 
-static tui_cell_t *s_cells = NULL; /* ROWS*COLS */
+static tui_cell_t *s_cells = NULL; /* ROWS*COLS: the frame's working grid */
+static tui_cell_t *s_front_cells = NULL; /* ROWS*COLS: last presented to LVGL */
+/* ONE double-buffered cell frame. Every draw primitive mutates s_cells (the
+ * working grid); tui_flush diffs it against s_front_cells, emits one recolor
+ * markup buffer through tui_frame_render_full(), calls lv_label_set_text()
+ * ONCE, then commits working -> presented. No second window manager, no
+ * per-widget LVGL objects. */
+static tui_frame_t s_frame;
 static int s_rows = P4_CONFIG_TUI_ROWS;
 static int s_cols = P4_CONFIG_TUI_COLS;
 static int s_cur_row = 1;
@@ -214,8 +222,18 @@ static void tui_alloc_cells(void)
 {
     size_t total = (size_t)s_rows * (size_t)s_cols;
     size_t bytes = total * sizeof(tui_cell_t);
+
     s_cells = p4heap_alloc_psram(bytes);
-    if (s_cells) memset(s_cells, 0, bytes);
+    if (!s_cells) return;
+    memset(s_cells, 0, bytes);
+    s_front_cells = p4heap_alloc_psram(bytes);
+    if (!s_front_cells) {
+        heap_caps_free(s_cells);
+        s_cells = NULL;
+        return;
+    }
+    memset(s_front_cells, 0, bytes);
+    tui_frame_bind(&s_frame, s_cols, s_rows, s_front_cells, s_cells);
 }
 
 /* ==== Logical grid geometry ====
@@ -724,6 +742,7 @@ static tui_cell_t *tui_grid_alloc_copy(const tui_cell_t *old, int old_cols,
 static bool tui_grid_commit(int cols, int rows)
 {
     tui_cell_t *cells;
+    tui_cell_t *front = NULL;
     tui_cell_t *alt = NULL;
     tui_cell_t *page = NULL;
 
@@ -734,10 +753,16 @@ static bool tui_grid_commit(int cols, int rows)
     if (cells == NULL) {
         return false;
     }
+    front = tui_grid_alloc_copy(s_front_cells, s_cols, s_rows, cols, rows);
+    if (front == NULL) {
+        heap_caps_free(cells);
+        return false;
+    }
     if (s_alt_cells != NULL) {
         alt = tui_grid_alloc_copy(s_alt_cells, s_cols, s_rows, cols, rows);
         if (alt == NULL) {
             heap_caps_free(cells);
+            heap_caps_free(front);
             return false;
         }
     }
@@ -745,18 +770,22 @@ static bool tui_grid_commit(int cols, int rows)
         page = tui_grid_alloc_copy(s_page, s_cols, s_page_rows, cols, s_page_rows);
         if (page == NULL) {
             heap_caps_free(cells);
+            heap_caps_free(front);
             heap_caps_free(alt);
             return false;
         }
     }
     if (s_cells != NULL) heap_caps_free(s_cells);
+    if (s_front_cells != NULL) heap_caps_free(s_front_cells);
     if (s_alt_cells != NULL) heap_caps_free(s_alt_cells);
     if (s_page != NULL) heap_caps_free(s_page);
     s_cells = cells;
+    s_front_cells = front;
     s_alt_cells = alt;
     s_page = page;
     s_cols = cols;
     s_rows = rows;
+    tui_frame_bind(&s_frame, cols, rows, s_front_cells, s_cells);
     if (s_cur_row > s_rows) s_cur_row = s_rows;
     if (s_saved_row > s_rows) s_saved_row = s_rows;
     if (s_cur_col > s_cols) s_cur_col = s_cols;
@@ -883,8 +912,11 @@ bool tui_init(void)
     lv_obj_t *surf = windows_enter_tui_mode();
     if (!surf) {
         lvgl_port_unlock();
-        free(s_cells);
+        heap_caps_free(s_cells);
+        heap_caps_free(s_front_cells);
         s_cells = NULL;
+        s_front_cells = NULL;
+        memset(&s_frame, 0, sizeof(s_frame));
         return false;
     }
     s_tui_container = surf;
@@ -983,6 +1015,11 @@ void tui_deinit(void)
         heap_caps_free(s_cells);
         s_cells = NULL;
     }
+    if (s_front_cells) {
+        heap_caps_free(s_front_cells);
+        s_front_cells = NULL;
+    }
+    memset(&s_frame, 0, sizeof(s_frame));
     if (s_alt_cells) {
         heap_caps_free(s_alt_cells);
         s_alt_cells = NULL;
@@ -1402,50 +1439,15 @@ uint8_t tui_rgb_to_dos(uint32_t rgb)
     return ansi_cga_nearest(rgb);
 }
 
-/* One sampler for every image-to-cell blit: the current grid (tui_draw_image)
- * and the browser page buffer (tui_page_draw_image) share it, so an emoji
- * pack, screenshot preview and `draw img` all pick the same glyph/colour. */
-typedef void (*tui_pixel_sink_t)(void *ctx, int col, int row, char glyph,
-                                 uint8_t fg);
-
+/* The ONE image-to-cell sampler now lives in tui_frame.h (pure, shared with
+ * the host render gate and sprite cells). Every grid/page blit still funnels
+ * through this wrapper, so there is exactly one glyph ramp and one palette
+ * quantiser for images. */
 static void tui_sample_image(int x, int y, int w, int h,
                              const gfx_surface_t *img,
                              tui_pixel_sink_t sink, void *ctx)
 {
-    int cy;
-
-    if (img == NULL || img->px == NULL || w < 1 || h < 1) return;
-    for (cy = 0; cy < h; cy++) {
-        int sy;
-        int cx;
-
-        sy = (int)((int64_t)cy * img->h / h);
-        if (sy >= img->h) sy = img->h - 1;
-        for (cx = 0; cx < w; cx++) {
-            int sx;
-            uint16_t px;
-            uint32_t rgb;
-            int r;
-            int g;
-            int b;
-            int lum;
-            int level;
-
-            sx = (int)((int64_t)cx * img->w / w);
-            if (sx >= img->w) sx = img->w - 1;
-            px = img->px[(size_t)sy * (size_t)img->w + (size_t)sx];
-            r = ((px >> 11) & 0x1F) << 3;
-            g = ((px >> 5) & 0x3F) << 2;
-            b = (px & 0x1F) << 3;
-            rgb = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
-            lum = (r * 30 + g * 59 + b * 11) / 100;
-            level = lum * ANSI_IMAGE_RAMP_LAST / 255;
-            if (level < 0) level = 0;
-            if (level > ANSI_IMAGE_RAMP_LAST) level = ANSI_IMAGE_RAMP_LAST;
-            sink(ctx, x + cx, y + cy, ansi_image_glyph((char)level),
-                 tui_rgb_to_dos(rgb));
-        }
-    }
+    tui_sample_image_cells(x, y, w, h, img, sink, ctx);
 }
 
 static void tui_grid_pixel(void *ctx, int col, int row, char glyph, uint8_t fg)
@@ -1734,99 +1736,63 @@ void tui_alt_leave(void)
 
 void tui_flush(void)
 {
-    if (!s_cells || !s_tui_label) return;
-    // Build recolor buffer: each fg run emits "#rrggbb " + utf8 + " #";
-    // `#` cells split colored runs (close/escape/reopen), so budget 16
-    // bytes per cell worst case. Rows separated by "\n".
-    size_t cap = (size_t)s_rows * (size_t)(s_cols * 16 + 1) + 1;
-    char *buf = p4heap_alloc_psram(cap);
-    if (!buf) return;
-    size_t pos = 0;
-    for (int r = 1; r <= s_rows; r++) {
-        int c = 1;
-        while (c <= s_cols) {
-            tui_cell_t *cell = cell_at(r, c);
-            /* Effective fg: bold on a stock color renders bright (recolor
-             * markup has no bold/italic/underline; dim/italic/underline keep
-             * their base color). No cell writer sets attrs yet — forward-
-             * compatible for Markdown TUI targeting. */
-            uint8_t fg = cell->fg;
-            if ((cell->attr & 1) != 0 && fg < 8) {
-                fg += 8;
-            }
-            /* Coalesce same effective fg (attrs beyond bold ride along;
-             * only the lead cell's attr mattered above). */
-            int run = 1;
-            while (c + run <= s_cols) {
-                tui_cell_t *n = cell_at(r, c + run);
-                uint8_t nfg = n->fg;
-                if (((n->attr & 1) != 0) && nfg < 8) {
-                    nfg += 8;
-                }
-                if (nfg != fg) break;
-                run++;
-            }
-            /* Emit one fg run. A `#` cell inside a COLORED run must split
-             * it: in TEXT_INPUT the first `#` always closes the color, so
-             * close, emit the cell untagged (`##` is the WAIT-state literal
-             * escape), and reopen. Untagged runs (fg 16) just double `#`. */
-            bool tagged = (fg < 16);
-            uint32_t col = 0;
+    size_t cap;
+    char *buf;
+    tui_dirty_t dirty;
 
-            if (tagged) {
-                /* Cell fg/bg are DOS palette indices; the ANSI palette enum
-                 * uses a different order (ANSI 11 is bright yellow, DOS 11 is
-                 * bright cyan), so map through the DOS table, not the ANSI
-                 * palette. */
-                col = tui_dos_color_rgb(fg);
-                int n = snprintf(buf + pos, cap - pos, "#%06x ", (unsigned)(col & 0xFFFFFF));
-                if (n < 0) break;
-                if ((size_t)n >= cap - pos) { pos = cap - 1; break; }
-                pos += (size_t)n;
-            }
-            for (int k = 0; k < run; k++) {
-                tui_cell_t *cc = cell_at(r, c + k);
-                const char *utf8 = cc->utf8[0] ? cc->utf8 : " ";
-
-                if (tagged && strchr(utf8, '#') != NULL) {
-                    int n;
-
-                    if (pos + 1 < cap) buf[pos++] = '#'; /* close */
-                    for (const char *q = utf8; *q != '\0' && pos + 2 < cap; q++) {
-                        buf[pos++] = *q;
-                        if (*q == '#') buf[pos++] = '#'; /* WAIT escape */
-                    }
-                    n = snprintf(buf + pos, cap - pos, "#%06x ", (unsigned)(col & 0xFFFFFF));
-                    if (n < 0) break;
-                    if ((size_t)n >= cap - pos) { pos = cap - 1; break; }
-                    pos += (size_t)n;
-                    continue;
-                }
-                for (const char *q = utf8; *q != '\0' && pos + 2 < cap; q++) {
-                    buf[pos++] = *q;
-                    if (*q == '#') buf[pos++] = '#'; /* WAIT escape */
-                }
-            }
-            if (tagged) {
-                /* Close the recolor run with '#' only. A space before the
-                 * closing '#' is rendered as a real space by LVGL, so every
-                 * coloured run shifted the following cells right (the table
-                 * columns and the image border drifted). */
-                if (pos + 1 < cap) { buf[pos++] = '#'; }
-            }
-            c += run;
-        }
-        if (r < s_rows && pos + 1 < cap) buf[pos++] = '\n';
+    if (!s_cells || !s_tui_label || !tui_frame_valid(&s_frame)) return;
+    /* Double buffer: diff presented vs working FIRST. A clean frame costs no
+     * markup rebuild and no LVGL text set - one present is simply skipped. */
+    dirty = tui_frame_diff(&s_frame);
+    if (!dirty.any) {
+        gfx_frame_stats_sample(&s_tui_stats, (uint64_t)esp_timer_get_time());
+        return;
     }
-    if (pos >= cap) pos = cap - 1;
-    buf[pos] = '\0';
+    cap = tui_frame_markup_cap(&s_frame);
+    buf = p4heap_alloc_psram(cap);
+    if (!buf) return;
+    /* ONE cell renderer produces the whole label payload. tui_flush remains
+     * the only LVGL path: exactly one lv_label_set_text per presented frame. */
+    (void)tui_frame_render_full(&s_frame, buf, cap);
     lvgl_port_lock(0);
     lv_label_set_text(s_tui_label, buf);
     tui_title_sync();
     lvgl_port_unlock();
     heap_caps_free(buf);
+    tui_frame_commit(&s_frame);
     /* Present point for the TUI frame-pacing stats (`tui stats`). */
     gfx_frame_stats_sample(&s_tui_stats, (uint64_t)esp_timer_get_time());
+}
+
+/* Live-frame bridge: the pure renderer/seam lives in tui_frame.h, the live
+ * storage stays here. Reported by the new `tui frame` verb. */
+const tui_frame_t *tui_live_frame(void)
+{
+    return &s_frame;
+}
+
+tui_dirty_t tui_live_frame_dirty(void)
+{
+    return tui_frame_diff(&s_frame);
+}
+
+void tui_draw_sprite(int x, int y, int w, int h, const gfx_surface_t *img)
+{
+    if (!tui_frame_valid(&s_frame)) return;
+    tui_frame_draw_sprite(&s_frame, x, y, w, h, img);
+}
+
+void tui_print_rgb(int col, int row, const char *text,
+                   uint32_t fg_rgb, uint32_t bg_rgb, bool has_bg)
+{
+    if (text == NULL || !tui_frame_valid(&s_frame)) return;
+    for (const char *p = text; *p != '\0'; p++) {
+        char ch[2];
+
+        ch[0] = *p;
+        ch[1] = '\0';
+        tui_frame_set_rgb(&s_frame, col++, row, ch, fg_rgb, bg_rgb, has_bg, 0);
+    }
 }
 
 /* Sync the title-bg overlay with the armed band. Runs with the LVGL lock

@@ -12,6 +12,7 @@ setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-MOOD]
 title "Mood"
+gosub :rich_mood
 rem Layout: the trend bars are authored for rows 8..12 of the 80x25 grid.
 rem Shifting by half the extra rows centres the block on an 80x97 panel
 rem without moving a single row on landscape. Bar width/label follow TUICOLS.
@@ -29,9 +30,28 @@ set /a S9=9+%MO% > NUL
 draw fullscreen on
 goto menu
 
+rem ---- v1.6 richer-language showcase -----------------------------------
+rem [M-RICH-MOOD]: palette map + for /K, string padding and func/return,
+rem all computed locally so the live sampler is untouched.
+:rich_mood
+echo [M-RICH-MOOD] palette language tour
+map /set MOODPAL calm green
+map /set MOODPAL strained red
+for /K %%k in (MOODPAL) do echo [M-RICH-MOOD-K] %%k=%%l
+set MDW=mood
+str /pad MDW 8 MDP .
+func :moodpct 60 40
+echo [M-RICH-MOOD-F] pct=%RESULT%
+echo [M-RICH-MOOD-S] pad=%MDP%
+return
+
+:moodpct
+return %1+%2
+
 :menu
 draw clear screen
 gosub %APPROOT%/APPLIB.BAT::page double "MOOD 💖"
+draw run 58 2 "[M-RICH-MOOD] map/forK/func" /fg 10 /bg 0
 draw text 5 2 "board mood from live heap (mem includes PSRAM)" 14
 draw text 45 2 "local %TIME%" 7
 list "Mood" "Live mood (5 samples)" "RGB demo" "Tone demo" "Snapshot" "Service sampler" "Back"

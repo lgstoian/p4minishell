@@ -49,11 +49,17 @@ def default_renderer():
     may be staged under ``tools/host/build*`` by host tools. The first existing
     ELF wins; ``--renderer`` still overrides it.
     """
+    # Prefer the canonical WSL host lane: other agents can leave ad-hoc
+    # build-* directories with an older ELF behind. A stale renderer that
+    # predates a feature probe must never silently satisfy the gate.
+    canonical = ROOT / "test" / "host" / "build-wsl" / "host_webapp_render.elf"
+    if canonical.is_file():
+        return canonical
     for parent in (ROOT / "test" / "host", TOOLS / "host"):
         for elf in sorted(parent.glob("build*/host_webapp_render.elf")):
             if elf.is_file():
                 return elf
-    return ROOT / "test" / "host" / "build-wsl" / "host_webapp_render.elf"
+    return canonical
 
 
 BASELINE_TAG = "webapp-baseline-v1"
@@ -63,6 +69,7 @@ DUMP_HEAD = "tui.dump cols="
 DUMP_END = "tui.dump.end"
 CANVAS = "webapp.canvas "
 FRAME = "webapp.frame "
+META = "webapp."   # any other webapp.* line is a feature/capability report
 ROW_RE = re.compile(r"^(\d{3})\|(.*)$")
 RUN_RE = re.compile(r"^(\d{3})@(.*)$")
 RUN_ITEM_RE = re.compile(r"^\d+-\d+:\d+$")
@@ -106,6 +113,7 @@ def parse_emission(raw: str, fixture: str, fixture_dir: Path) -> RenderResult:
     runs: Dict[int, List[str]] = {}
     frames: List[Path] = []
     canvas_lines = 0
+    meta_lines = 0
 
     for line in text.split("\n"):
         line = line.rstrip()
@@ -144,6 +152,12 @@ def parse_emission(raw: str, fixture: str, fixture_dir: Path) -> RenderResult:
 
         if line.startswith(CANVAS):
             canvas_lines += 1
+            canonical.append(line)
+            continue
+
+        if (line.startswith(META) and not line.startswith(BEGIN) and
+                not line.startswith(END)):
+            meta_lines += 1
             canonical.append(line)
             continue
 
@@ -188,9 +202,12 @@ def parse_emission(raw: str, fixture: str, fixture_dir: Path) -> RenderResult:
                         % (declared_rows, declared_runs, len(rows), len(runs)))
     if not rows or not runs:
         raise GateError("zero assertions: no rows or colour runs were emitted")
+    if meta_lines == 0:
+        raise GateError("zero assertions: no webapp.* feature report was emitted")
 
     return RenderResult(fixture=fixture, lines=canonical, rows=rows, runs=runs,
-                        frames=frames, assertions=len(rows) + len(runs) + canvas_lines)
+                        frames=frames,
+                        assertions=len(rows) + len(runs) + canvas_lines + meta_lines)
 
 
 def write_baseline(path: Path, fixture: str, result: RenderResult) -> None:
@@ -345,7 +362,11 @@ def run_renderer(renderer: Path, fixture: Path, cwd: Path) -> str:
         command = [wsl, "--exec", _to_wsl_path(renderer), _to_wsl_path(fixture)]
         workdir = None
     try:
-        proc = subprocess.run(command, cwd=workdir, capture_output=True, text=True,
+        # The renderer emits UTF-8 (HTML entities decode to UTF-8). On a
+        # Windows host the locale codec is cp1252, which would silently turn
+        # `©` into `Â©` in the baseline and in every proof image; pin UTF-8.
+        proc = subprocess.run(command, cwd=workdir, capture_output=True,
+                              text=True, encoding="utf-8", errors="replace",
                               timeout=RENDER_TIMEOUT)
     except OSError as exc:
         raise GateError("cannot run %s here (%s); use a POSIX host" % (renderer, exc))
@@ -417,6 +438,10 @@ def self_test() -> int:
         "002|Second",
         "002@1-80:7",
         DUMP_END,
+        "webapp.meta semantic=2 controls=3 grids=1 canvases=1",
+        "webapp.css id=card radius=3 shadow=1 gradient=1 opacity=128",
+        "webapp.cascade h1_color=.win spec=0.1.0 imp=1 order=6 fg=14",
+        "webapp.entity &amp;=26/5 &reg=AE/4 &#x41;=41/5",
         CANVAS + " id=c w=96 h=48 pixel0=ff5555ff",
         END + " fixture=hello.html rows=2 runs=2",
     ]) + "\n"
@@ -462,6 +487,38 @@ def self_test() -> int:
             checks.append(("missing marker rejected", False))
         except GateError:
             checks.append(("missing marker rejected", True))
+
+        no_meta = good.replace("webapp.meta semantic=2 controls=3 grids=1 canvases=1\n", "")
+        try:
+            evaluate(no_meta, "hello.html", fixture_dir, base, update=False)
+            checks.append(("missing feature report rejected", False))
+        except GateError:
+            checks.append(("missing feature report rejected", True))
+
+        bad_meta = good.replace("webapp.css id=card radius=3",
+                                "webapp.css id=card radius=9")
+        try:
+            evaluate(bad_meta, "hello.html", fixture_dir, base, update=False)
+            checks.append(("tampered feature report rejected", False))
+        except GateError:
+            checks.append(("tampered feature report rejected", True))
+
+        # The cascade/entity lines are part of the same exact baseline: a
+        # wrong specificity decision or entity mapping must go RED too.
+        bad_cascade = good.replace("webapp.cascade h1_color=.win spec=0.1.0",
+                                   "webapp.cascade h1_color=#hero spec=1.0.0")
+        try:
+            evaluate(bad_cascade, "hello.html", fixture_dir, base, update=False)
+            checks.append(("tampered cascade decision rejected", False))
+        except GateError:
+            checks.append(("tampered cascade decision rejected", True))
+
+        bad_entity = good.replace("&amp;=26/5", "&amp;=26/4")
+        try:
+            evaluate(bad_entity, "hello.html", fixture_dir, base, update=False)
+            checks.append(("tampered entity mapping rejected", False))
+        except GateError:
+            checks.append(("tampered entity mapping rejected", True))
 
         stale = base / "hello.txt"
         stale.write_text(stale.read_text(encoding="utf-8").replace(

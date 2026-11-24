@@ -10,7 +10,7 @@ code, see [`SDK.md`](SDK.md); for the command surface, see
 [`command.md`](command.md); for the API, see [`API.md`](API.md); for the
 working rules, see [`ai-context.md`](ai-context.md).
 
-- **Version:** v1.5.0 · **Target:** ESP32-P4 + ESP32-C6 · **ESP-IDF:** v5.5.5
+- **Version:** v1.6.0 · **Target:** ESP32-P4 + ESP32-C6 · **ESP-IDF:** v5.5.5
 - **UI:** LVGL 9.6.0~1 / esp_lvgl_port 2.9.0, JD9165 1024x600 + GT911 touch
 - **License:** MIT (see [`licence.md`](licence.md))
 
@@ -57,15 +57,17 @@ components/boot/                CONFIG.SYS parser + AUTOEXEC.BAT runner + defaul
 components/browser/             Browser memory caches: PSRAM image cache + rendered-page back/forward cache
 components/command/             Command dispatch, worker task, pipeline, and the split *_commands.c verb files (incl. download_commands.c)
 components/applib/              Native-app runtime library (transcript stdout, memory, time, input, state, ABI)
-components/modal/               Shared modal runtime + ready-made surfaces (dialog/list/ask/browse/view/hexview/imageview/form)
+components/modal/               Shared modal runtime + ready-made surfaces (dialog/list/ask/browse/view/hexview/imageview/form, plus mpick/mprog/mformx/mstack sessions)
 components/editor/              `edit` editor: byte-preserving document model + LVGL surface + focus/spell/templates
-components/tui/                 TUI 80x25 cell buffer + draw primitives + tui_flush
-components/gfx/                 RGB565 raster core + BMP parse/decode/scale + 8x8 font + plot viewport
+components/tui/                 TUI 80x25 cell buffer + draw primitives + tui_flush; tui_frame.h (one double-buffered renderer/dirty-rect/sampler) + tui_widgets.h (focus/layout/scroll/route)
+components/gfx/                 RGB565 raster core + BMP parse/decode/scale + 8x8 font + plot viewport + AA/gradient/atlas/composite toolkit
 components/imgdec/              PNG (LodePNG) + JPEG (TJpgDec) decode to scaled RGB565
 components/filetype/            Central extension -> kind registry
 components/markdown/            CommonMark-subset renderer (ANSI) + HTML serializer + print paginator + HTML reader + unified DOM renderer (TUI/ANSI) + css_color.c (the one CSS RGBA parser)
 components/jsengine/            QuickJS engine + DOM/FS/shell bindings + Canvas 2D RGBA rasterizer (js_canvas) + HID-free HTML5 subset glue
 components/mcp/                 MCP (Model Context Protocol) JSON-RPC client (networking + json)
+components/nativepay/           Pure signed-envelope verifier (canonical bytes, CRC, SHA-256, hook-based ECDSA)
+components/nativeexec/          The ONE fixed-ABI native payload loader (inspect/plan/launch, no ELF/MMU/second dispatcher)
 components/font/                Font registry (roles/sizes/fallbacks), SD TTF loader, CJK attach, themes,
                                 emoji_core.c (retro DOS map) + the LVGL glyph-remap fallback link
 components/emoji/               Third-party EMOJI/ packs: INI index, shared image decode, PSRAM cell/LVGL-glyph caches
@@ -218,6 +220,36 @@ Granularity follows each surface's text model:
 - `browse` rows select their entry name (a list has rows, not columns).
 
 The editor keeps its own drag/keyboard selection.
+
+## v1.6 additive seams and ADRs
+
+All v1.6 work extends existing engines; nothing is replaced and no second
+implementation is introduced. The architecture records three new decisions
+([`architecture.md`](architecture.md) ADR-15..17):
+
+- **One native loader path (ADR-15).** `components/nativepay` is a pure
+  verifier over the ABI §4.1 canonical bytes (corrected in v1.6);
+  `components/nativeexec` is the only component that maps and calls a verified
+  payload. `components/command/native_commands.c` installs the single `p4sign`
+  key plus the crypto/API/map hooks, and the `native` verb and `natrun` app are
+  two front doors over one run core. No ELF parser, relocator, MMU claim,
+  second dispatcher or second key store; only a `.bat` shim launches a payload.
+- **One renderer (ADR-16).** The gfx toolkit adds AA/gradient/atlas/composite
+  primitives to the one RGB565 raster core; `tui_frame.h` owns the one
+  double-buffered cell renderer, dirty-rect diff and image sampler, and
+  `tui_widgets.h` adds focus/layout/scroll/route over the existing pane/modal
+  state; HTML5/CSS/JS (forms, semantics, grid, colspan, CSS units/selectors/
+  gradients/opacity, JS timers/events/console, canvas gradients/shadows) stays
+  in the one DOM/CSS/canvas engine. `webapp` and `draw run`/`sprite` are
+  facades. Host render gates compile those same production files.
+- **One event model (ADR-17).** Key chords, taps, focus, modal sessions, batch
+  `trap /on` and webapp `event`/`tick` all reuse the modal chord resolver,
+  hotspot table, workspace event queue and pending-goto slot. No private input
+  loop, mode stack or notification loop.
+
+Host-only backends are test-only (`test/host/`, `tools/host/`) and report honest
+"unavailable" verdicts; a host gate pass is never hardware sign-off
+([`harness.md`](harness.md) §0/§2.2).
 
 ## Configuration system
 

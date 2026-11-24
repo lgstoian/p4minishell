@@ -82,10 +82,22 @@ Regenerate the committed manifests after changing tags or components:
 
 ## 1. Project snapshot
 
+**v1.6.0 additive expansion (board-free release candidate).** An opt-in,
+signed native payload now has ONE loader path (`components/nativeexec`, launched
+only by a `.bat` shim through `natrun`); the gfx toolkit gained AA/gradient/
+atlas/composite; batch gained `func`/`return <expr>`/`%RESULT%`, `for /K`,
+`trap /on`, `str /rev|count|pad` and `map /values|incr`; HTML5/CSS/JS, the TUI
+cell frame and the modal runtime gained additive surfaces; all 33 reference
+apps emit additive `[M-RICH-*]` markers (pre-existing `[M-*]` preserved); and
+the host gate set now covers batch, webapp, gfx, tui, modal and apps. Everything is host/static
+verified only — the on-board suites remain the authority (`harness.md` §0/§2.2).
+See [`changelog.md`](changelog.md) §1.6.0 and [`architecture.md`](architecture.md)
+ADR-15..17.
+
 | Field | Value |
 |-------|-------|
 | Name | P4MiniShell |
-| Version | **v1.5.0** (`p4minishell_config.h` version macros) |
+| Version | **v1.6.0** (`p4minishell_config.h` version macros; config header/yaml are updated by the build owner, not the docs pass) |
 | Type | Embedded shell + application framework (palmtop / PDA / writerdeck) |
 | Target | ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO) |
 | Framework | ESP-IDF v5.5.5 |
@@ -655,6 +667,28 @@ tools use a webcam to observe the device; prefer them over guessing.
   never compiled into firmware, and both host pre-gates
   (`tools/host_batch_run.py`, `tools/host_webapp_gate.py`) stay pre-gates only;
   the on-device suites remain authoritative (`harness.md` §0 and §2.2).
+- **No second loader, no second renderer, no second event model.** The signed
+  native payload path has exactly ONE loader (`native_exec_launch()` in
+  `components/nativeexec`), reached only by the `natrun` `.bat` app front door
+  and the `native` diagnostics verb; `components/nativepay` is a pure verifier
+  that never reads a file or transfers control. Never add a second loader, ELF
+  parser, relocator, address space, dispatcher or key store: the only trust key
+  is the `p4sign` NVS key installed with `pkg key install`. Likewise, HTML/CSS/
+  canvas pages go through the ONE DOM/CSS/canvas engine (`components/markdown`
+  + `components/jsengine`), TUI cells through the ONE frame renderer/sampler
+  (`tui_frame.h`), colours through the ONE CSS colour parser and ONE DOS
+  palette, and input through the ONE modal chord/tap/event path. `webapp`,
+  `draw run`, `tui frame` and the new modal verbs are thin facades, not new
+  runtimes.
+- **Host-only backends never fake hardware or firmware behaviour.** Every
+  host gate (`host_batch_run.py`, `host_webapp_gate.py`, `host_tui_gate.py`,
+  `host_modal_gate.py`, `gfx_toolkit_test.py --host`, the native payload
+  checker) compiles or drives the real shipped translation units. Fixture
+  roots, POSIX I/O hooks and generated harnesses live in `test/host/` or
+  `tools/host/`; a missing root/key/backend is an honest failure or an explicit
+  "unavailable" verdict, never an invented card, file, key, pixel or success.
+  A host pass is a pre-gate only and can never be written up as hardware
+  sign-off (`harness.md` §0 and §2.2).
 
 ### Comments
 - All major sections need descriptive comments explaining purpose and behavior
@@ -1147,9 +1181,10 @@ tools use a webcam to observe the device; prefer them over guessing.
     stale). `gfind` itself is a thin orchestrator over `db_find`/`db_list`,
     `alarm_list`, and that shared scan core — no parallel store search.
   - Batch language verbs (`set`, `calc`, `path`, `echo`, `call`, `gosub`,
-    `return`, `on`, `if`, `for` including `for /f`, `goto`, `shift`, `pause`,
-    `choice`, `setlocal`, `endlocal`, `exit`, `proc`, `ini`, `appconfig`,
-    `temp`, `ansi`, `menu`, `appmode`) ->
+    `return`, `on`, `if`, `for` including `for /f` and `for /K`, `goto`, `shift`,
+    `pause`, `choice`, `setlocal`, `endlocal`, `exit`, `proc`, `ini`, `appconfig`,
+    `temp`, `ansi`, `menu`, `appmode`, `dim`, `str`, `map`, `trap`, `func`,
+    `until`, `local`) ->
     `components/batch/batch.c` (+ `components/batch/calc.c` for the `calc`
     float evaluator).
   - Alias verbs (`alias`, `unalias`) -> `components/batch/batch.c` (the alias table, the
@@ -1168,13 +1203,16 @@ tools use a webcam to observe the device; prefer them over guessing.
   the unit tests.
 - Time / SNTP verbs (`date`, `time`, `timezone`, `sntp`/`ntpsync`) -> `components/clock/clock_commands.c`
 - Command verbs live in the split `components/command/*.c` files (never one monolith):
-  - TUI/modal verbs (`draw`, `tui`, `color`, `locate`, `anchor`, `dialog`, `list`, `ask`,
-    `browse`, `view`, `hexview`) -> `components/command/tui_commands.c`
+  - TUI/modal verbs (`draw` incl. `run`/`sprite`, `tui` incl. `frame`/`focus`/
+    `layout`/`scroll`/`route`, `color`, `locate`, `anchor`, `dialog`, `list`, `ask`,
+    `mpick`, `mprog`, `mformx`, `mstack`, `browse`, `view`, `hexview`) ->
+    `components/command/tui_commands.c` and `components/command/modal_commands.c`
   - Declarative screens + flows (`screen run|flow|info`) -> `components/command/screen_commands.c`
     (flat KEY=VALUE reader + argv synthesis into the existing verbs; `flow` routes over `.FRM`
     nodes via the pure `screen_flow_select()`; never a second surface and never a second router)
 - GFX canvas verbs (`gfx init/close/status/clear/pixel/line/rect/circle/hline/vline/triangle/
-ellipse/polygon/fill/text/show/load/blit/blitmany[/s][/r]/free/slots/save`) -> `components/command/gfx_commands.c`
+ellipse/polygon/lineaa/circleaa/rectaa/gradient/fill/text/show/load/blit/
+blitmany[/s][/r][/a]/composite/free/slots/save`) -> `components/command/gfx_commands.c`
   (rotation via pure `gfx_surface_rotate_cw()`, scale via `gfx_surface_blit_scaled()`);
 the raster core + 8x8 font are `components/gfx/`
   - `gfx show` MUST `lvgl_port_task_wake(LVGL_PORT_EVENT_DISPLAY, NULL)` after
@@ -1191,6 +1229,14 @@ the raster core + 8x8 font are `components/gfx/`
     frozen in [`ABI.md`](ABI.md) — change it there first. `asset_verify_app` reports the verdict but
     delegates the crypto to `pkg_sign_*`; never add a second signature implementation. Neither the
     private key nor an unsanctioned trust root may enter the firmware.
+  - Signed native payloads (`native info|status|verify <APP>`, `natrun <APP>`) ->
+    `components/command/native_commands.c` (installs the ONE `p4sign` key, the
+    mbedTLS SHA-256/ECDSA hooks and the API/map seams); the loader itself is the
+    single `components/nativeexec` path and the verifier is the pure
+    `components/nativepay` core. No second key store or loader.
+  - Webapp facade (`webapp open|dump|css|js|event|tick`) ->
+    `components/command/webapp_commands.c`; every subcommand delegates to the
+    existing `html`, `tui dump`, `browser css` and `js eval` engines.
   - Database (`db ...`) -> `components/command/db_commands.c`
   - Alarm / calendar (`alarm ...`, `cal ...`) -> `components/command/alarm_commands.c`
   - Fonts/theme/cursor (`font ...`, `theme show`, `cursor ...`) -> `components/command/font_commands.c`

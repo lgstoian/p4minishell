@@ -1,22 +1,22 @@
-# P4MiniShell Unit Tests (firmware v1.5.0)
+# P4MiniShell Unit Tests (firmware v1.6.0)
 
 This directory contains the unit tests for the P4MiniShell components. They use
 the Unity framework (included in ESP-IDF) and run in two places:
 
 - **On the P4 target** - the authoritative run (`tools/unit_run.py COM3 COM6`).
 - **On the host** - a hardware-free pre-gate that compiles the real interpreter
-  (`test/host/`, ESP-IDF `linux` target, 345 cases). See `harness.md` 2.2 and
+  (`test/host/`, ESP-IDF `linux` target, 375 cases). See `harness.md` 2.2 and
   section "Host suite" below.
 
 Last recorded hardware baseline (v1.4.3): **699 tests, 0 failures, 2 ignored**
 on COM3 and COM6 (before the new trap/native-payload cases). The host lane has
-**345 generated cases** awaiting its next green run; the previously recorded
+**375 generated cases** awaiting its next green run; the previously recorded
 285/285 run predates the interpreter-in-host expansion. The current static
-case count is **769** (what `tools/green_guard.py` sees in
-`test/main/test_*.c`: 717 `RUN_TEST` registrations + 52 self-registering
-`TEST_CASE`s, including 4 new `trap` cases — the pre-change baseline was 758),
-and the generated host runner expects **345** cases
-(`tools/host_test_manifest.json`, up from 285). Refresh the hardware and host
+case count is **809** (what `tools/green_guard.py` sees in
+`test/main/test_*.c`: `RUN_TEST` registrations + self-registering `TEST_CASE`s,
+including the v1.6 native-payload/loader, gfx toolkit, TUI frame/widget, modal
+and HTML/JS cases), and the generated host runner expects **375** cases
+(`tools/host_test_manifest.json`, up from 345). Refresh the hardware and host
 run counts with `tools/unit_run.py` and `tools/host_unit_run.py` before quoting
 them as verified; the difference between the static target count and a
 hardware run is cases that only compile for the target. The runner completes
@@ -75,13 +75,15 @@ test/
     test_power.c            # power/idle state
     test_audio.c            # audio output-mode parse, route/amp-gate resolve, WAV params, mic stats, Goertzel
     test_serial.c           # serial framing/CRC
-    test_tui.c              # TUI state, table width/parse helpers, draw hold, selftest (palette/coverage/metrics), bound cell info
+    test_tui.c              # TUI state, table width/parse helpers, draw hold, selftest (palette/coverage/metrics), bound cell info + v1.6 frame/dirty-rect/widget geometry/image sampler
     test_clipboard.c        # RAM clipboard
     test_history_file.c     # history file round-trip
     test_markdown.c         # markdown ANSI renderer + HTML serializer + print paginator
     test_filetype.c         # filetype registry
     test_json.c             # json validate/pretty
-    test_gfx.c              # RGB565 raster + BMP (24/32-bit, top-down, scaled decode, fit) + blit + row convert + toolkit (spans/tri/poly/ellipse/fill/text) + viewport (map/clip/nice-step) + frame-stats (intervals/jitter/dropped/format)
+    test_gfx.c              # RGB565 raster + BMP (24/32-bit, top-down, scaled decode, fit) + blit + row convert + toolkit (spans/tri/poly/ellipse/fill/text, v1.6 AA/gradient/atlas/composite) + viewport (map/clip/nice-step) + frame-stats (intervals/jitter/dropped/format)
+    test_native_payload.c   # native envelope parse/verdicts (magic/version/size/CRC/SHA/signature)
+    test_native_exec.c      # v1.6: fixed export table, API mask, plan/inspect/launch (pure half host-testable)
     test_asset.c            # CRC-32 vectors + asset manifest parser
     test_pkg.c              # pkg APPINFO-name helper + ECDSA signature vectors + version compare + requires= parse
     test_assoc.c            # assoc extension normalize + argument split
@@ -108,12 +110,12 @@ test/
     test_cas.c              # CAS parser/simplify/diff/solve/series
     test_chat.c             # chat transport (config, inbox/log ring, sequence, send/poll/clear)
     test_error_strings.c    # error-code -> message table
-    test_html.c             # HTML reader (components/markdown/html_read.c)
+    test_html.c             # HTML reader (components/markdown/html_read.c) + v1.6 semantics/forms/grid/table colspan
     test_httpget.c          # cookie jar for httpget/browser
     test_imgdec.c           # PNG/JPEG/BMP format probe, RGB565 mapping, decode caps
     test_rss_opml.c         # OPML parse: standard/extensions, sanitising, limits, write
     test_usb_hid_layout.c   # HID report-descriptor map, 16-bit axes, wheel, report IDs
-    test_js_canvas.c        # Canvas 2D core: alpha, transforms, paths, text, snapshots
+    test_js_canvas.c        # Canvas 2D core: alpha, transforms, paths, text, snapshots + v1.6 gradient/shadow/rounded rects
     test_locale.c           # locale formatting (date order, 12/24h, decimals, thousands)
 ```
 
@@ -141,7 +143,8 @@ python ..\tools\unit_run.py COM3 COM6
 
 The same sources also build natively with ESP-IDF's preview `linux` target
 (`test/host/`), so the pure-logic cases run on the host and in CI without a
-board. Coverage today is **345 cases** (last run) - the leaf components with no
+board. Coverage today is **375 generated cases** (manifest count; refresh with
+`tools/host_unit_run.py`) - the leaf components with no
 board dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`), the
 hardware-free halves of the shell (`shell_core.c` for text/scanning/history/
 abort/help, `shell_transcript.c` for the transcript model behind an optional
@@ -171,15 +174,37 @@ which lives only in `test/host` and reports "unavailable" for board-only calls �
 never firmware behaviour. This lane remains a pre-gate only — see
 `harness.md` §2.2.
 
-Two further host-only pre-gates are separate from this Unity case count and
-open no serial port: `tools/host_webapp_gate.py` checks the shared HTML/CSS/TUI
-render path against `tools/host/fixtures/webapp/` fixtures through
-`tools/host/main/host_webapp_render.c` (1 fixture, 51 assertions OK), and
-`tools/host_batch_run.py` runs the real `tools/host/fixtures/batch/HELLO.BAT`
-through the real interpreter in `test/host/main/host_batch_run.c` over the
-host-only POSIX fixture-root backend (1 fixture, 7 assertions OK). Neither
-signs off hardware — the on-device suites remain authoritative (`harness.md`
-§2.2).
+Several host-only pre-gates are separate from this Unity case count and open no
+serial port:
+
+- `tools/host_webapp_gate.py` checks the shared HTML/CSS/TUI render path against
+  `tools/host/fixtures/webapp/` fixtures (`hello.html`, `features.html`) through
+  `tools/host/main/host_webapp_render.c` and exact text/colour-run baselines.
+- `tools/host_batch_run.py` runs the real `tools/host/fixtures/batch/HELLO.BAT`
+  and `FEATURES.BAT` through the real interpreter in
+  `test/host/main/host_batch_run.c` over the host-only POSIX fixture-root
+  backend (`str /rev|count|pad`, `map /values|incr`, `for /K`, `func`/`return`,
+  `trap /on`).
+- `tools/host_tui_gate.py` compiles the one `tui_frame.h` cell renderer, the one
+  ANSI palette and the one CSS colour parser over `tools/host/fixtures/tui/`
+  scenes and compares dirty rects and colour runs.
+- `tools/host_modal_gate.py` generates a harness from
+  `tools/host/fixtures/modal/transitions.json` and links the real
+  `components/modal/modal_args.c` for focus/progress/session transitions.
+- `tools/gfx_toolkit_test.py --host` checks the exact RGB565 constants shared
+  with `test/main/test_gfx.c` and the verb coverage of `GFXAA.BAT`.
+- `tools/host_apps_gate.py --check` drives all **33 updated reference apps**
+  through the same real interpreter ELF as the batch gate: **363 host assertions
+  PASS, 40 hardware surfaces honestly SKIP (gfx/TUI/modal/webapp/native, reason
+  named) and 7 red-canary checks**. The `[M-RICH-*]` markers are additive;
+  pre-existing `[M-*]` markers are unchanged. The new transcript lines mean
+  `tools/appdiff/baseline/*.transcript.txt` goldens need a board rebaseline.
+- `tools/make_native_payload.py check|selftest` verifies the signed test
+  envelope in `tools/host/fixtures/native/` with a throwaway key; no bytes are
+  mapped or executed, and the key is never installed on a board.
+
+All of these are pre-gates only — none signs off hardware, and the on-device
+suites remain authoritative (`harness.md` §2.2).
 
 ## False-green guard
 

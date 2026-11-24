@@ -2186,10 +2186,115 @@ void shell_command_gosub(int argc, char **argv)
 }
 
 /**
- * `return [code]` — BASIC-named sibling of `goto :eof`. Inside a `call :label`
- * / `gosub` scope it returns to the caller; at the top level of a batch file it
- * ends the frame (the documented `RETURN -> goto :eof` mapping). An optional
- * code sets ERRORLEVEL first.
+ * `func NAME [args]` — a named local routine with parameters and a result.
+ *
+ * Deliberately a thin front door over `call :label`: the same label-call slot
+ * saves the caller's arguments and binds NAME's arguments to `%1..%9`, and
+ * the same pending-goto slot jumps to `:NAME`. A `return <expr>` publishes
+ * `%RESULT%` into the frame-local class (the env core already routes names
+ * created inside a call scope there). No second dispatcher or frame stack.
+ */
+void shell_command_func(int argc, char **argv)
+{
+    const char *label;
+
+    if (argc < 2 || argv[1][0] == '\0') {
+        shell_print_usage("Usage: func NAME [args]   (returns a value in %%RESULT%%)");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    /* The name may be written `:NAME` (like `call :label`) or bare NAME. */
+    label = argv[1];
+    if (label[0] == ':') {
+        label++;
+    }
+    if (label[0] == '\0') {
+        shell_print_usage("Usage: func NAME [args]");
+        batch_set_errorlevel(2);
+        return;
+    }
+
+    if (s_loop_body_depth > 0) {
+        /* Same inline path `call`/`gosub` use inside a for/while body. */
+        shell_execute_label_block("func", label, argc - 2, &argv[2]);
+    } else {
+        (void)shell_local_subroutine_begin("func", label, argc - 2, &argv[2]);
+    }
+}
+
+bool batch_return_eval(const char *expr, char *out, size_t out_size,
+                       int *level_out)
+{
+    int32_t value = 0;
+    const char *error = NULL;
+    const char *cursor;
+
+    if (out == NULL || out_size == 0) {
+        return false;
+    }
+    out[0] = '\0';
+    if (level_out != NULL) {
+        *level_out = 0;
+    }
+    if (expr == NULL || expr[0] == '\0') {
+        return false;
+    }
+
+    /* A bare name that is not a defined variable is a string result, not the
+     * `set /a` rule that an undefined identifier reads as 0. Defined names
+     * still evaluate numerically (e.g. `return COUNT` after `set /a COUNT=5`). */
+    if (isalpha((unsigned char)expr[0]) || expr[0] == '_') {
+        bool bare_name = true;
+
+        for (cursor = expr; *cursor != '\0'; cursor++) {
+            if (!(isalnum((unsigned char)*cursor) || *cursor == '_' ||
+                  *cursor == '[' || *cursor == ']')) {
+                bare_name = false;
+                break;
+            }
+        }
+        if (bare_name && shell_env_get(expr) == NULL) {
+            snprintf(out, out_size, "%s", expr);
+            if (level_out != NULL) {
+                *level_out = 0;
+            }
+            return true;
+        }
+    }
+
+    if (shell_expr_evaluate(expr, &value, &error)) {
+        snprintf(out, out_size, "%ld", (long)value);
+        if (level_out != NULL) {
+            *level_out = (int)value;
+        }
+        return true;
+    }
+
+    /* Not a complete arithmetic expression: keep ERRORLEVEL parity with the
+     * old `return N` (a leading integer is still a code) and publish the
+     * whole expanded text as a string result. */
+    cursor = expr;
+    if (*cursor == '+' || *cursor == '-') {
+        cursor++;
+    }
+    if (*cursor >= '0' && *cursor <= '9') {
+        long code = strtol(expr, NULL, 10);
+
+        if (level_out != NULL) {
+            *level_out = (int)code;
+        }
+    }
+    snprintf(out, out_size, "%s", expr);
+    return true;
+}
+
+/**
+ * `return [code|expr]` — BASIC-named sibling of `goto :eof`. Inside a
+ * `call :label` / `gosub` / `func` scope it returns to the caller; at the top
+ * level it ends the frame. An expression is evaluated by the one `set /a`
+ * engine and published in `%RESULT%` (a frame-local slot while a call scope
+ * is active); plain `return N` keeps its exact ERRORLEVEL contract.
  */
 void shell_command_return(int argc, char **argv)
 {
@@ -2199,7 +2304,26 @@ void shell_command_return(int argc, char **argv)
         return;
     }
     if (argc >= 2) {
-        batch_set_errorlevel(atoi(argv[1]));
+        char *statement = malloc(SHELL_ENV_NAME_BYTES + SHELL_ENV_VALUE_BYTES);
+
+        if (statement != NULL) {
+            shell_join_args(argv, 1, argc, statement,
+                            SHELL_ENV_NAME_BYTES + SHELL_ENV_VALUE_BYTES);
+            {
+                char result[SHELL_ENV_VALUE_BYTES];
+                int level = 0;
+
+                if (batch_return_eval(statement, result, sizeof(result), &level)) {
+                    (void)shell_env_set("RESULT", result);
+                    batch_set_errorlevel(level);
+                } else {
+                    batch_set_errorlevel(0);
+                }
+            }
+            free(statement);
+        } else {
+            batch_set_errorlevel(0);
+        }
     }
     s_goto_eof = true;
     s_goto_pending = true;
@@ -4399,6 +4523,18 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
             shell_mark_foreground_break();
             shell_clear_abort();
             shell_transcript_append_text("^C\n");
+            /* `trap /on int` turns a break into a jump to the handler via the
+             * one pending-goto slot instead of unwinding the frame. */
+            if (batch_trap_fire_event(BATCH_TRAP_INT)) {
+                long handler_pos = shell_find_label_pos(frame, s_goto_label);
+
+                if (handler_pos >= 0) {
+                    shell_frame_seek(frame, handler_pos);
+                    s_goto_pending = false;
+                    s_goto_label[0] = '\0';
+                    continue;
+                }
+            }
             s_stop_mode = BATCH_STOP_ALL;
             break;
         }
@@ -4509,6 +4645,14 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
         }
 
         batch_run_nested(trimmed);
+
+        /* `exit /b N` with a nonzero code can be caught by `trap /on exit`.
+         * Firing consumes the stop request, so control reaches the handler
+         * through the same pending-goto slot as every other trap. */
+        if (s_stop_mode == BATCH_STOP_FRAME && batch_get_errorlevel() != 0 &&
+            batch_trap_fire_event(BATCH_TRAP_EXIT)) {
+            s_stop_mode = BATCH_STOP_NONE;
+        }
 
         /* `exit` or `exit /b` asked this file to stop. A frame-stop inside a
          * called `:label` block returns to the caller instead. */
@@ -5557,6 +5701,7 @@ static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *comman
     bool for_f = false;
     bool for_l = false;
     bool for_a = false;
+    bool for_k = false;
     bool for_d = false;
     bool for_r = false;
     char for_root[SHELL_SD_PATH_BYTES];
@@ -5589,8 +5734,20 @@ static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *comman
         while (*for_ptr && isspace((unsigned char)*for_ptr)) for_ptr++;
     }
 
-    /* `for /D` — directory names instead of file names (cmd.exe parity). */
+    /* `for /K` — iterate the keys of an existing map, binding the key to
+     * %%k and its live value to the next letter, exactly like `for /A`
+     * binds an array's index and value. The one map key collector supplies
+     * the set; no second for-loop implementation. */
     if (!for_l && !for_a && *for_ptr == '/' &&
+        (for_ptr[1] == 'k' || for_ptr[1] == 'K') &&
+        (for_ptr[2] == '\0' || isspace((unsigned char)for_ptr[2]))) {
+        for_k = true;
+        for_ptr += 2;
+        while (*for_ptr && isspace((unsigned char)*for_ptr)) for_ptr++;
+    }
+
+    /* `for /D` — directory names instead of file names (cmd.exe parity). */
+    if (!for_l && !for_a && !for_k && *for_ptr == '/' &&
         (for_ptr[1] == 'd' || for_ptr[1] == 'D') &&
         (for_ptr[2] == '\0' || isspace((unsigned char)for_ptr[2]))) {
         for_d = true;
@@ -5863,6 +6020,53 @@ static void shell_execute_for_loop_body(shell_batch_frame_t *frame, char *comman
             }
         }
         free(names);
+        return;
+    }
+
+    /* `for /K` iterates a map's keys through the same binding runner as
+     * `for /A`: %%k is the key text, the next letter its live value. */
+    if (for_k) {
+        char map_name[SHELL_ENV_NAME_BYTES];
+        char (*keys)[SHELL_ENV_NAME_BYTES] = NULL;
+        int collected;
+
+        /* Copy the name out of the heap set buffer before it is freed: the
+         * value lookup below runs once per key, after the free. Scratch key
+         * names are heap-allocated: this runs on the recursive batch path. */
+        snprintf(map_name, sizeof(map_name), "%s", shell_trim(set_str));
+        if (map_name[0] == '\0') {
+            shell_transcript_append_text("for /K: needs a MAP name in (map)\n");
+            free(set_str);
+            return;
+        }
+        keys = malloc(sizeof(*keys) * (P4_CONFIG_ENV_MAP_SLOTS + 8));
+        if (keys == NULL) {
+            shell_transcript_append_text("for /K: out of memory\n");
+            free(set_str);
+            return;
+        }
+        collected = shell_map_collect_keys(map_name, keys, P4_CONFIG_ENV_MAP_SLOTS + 8);
+        free(set_str);
+        set_str = NULL;
+        for (int i = 0; i < collected; i++) {
+            char value[SHELL_ENV_VALUE_BYTES];
+            shell_for_binding_t bindings[2];
+
+            if (!shell_map_lookup(map_name, keys[i], value, sizeof(value))) {
+                value[0] = '\0';
+            }
+            bindings[0].var = var_name;
+            bindings[0].text = keys[i];
+            bindings[0].len = strlen(keys[i]);
+            bindings[1].var = (char)(var_name + 1);
+            bindings[1].text = value;
+            bindings[1].len = strlen(value);
+            shell_for_substitute_and_run_bindings(do_command, bindings, 2);
+            if (for_check_break() || for_check_continue()) {
+                break;
+            }
+        }
+        free(keys);
         return;
     }
 

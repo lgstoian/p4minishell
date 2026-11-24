@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=CHAT
+[M-RICH-CHAT] host language extract
+W=chat
+1
+[M-RICH-CHAT-K] host=p4
+[M-RICH-CHAT-K] port=80
+[M-RICH-CHAT-F] result=42
+[M-RICH-CHAT-S] rev=tahc count=1 pad=chat------ vals=p4,80
+[M-RICH-CHAT-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

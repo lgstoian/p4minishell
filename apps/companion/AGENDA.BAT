@@ -15,3 +15,18 @@ cal today
 cal next
 notify /t:3 "agenda checked"
 echo [M-AGENDA-DONE]
+rem ---- v1.6 richer-language showcase -----------------------------------
+rem [M-RICH-AGENDA] headless str/map/forK/func tour; alarms are not changed.
+echo [M-RICH-AGENDA] agenda language tour
+set AW=agenda
+str /rev AW WA
+str /pad AW 8 AP .
+map /set AGENDA next cal
+for /K %%k in (AGENDA) do echo [M-RICH-AGENDA-K] %%k=%%l
+func :agendanext 2 3
+echo [M-RICH-AGENDA-F] slots=%RESULT%
+echo [M-RICH-AGENDA-S] rev=%WA% pad=%AP%
+goto :eof
+
+:agendanext
+return %1+%2

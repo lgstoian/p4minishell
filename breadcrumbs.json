@@ -107,6 +107,7 @@
     "components/command/mcp_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/md_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/modal_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/native_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/netsvc_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/periph_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/pim_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
@@ -259,6 +260,8 @@
     "components/modal/modal_args.c": "module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules",
     "components/modal/modal_surf.c": "module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules",
     "components/modal/modal_surf.h": "module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules",
+    "components/nativeexec/native_exec.c": "module=nativeexec :: layer=leaf :: domain=app :: status=experimental :: tests=test/main/test_native_exec.c :: rules=ai-context.md#module-layering-rules",
+    "components/nativeexec/nativeexec.h": "module=nativeexec :: layer=leaf :: domain=app :: status=experimental :: tests=test/main/test_native_exec.c :: rules=ai-context.md#module-layering-rules",
     "components/nativepay/native_payload.c": "module=nativepay :: layer=leaf :: domain=app :: status=experimental :: tests=test/main/test_native_payload.c :: rules=ai-context.md#module-layering-rules",
     "components/nativepay/native_payload.h": "module=nativepay :: layer=leaf :: domain=app :: status=experimental :: tests=test/main/test_native_payload.c :: rules=ai-context.md#module-layering-rules",
     "components/networking/bluetooth.c": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
@@ -339,12 +342,14 @@
     "components/tui/tui.h": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
     "components/tui/tui_fonts.c": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
     "components/tui/tui_fonts.h": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
+    "components/tui/tui_frame.h": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
     "components/tui/tui_modal.c": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
     "components/tui/tui_modal.h": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
     "components/tui/tui_page_shot.c": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
     "components/tui/tui_page_shot_internal.h": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
     "components/tui/tui_pane.c": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
     "components/tui/tui_pane.h": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
+    "components/tui/tui_widgets.h": "module=tui :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_tui.c :: rules=ai-context.md#module-layering-rules",
     "components/uitest/include/ui_test.h": "module=uitest :: layer=leaf :: domain=ui :: status=stable :: rules=ai-context.md#module-layering-rules",
     "components/uitest/ui_test.c": "module=uitest :: layer=leaf :: domain=ui :: status=stable :: rules=ai-context.md#module-layering-rules",
     "components/usb/usb.c": "module=usb :: layer=leaf :: domain=platform :: status=stable :: tests=test/main/test_userial.c :: rules=ai-context.md#module-layering-rules",
@@ -817,6 +822,8 @@
         "rss",
         "mcp",
         "browser",
+        "nativepay",
+        "nativeexec",
         "zip"
       ],
       "rules": [
@@ -1304,6 +1311,23 @@
       "status": "stable",
       "tests": [
         "test/main/test_modal.c"
+      ]
+    },
+    "nativeexec": {
+      "domain": "app",
+      "header": "components/nativeexec/nativeexec.h",
+      "layer": "leaf",
+      "path": "components/nativeexec",
+      "provides": "the one fixed-ABI loader for opted-in signed native payloads",
+      "requires": [
+        "nativepay"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "experimental",
+      "tests": [
+        "test/main/test_native_exec.c"
       ]
     },
     "nativepay": {

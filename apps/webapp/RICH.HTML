@@ -1,0 +1,54 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: 2026 Stoian Alexandru -->
+<!-- SPDX-License-Identifier: MIT -->
+<!--
+  RICH.HTML - the v1.6 webapp showcase page for WEBAPP.BAT.
+  One browser engine: HTML5 forms, a canvas gradient, CSS gradients/shadows,
+  semantic sections and a JS timer. WEBAPP.BAT drives it with webapp open,
+  webapp event, webapp tick and webapp dump; no network is touched.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>P4 Webapp Rich</title>
+<style>
+body { color: #aaaaaa; }
+h1 { color: #00ffff; }
+#card {
+  border-radius: 3px;
+  box-shadow: 1px 1px #000000;
+  background: linear-gradient(90deg, #ff0000 0%, #0000ff 100%);
+}
+input[type=text] { color: #ffff55; }
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); }
+</style>
+</head>
+<body>
+<header><nav><a href="#go">Go</a></nav></header>
+<main>
+<h1>[M-RICH-WEBAPP]</h1>
+<section id="card">CSS gradient + shadow</section>
+<form id="go">
+<label>Name</label><input id="n" type="text" value="P4" placeholder="Name">
+<input id="ok" type="checkbox" checked>
+<button id="p4run" onclick="console.log('p4-run')">Run</button>
+</form>
+<div class="grid"><div>Forms</div><div>Canvas</div></div>
+<p id="p4state">boot</p>
+<canvas id="c" width="32" height="16">Fallback pixels</canvas>
+</main>
+<footer>webapp open | dump | css | js | event | tick</footer>
+<script>
+document.addEventListener('click', function (e) {
+  document.getElementById('p4state').textContent = 'clicked';
+});
+setTimeout(function () { document.getElementById('p4state').textContent = 'ready'; }, 100);
+var g = document.getElementById('c').getContext('2d');
+var grad = g.createLinearGradient(0, 0, 32, 0);
+grad.addColorStop(0, '#ff0000');
+grad.addColorStop(1, '#0000ff');
+g.fillStyle = grad;
+g.fillRect(0, 0, 32, 16);
+</script>
+</body>
+</html>

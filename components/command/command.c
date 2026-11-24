@@ -5370,6 +5370,11 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "native")) {
+        shell_command_native(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "store")) {
         shell_command_store(argc, argv);
         return true;
@@ -5567,6 +5572,11 @@ bool shell_execute_command_core(char *command)
     }
 
     /* BASIC-named jump/return/dispatch siblings of goto/call (additive). */
+    if (shell_text_equals_ignore_case(argv[0], "func")) {
+        shell_command_func(argc, argv);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "gosub")) {
         shell_command_gosub(argc, argv);
         return true;
@@ -5850,6 +5860,23 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "ask")) {
         shell_command_ask(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "mpick")) {
+        shell_command_mpick(argc, argv);
+        return true;
+    }
+    if (shell_text_equals_ignore_case(argv[0], "mprog")) {
+        shell_command_mprog(argc, argv);
+        return true;
+    }
+    if (shell_text_equals_ignore_case(argv[0], "mformx")) {
+        shell_command_mformx(argc, argv);
+        return true;
+    }
+    if (shell_text_equals_ignore_case(argv[0], "mstack")) {
+        shell_command_mstack(argc, argv);
         return true;
     }
 

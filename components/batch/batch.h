@@ -167,8 +167,25 @@ void shell_command_dim(int argc, char **argv);
  *   str /split VAR DELIM DEST    split into DEST[0..n-1]
  *   str /join VAR DELIM DEST     join DEST with DELIM
  *   str /fmt DEST "f" args...    %1..%9 substitution
+ *   str /rev VAR DEST            reverse VAR into DEST
+ *   str /count VAR NEEDLE [DEST] count non-overlapping occurrences
+ *   str /pad VAR WIDTH DEST [C]  right-pad with C (default space)
+ *
+ * The three new forms are thin front doors over pure helpers below; they add
+ * no second matcher or string table (the /find /split /join cores are reused).
  */
 void shell_command_str(int argc, char **argv);
+
+/** Reverse a value into @p out (pure, unit-tested). Always NUL-terminates. */
+void shell_str_reverse(const char *value, char *out, size_t out_size);
+
+/** Count non-overlapping occurrences of @p needle in @p value (pure). An
+ *  empty needle counts 0. */
+int shell_str_count(const char *value, const char *needle);
+
+/** Right-pad @p value to @p width with @p pad (default ' ' when 0), truncated
+ *  to @p out_size - 1 (pure, unit-tested). */
+void shell_str_pad(const char *value, int width, char pad, char *out, size_t out_size);
 
 /**
  * `map` — associative key->value store.
@@ -178,10 +195,30 @@ void shell_command_str(int argc, char **argv);
  *   map /has CFG host              errorlevel 0/1
  *   map /del CFG host              remove key
  *   map /keys CFG KEYS             emit keys into KEYS[0..n-1]
+ *   map /values CFG VALS           emit values into VALS[0..n-1]
+ *   map /incr CFG KEY [STEP]       add STEP (default 1) to a numeric value
  *   map /size CFG                  number of entries
  *   map /clear CFG                 remove all entries
+ *
+ * /keys and /values both use the one key collector below (the same the
+ * `for /K` loop uses), so there is a single map enumeration implementation.
  */
 void shell_command_map(int argc, char **argv);
+
+/**
+ * Collect every key of a map into @p keys (slot order), reusing the one
+ * prefix scan over the shared slot table. @return The entry count.
+ */
+int shell_map_collect_keys(const char *map_name,
+                           char keys[][P4_CONFIG_ENV_NAME_BYTES], int max);
+
+/**
+ * Look up a key's value directly into @p out without writing an environment
+ * variable (the /get form and `for /K` share this one reader).
+ * @return true when the key exists.
+ */
+bool shell_map_lookup(const char *map_name, const char *key,
+                      char *out, size_t out_size);
 
 /**
  * `trap` — structured error handling.
@@ -210,6 +247,26 @@ void trap_handler_pop(void);
 void trap_set_message(const char *msg);
 bool batch_trap_maybe_fire(void);
 void trap_init(void);
+
+/** Events a `trap /on` handler can subscribe to (bit mask, no config needed). */
+typedef enum {
+    BATCH_TRAP_ERRORLEVEL = 1 << 0, /**< failing line, ERRORLEVEL >= 2 (default). */
+    BATCH_TRAP_EXIT       = 1 << 1, /**< `exit /b N` with a nonzero code. */
+    BATCH_TRAP_INT        = 1 << 2, /**< foreground break (^C / Stop). */
+} batch_trap_event_t;
+
+/** Parse a comma-separated event list (`errorlevel,exit,int`, case-insensitive).
+ *  @return The bit mask (0 on an unknown/empty word). Pure, unit-tested. */
+int batch_trap_parse_events(const char *text);
+
+/** Install a handler for the given event mask. @p label must be a `:label`.
+ *  Returns false when the stack is full or the label is empty. */
+bool batch_trap_on_event(int events, const char *label);
+
+/** Fire the top handler when it subscribes to @p event. Publishes
+ *  TRAP_CODE/TRAP_MSG, pops the one-shot handler and arms the existing
+ *  pending-goto slot; no second jump path. @return true when it fired. */
+bool batch_trap_fire_event(int event);
 
 /* Arm a goto from a non-command engine hook (trap). Uses the one pending-goto
  * slot in the active batch task context; no second control-flow path. */
@@ -628,7 +685,13 @@ void shell_command_call(int argc, char **argv);
 /** `if` — conditional execution on errorlevel, file existence, or strings. */
 void shell_command_if(int argc, char **argv);
 
-/** `for` — loop over a token set or wildcard pattern: `for %v in (set) do cmd`. */
+/**
+ * `for` — loop over a token set or wildcard pattern: `for %v in (set) do cmd`.
+ *
+ * `for /K %%k in (MAP) do cmd` iterates a map's keys: `%%k` binds the key
+ * text and the next letter (`%%l`) its live value, reusing the one for-loop
+ * machinery, the one map key collector and the one substitution runner.
+ */
 void shell_command_for(int argc, char **argv);
 
 /**
@@ -669,6 +732,17 @@ int shell_sort_array(const char *name, bool numeric, bool descending);
  *         unusable).
  */
 int shell_fora_collect(const char *prefix, char names[][P4_CONFIG_ENV_NAME_BYTES], int max);
+
+/**
+ * Collect every in-use slot name beginning with @p prefix (case-insensitive)
+ * into @p names, in slot order. Pure over the one shared table (and a job's
+ * private overlay), unit-tested; the map key collector and `for /K` use it
+ * instead of a second enumeration/matcher.
+ *
+ * @return The entry count (0 when the arguments are unusable).
+ */
+int shell_env_collect_prefix(const char *prefix,
+                             char names[][P4_CONFIG_ENV_NAME_BYTES], int max);
 
 /**
  * `switch` case matcher (pure, unit-tested): first case-insensitive match
@@ -773,9 +847,34 @@ void shell_command_goto(int argc, char **argv);
  *  `goto :eof`. */
 void shell_command_gosub(int argc, char **argv);
 
-/** `return [code]` — return from a `gosub`/`call :label` scope; at the top
- *  level of a batch file it ends the frame (like `goto :eof`). */
+/**
+ * `func NAME [args]` — named local routine with parameters and a return value.
+ *
+ * A thin DOS-shaped front door over the SAME `call :label` frame machinery:
+ * it enters `:NAME` with a fresh argument set (saved/restored by the label
+ * call slot), so `%1..%9` are the function's parameters. A `return <expr>`
+ * inside publishes its value into the frame-local slot class as `%RESULT%`.
+ * There is no second dispatcher, argument table or control-flow path: `func`
+ * and `call :label` differ only in intent, and `return` is the existing verb.
+ */
+void shell_command_func(int argc, char **argv);
+
+/** `return [code|expr]` — return from a `gosub`/`call :label`/`func` scope;
+ *  at the top level it ends the frame (like `goto :eof`). An expression is
+ *  evaluated by the one `set /a` engine and published in `%RESULT%`
+ *  (frame-local inside a call scope); a non-numeric text is published verbatim.
+ *  ERRORLEVEL keeps the existing contract: the returned integer, or 0 for a
+ *  string result / bare return. */
 void shell_command_return(int argc, char **argv);
+
+/**
+ * Evaluate a `return` value (pure, unit-tested): a complete `set /a`
+ * expression yields its decimal text and integer ERRORLEVEL; otherwise a
+ * leading integer is kept for ERRORLEVEL parity and the whole text is
+ * published as a string. @return false only for NULL/empty input.
+ */
+bool batch_return_eval(const char *expr, char *out, size_t out_size,
+                       int *level_out);
 
 /** `on <expr> goto|gosub|call <label>[,<label>...]` — BASIC computed dispatch.
  *  The 1-based expression result selects a target; out of range falls through. */

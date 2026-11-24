@@ -10,6 +10,7 @@ rem =====================================================================
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 title "Fun & Demos"
 echo [M-FUN]
+gosub :rich_fun
 rem Layout: the shell publishes the grid (80x25 landscape, 80x97 portrait).
 rem Panels take the extra rows; the inset demo boxes keep their authored
 rem columns (5..74) and grow downward on a taller panel.
@@ -37,6 +38,25 @@ draw text 5 6 "Melody, RGB, guessing, calc, snake, elite trader"
 list "Fun / Demos" "Melody (TUI)" "RGB effects" "Number guessing" "Calc playground" "Browse demo file" "TUI Demo" "Snake" "Elite Trader" "Back"
 on %errorlevel%+1 goto :melody,:rgb,:guess,:calc,:browse_demo,:tui_demo,:snake,:elite,:back
 goto :back
+
+rem ---- v1.6 richer-language showcase ------------------------------------
+rem [M-RICH-FUN] scores the demo menu with map /set + for /K, str /count|/pad
+rem and func/return; melody/RGB/game state is not touched.
+:rich_fun
+echo [M-RICH-FUN] demo language tour
+map /set FUNDEMOS melody tone
+map /set FUNDEMOS guess calc
+for /K %%k in (FUNDEMOS) do echo [M-RICH-FUN-K] %%k=%%l
+set FW=fun
+str /count FW n CN
+str /pad FW 8 FP .
+func :fundemo 5 7
+echo [M-RICH-FUN-F] score=%RESULT%
+echo [M-RICH-FUN-S] n=%CN% pad=%FP%
+return
+
+:fundemo
+return %1+%2
 
 :tui_demo
 tui fullscreen on

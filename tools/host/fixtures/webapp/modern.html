@@ -1,0 +1,50 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: 2026 Stoian Alexandru -->
+<!-- SPDX-License-Identifier: MIT -->
+<!--
+  Deterministic host fixture for the modern-site subset: one longest-match
+  entity decoder (named, legacy no-semicolon, numeric clamp/remap), a packed
+  (id,class,type) specificity triple, !important and source order through the
+  ONE cascade comparator. The host harness renders DOM/CSS only; the inline
+  script documents the same-page JS timer/microtask ordering used by the
+  browser path (no second scheduler).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Modern site host proof</title>
+<style>
+  body { color: #aaaaaa; }
+  h1 { color: #00ffff; }
+  .banner { color: #00ff00; }
+  #hero { color: #ff0000; }
+  #hero { color: #ff00ff; }          /* same specificity: later source wins */
+  .win { color: #ffff00 !important; }/* !important beats a higher id score */
+  p { color: #00ff00; }
+  p { color: #0000ff; }              /* source order, equal specificity */
+  #one { color: #ff0000; }           /* one id beats eleven classes */
+  .a.b.c.d.e.f.g.h.i.j.k { color: #00ff00; }
+  .first { color: #ff0000; }         /* first duplicate attribute wins */
+  .second { color: #0000ff; }
+</style>
+</head>
+<body>
+<main>
+<h1 id="hero" class="banner win">Entities &amp; CSS &copy; &reg&#x20AC; &#x93; &#x41;</h1>
+<p id="order">Source order and specificity</p>
+<div id="one" class="a b c d e f g h i j k">Eleven classes, one id</div>
+<div id="dup" class="first" class="second">Duplicate attribute</div>
+<p>Named &hellip; and legacy &reg&copy; without semicolons</p>
+<p>Numeric &#36; &#x42; clamped &#x110000; and remapped &#x80;</p>
+<button id="btn" onclick="logEvent('click')">Event</button>
+</main>
+<script>
+var log = [];
+setTimeout(function () { log.push('timer'); print(log.join(',')); }, 0);
+Promise.resolve().then(function () { log.push('micro'); });
+document.getElementById('btn').addEventListener('click', function (e) {
+  log.push(e.type);
+});
+</script>
+</body>
+</html>

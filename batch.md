@@ -7,10 +7,20 @@
 > for architecture see [`documentation.md`](documentation.md); for the
 > step-by-step tutorial see [`tutorial_batch.md`](tutorial_batch.md).
 
-- **Version:** v1.5.0 · **Line endings:** CRLF or LF · **Encoding:** UTF-8
+- **Version:** v1.6.0 · **Line endings:** CRLF or LF · **Encoding:** UTF-8
   (FATFS long filenames are UTF-8) · **Size:** ≤128 KB runs RAM-resident
   (`P4_CONFIG_BATCH_FILE_MAX_BYTES`); larger files stream from SD with
   identical semantics.
+
+**Marker contract (v1.6).** All 33 updated reference `.bat` apps emit an
+additive `[M-RICH-*]` block that exercises `str /rev|/count|/pad`, `map
+/values|/incr`, `for /K`, `func`/`return <expr>`/`%RESULT%`, `trap /on` and the
+new surface verbs. These markers are **additive**: every pre-existing `[M-*]`
+marker is preserved, so older suite assertions still match. The host proof is
+`python tools/host_apps_gate.py --check` (33/33 apps, 363 host assertions);
+hardware-only surfaces are honestly SKIPped. The new marker lines change app
+transcripts, so the `tools/appdiff/baseline/*.transcript.txt` goldens await a
+board rebaseline.
 
 ---
 
@@ -150,6 +160,7 @@ table. `set NAME` prints one value. Undefined `%VAR%` expands to empty (so
 | `%ERRCODE%` | Last specific error code (from `error_strings.h`) as decimal. |
 | `%ERRMSG%` | Short status word from ERRORLEVEL (`success`/`error`/`usage`). Virtual and read-only: `trap` does **not** write it (see `%TRAP_MSG%` below). |
 | `%TRAP_CODE%` `%TRAP_MSG%` | Ordinary variables published by a firing `trap` (or by `trap /raise`): the decimal code and the message. Unlike `%ERRCODE%`/`%ERRMSG%` they are normal writable slots, so a script can set or inspect them like any other variable. |
+| `%RESULT%` | Ordinary frame-local slot published by `return <expr>` inside a `func NAME [args]` routine. Numeric expressions (including arithmetic on `%1..%9`) produce decimal text; an undefined bare name is returned as text. |
 | `%DATE%` `%TIME%` | `MM-DD-YYYY`, `HH:MM:SS` (device clock). |
 | `%RANDOM%` | `0..32767`. |
 | `%CD%` | Current directory. |
@@ -158,6 +169,7 @@ table. `set NAME` prints one value. Undefined `%VAR%` expands to empty (so
 | `%VAR:old=new%` | Replace every (case-insensitive) `old` with `new`. `%P:l=L%`, `%P:o=%` deletes. |
 | `!VAR!` | Delayed expansion: same named values and `:~`/`:` forms as `%VAR%`, but resolved at execution time. Only inside a `setlocal enabledelayedexpansion` scope; otherwise literal. `!!` is a literal `!`, `^!` never expands, `'...'` stays literal. |
 | `^%` | Literal percent (never expands). |
+| `%%k` / `%%l` in `for /K` | Map key bound to `%%k` and its **live** value bound to the next letter (`%%l`); both re-read from the map on every iteration. |
 | `'...'` | Single-quoted runs stay fully literal. |
 
 `local NAME=value` is a guarded front door over the one `set` implementation: inside a `call :label` / `gosub` scope it assigns into the existing frame-local slot class (same lifetime as other call-scope temporaries, no new variable table); outside one it refuses with ERRORLEVEL 2.
@@ -252,6 +264,38 @@ calc SPR[1]*2
 - Cleanup: `set SPR[0]=` frees the slot. Arrays share the 64-slot budget
   with everything else — a 22-variable game plus a 10-element array fits;
   two such games nested do not.
+
+### 6b. String and map helpers (`str`, `map`)
+
+`str` and `map` are pure verb suites over the same slot table; neither adds a
+second variable store or parser.
+
+```
+str /len VAR                       str /sub VAR START LEN DEST
+str /find VAR NEEDLE [IDX_VAR]     str /upper|/lower|/trim VAR DEST
+str /rep VAR OLD NEW DEST          str /split VAR DELIM DEST
+str /join VAR DELIM DEST           str /fmt DEST "format" args...
+str /rev VAR DEST                  rem reverse the value (v1.6)
+str /count VAR NEEDLE [DEST]       rem non-overlapping occurrences (v1.6)
+str /pad VAR WIDTH DEST [CHAR]     rem right-pad to WIDTH, default space (v1.6)
+```
+
+`/rev`, `/count` and `/pad` are the v1.6 additions. Results go to a DEST slot;
+`/count` writes the value to `DEST` (or the current errorlevel when omitted).
+
+```
+map /set MAPNAME KEY VALUE         map /get MAPNAME KEY DEST
+map /has MAPNAME KEY               map /del MAPNAME KEY
+map /keys MAPNAME DEST             map /values MAPNAME DEST   (v1.6)
+map /incr MAPNAME KEY [STEP]       map /size MAPNAME
+map /clear MAPNAME
+```
+
+`/keys` and `/values` share the ONE hash-slot collector, so their results line
+up; both fill `DEST[0..n-1]` plus `DEST.__len`. `/incr` does an in-place numeric
+increment (a missing key starts at 0, default step 1) and is the counter idiom
+used with `for /K`. Both suites set ERRORLEVEL 0 on success, 1 on a missing
+map/key or out-of-memory, 2 on usage.
 
 ---
 
@@ -371,7 +415,29 @@ tab; empty `delims=` = whole line one token), `tokens=` (1-based indices
 bound to consecutive letters `%%a %%b ...`; `*` captures the rest).
 The mechanism behind BASIC `READ`/`DATA`/`INPUT#` verbs.
 
-### 10.5 `while` condition loops
+### 10.5 `for /K` map keys
+
+```
+for /K %%k in (MAP) do <cmd>
+```
+
+Iterates the keys of an existing associative map created with `map /set`.
+`%%k` binds the key and the next letter (`%%l`, `%%m`, …) binds the **live**
+value for that key, through the same one hash-slot collector used by
+`map /keys` and `map /values` — there is no second enumeration path. Keys are
+visited in the map's internal order; a missing/empty map iterates zero times.
+The body re-enters the full pipeline per key, so `%%k`/`%%l` substitute
+textually each pass.
+
+```bat
+map /set CFG host p4
+map /set CFG port 80
+for /K %%k in (CFG) do echo %%k=%%l     rem host=p4 then port=80
+map /values CFG VALS                    rem VALS[0]=p4, VALS[1]=80
+map /incr CFG hits 1                    rem missing key starts at 0
+```
+
+### 10.6 `while` condition loops
 
 ```
 while <expr> do <cmd>
@@ -455,9 +521,23 @@ ERRORLEVEL < 2 does not fire it.
 `TRAP_CODE=CODE` / `TRAP_MSG=message`; a firing handler overwrites both with the
 line's ERRORLEVEL and an `errorlevel N` message. `TRAP_MSG` is an **ordinary**
 variable (`set TRAP_MSG=...` works); `ERR` and `ERRMSG` remain virtual,
-read-only slots and are no longer written by `trap`. The
-`trap /on errorlevel|exit|int` form shown in the usage text is reserved but not
-implemented today (it reports `unknown switch`, ERRORLEVEL 2).
+read-only slots and are no longer written by `trap`.
+
+**`trap /on errorlevel|exit|int :label` (v1.6)** subscribes the handler to one
+or more explicit events instead of the implicit errorlevel-only default:
+
+```
+trap /on errorlevel :onerr              rem same as `trap :onerr`
+trap /on errorlevel,exit :onerr          rem multiple events
+trap /on int :onbreak                    rem foreground ^C / Stop
+```
+
+The handler label must start with `:` and the event list is comma-separated;
+an unknown event or a bare label is a usage error (ERRORLEVEL 2). `exit` fires
+on `exit /b N` with a nonzero code, `int` turns a foreground break into a jump
+to the handler (headless runs have no injected `^C`, so this path is covered by
+the Unity suite rather than by a host fixture). All events publish the ordinary
+`TRAP_CODE`/`TRAP_MSG` variables and use the same one-shot pending-goto unwind.
 
 ```bat
 @echo off
@@ -469,6 +549,35 @@ exit /b 0
 :recover
 echo failed with %TRAP_CODE%: %TRAP_MSG%
 exit /b 1
+```
+
+### 11.2 `func` — named local routines with a return value
+
+```
+func NAME [args]        rem call the :NAME block; :NAME optional
+return <expr>           rem publish %RESULT% and return
+```
+
+`func` is deliberately a thin front door over `call :label`: the same
+label-call slot saves the caller's arguments, binds NAME's arguments to
+`%1..%9`, and the same pending-goto slot jumps to `:NAME`. Inside a `for`/
+`while` body it takes the existing inline path. There is no second dispatcher
+or frame stack. `return <expr>` evaluates with the `set /a` expression engine
+and stores the result as decimal text in `%RESULT%` in the **frame-local** slot
+class (same lifetime as other `call :label` temporaries); an undefined bare name
+is returned literally, so `return hello` yields `hello`. `return` outside a
+scope still ends the file at top level, and a numeric result also becomes the
+ERRORLEVEL.
+
+```bat
+func double 21
+echo %RESULT%                  rem 42
+goto :done
+
+:double
+return %1*2
+
+:done
 ```
 
 ---
@@ -671,7 +780,13 @@ prechecks, partial-file cleanup):
   keyboard-aware; never pixels). Verbs: `box` (single/double/rounded + title
   + nested window stack), `line`, `fill`, `text`, `bar`, `table`, `list`,
   `window`, `cursor`, `hold` (coalesce flushes), `alt-screen`, `save`,
-  `restore`, `close`, `refresh`, `fullscreen`. `tui stats` reports frame
+  `restore`, `close`, `refresh`, `fullscreen`, plus `run`
+  (`draw run <x> <y> <text> [/fg COLOR] [/bg COLOR]`) and `sprite`
+  (`draw sprite <x> <y> <w> <h> [checker|ramp]`). `tui frame
+  status|diff|flush|reset`, `tui focus <name|next|prev>`, `tui layout
+  <row|column|grid> ...`, `tui scroll <name> <viewport> <content> [delta]`
+  and `tui route <key>` drive the ONE double-buffered cell frame and the
+  shared focus/layout/scroll/event seams. `tui stats` reports frame
   pacing. Refused in `start` background jobs and while a gfx canvas is open
   (read-only `plot status` / text-only `plot table` excepted).
 - **Hyperlinks** (`link <label> <command...>`, `link list`, `link open <n>`):
@@ -683,15 +798,19 @@ prechecks, partial-file cleanup):
   present per frame; never blocking I/O inside a frame loop):
   `init <w> <h>` (≤320×240) / `close` / `status` / `stats` / `clear` /
   `pixel` / `line` / `rect` / `circle` / `hline` / `vline` / `triangle` /
-  `ellipse` / `polygon` / `fill` / `text` (8×8 bitmap font) / `show` /
+  `ellipse` / `lineaa` / `circleaa` / `rectaa` / `gradient` / `polygon` /
+  `fill` / `text` (8×8 bitmap font) / `show` /
   `image <bmp> [x y [w h]]` / `load <slot> <bmp>` (8 slots, max 64x64) /
   `blit <slot> <x> <y> [transparent]` / **`blitmany <slot> [/s:N] [/r:deg]
-  <x1> <y1> [<x2> <y2> ...] [transparent]`** (one command stamps up to
-  `P4_CONFIG_GFX_BLITMANY_MAX` = 64 positions — a whole formation per line;
-  `/s:1..4` upscales every stamp, `/r:0|90|180|270` rotates clockwise first,
+  [/a:<cols>,<cw>,<ch>] <x1> <y1> [<x2> <y2> ...] [transparent]`** (one command
+  stamps up to `P4_CONFIG_GFX_BLITMANY_MAX` = 64 positions — a whole formation
+  per line; `/s:1..4` upscales every stamp, `/r:0|90|180|270` rotates clockwise
+  first, `/a:` treats the sprite as a sheet of `<cols>` cells of `<cw>x<ch>`
+  and the x/y pairs as sheet indices; `/a:` cannot be combined with `/r:`;
   refused when the transformed sprite exceeds the canvas) /
-  `free` / `slots` / `save`. Close any `draw` surface before `gfx init`
-  (a canvas and TUI never compose).
+  `composite <slot> <x> <y> <alpha 0..256> [transparent]` (alpha-blend a
+  loaded sprite as a translucent layer) / `free` / `slots` / `save`. Close any
+  `draw` surface before `gfx init` (a canvas and TUI never compose).
 - **Plot** (`plot func|polar|para|data|bar|table|line|point|axes|...`):
   world-coordinate graphs onto canvas or TUI through one shared viewport;
   function sampling binds `calc` over `X`/`T` (restored afterwards). Canvas

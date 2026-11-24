@@ -28,6 +28,8 @@
 
 #include <string.h>
 
+#include "command.h"
+
 /* The sample native app entry point (the ABI). */
 static int hello_main(int argc, char **argv)
 {
@@ -60,4 +62,9 @@ void native_apps_register(void)
                        "native-app ABI sample: show argv, env, and cwd",
                        hello_main);
     whoami_register();
+
+    /* One opt-in signed payload path: install the crypto/map hooks from the
+     * existing p4sign trust store, then register the `natrun` launcher. */
+    (void)native_commands_init();
+    (void)native_launcher_register();
 }

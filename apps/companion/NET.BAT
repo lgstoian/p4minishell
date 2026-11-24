@@ -10,6 +10,7 @@ rem =====================================================================
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 title "Network Tools"
 echo [M-NET]
+gosub :rich_net
 rem Layout: the shell publishes the grid (80x25 landscape, 80x97 portrait).
 rem The Tools panel takes the extra rows; Status stays on the bottom rows.
 if "%TUICOLS%"=="" set TUICOLS=80
@@ -35,6 +36,24 @@ draw text 5 %SY% "Offline handling: all ops degrade gracefully"
 list "Network Tools" "Wi-Fi status (TUI)" "Connect Wi-Fi" "Pick known network" "Ping (TUI)" "DNS lookup" "Fetch a joke" "Messaging (MQTT)" "Back"
 on %errorlevel%+1 goto :status,:connect,:known,:ping,:dns,:joke,:msg,:back
 goto :back
+
+rem ---- v1.6 richer-language showcase ------------------------------------
+rem [M-RICH-NET] previews the tool menu with map /set + for /K, str /pad and
+rem func/return; Wi-Fi/MQTT state is not touched.
+:rich_net
+echo [M-RICH-NET] tools language tour
+map /set NETTOOLS wifi status
+map /set NETTOOLS mqtt net
+for /K %%k in (NETTOOLS) do echo [M-RICH-NET-K] %%k=%%l
+set NW=network
+str /pad NW 10 NP .
+func :netsum 8 9
+echo [M-RICH-NET-F] sum=%RESULT%
+echo [M-RICH-NET-S] pad=%NP%
+return
+
+:netsum
+return %1+%2
 
 :status
 tui fullscreen on

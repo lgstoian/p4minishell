@@ -1,0 +1,59 @@
+# webapp-baseline-v1 fixture=recovery.html
+webapp.render.begin fixture=recovery.html cols=80 rows=25
+tui.dump cols=80 from=1 to=25
+001|
+001@1-80:7
+002|Truncated markup recovers
+002@1-25:11 26-80:7
+003|=========================
+003@1-25:11 26-80:7
+004|
+004@1-80:7
+005|First paragraph
+005@1-15:10 16-80:7
+006|
+006@1-80:7
+007|Second paragraph
+007@1-16:10 17-80:7
+008|
+008@1-80:7
+009|
+009@1-80:7
+010|  - alpha
+010@1-4:7 5-9:14 10-80:7
+011|  - beta
+011@1-4:7 5-8:14 9-80:7
+012|
+012@1-80:7
+013|Duplicate id keeps first
+013@1-24:13 25-80:7
+014|
+014@1-80:7
+015|left  right
+015@1-4:12 5-6:7 7-11:12 12-80:7
+016|
+016@1-80:7
+017|
+017@1-80:7
+018|
+018@1-80:7
+019|
+019@1-80:7
+020|
+020@1-80:7
+021|
+021@1-80:7
+022|
+022@1-80:7
+023|
+023@1-80:7
+024|
+024@1-80:7
+025|
+025@1-80:7
+tui.dump.end
+webapp.meta semantic=1 controls=0 grids=0 canvases=0
+webapp.events handlers=0
+webapp.cascade h1_color=h1 spec=0.0.1 imp=0 order=1 fg=11
+webapp.entity &amp;=0026/5 &reg=00AE/4 &#x41;=0041/6 &#1114112;=FFFD/10 &#x80;=20AC/6 &hellip;=2026/8
+webapp.render.end fixture=recovery.html rows=25 runs=25

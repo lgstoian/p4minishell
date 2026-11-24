@@ -392,6 +392,65 @@ static JSValue js_http_get(JSContext *ctx, JSValueConst this_val,
     free(buf); return r;
 }
 
+/* Promise-style fetch on the ONE runtime/transport. The network work is done
+ * synchronously here (the worker owns it), but the result is delivered through
+ * a real QuickJS Promise capability: `.then()` jobs are drained by the SAME
+ * `timers.run()` microtask checkpoint as setTimeout/setInterval callbacks.
+ * The body is refused above the JS PSRAM budget instead of being copied into
+ * the 512 KB QuickJS heap. */
+static JSValue js_fetch(JSContext *ctx, JSValueConst this_val,
+                        int argc, JSValueConst *argv)
+{
+    JSValue resolving_funcs[2];
+    JSValue promise;
+    JSValue done;
+    const char *url;
+    networking_http_result_t result;
+
+    (void)this_val;
+    promise = JS_NewPromiseCapability(ctx, resolving_funcs);
+    if (JS_IsException(promise)) return promise;
+
+    if (argc < 1 || (url = JS_ToCString(ctx, argv[0])) == NULL) {
+        JSValue err = JS_NewString(ctx, "Error: fetch requires a URL");
+
+        done = JS_Call(ctx, resolving_funcs[1], JS_UNDEFINED, 1, &err);
+        JS_FreeValue(ctx, err);
+    } else {
+        memset(&result, 0, sizeof(result));
+        if (networking_http_get_ex(url, NULL, 0, NULL, NULL, NULL, &result) != ESP_OK ||
+            result.body_size > P4_CONFIG_JS_HTTP_MAX_BYTES ||
+            result.content_length > P4_CONFIG_JS_HTTP_MAX_BYTES) {
+            JSValue err = JS_NewString(ctx, "Error: fetch failed");
+
+            done = JS_Call(ctx, resolving_funcs[1], JS_UNDEFINED, 1, &err);
+            JS_FreeValue(ctx, err);
+        } else {
+            JSValue response = JS_NewObject(ctx);
+            JSValue body = JS_NewStringLen(ctx, (const char *)result.body,
+                                           result.body_size);
+
+            JS_SetPropertyStr(ctx, response, "body", body);
+            JS_SetPropertyStr(ctx, response, "status",
+                              JS_NewInt32(ctx, result.http_status));
+            JS_SetPropertyStr(ctx, response, "ok",
+                              JS_NewBool(ctx, result.http_status >= 200 &&
+                                              result.http_status < 300));
+            done = JS_Call(ctx, resolving_funcs[0], JS_UNDEFINED, 1, &response);
+            JS_FreeValue(ctx, response);
+        }
+        networking_http_result_free(&result);
+        JS_FreeCString(ctx, url);
+    }
+    if (JS_IsException(done)) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+    }
+    JS_FreeValue(ctx, done);
+    JS_FreeValue(ctx, resolving_funcs[0]);
+    JS_FreeValue(ctx, resolving_funcs[1]);
+    return promise;
+}
+
 static JSValue js_gpio_read(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
 {
@@ -516,6 +575,78 @@ static JSValue js_event_subscribers(JSContext *ctx, JSValueConst this_val,
 }
 
 /* ========================================================================
+ * ASYNC TIMERS + SAFE WEB APIS (same QuickJS runtime)
+ * ======================================================================== */
+
+static JSValue js_set_timeout(JSContext *ctx, JSValueConst this_val,
+                              int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    if (argc < 2) return JS_NewInt32(ctx, 0);
+    {
+        int32_t delay = 0;
+
+        (void)JS_ToInt32(ctx, &delay, argv[1]);
+        if (delay < 0) delay = 0;
+        return JS_NewInt32(ctx, (int32_t)jsengine_timer_add(ctx, &argv[0],
+                                                           (uint32_t)delay, false));
+    }
+}
+
+static JSValue js_set_interval(JSContext *ctx, JSValueConst this_val,
+                               int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    if (argc < 2) return JS_NewInt32(ctx, 0);
+    {
+        int32_t delay = 0;
+
+        (void)JS_ToInt32(ctx, &delay, argv[1]);
+        if (delay < 1) delay = 1;
+        return JS_NewInt32(ctx, (int32_t)jsengine_timer_add(ctx, &argv[0],
+                                                           (uint32_t)delay, true));
+    }
+}
+
+static JSValue js_clear_timeout(JSContext *ctx, JSValueConst this_val,
+                                int argc, JSValueConst *argv)
+{
+    int32_t id = 0;
+
+    (void)ctx; (void)this_val;
+    if (argc >= 1) (void)JS_ToInt32(ctx, &id, argv[0]);
+    return JS_NewBool(ctx, jsengine_timer_cancel((uint32_t)id));
+}
+
+static JSValue js_timers_pending(JSContext *ctx, JSValueConst this_val,
+                                 int argc, JSValueConst *argv)
+{
+    (void)ctx; (void)this_val; (void)argc; (void)argv;
+    return JS_NewInt32(ctx, jsengine_timers_pending());
+}
+
+static JSValue js_timers_run(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv)
+{
+    int64_t now = jsengine_now_ms();
+
+    (void)this_val;
+    if (argc >= 1) {
+        double provided = 0.0;
+
+        if (JS_ToFloat64(ctx, &provided, argv[0]) == 0) now = (int64_t)provided;
+    }
+    return JS_NewInt32(ctx, jsengine_timers_run_due(now));
+}
+
+static JSValue js_performance_now(JSContext *ctx, JSValueConst this_val,
+                                  int argc, JSValueConst *argv)
+{
+    (void)this_val; (void)argc; (void)argv;
+    return JS_NewFloat64(ctx, (double)jsengine_now_ms());
+}
+
+/* ========================================================================
  * REGISTRATION
  * ======================================================================== */
 
@@ -565,6 +696,9 @@ void js_bindings_register(JSContext *ctx)
     JS_SetPropertyStr(ctx, http, "get", JS_NewCFunction(ctx, js_http_get, "get", 1));
     JS_SetPropertyStr(ctx, global, "http", http);
 
+    JS_SetPropertyStr(ctx, global, "fetch",
+                      JS_NewCFunction(ctx, js_fetch, "fetch", 1));
+
     JSValue gpio = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, gpio, "read", JS_NewCFunction(ctx, js_gpio_read, "read", 1));
     JS_SetPropertyStr(ctx, gpio, "write", JS_NewCFunction(ctx, js_gpio_write, "write", 2));
@@ -591,6 +725,33 @@ void js_bindings_register(JSContext *ctx)
     JS_SetPropertyStr(ctx, event, "publish", JS_NewCFunction(ctx, js_event_publish, "publish", 2));
     JS_SetPropertyStr(ctx, event, "subscribers", JS_NewCFunction(ctx, js_event_subscribers, "subscribers", 0));
     JS_SetPropertyStr(ctx, global, "event", event);
+
+    /* Web-style async timers on the SAME runtime. `timers.run()` is a
+     * deterministic pump for scripts/host gates with no wall-clock wait. */
+    JS_SetPropertyStr(ctx, global, "setTimeout",
+                      JS_NewCFunction(ctx, js_set_timeout, "setTimeout", 2));
+    JS_SetPropertyStr(ctx, global, "setInterval",
+                      JS_NewCFunction(ctx, js_set_interval, "setInterval", 2));
+    JS_SetPropertyStr(ctx, global, "clearTimeout",
+                      JS_NewCFunction(ctx, js_clear_timeout, "clearTimeout", 1));
+    JS_SetPropertyStr(ctx, global, "clearInterval",
+                      JS_NewCFunction(ctx, js_clear_timeout, "clearInterval", 1));
+    {
+        JSValue timers = JS_NewObject(ctx);
+
+        JS_SetPropertyStr(ctx, timers, "pending",
+                          JS_NewCFunction(ctx, js_timers_pending, "pending", 0));
+        JS_SetPropertyStr(ctx, timers, "run",
+                          JS_NewCFunction(ctx, js_timers_run, "run", 0));
+        JS_SetPropertyStr(ctx, global, "timers", timers);
+    }
+    {
+        JSValue performance = JS_NewObject(ctx);
+
+        JS_SetPropertyStr(ctx, performance, "now",
+                          JS_NewCFunction(ctx, js_performance_now, "now", 0));
+        JS_SetPropertyStr(ctx, global, "performance", performance);
+    }
 
     JS_FreeValue(ctx, global);
 }

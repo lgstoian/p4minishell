@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=SET
+[M-RICH-SET] host language extract
+W=settings
+2
+[M-RICH-SET-K] host=p4
+[M-RICH-SET-K] port=80
+[M-RICH-SET-F] result=42
+[M-RICH-SET-S] rev=sgnittes count=2 pad=settings-- vals=p4,80
+[M-RICH-SET-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

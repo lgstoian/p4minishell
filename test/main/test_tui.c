@@ -14,12 +14,15 @@
 
 #include "unity.h"
 #include "tui.h"
+#include "tui_frame.h"
 #include "tui_pane.h"
+#include "tui_widgets.h"
 #include "tui_modal.h"
 #include "command.h"
 #include "p4minishell_config.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 
 void test_tui_default_color_roundtrip(void)
 {
@@ -699,4 +702,215 @@ void test_modal_repeat(void)
     TEST_ASSERT_EQUAL_INT(1, modal_get_repeat()); /* consumed */
     modal_clear_repeat();
     TEST_ASSERT_EQUAL_INT(1, modal_get_repeat());
+}
+
+/* ========================================================================
+ * CELL BUFFER / COMPONENT LAYER (pure parts)
+ * ================================================================ */
+
+void test_tui_frame_diff_and_commit(void)
+{
+    static tui_cell_t shown[2][3];
+    static tui_cell_t next[2][3];
+    tui_frame_t frame;
+    tui_dirty_t d;
+
+    memset(shown, 0, sizeof(shown));
+    memset(next, 0, sizeof(next));
+    tui_frame_bind(&frame, 3, 2, shown[0], next[0]);
+    TEST_ASSERT_TRUE(tui_frame_valid(&frame));
+
+    tui_frame_clear(&frame, 16, 16);
+    d = tui_frame_diff(&frame);
+    TEST_ASSERT_TRUE(d.any);
+    TEST_ASSERT_EQUAL_INT(1, d.min_col);
+    TEST_ASSERT_EQUAL_INT(1, d.min_row);
+    TEST_ASSERT_EQUAL_INT(3, d.max_col);
+    TEST_ASSERT_EQUAL_INT(2, d.max_row);
+
+    tui_frame_commit(&frame);
+    d = tui_frame_diff(&frame);
+    TEST_ASSERT_FALSE(d.any);
+
+    tui_frame_set(&frame, 2, 1, "X", 12, 16, 0);
+    d = tui_frame_diff(&frame);
+    TEST_ASSERT_TRUE(d.any);
+    TEST_ASSERT_EQUAL_INT(2, d.min_col);
+    TEST_ASSERT_EQUAL_INT(2, d.max_col);
+    TEST_ASSERT_EQUAL_INT(1, d.min_row);
+    TEST_ASSERT_EQUAL_INT(1, d.max_row);
+}
+
+void test_tui_frame_dirty_rect_helpers(void)
+{
+    tui_dirty_t a = tui_dirty_none();
+    tui_dirty_t b = tui_dirty_none();
+    tui_dirty_t u;
+
+    TEST_ASSERT_FALSE(a.any);
+    tui_dirty_add(&a, 4, 2);
+    tui_dirty_add(&a, 2, 5);
+    TEST_ASSERT_EQUAL_INT(2, a.min_col);
+    TEST_ASSERT_EQUAL_INT(5, a.max_row);
+    tui_dirty_add(&b, 0, 0);
+    TEST_ASSERT_FALSE(b.any);
+    tui_dirty_add(&b, 8, 1);
+    u = tui_dirty_union(a, &b);
+    TEST_ASSERT_TRUE(u.any);
+    TEST_ASSERT_EQUAL_INT(2, u.min_col);
+    TEST_ASSERT_EQUAL_INT(8, u.max_col);
+    TEST_ASSERT_EQUAL_INT(1, u.min_row);
+    TEST_ASSERT_EQUAL_INT(5, u.max_row);
+}
+
+void test_tui_frame_render_markup(void)
+{
+    static tui_cell_t shown[1][4];
+    static tui_cell_t next[1][4];
+    tui_frame_t frame;
+    char out[512];
+
+    memset(shown, 0, sizeof(shown));
+    memset(next, 0, sizeof(next));
+    tui_frame_bind(&frame, 4, 1, shown[0], next[0]);
+    tui_frame_clear(&frame, 16, 16);
+    tui_frame_set(&frame, 1, 1, "H", 7, 16, 0);
+    tui_frame_set(&frame, 2, 1, "#", 7, 16, 0);
+    tui_frame_set(&frame, 3, 1, "i", 12, 16, 1);
+    TEST_ASSERT_TRUE(tui_frame_render_full(&frame, out, sizeof(out)) > 0);
+    /* DOS 7 is CGA 0xAAAAAA; a '#' inside a coloured run must be escaped. */
+    TEST_ASSERT_NOT_NULL(strstr(out, "#aaaaaa"));
+    TEST_ASSERT_NOT_NULL(strstr(out, "##"));
+    /* Bold on a stock colour renders bright (12 -> 14). */
+    TEST_ASSERT_NOT_NULL(strstr(out, "#ffff55"));
+}
+
+void test_tui_frame_render_runs(void)
+{
+    static tui_cell_t shown[1][5];
+    static tui_cell_t next[1][5];
+    tui_frame_t frame;
+    char out[256];
+
+    memset(shown, 0, sizeof(shown));
+    memset(next, 0, sizeof(next));
+    tui_frame_bind(&frame, 5, 1, shown[0], next[0]);
+    tui_frame_clear(&frame, 16, 16);
+    tui_frame_set(&frame, 1, 1, "A", 7, 16, 0);
+    tui_frame_set(&frame, 2, 1, "B", 7, 16, 0);
+    tui_frame_set(&frame, 3, 1, "C", 7, 16, 0);
+    tui_frame_set(&frame, 4, 1, "D", 12, 16, 0);
+    tui_frame_set(&frame, 5, 1, "E", 12, 16, 0);
+    TEST_ASSERT_TRUE(tui_frame_render_runs(&frame, 1, 1, out, sizeof(out)) > 0);
+    TEST_ASSERT_EQUAL_STRING("001@1-3:7 4-5:12\n", out);
+}
+
+void test_tui_frame_color_palette(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(4, tui_frame_rgb_to_dos(0xAA0000));
+    TEST_ASSERT_EQUAL_UINT8(15, tui_frame_rgb_to_dos(0xFFFFFF));
+    TEST_ASSERT_EQUAL_UINT32(0x000000, tui_256_rgb(16));
+    TEST_ASSERT_EQUAL_UINT32(0xFFFFFF, tui_256_rgb(231));
+    TEST_ASSERT_EQUAL_UINT8(0, tui_frame_256_to_dos(16));
+    TEST_ASSERT_EQUAL_UINT8(15, tui_frame_256_to_dos(231));
+    /* 24-bit input is quantised through the ONE palette; default stays 16. */
+    {
+        static tui_cell_t shown[1][2];
+        static tui_cell_t next[1][2];
+        tui_frame_t frame;
+
+        memset(shown, 0, sizeof(shown));
+        memset(next, 0, sizeof(next));
+        tui_frame_bind(&frame, 2, 1, shown[0], next[0]);
+        tui_frame_set_rgb(&frame, 1, 1, "R", 0xFF5555, 0, false, 0);
+        TEST_ASSERT_EQUAL_UINT8(12, next[0][0].fg);
+        TEST_ASSERT_EQUAL_UINT8(16, next[0][0].bg);
+    }
+}
+
+void test_tui_layout_rects(void)
+{
+    tui_rect_t bounds = {1, 1, 20, 12};
+    tui_rect_t r;
+
+    TEST_ASSERT_TRUE(tui_layout_rect(TUI_LAYOUT_ROW, bounds, 2, 4, 0, 0, &r));
+    TEST_ASSERT_EQUAL_INT(11, r.x);
+    TEST_ASSERT_EQUAL_INT(1, r.y);
+    TEST_ASSERT_EQUAL_INT(5, r.w);
+    TEST_ASSERT_EQUAL_INT(12, r.h);
+
+    TEST_ASSERT_TRUE(tui_layout_rect(TUI_LAYOUT_COLUMN, bounds, 1, 3, 0, 1, &r));
+    TEST_ASSERT_EQUAL_INT(1, r.x);
+    TEST_ASSERT_EQUAL_INT(5, r.y);
+    TEST_ASSERT_EQUAL_INT(20, r.w);
+    TEST_ASSERT_EQUAL_INT(3, r.h);
+
+    TEST_ASSERT_TRUE(tui_layout_rect(TUI_LAYOUT_GRID, bounds, 5, 6, 3, 0, &r));
+    TEST_ASSERT_EQUAL_INT(13, r.x);
+    TEST_ASSERT_EQUAL_INT(7, r.y);
+    TEST_ASSERT_FALSE(tui_layout_rect(TUI_LAYOUT_GRID, bounds, 6, 6, 3, 0, NULL));
+    TEST_ASSERT_FALSE(tui_layout_rect(TUI_LAYOUT_ROW, bounds, 0, 0, 0, 0, &r));
+}
+
+void test_tui_scroll_clamp_and_focus_wrap(void)
+{
+    TEST_ASSERT_EQUAL_INT(0, tui_scroll_clamp(-5, 10, 100));
+    TEST_ASSERT_EQUAL_INT(90, tui_scroll_clamp(999, 10, 100));
+    TEST_ASSERT_EQUAL_INT(7, tui_scroll_step(5, 10, 100, 2));
+    TEST_ASSERT_EQUAL_INT(3, tui_scroll_step(5, 10, 8, 99));
+    TEST_ASSERT_EQUAL_INT(-1, tui_focus_wrap(-1, 0, 1));
+    TEST_ASSERT_EQUAL_INT(0, tui_focus_wrap(-1, 3, 1));
+    TEST_ASSERT_EQUAL_INT(2, tui_focus_wrap(0, 3, -1));
+    TEST_ASSERT_EQUAL_INT(1, tui_focus_wrap(0, 3, 1));
+}
+
+void test_tui_widget_focus_and_scroll_regions(void)
+{
+    tui_workspace_reset();
+    TEST_ASSERT_TRUE(tui_widget_add("F1", "button", 1, 1, 8, 1, "One"));
+    TEST_ASSERT_TRUE(tui_widget_add("F2", "button", 10, 1, 8, 1, "Two"));
+    TEST_ASSERT_TRUE(tui_widget_bind_label("F1", "run_one"));
+    TEST_ASSERT_TRUE(tui_widget_bind_label("F2", "run_two"));
+    TEST_ASSERT_EQUAL_STRING("run_one", tui_widget_get_label("F1"));
+    TEST_ASSERT_NULL(tui_widget_get_label("missing"));
+    TEST_ASSERT_TRUE(tui_widget_focus_add("F1"));
+    TEST_ASSERT_TRUE(tui_widget_focus_add("F2"));
+    TEST_ASSERT_TRUE(tui_widget_focus_add("F1")); /* idempotent */
+    TEST_ASSERT_EQUAL_INT(2, tui_widget_focus_count());
+    TEST_ASSERT_EQUAL_STRING("F1", tui_widget_focus_current());
+    TEST_ASSERT_EQUAL_INT(1, tui_widget_focus_step(1));
+    TEST_ASSERT_EQUAL_STRING("F2", tui_widget_focus_current());
+    TEST_ASSERT_EQUAL_STRING("run_two", tui_widgets_activate_focused());
+
+    TEST_ASSERT_TRUE(tui_scroll_region_add("LIST", 5, 40));
+    TEST_ASSERT_EQUAL_INT(0, tui_scroll_region_get("LIST"));
+    TEST_ASSERT_EQUAL_INT(35, tui_scroll_region_step("LIST", 999));
+    TEST_ASSERT_EQUAL_INT(30, tui_scroll_region_step("LIST", -5));
+    TEST_ASSERT_TRUE(tui_scroll_region_remove("LIST"));
+    TEST_ASSERT_EQUAL_INT(-1, tui_scroll_region_get("LIST"));
+
+    tui_workspace_reset();
+    TEST_ASSERT_EQUAL_INT(0, tui_widget_focus_count());
+    TEST_ASSERT_NULL(tui_widget_focus_current());
+}
+
+void test_tui_widgets_route_uses_modal_and_events(void)
+{
+    char label[32] = {0};
+
+    modal_init(test_exec_label_cb, test_env_get_cb, test_env_set_cb, NULL);
+    modal_reset();
+    tui_workspace_reset();
+    TEST_ASSERT_TRUE(modal_map_create("ROUTE"));
+    TEST_ASSERT_TRUE(modal_bind("ROUTE", "j", "goto_next"));
+    /* The modal layer resolves the chord; the workspace records the input. */
+    TEST_ASSERT_TRUE(tui_widgets_route_key("j", label, sizeof(label)));
+    TEST_ASSERT_EQUAL_STRING("goto_next", label);
+    TEST_ASSERT_EQUAL_INT(1, tui_event_count());
+
+    TEST_ASSERT_TRUE(tui_tap_add(2, 2, 4, 2, "tap_action"));
+    TEST_ASSERT_TRUE(tui_widgets_route_tap(3, 3, label, sizeof(label)));
+    TEST_ASSERT_EQUAL_STRING("tap_action", label);
+    TEST_ASSERT_EQUAL_INT(2, tui_event_count());
+    TEST_ASSERT_FALSE(tui_widgets_route_tap(50, 50, label, sizeof(label)));
 }

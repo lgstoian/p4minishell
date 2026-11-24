@@ -463,7 +463,8 @@ bool shell_command_gfx(int argc, char **argv)
 {
     if (argc < 2) {
         shell_transcript_appendf_ansi(SH_ERR "gfx: missing subcommand\n" SH_RST);
-            shell_transcript_appendf_ansi("Usage: gfx init|close|status|stats|clear|pixel|line|rect|circle|hline|vline|triangle|ellipse|polygon|fill|text|show|image|load|blit|blitmany|free|slots|save <args>\n");
+            shell_transcript_appendf_ansi("Usage: gfx init|close|status|stats|clear|pixel|line|lineaa|rect|rectaa|circle|circleaa|hline|vline|triangle|ellipse|polygon|gradient|fill|text|show|image|load|blit|blitmany|composite|free|slots|save <args>\n");
+            shell_transcript_appendf_ansi("       blitmany [/a:<cols>,<cw>,<ch>] takes idx x y triples (sprite sheet); composite blends a slot as a translucent layer\n");
         batch_set_errorlevel(2);
         return false;
     }
@@ -855,6 +856,129 @@ bool shell_command_gfx(int argc, char **argv)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[1], "lineaa")) {
+        /* gfx lineaa <x1> <y1> <x2> <y2> <color>: smooth line. The original
+         * `gfx line` stays pixel-exact; this is a separate raster entry point. */
+        if (argc != 7) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx lineaa: usage: gfx lineaa <x1> <y1> <x2> <y2> <color>\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        gfx_surface_line_aa(&s_gfx, atoi(argv[2]), atoi(argv[3]),
+                            atoi(argv[4]), atoi(argv[5]),
+                            gfx_color_arg(argv[6], 0xFFFF));
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "circleaa")) {
+        /* gfx circleaa <cx> <cy> <r> <color>: smooth 1px circle outline. */
+        if (argc != 6) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx circleaa: usage: gfx circleaa <cx> <cy> <r> <color>\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        gfx_surface_circle_aa(&s_gfx, atoi(argv[2]), atoi(argv[3]),
+                              atoi(argv[4]), gfx_color_arg(argv[5], 0xFFFF));
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "rectaa")) {
+        /* gfx rectaa <x> <y> <w> <h> <color>: smooth 1px rectangle outline. */
+        if (argc != 7) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx rectaa: usage: gfx rectaa <x> <y> <w> <h> <color>\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        gfx_surface_rect_aa(&s_gfx, atoi(argv[2]), atoi(argv[3]),
+                            atoi(argv[4]), atoi(argv[5]),
+                            gfx_color_arg(argv[6], 0xFFFF));
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "gradient")) {
+        /* gfx gradient <x> <y> <w> <h> <color0> <color1> [h|v]: linear fill.
+         * Defaults to horizontal; `v` interpolates down the rows. */
+        bool vertical = false;
+
+        if (argc != 9 && argc != 10) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx gradient: usage: gfx gradient <x> <y> <w> <h> <color0> <color1> [h|v]\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (argc > 9) {
+            if (shell_text_equals_ignore_case(argv[9], "v") ||
+                shell_text_equals_ignore_case(argv[9], "vertical")) {
+                vertical = true;
+            } else if (!shell_text_equals_ignore_case(argv[9], "h") &&
+                       !shell_text_equals_ignore_case(argv[9], "horizontal")) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx gradient: bad direction '%s' (h|v)\n" SH_RST, argv[9]);
+                batch_set_errorlevel(2);
+                return false;
+            }
+        }
+        gfx_surface_gradient(&s_gfx, atoi(argv[2]), atoi(argv[3]),
+                             atoi(argv[4]), atoi(argv[5]),
+                             gfx_color_arg(argv[6], 0x0000),
+                             gfx_color_arg(argv[7], 0xFFFF), vertical);
+        batch_set_errorlevel(0);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "composite")) {
+        /* gfx composite <slot> <x> <y> <alpha 0..256> [transparent]: blend a
+         * loaded sprite slot as one translucent offscreen layer. The slot is
+         * an ordinary gfx_surface_t - there is no second surface type. */
+        int slot;
+        int alpha;
+        char *end = NULL;
+        bool use_t = false;
+        uint16_t tcolor = 0x0000;
+
+        if (!gfx_require_foreground()) return false;
+        if (argc != 6 && argc != 7) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx composite: usage: gfx composite <slot 0..%d> <x> <y> <alpha 0..256> [transparent]\n" SH_RST,
+                                          GFX_SPR_SLOTS - 1);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        slot = (int)strtol(argv[2], &end, 10);
+        if (end == argv[2] || *end != '\0' || slot < 0 || slot >= GFX_SPR_SLOTS) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx composite: bad slot '%s' (0..%d)\n" SH_RST,
+                                          argv[2], GFX_SPR_SLOTS - 1);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (s_gfx_spr[slot].px == NULL) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx composite: slot %d empty (gfx load first)\n" SH_RST, slot);
+            batch_set_errorlevel(1);
+            return false;
+        }
+        alpha = atoi(argv[5]);
+        if (alpha < 0 || alpha > 256) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx composite: bad alpha '%s' (0..256)\n" SH_RST, argv[5]);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (argc > 6) {
+            use_t = true;
+            tcolor = gfx_color_arg(argv[6], 0x0000);
+        }
+        if (use_t) {
+            gfx_surface_composite_keyed(&s_gfx, &s_gfx_spr[slot],
+                                        atoi(argv[3]), atoi(argv[4]),
+                                        (unsigned)alpha, tcolor);
+        } else {
+            gfx_surface_composite(&s_gfx, &s_gfx_spr[slot],
+                                  atoi(argv[3]), atoi(argv[4]),
+                                  (unsigned)alpha);
+        }
+        batch_set_errorlevel(0);
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[1], "fill")) {
         /* gfx fill <x> <y> <color>: 4-way flood fill of the seed's color. */
         int changed;
@@ -1020,12 +1144,17 @@ bool shell_command_gfx(int argc, char **argv)
     }
 
     if (shell_text_equals_ignore_case(argv[1], "blitmany")) {
-        /* gfx blitmany <slot> [/s:N] [/r:deg] <x1> <y1> [<x2> <y2> ...]
-         * [transparent]: stamp one sprite at many positions in a single
-         * command, so a batch game draws a whole formation without one
-         * transcript line per stamp. A trailing odd token is the transparent
-         * color (same as `blit`). `/s:1..4` upscales every stamp
-         * (nearest-neighbour); `/r:0|90|180|270` rotates clockwise first. */
+        /* gfx blitmany <slot> [/s:N] [/r:deg] [/a:<cols>,<cw>,<ch>]
+         *   <x1> <y1> [<x2> <y2> ...] [transparent]
+         * Stamp one sprite at many positions in a single command, so a batch
+         * game draws a whole formation without one transcript line per stamp.
+         * A trailing non-multiple token is the transparent color (same as
+         * `blit`). `/s:1..4` upscales every stamp (nearest-neighbour);
+         * `/r:0|90|180|270` rotates clockwise first. The additive `/a:` flag
+         * switches to sprite-sheet mode: tokens become <cell> <x> <y> triples
+         * and each stamp blits one atlas cell through the same sprite slot.
+         * `/a:` and `/r:` are mutually exclusive (rotation applies to the
+         * whole slot, atlas cells are addressed in the unrotated grid). */
         int slot;
         char *end = NULL;
         bool use_t = false;
@@ -1034,7 +1163,12 @@ bool shell_command_gfx(int argc, char **argv)
         int scale = 1;
         int turns = 0;
         int coords = 0;
-        int pairs = 0;
+        int groups = 0;
+        int stride = 2;
+        int cols = 0;
+        int cell_w = 0;
+        int cell_h = 0;
+        bool atlas = false;
         int index;
         gfx_surface_t rotated = {NULL, 0, 0};
         const gfx_surface_t *spr = NULL;
@@ -1042,8 +1176,9 @@ bool shell_command_gfx(int argc, char **argv)
         if (!gfx_require_foreground()) return false;
         if (!gfx_require_open()) return false;
         if (argc < 5) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: usage: gfx blitmany <slot 0..%d> [/s:1..4] [/r:0|90|180|270] <x1> <y1> [<x2> <y2> ...] [transparent]\n" SH_RST,
+            shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: usage: gfx blitmany <slot 0..%d> [/s:1..4] [/r:0|90|180|270] [/a:<cols>,<cw>,<ch>] <x1> <y1> [<x2> <y2> ...] [transparent]\n" SH_RST,
                                           GFX_SPR_SLOTS - 1);
+            shell_transcript_appendf_ansi("   /a: switches to <cell> <x> <y> triples; /a: cannot be combined with /r:\n");
             batch_set_errorlevel(2);
             return false;
         }
@@ -1060,7 +1195,7 @@ bool shell_command_gfx(int argc, char **argv)
             return false;
         }
         /* Two passes over argv[3..] keep stack use flat: first validate the
-         * flags and count the coordinates, then stamp. */
+         * flags and count the tokens, then stamp. */
         for (index = 3; index < argc; index++) {
             if (strncasecmp(argv[index], "/s:", 3) == 0) {
                 scale = atoi(argv[index] + 3);
@@ -1072,6 +1207,12 @@ bool shell_command_gfx(int argc, char **argv)
                 }
             } else if (strncasecmp(argv[index], "/r:", 3) == 0) {
                 int deg = atoi(argv[index] + 3);
+
+                if (atlas) {
+                    shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: /a: cannot be combined with /r:\n" SH_RST);
+                    batch_set_errorlevel(2);
+                    return false;
+                }
                 if (deg != 0 && deg != 90 && deg != 180 && deg != 270) {
                     shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: bad rotation '%s' (0|90|180|270)\n" SH_RST,
                                                   argv[index]);
@@ -1079,34 +1220,54 @@ bool shell_command_gfx(int argc, char **argv)
                     return false;
                 }
                 turns = deg / 90;
+            } else if (strncasecmp(argv[index], "/a:", 3) == 0) {
+                if (turns != 0) {
+                    shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: /a: cannot be combined with /r:\n" SH_RST);
+                    batch_set_errorlevel(2);
+                    return false;
+                }
+                if (sscanf(argv[index] + 3, "%d,%d,%d", &cols, &cell_w, &cell_h) != 3 ||
+                    cols < 1 || cell_w < 1 || cell_h < 1) {
+                    shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: bad atlas '%s' (want <cols>,<cw>,<ch>)\n" SH_RST,
+                                                  argv[index]);
+                    batch_set_errorlevel(2);
+                    return false;
+                }
+                atlas = true;
+                stride = 3;
             } else {
                 coords++;
             }
         }
-        if (coords > P4_CONFIG_GFX_BLITMANY_MAX * 2 + 1) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: needs 1..%d X Y pairs\n" SH_RST,
-                                          P4_CONFIG_GFX_BLITMANY_MAX);
+        if (coords > P4_CONFIG_GFX_BLITMANY_MAX * stride + 1) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: needs 1..%d %s\n" SH_RST,
+                                          P4_CONFIG_GFX_BLITMANY_MAX,
+                                          atlas ? "cell X Y triples" : "X Y pairs");
             batch_set_errorlevel(2);
             return false;
         }
-        /* A trailing odd token is the transparent color (same as `blit`);
-         * flags were consumed above, so the last non-flag token dangles. */
-        if ((coords % 2) != 0) {
+        /* A trailing token that does not complete a group is the transparent
+         * color (same as `blit`); flags were consumed above, so the last
+         * non-flag token dangles. Plain mode kept its odd-token rule; atlas
+         * mode uses a whole extra token after complete triples. */
+        if ((coords % stride) != 0) {
             for (index = argc - 1; index >= 3; index--) {
                 if (strncasecmp(argv[index], "/s:", 3) != 0 &&
-                    strncasecmp(argv[index], "/r:", 3) != 0) {
+                    strncasecmp(argv[index], "/r:", 3) != 0 &&
+                    strncasecmp(argv[index], "/a:", 3) != 0) {
                     color_arg = argv[index];
                     break;
                 }
             }
             use_t = true;
             tcolor = gfx_color_arg(color_arg != NULL ? color_arg : "", 0x0000);
-            coords--;
+            coords -= coords % stride;
         }
-        pairs = coords / 2;
-        if (pairs < 1 || pairs > P4_CONFIG_GFX_BLITMANY_MAX) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: needs 1..%d X Y pairs\n" SH_RST,
-                                          P4_CONFIG_GFX_BLITMANY_MAX);
+        groups = coords / stride;
+        if (groups < 1 || groups > P4_CONFIG_GFX_BLITMANY_MAX) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: needs 1..%d %s\n" SH_RST,
+                                          P4_CONFIG_GFX_BLITMANY_MAX,
+                                          atlas ? "cell X Y triples" : "X Y pairs");
             batch_set_errorlevel(2);
             return false;
         }
@@ -1120,13 +1281,18 @@ bool shell_command_gfx(int argc, char **argv)
             }
             spr = &rotated;
         }
-        if (spr->w * scale > GFX_MAX_W || spr->h * scale > GFX_MAX_H) {
-            shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: scaled %dx%d exceeds the %dx%d canvas\n" SH_RST,
-                                          spr->w * scale, spr->h * scale,
-                                          GFX_MAX_W, GFX_MAX_H);
-            gfx_surface_free(&rotated);
-            batch_set_errorlevel(2);
-            return false;
+        {
+            int stamp_w = atlas ? cell_w : spr->w;
+            int stamp_h = atlas ? cell_h : spr->h;
+
+            if (stamp_w * scale > GFX_MAX_W || stamp_h * scale > GFX_MAX_H) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx blitmany: scaled %dx%d exceeds the %dx%d canvas\n" SH_RST,
+                                              stamp_w * scale, stamp_h * scale,
+                                              GFX_MAX_W, GFX_MAX_H);
+                gfx_surface_free(&rotated);
+                batch_set_errorlevel(2);
+                return false;
+            }
         }
         /* Second pass over a heap index (this sits on the recursive batch
          * path, so no line-sized stack array): the pair order is the argv
@@ -1144,15 +1310,41 @@ bool shell_command_gfx(int argc, char **argv)
             for (index = 3; index < argc; index++) {
                 if (strncasecmp(argv[index], "/s:", 3) == 0 ||
                     strncasecmp(argv[index], "/r:", 3) == 0 ||
+                    strncasecmp(argv[index], "/a:", 3) == 0 ||
                     (color_arg != NULL && argv[index] == color_arg)) {
                     continue;
                 }
                 pair_idx[held++] = index;
             }
-            for (index = 0; index + 1 < held; index += 2) {
-                int x = atoi(argv[pair_idx[index]]);
-                int y = atoi(argv[pair_idx[index + 1]]);
+            for (index = 0; index + stride - 1 < held; index += stride) {
+                int first = atoi(argv[pair_idx[index]]);
+                int x;
+                int y;
 
+                if (atlas) {
+                    x = atoi(argv[pair_idx[index + 1]]);
+                    y = atoi(argv[pair_idx[index + 2]]);
+                    if (scale == 1) {
+                        gfx_surface_blit_atlas(&s_gfx, spr, cell_w, cell_h,
+                                               cols, first, x, y, use_t, tcolor);
+                    } else {
+                        /* Scale the extracted cell through the same atlas
+                         * path: stamp into a one-cell view of the sheet. */
+                        gfx_surface_t cell = {NULL, 0, 0};
+
+                        if (gfx_surface_alloc(&cell, cell_w, cell_h)) {
+                            gfx_surface_blit_atlas(&cell, spr, cell_w, cell_h,
+                                                   cols, first, 0, 0, false, 0);
+                            gfx_surface_blit_scaled(&s_gfx, &cell, x, y,
+                                                    cell_w * scale, cell_h * scale,
+                                                    use_t, tcolor);
+                            gfx_surface_free(&cell);
+                        }
+                    }
+                    continue;
+                }
+                x = first;
+                y = atoi(argv[pair_idx[index + 1]]);
                 if (scale == 1) {
                     gfx_surface_blit(&s_gfx, spr, x, y, use_t, tcolor);
                 } else {

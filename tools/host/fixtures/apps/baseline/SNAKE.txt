@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=SNAKE
+[M-RICH-SNAKE] host language extract
+W=snake
+1
+[M-RICH-SNAKE-K] host=p4
+[M-RICH-SNAKE-K] port=80
+[M-RICH-SNAKE-F] result=42
+[M-RICH-SNAKE-S] rev=ekans count=1 pad=snake----- vals=p4,80
+[M-RICH-SNAKE-T] code=4 msg=errorlevel 4
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0
