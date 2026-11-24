@@ -21,6 +21,7 @@ import struct
 from p4test.asserts import Checklist
 from p4test.perf import parse_perf_report
 from p4test.session import PanicError
+from p4test.screenshot import TOL_LIVE, TOL_TEXT, parse_bmp
 
 NAME = "display"
 TAGS = ["display", "slow"]
@@ -47,52 +48,8 @@ def q565(rgb):
     return (((v >> 11) & 0x1F) << 3, ((v >> 5) & 0x3F) << 2, (v & 0x1F) << 3)
 
 
-class _Bmp:
-    """Minimal 24/32-bit BMP reader for a ``gfx save`` file (top-left origin)."""
-
-    def __init__(self, raw):
-        if len(raw) < 54 or raw[0:2] != b"BM":
-            raise ValueError("not a BMP (%r)" % raw[:4])
-        self.data = raw
-        self.data_offset = struct.unpack_from("<I", raw, 10)[0]
-        self.width = struct.unpack_from("<i", raw, 18)[0]
-        self.height = struct.unpack_from("<i", raw, 22)[0]
-        self.bpp = struct.unpack_from("<H", raw, 28)[0]
-        self.top_down = self.height < 0
-        self.height = abs(self.height)
-        self.stride = ((self.width * self.bpp // 8 + 3) // 4) * 4
-
-    def px(self, x, y):
-        row = y if self.top_down else (self.height - 1 - y)
-        off = self.data_offset + row * self.stride + x * (self.bpp // 8)
-        b = self.data[off]
-        g = self.data[off + 1]
-        r = self.data[off + 2]
-        return (r, g, b)
-
-    def count_near(self, x, y, w, h, rgb, tol=24):
-        tr, tg, tb = rgb
-        n = 0
-        for yy in range(max(0, y), min(self.height, y + h)):
-            for xx in range(max(0, x), min(self.width, x + w)):
-                r, g, b = self.px(xx, yy)
-                if abs(r - tr) <= tol and abs(g - tg) <= tol and abs(b - tb) <= tol:
-                    n += 1
-        return n
-
-    def region_mean(self, x, y, w, h):
-        sr = sg = sb = 0
-        n = 0
-        for yy in range(max(0, y), min(self.height, y + h)):
-            for xx in range(max(0, x), min(self.width, x + w)):
-                r, g, b = self.px(xx, yy)
-                sr += r
-                sg += g
-                sb += b
-                n += 1
-        if n == 0:
-            return (0.0, 0.0, 0.0)
-        return (sr / n, sg / n, sb / n)
+# The Bmp pixel model and its comparators live in p4test.screenshot; this
+# suite parses a `gfx save` BMP through the same one the screenshot path uses.
 
 
 def _make_bmp(w, h, rgb):
@@ -143,7 +100,7 @@ def run(dev, ctx):
 
     def pull_bmp(remote):
         try:
-            return _Bmp(dev.pull_file(remote))
+            return parse_bmp(dev.pull_file(remote))
         except PanicError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -234,7 +191,7 @@ def run(dev, ctx):
         stats = parse_perf_report(tui_raw)
         c.check("tui stats parses", stats is not None, "raw=%r" % tui_raw[-200:])
         if stats is not None:
-            c.check("tui stats frames sane", stats.frames >= 0, "frames=%d" % stats.frames)
+            c.check("tui stats frames sane", stats.frames > 0, "frames=%d" % stats.frames)
 
         c.expect("color default", "color", dev.run("color"))
         c.expect("color set", "fg=7 bg=0", dev.run("color 7 0"))
@@ -252,7 +209,7 @@ def run(dev, ctx):
             # which is board-agnostic and independent of what else is drawn.
             bright = tui_shot.count_near(0, 42, tui_shot.width,
                                          tui_shot.height - 42,
-                                         (255, 255, 255), tol=48)
+                                         (255, 255, 255), tol=TOL_TEXT)
             c.check("TUI text visible on screen", bright > 0, "white px=%d" % bright)
         dev.run("draw close")
 
@@ -314,7 +271,7 @@ def run(dev, ctx):
         gstats = parse_perf_report(dev.run("gfx stats"))
         c.check("gfx stats parses", gstats is not None, "no frames field")
         if gstats is not None:
-            c.check("gfx stats frames sane", gstats.frames >= 0,
+            c.check("gfx stats frames sane", gstats.frames > 0,
                     "frames=%d" % gstats.frames)
         c.expect("gfx stats reset", "reset", dev.run("gfx stats reset"))
         c.expect("gfx stats target", "target 30 fps", dev.run("gfx stats target 30"))
@@ -324,7 +281,7 @@ def run(dev, ctx):
             c.equals("gfx screenshot width", gfx_shot.width, disp_w)
             c.equals("gfx screenshot height", gfx_shot.height, disp_h)
             magenta = gfx_shot.count_near(0, 0, gfx_shot.width, gfx_shot.height,
-                                           (248, 0, 248), tol=40)
+                                           (248, 0, 248), tol=TOL_LIVE)
             c.check("gfx canvas sprite visible", magenta > 0, "magenta px=%d" % magenta)
 
         c.expect("gfx save", "gfx: saved", dev.run("gfx save %s" % GFX_BMP, timeout=30))

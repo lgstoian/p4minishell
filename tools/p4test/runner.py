@@ -44,10 +44,11 @@ import time
 import traceback
 from typing import Dict, List, Optional, Tuple
 
+from .agent import dogfood_self_test
 from .asserts import Checklist, SuiteResult
 from .device import Device
 from .local_config import wifi_credentials
-from .session import PANICS, P4Error, PanicError
+from .session import PANICS, P4Error, PanicError, read_until_self_test
 from . import panic_symbols
 
 # Fast tier: the per-area smoke subset that gates feature delivery in
@@ -165,15 +166,33 @@ def _tools_dir() -> str:
 # false-green / machine-readable-comment checks: a green hardware run is only
 # meaningful if the suite actually asserts and the tree is structurally sound.
 STATIC_GATES = [
-    ("green guard (false-green tests)", "green_guard.py"),
-    ("machine-readable comments", "comment_index.py"),
-    ("agent breadcrumbs", "breadcrumbs.py"),
+    ("comment index", "comment_index.py"),
+    ("breadcrumbs", "breadcrumbs.py"),
+    ("green guard (false-green tests)", "green_guard.py", ["--strict"]),
+    ("ui colours", "check_assets.py"),
     # Artifact identity: reject a gallery PNG that shows the shell or is the
     # same screen as another app. This is the gate that v1.4.3 lacked.
     ("gallery identity", "gallery_audit.py"),
     ("gallery guard canary", "gallery_audit_selftest.py"),
     ("LED state-machine contract", "led_contract.py"),
 ]
+# The static-DRAM budget needs a built image; a fresh checkout has none, so
+# this gate is conditional exactly as in tools/harness/verify.py.
+SIZE_GATE = ("size budget", "size_budget.py")
+
+
+def elf_exists() -> bool:
+    return os.path.exists(os.path.join(os.path.dirname(_tools_dir()),
+                                       "build", "p4minishell.elf"))
+
+
+def static_gate_specs(include_size: Optional[bool] = None) -> list:
+    """The host gate list shared by ``--static``/``--guard`` and verify.py."""
+    specs = [tuple(spec) for spec in STATIC_GATES]
+    want_size = elf_exists() if include_size is None else include_size
+    if want_size:
+        specs.append(SIZE_GATE)
+    return specs
 
 
 def run_static_gates() -> int:
@@ -181,17 +200,31 @@ def run_static_gates() -> int:
     tools = _tools_dir()
     root = os.path.dirname(tools)
     failed = 0
-    for label, script in STATIC_GATES:
+    for spec in static_gate_specs():
+        label, script = spec[:2]
+        args = spec[2] if len(spec) > 2 else ()
         print("\n" + "=" * 62)
         print("STATIC GATE: %s" % label)
         print("=" * 62)
-        rc = subprocess.run([sys.executable, os.path.join(tools, script)],
+        rc = subprocess.run([sys.executable, os.path.join(tools, script)] + list(args),
                             cwd=root).returncode
         if rc != 0:
             failed += 1
             print("STATIC GATE FAILED: %s" % label)
     print("\nSTATIC GATES %s" % ("OK" if failed == 0 else "FAIL"))
     return 1 if failed else 0
+
+
+def needs_clean_boot(mod) -> bool:
+    """True when a suite declares that prior UI/pixel state contaminates it."""
+    return bool(getattr(mod, "NEEDS_CLEAN_BOOT", False))
+
+
+def suite_wedged(res: SuiteResult) -> bool:
+    """True when a failed suite may have left the shell worker blocked."""
+    err = res.error or ""
+    return ("not seen within" in err or "did not return" in err
+            or "marker not seen" in err)
 
 
 def _run_one_suite(mod, dev, ctx) -> Tuple[SuiteResult, List[str]]:
@@ -275,14 +308,40 @@ def run_suites(mods, port: Optional[str], quick: bool = False,
     results: List[SuiteResult] = []
     dev = Device(port, boot=True, settle_ms=4000 if quick else 8000)
     ctx = {"quick": quick, "wifi": wifi_credentials()}
+    settle_ms = 4000 if quick else 8000
+    dirty = False
     try:
-        for mod in mods:
+        for index, mod in enumerate(mods):
             name = getattr(mod, "NAME", mod.__name__)
             print("\n" + "=" * 62)
             print("SUITE: %s" % name)
             print("=" * 62)
+            # A suite that declares NEEDS_CLEAN_BOOT must not inherit a TUI
+            # page, rotation, sprite or modal from the one before it. A suite
+            # that wedged the worker likewise leaves the board unusable. Other
+            # suites share the boot: a hard reset per area cost ~8 min/board
+            # and caught nothing the declared flag does not already cover.
+            if index and (dirty or needs_clean_boot(mod)):
+                try:
+                    print("  [REBOOT] before %s (%s)" % (
+                        name, "declared NEEDS_CLEAN_BOOT" if needs_clean_boot(mod)
+                        else "previous suite wedged the shell"))
+                    dev.reboot(settle_ms=settle_ms)
+                except PanicError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    res = SuiteResult(name, 0, 1,
+                                      error="clean boot failed: %s" % exc)
+                    results.append(res)
+                    dirty = True
+                    if not keep_going:
+                        break
+                    continue
+                dirty = False
             res, _failed = _run_one_suite(mod, dev, ctx)
             results.append(res)
+            if not res.ok and suite_wedged(res):
+                dirty = True
             if not keep_going and results and not results[-1].ok:
                 break
     finally:
@@ -323,7 +382,8 @@ def _resolve_board_port(token: str) -> Tuple[str, str]:
 
 def _board_worker(label: str, port: str, mods, quick: bool,
                   stop_event: threading.Event, fail_fast: bool,
-                  retry: int, out: list, router: _ThreadRouter) -> None:
+                  retry: int, strict_green: bool, out: list,
+                  router: _ThreadRouter) -> None:
     """Run every suite on one board, capturing all prints for merged output."""
     buf = io.StringIO()
     board_results: List[Tuple[str, SuiteResult, List[str], bool]] = []
@@ -339,7 +399,9 @@ def _board_worker(label: str, port: str, mods, quick: bool,
             dev = Device(port, boot=True,
                          settle_ms=4000 if quick else 8000)
             ctx = {"quick": quick, "wifi": wifi_credentials()}
-            for mod in mods:
+            settle_ms = 4000 if quick else 8000
+            dirty = False
+            for index, mod in enumerate(mods):
                 name = getattr(mod, "NAME", mod.__name__)
                 if stop_event.is_set():
                     print("\nSUITE [%s]: %s SKIPPED (fail-fast)"
@@ -348,24 +410,30 @@ def _board_worker(label: str, port: str, mods, quick: bool,
                         (name, SuiteResult(name, 0, 0, skipped=1), [], True))
                     continue
                 print("\nSUITE [%s]: %s" % (label, name))
-                # Every suite starts from a clean boot. Long suites accumulate
-                # live UI/transcript/service state (internal RAM, a TUI page, a
-                # background job, a Wi-Fi retry loop), and a suite that inherits
-                # any of it produces failures that have nothing to do with the
-                # area under test - the full sweep used to report one unrelated
-                # timeout per run on a different suite each time. The SD payload
-                # persists across the reset, so a reboot costs ~15 s and buys a
-                # reproducible result.
-                # Only pixel-sensitive areas need a hard reset between suites.
-                # Rebooting for every area cost ~8 min/board and hid nothing:
-                # a failed or timed-out suite already triggers the reset below.
-                if mod is not mods[0]:
+                # Honour the suite's declared NEEDS_CLEAN_BOOT: pixel/rotation
+                # state from the previous suite changes those captures. A suite
+                # that wedged the shell worker must also be followed by a reset
+                # or its failures cascade into unrelated areas. Other suites
+                # share the boot; a hard reset for every one cost ~8 min/board
+                # and caught nothing the declaration does not already cover.
+                if index and (dirty or needs_clean_boot(mod)):
                     try:
-                        dev.reboot(settle_ms=4000 if quick else 2000)
+                        print("  [REBOOT] before %s (%s)" % (
+                            name, "declared NEEDS_CLEAN_BOOT"
+                            if needs_clean_boot(mod)
+                            else "previous suite wedged the shell"))
+                        dev.reboot(settle_ms=settle_ms)
                     except PanicError:
                         raise
-                    except Exception:  # noqa: BLE001
-                        pass
+                    except Exception as exc:  # noqa: BLE001
+                        res = SuiteResult(name, 0, 1,
+                                          error="clean boot failed: %s" % exc)
+                        board_results.append((name, res, [name], False))
+                        dirty = True
+                        if fail_fast:
+                            stop_event.set()
+                        continue
+                    dirty = False
                 attempts = 1 + max(0, retry)
                 res, failed = _run_one_suite(mod, dev, ctx)
                 tried = 1
@@ -387,22 +455,11 @@ def _board_worker(label: str, port: str, mods, quick: bool,
                                           duration=res.duration)
                         failed = [name]
                 board_results.append((name, res, failed, False))
-                if not res.ok:
-                    # A suite that timed out may have left the shell worker
-                    # blocked (an app still owning it, a stuck SD op). Without a
-                    # reset every later suite inherits the wedge and the sweep
-                    # reports a cascade of unrelated failures instead of one
-                    # real one.
-                    err = res.error or ""
-                    wedged = ("not seen within" in err or
-                              "did not return" in err)
-                    if wedged:
-                        try:
-                            print("  [RESET] %s timed out; rebooting before the "
-                                  "next suite" % name)
-                            dev.reboot(settle_ms=4000 if quick else 8000)
-                        except Exception:  # noqa: BLE001
-                            pass
+                if not res.ok and suite_wedged(res):
+                    # Remember it: the next suite gets a reset before it runs,
+                    # so a timeout cannot cascade into unrelated areas.
+                    print("  [RESET] %s timed out; next suite will reboot" % name)
+                    dirty = True
                 if fail_fast and not res.ok:
                     stop_event.set()
         finally:
@@ -444,7 +501,8 @@ def run_boards(board_tokens: List[str], mods, quick: bool = False,
         for label, port in resolved:
             th = threading.Thread(target=_board_worker,
                                   args=(label, port, mods, quick, stop_event,
-                                        fail_fast, retry, collected, router),
+                                        fail_fast, retry, strict_green,
+                                        collected, router),
                                   name="board-%s" % label, daemon=True)
             threads.append(th)
         for th in threads:
@@ -630,6 +688,47 @@ def _self_test_summary() -> int:
             bad += 1
             print("     expected %s failed=%d skipped=%d, got:\n%s"
                   % (want_status, want_failed, want_skipped, text))
+    # Clean-boot declaration: only suites that opt in demand a hard reset.
+    plain = type("Plain", (), {})()
+    opted = type("Opted", (), {"NEEDS_CLEAN_BOOT": True})()
+    off = type("Off", (), {"NEEDS_CLEAN_BOOT": False})()
+    boot_cases = [(plain, False), (opted, True), (off, False)]
+    for mod, want in boot_cases:
+        ok = needs_clean_boot(mod) == want
+        print("%-4s NEEDS_CLEAN_BOOT %-6s -> %s" %
+              ("OK" if ok else "FAIL", type(mod).__name__, needs_clean_boot(mod)))
+        if not ok:
+            bad += 1
+    wedged = SuiteResult("w", 0, 1,
+                         error="run('x'): marker not seen within 30s")
+    healthy_fail = SuiteResult("h", 0, 1, error="check failed")
+    for label, res, want in (("timeout", wedged, True),
+                             ("plain failure", healthy_fail, False)):
+        ok = suite_wedged(res) == want
+        print("%-4s wedged detection %-14s -> %s"
+              % ("OK" if ok else "FAIL", label, suite_wedged(res)))
+        if not ok:
+            bad += 1
+    # The static gate list must stay in step with tools/harness/verify.py.
+    want_gates = [("comment_index.py", ()), ("breadcrumbs.py", ()),
+                  ("green_guard.py", ("--strict",)), ("check_assets.py", ()),
+                  ("gallery_audit.py", ()), ("gallery_audit_selftest.py", ()),
+                  ("led_contract.py", ())]
+    for include_size, expected in ((False, want_gates),
+                                   (True, want_gates + [("size_budget.py", ())])):
+        got = [(spec[1], tuple(spec[2]) if len(spec) > 2 else ())
+               for spec in static_gate_specs(include_size)]
+        ok = got == expected
+        print("%-4s static gates (size=%s)" %
+              ("OK" if ok else "FAIL", include_size))
+        if not ok:
+            bad += 1
+            print("     expected %r got %r" % (expected, got))
+    # read_until's missing-marker canary is a host-only check too.
+    if read_until_self_test() != 0:
+        bad += 1
+    if dogfood_self_test() != 0:
+        bad += 1
     print("summary self-test %s" % ("OK" if bad == 0 else "FAIL"))
     return 1 if bad else 0
 

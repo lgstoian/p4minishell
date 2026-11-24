@@ -1,4 +1,4 @@
-# P4MiniShell Application ABI & Package Trust (firmware v1.4.3)
+# P4MiniShell Application ABI & Package Trust (firmware v1.5.0)
 
 > **The contract between firmware and applications.** Read this before
 > shipping an app bundle or changing the native-app entry points. It freezes
@@ -39,16 +39,35 @@ entry, or a mix of both:
 - A **native** app (no shim) is the developer path for tests and tools;
   users are expected to reach apps through `launch`, so shipping native-only
   is discouraged for end-user apps.
+- A shim may also launch an **opt-in signed native payload** (§4.1): either a
+  pure native payload, or a hybrid that mixes batch steps, the native payload,
+  and a webapp page. The mix is authored in ordinary batch; the payload stays
+  one envelope. This is an addition to the shim, not a new app `type=`.
 
-There is **no SD code execution**. The firmware has no `dlopen`, no MMU
-address spaces, and no relocator; a `.P4X`/`.bin` payload on the card is a
-CRC + signature-covered **data blob**, never executed. "Installing a native
-app" means the blob is verified and stored; the C code that can run is the
-code linked into the firmware image and registered via `app_register`.
+> **Additive opt-in capability (amendment; the `applib-1` tag is unchanged).**
+> A `.bat` shim may launch the reserved `NATIVE/<APP>.P4X` blob when that blob
+> carries the signed envelope in §4.1 and passes every trust gate. There is
+> **no new executable format** and **no arbitrary unsigned SD execution**:
+> the reserved blob path, the `.bat` front door, and the one firmware loader
+> path are reused unchanged. No second dispatcher, parallel package format,
+> or removal of an existing feature is involved. The format-only parser is
+> `components/nativepay`; the loader and its launch surface are a later,
+> hardware-verified step ([`roadmap.md`](roadmap.md)).
+
+There is **no arbitrary SD code execution**. The firmware has no `dlopen`, no
+MMU address spaces, and no relocator. A `.P4X`/`.bin` file on the card stays a
+CRC- and signature-covered **data blob**: only the opt-in, signed payload
+envelope in §4.1 may be handed to the single loader path, and only when an
+ordinary `.bat` shim asks for it. Unsigned blobs, arbitrary `.bin` files, and
+any payload that fails a trust gate remain data, never code. "Installing a
+native app" still means the blob is verified and stored; the C code that can
+run is code linked into the firmware image and registered via `app_register`
+or delivered through the one opt-in payload path.
 
 A bundle is either a `PKGS/<APP>/` directory or a single-file `PKGS/<APP>.PKG`
-ZIP archive (the `.P4X` extension is reserved for the never-executed native
-payload blob). `pkg install <APP>` prefers the directory and falls back to the
+ZIP archive (the `.P4X` extension stays reserved for the one native payload
+blob: data unless opted in, signed, and launched by a `.bat` shim — §4.1).
+`pkg install <APP>` prefers the directory and falls back to the
 archive, unpacking it through the ONE ZIP reader; `pkg unpack <APP>` does only
 the unpack. Installs are staged: existing destinations are backed up under
 `PKGS/.installing/<APP>/`, each file is replaced atomically (temp + rename), and
@@ -123,15 +142,17 @@ Flat `KEY=VALUE`, the same shape as any INI file (read through the shared
 | `min_fw` | no | Minimum firmware (`1.4.0`); enforced at install, never bypassed by `/force`. |
 | `alpha` | no | Opt-in TUI/modal transparency, 0-255 or `0-100%` (255 = opaque). `launch` applies it to the whole TUI surface and every modal panel for the app's lifetime, then restores the default. (v1.4.3) |
 | `scrim` | no | Opt-in modal backdrop dimming, 0-255 or `0-100%` (0 = none). Black at that opacity behind modal panels; only meaningful with a translucent panel. (v1.4.3) |
+| `payload` | no | Opt-in path to the signed native payload blob (`NATIVE/<APP>.P4X`), relative to the bundle. Additive metadata only — no ABI bump. Launch is exclusively through the app's `.bat` shim and the one loader path (§4.1). |
 
 New keys are additive metadata only — they never change the entry ABI, so
 no `P4_CONFIG_NATIVE_ABI` bump is required to adopt them.
 
 Bundle layout under `PKGS/<APP>/` mirrors the install tree; every file must
 be CRC-listed in `<APP>.ASSETS`. The optional native payload lives at
-`NATIVE/<APP>.P4X` (opaque, CRC-covered, never executed). See
-[`docs/native_packaging.md`](docs/native_packaging.md) for the packaging
-walk-through.
+`NATIVE/<APP>.P4X` (opaque data blob, CRC-covered; never executed as arbitrary
+code — only the opted-in signed envelope of §4.1 may be launched by a `.bat`
+shim). See [`docs/native_packaging.md`](docs/native_packaging.md) for the
+packaging walk-through.
 
 ---
 
@@ -180,6 +201,50 @@ not signed; the file list is. The device rebuilds these bytes itself
 
 `pkg verify`/`check`/`info` report the same verdict (`signed: yes/no/...`).
 
+### 4.1 Opt-in signed native payload envelope (additive)
+
+The existing reserved `NATIVE/<APP>.P4X` path is the **only** payload path.
+An opted-in blob wraps its data in a fixed, little-endian envelope parsed by
+the format-only core in `components/nativepay`. The tag stays `applib-1`; the
+envelope is a new kind of *content* for the same blob, not a new executable
+format or ABI version.
+
+| Offset | Bytes | Field |
+|--------|-------|-------|
+| 0 | 8 | Magic `P4NATPAY` |
+| 8 | 4 | Format version (u32, currently 1) |
+| 12 | 8 | Arch id, NUL-padded: `esp32p4` |
+| 20 | 16 | ABI tag, NUL-padded: `applib-1` (`P4_CONFIG_NATIVE_ABI`) |
+| 36 | 4 | Payload size (u32, capped by `P4_CONFIG_NATPAY_MAX_PAYLOAD_BYTES`) |
+| 40 | 4 | Payload CRC-32 (integrity check, the one shared `strutil_crc32_update`) |
+| 44 | 32 | Payload SHA-256 |
+| 76 | 64 | ECDSA P-256 signature, raw `r || s` |
+| 140 | 2 | Entry ordinal (u16, 0-based index in the payload's export table) |
+| 142 | 2 | Reserved, must be zero |
+| 144 | 4 | Required API set (u32 bitmask: console, env, state, input, TUI, modal, db, time, webapp) |
+| 148 | N | Payload bytes (`N` = the size field) |
+
+**Canonical signed bytes.** The fixed header with the 64-byte signature field
+omitted, immediately followed by the payload bytes. The 32-byte digest is
+SHA-256 over exactly that stream; the publisher signs the digest. Magic,
+version, arch, ABI tag, size, CRC, SHA-256, entry ordinal, and required API set
+are therefore all bound by the signature; the signature itself is not. CRC-32
+is a cheap integrity check only and never substitutes for the signature.
+
+**Trust gates are unchanged.** Install-time manifest CRC and ECDSA verdicts,
+the single `p4sign` public key, and `P4_CONFIG_PKG_REQUIRE_SIGN` / `/signed`
+keep their exact §4 semantics. The envelope signature is an additional
+in-blob binding checked through hooks installed by the firmware; "no
+verifier" or "no trusted key" is a distinct, non-success verdict, never an
+implicit pass. A manifest BAD signature still refuses the bundle regardless
+of the envelope.
+
+**Launch.** The only front door is the ordinary `.bat` shim: it asks the one
+loader path for the verified envelope, optionally around batch setup and a
+webapp page (hybrid). There is no new verb, no second dispatcher, and no
+execution of unsigned blobs. The pure parser never reads a file or transfers
+control; the loader is a later hardware-verified step.
+
 ---
 
 ## 5. Guarantees and non-goals
@@ -193,14 +258,23 @@ not signed; the file list is. The device rebuilds these bytes itself
   never break an existing `applib-1` bundle.
 - Signed/unsigned coexistence: unsigned bundles keep the CRC-only contract;
   signing is opt-in and never breaks an unsigned bundle.
+- Additive native payloads: a `.bat` shim may launch one signed envelope
+  (pure native, or hybrid batch + native + webapp) while all existing batch,
+  hybrid, and webapp flows keep working unchanged.
+- Explicit degradation: an envelope with no verifier or no trust key is never
+  reported as trusted.
 
 **Explicitly not provided**
 
-- SD/flash code execution (`dlopen`, dynamic linking, per-app memory
-  isolation). C apps are linked into the firmware; the `.BAT` shim is their
-  front door.
-- A second dispatcher or a private app-entry path — `app_register` +
-  `launch`/`.bat` is the only model.
+- Arbitrary SD/flash code execution (`dlopen`, dynamic linking, ELF relocation,
+  per-app memory isolation). C apps are linked into the firmware; the `.BAT`
+  shim is their front door. The opt-in payload is the sole, signed exception
+  and still has no new executable format.
+- A second dispatcher, second runtime/loader, or second package format —
+  `app_register` + `launch`/`.bat` and the one payload loader path are the
+  only model. No existing feature is removed to make room for it.
+- Execution of unsigned `.P4X`/`.bin` blobs, or launch of a payload that fails
+  the CRC, SHA-256, arch/ABI, or signature gates.
 - Key revocation lists or online trust: trust is a single installed public
   key; rotating it means re-signing (and a `pkg key install`).
 
@@ -234,6 +308,7 @@ walk-throughs are [`tutorial_native.md`](tutorial_native.md) (C) and
 
 | Concern | Where |
 |---------|-------|
+| Native payload envelope parse + verify (format only, no loader) | `components/nativepay/native_payload.h`, `native_payload.c` |
 | Entry ABI + registry | `components/applib/applib_app.h`, `applib.c` |
 | Registration at boot | `main/native_apps.c` (`native_apps_register`) |
 | Dispatch + launch discovery | `components/command/command.c` (`shell_execute_command_core`, `shell_launch_*`) |

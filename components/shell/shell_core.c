@@ -1113,6 +1113,8 @@ const shell_help_entry_t shell_core_help_entries[] = {
     { "color",    "color [fg] [bg] - DOS COLOR parity (hex digits)" },
     { "emoji",    "emoji [status | reload] - retro DOS fallback + EMOJI/ pack on SD/USB" },
     { "html",     "html <file|url> - render a page with the browser engine (CSS/JS/canvas)" },
+    { "local",    "local NAME=value - frame-local assignment (inside call :label / gosub scope)" },
+    { "webapp",   "webapp open [/no] <file|url> | dump [from] [to] [/a] | css | js <code> - batch-facing webapp facade over the html/css/js engine" },
     { "epub",     "epub open <file> | close | info | toc | toc <n> | read | next | prev | goto <n> | extract <n> <file> - EPUB e-book reader" },
     { "locate",   "locate <row> <col> - DOS LOCATE parity (1-based, 80x25)" },
     { "config",   "config [KEY=VALUE | save | reset [key] | factory] - persistent settings (CONFIG.SYS)" },

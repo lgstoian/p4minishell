@@ -24,6 +24,10 @@
 #include "batch_env_internal.h"
 #include "batch_io.h"
 #include "error_strings.h"
+/* The batch verbs need the guarded-session and service prototypes but never
+ * touch a FATFS FRESULT. Hiding that one FATFS-typed declaration keeps the
+ * interpreter host-compilable without changing any firmware behaviour. */
+#define P4_STORAGE_NO_FATFS_TYPES 1
 #include "storage.h"
 #include "filetype.h"
 #include "modal_surf.h"
@@ -35,7 +39,12 @@
 #include "esp_random.h"
 #include "esp_system.h"
 #include "esp_mac.h"
-#include "bsp/esp-bsp.h"
+/* The only BSP fact the verbs use is the SD mount point, which lives in the
+ * hardware-free board_identity.h (staged by every build, including the host
+ * lane). Including esp-bsp.h here would drag the whole board BSP — LVGL, I2S,
+ * SDMMC — into a component that needs none of it. */
+#include "board_identity.h"
+#define BSP_SD_MOUNT_POINT BOARD_CFG_SD_MOUNT_POINT
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "p4heap.h"
@@ -51,6 +60,23 @@
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+/* The optional I/O backend can remap the SD mount onto a host fixture root.
+ * With no backend installed these are exactly the plain C calls the firmware
+ * has always used; the seam adds no second filesystem implementation. */
+static FILE *batch_file_open(const char *path, const char *mode)
+{
+    const batch_io_ops_t *ops = batch_io_ops_get();
+    return (ops != NULL && ops->file_open != NULL) ? ops->file_open(path, mode)
+                                                   : fopen(path, mode);
+}
+
+static esp_err_t batch_stat_path(const char *path, struct stat *st)
+{
+    const batch_io_ops_t *ops = batch_io_ops_get();
+    return (ops != NULL && ops->stat_path != NULL) ? ops->stat_path(path, st)
+                                                   : shell_sd_stat_path(path, st);
+}
 
 /* Backward-compatibility aliases */
 #define BATCH_TAG                       P4_CONFIG_SHELL_TAG
@@ -171,6 +197,7 @@ static bool s_default_echo = true;   /* CONFIG.SYS ECHO ON|OFF sets this; batch 
  * ======================================================================== */
 
 static void shell_env_print_all(void);
+static bool shell_in_label_call(const shell_batch_frame_t *frame);
 static bool shell_setlocal_push(void);
 static bool shell_setlocal_pop(void);
 static void shell_setlocal_unwind_to(int depth);
@@ -500,7 +527,7 @@ static esp_err_t shell_alias_save_to(const char *resolved_path)
         }
     }
 
-    file = fopen(tmp, "w");
+    file = batch_file_open(tmp, "w");
     if (file == NULL) {
         shell_sd_end(&session, "alias");
         return ESP_ERR_NOT_FOUND;
@@ -946,7 +973,7 @@ static esp_err_t shell_bind_save_to(const char *resolved_path)
             return ESP_ERR_INVALID_STATE;
         }
     }
-    file = fopen(tmp, "w");
+    file = batch_file_open(tmp, "w");
     if (file == NULL) {
         shell_sd_end(&session, "bind");
         return ESP_ERR_NOT_FOUND;
@@ -1501,6 +1528,24 @@ static void shell_setlocal_unwind_to(int depth)
  * ENVIRONMENT COMMANDS: set, path, echo
  * ======================================================================== */
 
+void shell_command_local(int argc, char **argv)
+{
+    if (argc < 2 || (argv[1][0] == '/' && argv[1][1] != '\0')) {
+        shell_print_usage("Usage: local NAME=value  (inside call :label / gosub scope)");
+        batch_set_errorlevel(2);
+        return;
+    }
+    if (s_active_batch_frame == NULL ||
+        !shell_in_label_call(s_active_batch_frame)) {
+        shell_print_error("local: only valid inside a call :label / gosub scope");
+        batch_set_errorlevel(2);
+        return;
+    }
+    /* The env core routes a new slot to SHELL_CLASS_FRAME_LOCAL while this
+     * call scope is active; reuse the one set implementation. */
+    shell_command_set(argc, argv);
+}
+
 void shell_command_set(int argc, char **argv)
 {
     char *assignment = NULL;
@@ -1861,7 +1906,7 @@ bool shell_resolve_batch_path(const char *command_name, char *resolved_path, siz
     }
 
     error = shell_fs_resolve_path(command_name, candidate, SHELL_SD_PATH_BYTES);
-    if (error == ESP_OK && shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
+    if (error == ESP_OK && batch_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
         snprintf(resolved_path, resolved_path_size, "%s", candidate);
         found = true;
         goto done;
@@ -1876,7 +1921,7 @@ bool shell_resolve_batch_path(const char *command_name, char *resolved_path, siz
         for (e = 0; e < 2 && !found; e++) {
             snprintf(with_ext, SHELL_SD_PATH_BYTES, "%s%s", command_name, script_exts[e]);
             error = shell_fs_resolve_path(with_ext, candidate, SHELL_SD_PATH_BYTES);
-            if (error == ESP_OK && shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
+            if (error == ESP_OK && batch_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
                 snprintf(resolved_path, resolved_path_size, "%s", candidate);
                 found = true;
                 goto done;
@@ -1891,7 +1936,7 @@ bool shell_resolve_batch_path(const char *command_name, char *resolved_path, siz
             if (shell_fs_resolve_path(entry, dir_path, SHELL_SD_PATH_BYTES) == ESP_OK) {
                 int written = snprintf(candidate, SHELL_SD_PATH_BYTES, "%s/%s", dir_path, command_name);
                 if (written > 0 && (size_t)written < SHELL_SD_PATH_BYTES &&
-                    shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
+                    batch_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
                     snprintf(resolved_path, resolved_path_size, "%s", candidate);
                     found = true;
                     goto done;
@@ -1904,7 +1949,7 @@ bool shell_resolve_batch_path(const char *command_name, char *resolved_path, siz
                     for (e = 0; e < 2 && !found; e++) {
                         written = snprintf(candidate, SHELL_SD_PATH_BYTES, "%s/%s%s", dir_path, command_name, script_exts[e]);
                         if (written > 0 && (size_t)written < SHELL_SD_PATH_BYTES &&
-                            shell_sd_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
+                            batch_stat_path(candidate, &st) == ESP_OK && S_ISREG(st.st_mode)) {
                             snprintf(resolved_path, resolved_path_size, "%s", candidate);
                             found = true;
                             goto done;
@@ -2357,6 +2402,16 @@ void shell_command_switch(int argc, char **argv)
     batch_set_errorlevel(0);
 }
 
+void batch_goto_label(const char *label)
+{
+    if (label == NULL || label[0] == '\0') {
+        return;
+    }
+    shell_store_goto_target(label);
+    s_goto_pending = true;
+    s_goto_eof = false;
+}
+
 void shell_command_goto(int argc, char **argv)
 {
     if (argc < 2) {
@@ -2513,7 +2568,7 @@ void shell_command_if(int argc, char **argv)
             }
             if (shell_fs_resolve_path(argv[arg_idx], resolved, SHELL_SD_PATH_BYTES) == ESP_OK &&
                 shell_sd_begin(&session) == ESP_OK) {
-                condition = (shell_sd_stat_path(resolved, &st) == ESP_OK);
+                condition = (batch_stat_path(resolved, &st) == ESP_OK);
                 shell_sd_end(&session, "if exist");
             }
             free(resolved);
@@ -4181,7 +4236,7 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
         return error;
     }
 
-    file = fopen(path, "rb");
+    file = batch_file_open(path, "rb");
     if (file == NULL) {
         shell_sd_end(&session, "call");
         free(frame);
@@ -4467,6 +4522,12 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
         if (s_stop_mode != BATCH_STOP_NONE) {
             break;
         }
+
+        /* Structured error handling: a failing line with an installed trap
+         * jumps to its handler through the existing pending-goto slot. This
+         * is the one place the trap engine hook is consumed; no second
+         * dispatcher and no separate control-flow path. */
+        (void)batch_trap_maybe_fire();
 
         /* `goto :eof` jumps to the end of the current batch frame. Inside a
          * called `:label` block it returns to the caller instead. */
@@ -5212,7 +5273,7 @@ static void shell_forf_run_source(const char *spec, const char *do_command,
         return;
     }
 
-    file = fopen(resolved, "r");
+    file = batch_file_open(resolved, "r");
     free(resolved);
     if (file == NULL) {
         free(line);
@@ -6444,6 +6505,10 @@ void batch_init(void)
 
     /* Arm the service supervisor (no-ops until the bg ops hook lands). */
     batch_svc_init();
+
+    /* Trap handlers are per-task stacks; reset them (and allocate the bg
+     * slot table) exactly once with the rest of the batch state. */
+    trap_init();
 
     s_initialized = true;
     ESP_LOGI(BATCH_TAG, "Batch module initialized");

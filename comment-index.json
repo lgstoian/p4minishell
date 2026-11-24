@@ -910,6 +910,23 @@
         "test/main/test_modal.c"
       ]
     },
+    "nativepay": {
+      "domain": "app",
+      "header": "components/nativepay/native_payload.h",
+      "layer": "leaf",
+      "path": "components/nativepay",
+      "provides": "opt-in signed native payload envelope parsing and verification",
+      "requires": [
+        "strutil"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "experimental",
+      "tests": [
+        "test/main/test_native_payload.c"
+      ]
+    },
     "networking": {
       "domain": "net",
       "header": "components/networking/networking.h",

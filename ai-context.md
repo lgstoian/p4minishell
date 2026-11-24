@@ -28,9 +28,10 @@ does" reference in [documentation.md](documentation.md).
   zero errors and zero warnings, the on-board unit suite is green, and the
   affected hardware behaviour is verified on the board. Reflash the main
   firmware after running the test app. When the change touches a source the
-  host lane compiles (`test/host/`, or the hardware-free translation units in
+  host lane compiles (`test/host/`, the hardware-free translation units in
   `components/shell`, `components/clock`, `components/header`,
-  `components/font`), `tools/host_unit_run.py --static` and
+  `components/font`, or the real interpreter sources in `components/batch`
+  linked through the host-only bridge), `tools/host_unit_run.py --static` and
   `tools/host_gen_runner.py --check` must be green too — but a host pass is
   never hardware sign-off (`harness.md` §2.2).
 - **Config values are never hardcoded.** All tunables live in
@@ -84,7 +85,7 @@ Regenerate the committed manifests after changing tags or components:
 | Field | Value |
 |-------|-------|
 | Name | P4MiniShell |
-| Version | **v1.4.3** (`p4minishell_config.h` version macros) |
+| Version | **v1.5.0** (`p4minishell_config.h` version macros) |
 | Type | Embedded shell + application framework (palmtop / PDA / writerdeck) |
 | Target | ESP32-P4 (host) + ESP32-C6 (co-processor over ESP-Hosted SDIO) |
 | Framework | ESP-IDF v5.5.5 |
@@ -624,6 +625,36 @@ tools use a webcam to observe the device; prefer them over guessing.
   and every host suite must record at least one check. `tools/green_guard.py`
   enforces the static side and the p4test runner treats a zero-assertion suite
   as a failure.
+- **Host bridges are test-only; the host lane stays a pre-gate.** The host lane
+  compiles the **real** interpreter (`components/batch/batch.c` and its pure
+  verb siblings), with `test/host/main/host_batch_bridge.c` supplying only the
+  link-time symbols the firmware provides from command/storage/UI and reporting
+  "unavailable" for board-only calls. A host bridge stub must **never** become
+  fake hardware behaviour in production code: it lives in `test/host`, is never
+  compiled into a firmware image, and a host pass still signs off nothing about
+  hardware (`harness.md` §0 and §2.2). Grow the lane by splitting hardware out
+  of mixed components or by honest host-only bridges — never by stubbing
+  hardware in `components/`.
+- **Facades delegate to the one engine; host render gates stay pre-gates.** The
+  `webapp` verb (`components/command/webapp_commands.c`) is a thin batch-facing
+  facade: `open` → `html`, `dump` → `tui dump`, `css` → `browser css`, `js` →
+  `js eval`. It adds no second renderer, JS runtime, colour model or surface —
+  extend the existing engines, never a parallel webapp implementation. The
+  host-only `tools/host_webapp_gate.py` drives `tools/host/main/host_webapp_render.c`
+  over fixtures in `tools/host/fixtures/webapp/` against the firmware's shared
+  DOM/CSS/render core; it opens no serial port and its pass is a pre-gate only,
+  never hardware sign-off (`harness.md` §0 and §2.2).
+- **Host-only backends must never fake success or become firmware code.** The
+  POSIX fixture root behind `host_batch_bridge.c::host_batch_fs_init(root)` and
+  the additive `batch_io_ops_t.file_open` / `stat_path` hooks is installed only
+  by the standalone `test/host/main/host_batch_run.c` probe; it maps `/sdcard`
+  onto a real host directory and returns real files or real errors. Without an
+  explicit root every service fails honestly — no invented card, file, key or
+  success — and lines needing full `command.c` dispatch are reported as
+  unsupported on that lane, not simulated. This code lives in `test/host`, is
+  never compiled into firmware, and both host pre-gates
+  (`tools/host_batch_run.py`, `tools/host_webapp_gate.py`) stay pre-gates only;
+  the on-device suites remain authoritative (`harness.md` §0 and §2.2).
 
 ### Comments
 - All major sections need descriptive comments explaining purpose and behavior

@@ -63,6 +63,80 @@ extern void test_batch_expr_comparisons(void);
 extern void test_batch_expr_logical(void);
 extern void test_batch_expr_errors(void);
 
+/* --- test_batch_control.c ------------------------------------ */
+extern void test_batch_label_is_line(void);
+extern void test_batch_label_extract(void);
+extern void test_batch_on_parse(void);
+extern void test_batch_on_select(void);
+extern void test_batch_on_dispatch_selection(void);
+extern void test_batch_forl_parse(void);
+extern void test_batch_fora_collect(void);
+extern void test_batch_switch_select(void);
+extern void test_batch_while_keywords(void);
+extern void test_batch_shift_parse_start(void);
+extern void test_batch_forf_option_defaults(void);
+extern void test_shell_parser_echo_glued(void);
+
+/* --- test_bind.c --------------------------------------------- */
+extern void test_bind_set_and_lookup(void);
+extern void test_bind_rejects_non_fkey(void);
+extern void test_bind_get_by_index(void);
+extern void test_bind_chord_set_and_lookup(void);
+extern void test_bind_chord_rejects(void);
+
+/* --- test_macro.c -------------------------------------------- */
+extern void test_macro_idle_paths(void);
+extern void test_macro_record_and_exclude(void);
+extern void test_macro_record_overflow(void);
+extern void test_macro_double_record(void);
+
+/* --- test_error_strings.c ------------------------------------ */
+extern void test_error_code_string_known(void);
+extern void test_error_code_string_unknown(void);
+extern void test_error_code_string_never_null(void);
+
+/* --- test_trap.c --------------------------------------------- */
+extern void test_trap_install_and_clear(void);
+extern void test_trap_raise_publishes_ordinary_variables(void);
+extern void test_trap_fire_is_one_shot(void);
+extern void test_trap_ignores_success(void);
+
+/* --- test_shell_variables.c ---------------------------------- */
+extern void test_variable_expansion_env_var(void);
+extern void test_variable_expansion_empty_name(void);
+extern void test_variable_expansion_single_quotes(void);
+extern void test_variable_expansion_caret_escape(void);
+extern void test_variable_expansion_multiple(void);
+extern void test_variable_expansion_errorlevel(void);
+extern void test_variable_expansion_output_truncated(void);
+extern void test_variable_expansion_pseudo_vars(void);
+extern void test_variable_expansion_err_level_vars(void);
+extern void test_variable_expansion_system_slots(void);
+extern void test_variable_virtual_names_not_stored(void);
+extern void test_variable_numeric_names_rejected(void);
+extern void test_variable_expansion_for_loop_var(void);
+extern void test_variable_expansion_null_input(void);
+extern void test_variable_expansion_null_output(void);
+extern void test_variable_expansion_no_batch_frame(void);
+extern void test_variable_expansion_tilde_modifiers(void);
+extern void test_variable_expansion_substring(void);
+extern void test_variable_expansion_replace(void);
+extern void test_variable_expansion_array_names(void);
+extern void test_variable_expansion_delayed(void);
+extern void test_variable_expansion_delayed_scope(void);
+
+/* --- test_shell_pipeline.c ----------------------------------- */
+extern void test_pipe_detection_agreement(void);
+extern void test_redirection_quote_awareness(void);
+extern void test_chain_pipe_vs_chain_under_quotes(void);
+extern void test_chain_single_quote_protection(void);
+extern void test_chain_truncation_with_pipes(void);
+extern void test_chain_empty_and_whitespace(void);
+extern void test_find_unquoted_pipe(void);
+extern void test_redirect_target_kind(void);
+extern void test_redirect_parse_missing_target(void);
+extern void test_redirect_parse_handle_prefix(void);
+
 /* --- test_browser_cache.c ------------------------------------ */
 extern void test_browser_image_cache_roundtrip(void);
 extern void test_browser_image_cache_miss_and_null(void);
@@ -412,6 +486,80 @@ void app_main(void)
     RUN_TEST(test_batch_expr_comparisons);
     RUN_TEST(test_batch_expr_logical);
     RUN_TEST(test_batch_expr_errors);
+
+    /* test_batch_control.c */
+    RUN_TEST(test_batch_label_is_line);
+    RUN_TEST(test_batch_label_extract);
+    RUN_TEST(test_batch_on_parse);
+    RUN_TEST(test_batch_on_select);
+    RUN_TEST(test_batch_on_dispatch_selection);
+    RUN_TEST(test_batch_forl_parse);
+    RUN_TEST(test_batch_fora_collect);
+    RUN_TEST(test_batch_switch_select);
+    RUN_TEST(test_batch_while_keywords);
+    RUN_TEST(test_batch_shift_parse_start);
+    RUN_TEST(test_batch_forf_option_defaults);
+    RUN_TEST(test_shell_parser_echo_glued);
+
+    /* test_bind.c */
+    RUN_TEST(test_bind_set_and_lookup);
+    RUN_TEST(test_bind_rejects_non_fkey);
+    RUN_TEST(test_bind_get_by_index);
+    RUN_TEST(test_bind_chord_set_and_lookup);
+    RUN_TEST(test_bind_chord_rejects);
+
+    /* test_macro.c */
+    RUN_TEST(test_macro_idle_paths);
+    RUN_TEST(test_macro_record_and_exclude);
+    RUN_TEST(test_macro_record_overflow);
+    RUN_TEST(test_macro_double_record);
+
+    /* test_error_strings.c */
+    RUN_TEST(test_error_code_string_known);
+    RUN_TEST(test_error_code_string_unknown);
+    RUN_TEST(test_error_code_string_never_null);
+
+    /* test_trap.c */
+    RUN_TEST(test_trap_install_and_clear);
+    RUN_TEST(test_trap_raise_publishes_ordinary_variables);
+    RUN_TEST(test_trap_fire_is_one_shot);
+    RUN_TEST(test_trap_ignores_success);
+
+    /* test_shell_variables.c */
+    RUN_TEST(test_variable_expansion_env_var);
+    RUN_TEST(test_variable_expansion_empty_name);
+    RUN_TEST(test_variable_expansion_single_quotes);
+    RUN_TEST(test_variable_expansion_caret_escape);
+    RUN_TEST(test_variable_expansion_multiple);
+    RUN_TEST(test_variable_expansion_errorlevel);
+    RUN_TEST(test_variable_expansion_output_truncated);
+    RUN_TEST(test_variable_expansion_pseudo_vars);
+    RUN_TEST(test_variable_expansion_err_level_vars);
+    RUN_TEST(test_variable_expansion_system_slots);
+    RUN_TEST(test_variable_virtual_names_not_stored);
+    RUN_TEST(test_variable_numeric_names_rejected);
+    RUN_TEST(test_variable_expansion_for_loop_var);
+    RUN_TEST(test_variable_expansion_null_input);
+    RUN_TEST(test_variable_expansion_null_output);
+    RUN_TEST(test_variable_expansion_no_batch_frame);
+    RUN_TEST(test_variable_expansion_tilde_modifiers);
+    RUN_TEST(test_variable_expansion_substring);
+    RUN_TEST(test_variable_expansion_replace);
+    RUN_TEST(test_variable_expansion_array_names);
+    RUN_TEST(test_variable_expansion_delayed);
+    RUN_TEST(test_variable_expansion_delayed_scope);
+
+    /* test_shell_pipeline.c */
+    RUN_TEST(test_pipe_detection_agreement);
+    RUN_TEST(test_redirection_quote_awareness);
+    RUN_TEST(test_chain_pipe_vs_chain_under_quotes);
+    RUN_TEST(test_chain_single_quote_protection);
+    RUN_TEST(test_chain_truncation_with_pipes);
+    RUN_TEST(test_chain_empty_and_whitespace);
+    RUN_TEST(test_find_unquoted_pipe);
+    RUN_TEST(test_redirect_target_kind);
+    RUN_TEST(test_redirect_parse_missing_target);
+    RUN_TEST(test_redirect_parse_handle_prefix);
 
     /* test_browser_cache.c */
     RUN_TEST(test_browser_image_cache_roundtrip);

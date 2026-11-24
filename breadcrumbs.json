@@ -82,6 +82,7 @@
     "components/command/chat_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/command.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/command.h": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/command_redirect.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/command_ui.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/command_ui.h": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/config_cmd.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
@@ -124,6 +125,7 @@
     "components/command/ui_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/ui_commands.h": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/command/userial_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
+    "components/command/webapp_commands.c": "module=command :: layer=command :: domain=core :: status=stable :: tests=test/main/test_shell_parser.c,test/main/test_assoc.c,test/main/test_screen.c,test/main/test_config.c,test/main/test_breadcrumb.c :: rules=ai-context.md#module-layering-rules",
     "components/db/db.c": "module=db :: layer=leaf :: domain=data :: status=stable :: tests=test/main/test_db.c :: rules=ai-context.md#module-layering-rules",
     "components/db/db.h": "module=db :: layer=leaf :: domain=data :: status=stable :: tests=test/main/test_db.c :: rules=ai-context.md#module-layering-rules",
     "components/display/display.c": "module=display :: layer=leaf :: domain=ui :: status=stable :: rules=ai-context.md#module-layering-rules",
@@ -257,6 +259,8 @@
     "components/modal/modal_args.c": "module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules",
     "components/modal/modal_surf.c": "module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules",
     "components/modal/modal_surf.h": "module=modal :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_modal.c :: rules=ai-context.md#module-layering-rules",
+    "components/nativepay/native_payload.c": "module=nativepay :: layer=leaf :: domain=app :: status=experimental :: tests=test/main/test_native_payload.c :: rules=ai-context.md#module-layering-rules",
+    "components/nativepay/native_payload.h": "module=nativepay :: layer=leaf :: domain=app :: status=experimental :: tests=test/main/test_native_payload.c :: rules=ai-context.md#module-layering-rules",
     "components/networking/bluetooth.c": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
     "components/networking/bluetooth.h": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
     "components/networking/http_server.c": "module=networking :: layer=leaf :: domain=net :: status=stable :: tests=test/main/test_wifi_state.c,test/main/test_netsvc.c,test/main/test_tcpterm.c :: rules=ai-context.md#module-layering-rules",
@@ -1300,6 +1304,23 @@
       "status": "stable",
       "tests": [
         "test/main/test_modal.c"
+      ]
+    },
+    "nativepay": {
+      "domain": "app",
+      "header": "components/nativepay/native_payload.h",
+      "layer": "leaf",
+      "path": "components/nativepay",
+      "provides": "opt-in signed native payload envelope parsing and verification",
+      "requires": [
+        "strutil"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "experimental",
+      "tests": [
+        "test/main/test_native_payload.c"
       ]
     },
     "networking": {

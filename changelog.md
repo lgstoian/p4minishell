@@ -14,6 +14,97 @@ open bugs see [`bugs.md`](bugs.md).
 
 ---
 
+## [1.5.0] - 2026-11-24
+
+> **Board-free release candidate.** Nothing in this section was verified
+> on a board: the on-device suites and the two-board matrix remain open
+> for v1.5.0 and must pass before a public release. Host/static gates are
+> pre-flight only (`harness.md` §0 and §2.2); the last hardware
+> sign-off was in the v1.4.x campaigns.
+
+### Fixed
+
+- `trap` was inert: an installed handler is now fired by the batch frame loop
+  (`batch_trap_maybe_fire()`) when a line leaves ERRORLEVEL >= 2. It is one-shot
+  (popped before the jump) and reaches its `:label` through the existing
+  pending-goto slot - no second dispatcher. `trap /raise CODE "message"` and a
+  firing handler now publish ordinary `TRAP_CODE` / `TRAP_MSG` variables; the
+  read-only virtual `ERR`/`ERRMSG` slots are no longer written. `trap_init()`
+  runs from `batch_init()` and resets/allocates the per-slot handler state.
+  Four new on-target cases (`test/main/test_trap.c`) cover install/clear,
+  `/raise`, one-shot fire and the ERRORLEVEL gate.
+
+### Added
+
+- **Opt-in signed native-payload verifier (additive ABI amendment).**
+  `components/nativepay` is a format-only parser/verifier for the reserved
+  `NATIVE/<APP>.P4X` envelope: magic/version/arch/`applib-1` tag, size
+  bounds, CRC-32, SHA-256 over canonical bytes, ECDSA P-256 through
+  installed hooks, entry ordinal and required API set. A missing verifier
+  or trust key is an explicit non-success verdict, never an implicit pass.
+  `ABI.md` §1/§4.1/§5 and `docs/native_packaging.md` §2.1 record
+  the amendment: no ABI tag bump, no new executable format or dispatcher,
+  signed blob only, launched solely by an ordinary `.bat` shim through the
+  one loader path. The loader/launch surface is **not** implemented, so no
+  payload executes and no hardware proof is claimed here.
+- Host unit lane: the real batch interpreter (`batch.c` plus `batch_trap.c`,
+  `batch_dim.c`, `batch_str.c`, `batch_map.c`, `error_strings.c`) now compiles
+  on the host behind a host-only bridge, with new `test_batch_control.c`,
+  `test_bind.c`, `test_macro.c`, `test_error_strings.c`, `test_trap.c`,
+  `test_shell_variables.c` and `test_shell_pipeline.c` suites - 345 generated
+  cases. The bridge supplies "unavailable" behaviour for board-only calls and
+  is never part of the firmware image.
+- **Webapp facade and reference app (additive).** `webapp open [/no] <file|url>`,
+  `webapp dump [from] [to] [/a]`, `webapp css` and `webapp js <code>` are a
+  thin batch-facing facade: they delegate to `html`, `tui dump`,
+  `browser css` and `js eval` respectively, with no second renderer, JS
+  runtime or surface. `apps/webapp/WEBAPP.BAT` + `WEBAPP.APPINFO` (deployed
+  via `apps/app_manifest.py`) opens `%APPDRIVE%/WEB/INDEX.HTML` (falling back
+  to `sd:/WEB/INDEX.HTML`), dumps 8 colour-run rows, shows CSS and emits
+  `[M-WEBAPP]` / `[M-WEBAPP-DONE]` /
+  `[M-WEBAPP-FAIL]` markers. A new host-only `tools/host_webapp_gate.py`
+  checks the shared render path against fixtures in
+  `tools/host/fixtures/webapp/` through a standalone harness over the
+  existing DOM/CSS engine - a pre-gate only, never hardware sign-off.
+- Additive `local NAME=value` batch verb: a guarded front door over the one
+  `set` implementation that assigns into the existing frame-local slot class.
+  It is valid only inside a `call :label` / `gosub` scope and refuses outside
+  with ERRORLEVEL 2; registered in `command.c` and the help table, with no
+  new variable table.
+- Host pre-gates (hardware-free, never sign-off): `tools/host_batch_run.py`
+  runs the real `HELLO.BAT` fixture through the real interpreter via
+  `test/host/main/host_batch_run.c` and a host-only POSIX fixture-root backend
+  (`host_batch_bridge.c::host_batch_fs_init()` over the additive
+  `batch_io_ops_t.file_open` / `stat_path` hooks); verbs needing full
+  `command.c` dispatch are reported as unsupported, never faked. Flags:
+  `--fixture`, `--root`, `--check`, `--update`, `--self-test` (7 canaries);
+  runner reads `P4_HOST_SD_ROOT` (default: the fixture directory), and POSIX
+  ELFs route through WSL on
+  Windows. `tools/host_webapp_gate.py` now discovers `host_webapp_render.elf`
+  under `test/host/build*` with no hardcoded path and routes it through WSL
+  on Windows. Verified: 1 batch fixture / 7 assertions, 1 webapp fixture /
+  51 assertions, Unity host lane 345/0/0. On-device suites remain
+  authoritative.
+
+### Changed
+
+- CI (`.github/workflows/build.yml`) now runs the false-green and identity
+  gates (`green_guard.py --strict`, `comment_index.py`, `breadcrumbs.py`,
+  `gallery_audit.py`, `gallery_audit_selftest.py`, `harness/verify.py`) and
+  the hardware-free host lane (`host_gen_runner.py --check`,
+  `host_unit_run.py --static/--build` plus the native host ELF run,
+  `host_batch_run.py --check`, `host_webapp_gate.py --check`). No CI job
+  requires a board. This enforces the v1.4.4 false-green fixes in CI:
+  vacuous/zero-assertion suites fail, and a retry-pass is not green.
+- Screenshot proof regeneration (board-free): the Gfx Toolkit gallery
+  image is now a deterministic **host render** of the fixed `GFXTOOL.BAT`
+  through the real gfx core (`tools/make_gfx_proof.py`), and its caption
+  says so; hardware recapture is still pending. The Webapp Demo entry says
+  "host-generated proof pending"; the Snake caption/PNG are unchanged
+  until recaptured. No device capture is claimed for these proofs.
+  `gallery_audit.py` plus its red canary reject a shell screenshot published
+  as an app image, so no fabricated capture can pass the gate.
+
 ## [1.4.4] - 2026-11-21
 
 ### Fixed

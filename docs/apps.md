@@ -1,9 +1,11 @@
 # Reference app gallery
 
-Every screenshot below is captured live from the device by
+Screenshots are normally captured live from the device by
 [`tools/suites/s25_apps_gallery.py`](../tools/suites/s25_apps_gallery.py)
-(JC1060P470C, 1024x600). The apps are batch-first and run from SD or USB;
-metadata comes from each app's `APPINFO`.
+(JC1060P470C, 1024x600). Any image explicitly labelled a **host-generated
+proof** is not a device capture; its caption says so and hardware recapture is
+pending. The apps are batch-first and run from SD or USB; metadata comes from
+each app's `APPINFO`.
 
 The feature matrix in [`readme.md`](../readme.md) lists which v1.4.3
 surface each app exercises (emoji, transparency, HTML, drive-aware data).
@@ -82,7 +84,11 @@ Melody, RGB effects, number guessing, calc, Snake and Elite Trader
 
 Raster toolkit demo: triangle/ellipse/polygon/flood-fill/spans plus scaled on-canvas text
 
-*Screenshot: `docs/assets/apps/gfxtool.png`*
+*Host-generated proof (hardware recapture pending): `docs/assets/apps/gfxtool.png`*
+
+This one image is not a device capture: it is rendered on the host from the real
+gfx core by [`tools/make_gfx_proof.py`](../tools/make_gfx_proof.py), with the
+text drawn after the sprite stamps as the fixed `GFXTOOL.BAT` does.
 
 ## Mood Dashboard
 
@@ -185,3 +191,11 @@ Dual-pane file commander: browse selectors plus copy/move/delete/mkdir/rename/vi
 Renders a basic website from <drive>/WEB/ with the html page verb
 
 *Screenshot: `docs/assets/apps/web.png`*
+
+## Webapp Demo
+
+Batch-first reference app for the `webapp` facade: opens the local `WEB/` page,
+dumps colour runs and shows CSS/JS through the shared browser engine.
+
+*Proof: host-generated proof pending - no device screenshot is claimed for this
+board-free release candidate.*

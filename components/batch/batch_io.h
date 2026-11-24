@@ -43,6 +43,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <sys/stat.h>
 
 #include "esp_err.h"
 #include "storage_path.h"   /* shell_sd_session_t (value type, no FATFS) */
@@ -110,6 +112,20 @@ typedef struct {
                                   bool (*cb)(const char *key, const char *value,
                                              void *ctx),
                                   void *ctx);
+
+    /**
+     * Open a batch script or spool file. Firmware leaves this NULL and the
+     * caller uses plain `fopen()`. A host test installs a backend that maps
+     * the SD mount point onto a fixture directory; no firmware behaviour
+     * changes. @p mode is the ordinary C `fopen` mode string.
+     */
+    FILE *(*file_open)(const char *path, const char *mode);
+
+    /**
+     * stat() wrapper for batch script discovery (firmware:
+     * `shell_sd_stat_path()`). NULL means use the storage implementation.
+     */
+    esp_err_t (*stat_path)(const char *path, struct stat *st);
 } batch_io_ops_t;
 
 /**

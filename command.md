@@ -2,9 +2,12 @@
 
 Complete reference for all shell commands available in P4MiniShell.
 
-> **Applies to firmware v1.4.3** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
+> **Applies to firmware v1.5.0** (ESP-IDF v5.5.5, ESP32-P4 + ESP32-C6). This is
 > the authoritative command reference; the on-device `help /all` mirrors it.
 > Current verified test baselines live in [`test/README.md`](test/README.md).
+> Two hardware-free pre-gates (`tools/host_batch_run.py` for real `.bat`
+> fixtures and `tools/host_webapp_gate.py` for the shared render path) check the
+> host build only; the on-device suites remain authoritative (`harness.md` §2.2).
 > Related docs: [`readme.md`](readme.md) (overview),
 > [`documentation.md`](documentation.md) (architecture),
 > [`SDK.md`](SDK.md) (integration).
@@ -144,6 +147,7 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `math` (`new`/`open`/`close`/`edit`/`render`/`eval`/`cursor`/`insert`) | `components/command/math_disp_commands.c` + `components/math_disp/` (natural-display math; `eval` serializes and delegates to the one `calc_evaluate`) |
 | `epub` (`open`/`close`/`info`/`toc`/`read`/`next`/`prev`/`goto`/`extract`) | `components/command/epub_commands.c` + `components/epub/` (ZIP via `components/zip`, XML via Expat) |
 | `chat` (`host`/`peer`/`send`/`poll`/`log`/`clear`/`status`/`onmsg`) | `components/command/chat_commands.c` + `components/chat/` (SoftAP host + HTTP; host control serialized through networking's Wi-Fi init-task claim) |
+| `webapp` (`open`/`dump`/`css`/`js`) | `components/command/webapp_commands.c` (batch-facing facade over the ONE engine: `html`, `tui dump`, `browser css`, `js eval` — no second renderer) |
 | Batch file execution, `:label` scanning, `for` loops, `\|` pipes, setlocal scoping | `components/batch/batch.c` |
 | Keypress wait (`pause`, `choice`, `more`) and the `prompt` template engine | `components/shell/shell.c` |
 | `brightness`, `rotate`, `battery`, `power`, `sleep`, `deepsleep` | `components/command/power_commands.c` |
@@ -328,7 +332,7 @@ project's `managed_components/` directories.
 ### Header long-press
 
 Pressing and holding anywhere on the top status bar shows a transient banner
-with the build identity: `P4MiniShell v1.4.3 | built <date> <time> | git
+with the build identity: `P4MiniShell v1.5.0 | built <date> <time> | git
 <hash>`. The same identity is reported by `version`, `about`, and `sysinfo`.
 
 ### header — responsive status bar
@@ -1476,6 +1480,32 @@ html https://example.com/
 
 ERRORLEVEL: 0 rendered, 1 fetch/parse/render error, 2 usage.
 
+### webapp open [/no] <file|url> | dump [from] [to] [/a] | css | js <code>
+
+A thin **batch-facing facade** over the same page engine: every subcommand
+forwards to an existing verb and returns its ERRORLEVEL. No second renderer, JS
+runtime, colour model or surface is introduced.
+
+| Form | Delegates to | Effect |
+|------|--------------|--------|
+| `webapp open [/no] <file\|url>` | `html [/no] ...` | Present a page (blocking modal unless `/no`). |
+| `webapp dump [from] [to] [/a]` | `tui dump ...` | Read the rendered grid back; `/a` appends the `NNN@start-end:fg` colour runs the suites assert. |
+| `webapp css` | `browser css` | Show parsed rules and computed styles. |
+| `webapp js <code>` | `js eval <code>` | Evaluate code in the existing page engine. |
+
+```
+webapp open /no %APPDRIVE%/WEB/INDEX.HTML
+webapp dump 1 8 /a
+webapp css
+webapp js "document.title"
+```
+
+The reference app `apps/webapp/WEBAPP.BAT` (`WEBAPP.APPINFO`) uses this facade
+and emits `[M-WEBAPP]` / `[M-WEBAPP-DONE]` / `[M-WEBAPP-FAIL]` markers; the
+host-only `tools/host_webapp_gate.py` checks the shared render path against
+fixtures in `tools/host/fixtures/webapp/` (pre-gate only, never hardware
+sign-off — see `harness.md` §2.2). See [`batch.md`](batch.md) §5c.
+
 ### receive <path> <size> [/crc]
 Push a binary from the host into an SD file over the USB-Serial/JTAG console.
 The transfer is ACK-paced so the device's small USB RX ring never drops bytes:
@@ -1665,6 +1695,7 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 |---------|-------------|
 | set | List all RAM-only environment variables |
 | set NAME=VALUE | Create or update environment variable |
+| local NAME=value | Guarded front door over `set`: assigns into the existing frame-local slot class; valid only inside a `call :label` / `gosub` scope (ERRORLEVEL 2 outside one), no new variable table |
 | set /a NAME=<expr> | Evaluate integer arithmetic and store the result |
 | set /p NAME=<prompt> | Prompt the user and store the typed line |
 | set /p NAME=<prompt> /T:secs | Prompt with a timeout; on timeout the variable is unchanged and errorlevel is 1 |
@@ -1701,7 +1732,7 @@ Listings are bounded to 128 entries per directory and recursion to 8 levels.
 | dim NAME SIZE [DEFAULT] | Declare a bounds-checked 1D/2D array; element N is `%NAME[N]%` and a read past the end is a trapped error. Switches: `/len` `/info` `/push` `/pop` `/shift` `/unshift` `/ins` `/rem` `/slice` `/copy` `/fill` `/reverse` `/sort` `/find` `/sum` `/avg` `/min` `/max` `/cmp`, plus `/ref` `/get` `/set` for C-like pointer access |
 | str /len VAR \| /sub VAR START LEN DEST \| /find VAR NEEDLE [IDX_VAR] \| /upper VAR DEST \| /lower VAR DEST \| /trim VAR DEST \| /rep VAR OLD NEW DEST \| /split VAR DELIM DEST \| /join VAR DELIM DEST \| /fmt DEST "format" args... | String-operation suite: length, substring, search, case conversion, trim, replace, split/join and formatted output; results go to a DEST variable |
 | map /set MAPNAME KEY VALUE \| /get MAPNAME KEY DEST \| /has MAPNAME KEY \| /del MAPNAME KEY \| /keys MAPNAME DEST \| /size MAPNAME \| /clear MAPNAME | Hash map layered on the flat slot table: keyed set/get/has/del, list keys into DEST, count entries, or clear the map |
-| trap :label \| trap /on (errorlevel, exit, int) \| trap /raise CODE "message" \| trap /clear | Per-frame error handler: install a `:label` handler, choose which events trap, raise one manually, or clear it |
+| trap :label \| trap /raise CODE "message" \| trap /clear | Per-frame **one-shot** error handler: install a `:label` handler, raise one manually (sets ERRORLEVEL and publishes `TRAP_CODE`/`TRAP_MSG`), or clear it. A line leaving ERRORLEVEL ≥ 2 fires the handler and jumps to its label through the existing pending-goto slot. (`/on ...` is reserved in the usage text but not implemented.) |
 | for /D %%v in (set) do cmd | Loop over directory names (wildcards match dirs; literals pass through) |
 | for /R [path] %%v in (set) do cmd | Recursively loop over files matching the set under `path` (cwd default; depth cap `P4_CONFIG_DIR_RECURSE_DEPTH_MAX`) |
 | while <expr> do cmd | Re-run while a `set /a` expression is nonzero (`EQU NEQ LSS LEQ GTR GEQ` keywords; bare names or `%%n%%` stay live; cap `P4_CONFIG_WHILE_ITER_MAX`) |
@@ -1943,6 +1974,32 @@ optional `else` group: `if %n% GTR 1 (echo big & exit /b 0) else (echo small)`.
 Each group runs through the full pipeline when selected. Groups cannot hold
 unbalanced parens; multi-line branches stay `:label` + `goto`/`gosub`
 subroutines.
+
+### trap — one-shot error handlers
+
+`trap` installs an error handler for the current batch frame. The batch frame
+loop calls `batch_trap_maybe_fire()` after each line: when a line leaves
+ERRORLEVEL at 2 or above (the `if errorlevel 2` range) it publishes the failure,
+pops the handler and jumps to its label through the **same pending-goto slot
+`goto` uses** — no second dispatcher or jump path.
+
+```
+trap :recover              rem install a :label handler for this frame
+trap /raise 3 "bad input"  rem raise by hand: ERRORLEVEL=3, publish the variables
+trap /clear                rem remove the top handler without firing it
+```
+
+The handler is **one-shot**: it is consumed before the jump, so a new error
+inside the handler cannot re-enter it forever — install it again for another
+catch. ERRORLEVEL 0/1 does not fire it. `trap /raise CODE "message"` sets
+ERRORLEVEL to CODE and publishes `TRAP_CODE=CODE` and `TRAP_MSG=message`; when a
+failing line fires the handler, those two variables hold the line's ERRORLEVEL
+and an `errorlevel N` message. `TRAP_MSG` is an **ordinary** variable, while
+`ERR`/`ERRMSG` are virtual, read-only slots and are no longer written by
+`trap`. `trap_init()` runs from `batch_init()` and resets the per-slot handler
+state once at startup. The `trap /on errorlevel|exit|int` line in the usage text
+is reserved but not implemented (it reports `unknown switch`, ERRORLEVEL 2).
+See [`batch.md`](batch.md) §11.1 for a full example.
 
 ### set /p — prompted input
 

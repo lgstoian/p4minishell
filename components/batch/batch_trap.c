@@ -40,10 +40,7 @@
  * here without adding fields, we use a small static array keyed by bg slot.
  * For the foreground task (slot 0) we use a static variable. */
 
-/* Trap handler label (the label to jump to on error) */
-static char s_trap_handler[TRAP_DEPTH_MAX][TRAP_NAME_BYTES];
-static int s_trap_level = 0;       /* current frame depth for fg */
-static char s_trap_msg[TRAP_MSG_BYTES]; /* %ERRMSG% content */
+static char s_trap_msg[TRAP_MSG_BYTES]; /* TRAP_MSG content */
 
 /* Per-bg-slot trap state (same pattern as other bg context) */
 typedef struct {
@@ -92,11 +89,13 @@ void shell_command_trap(int argc, char **argv)
             int code = (int)strtol(argv[2], NULL, 10);
             const char *msg = (argc >= 4) ? argv[3] : "trap raised";
             char code_buf[12];
+            /* ERR / ERRMSG are read-only virtual slots (see batch_env.c) and
+             * refuse shell_env_set(). Use ordinary variables so the values are
+             * actually observable by the script. */
             snprintf(code_buf, sizeof(code_buf), "%d", code);
-            shell_env_set("ERR", code_buf);
-            shell_env_set("ERRMSG", msg);
+            (void)shell_env_set("TRAP_CODE", code_buf);
+            trap_set_message(msg);
             batch_set_errorlevel(code);
-            /* Would trigger handler if installed - handled by the engine */
             return;
         }
 
@@ -171,13 +170,46 @@ void trap_set_message(const char *msg)
 {
     if (msg != NULL) {
         snprintf(s_trap_msg, sizeof(s_trap_msg), "%s", msg);
-        shell_env_set("ERRMSG", s_trap_msg);
+        (void)shell_env_set("TRAP_MSG", s_trap_msg);
     }
+}
+
+bool batch_trap_maybe_fire(void)
+{
+    trap_bg_state_t *st;
+    const char *label;
+    char code_buf[16];
+
+    if (batch_get_errorlevel() < 2) {
+        return false;
+    }
+    st = trap_state();
+    if (st->level <= 0 || st->handler[st->level - 1][0] == '\0') {
+        return false;
+    }
+
+    label = st->handler[st->level - 1];
+    snprintf(code_buf, sizeof(code_buf), "%d", batch_get_errorlevel());
+    (void)shell_env_set("TRAP_CODE", code_buf);
+    snprintf(s_trap_msg, sizeof(s_trap_msg), "errorlevel %s", code_buf);
+    (void)shell_env_set("TRAP_MSG", s_trap_msg);
+
+    /* One-shot: pop before the jump so an error inside the handler cannot
+     * re-enter the same handler forever. */
+    st->handler[st->level - 1][0] = '\0';
+    st->level--;
+
+    batch_goto_label(label);
+    batch_set_errorlevel(0);
+    return true;
 }
 
 void trap_init(void)
 {
-    memset(s_trap_handler, 0, sizeof(s_trap_handler));
-    s_trap_level = 0;
     s_trap_msg[0] = '\0';
+    if (s_trap_bg != NULL) {
+        memset(s_trap_bg, 0, P4_CONFIG_BG_TASKS * sizeof(*s_trap_bg));
+    } else {
+        s_trap_bg = calloc(P4_CONFIG_BG_TASKS, sizeof(*s_trap_bg));
+    }
 }

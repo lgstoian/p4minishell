@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>P4MiniShell v1.5.0 — checked screenshot proofs</title>
+<style>
+  body { background:#111; color:#eee; font:14px/1.4 system-ui, sans-serif; margin:24px; }
+  h1 { font-size:22px; margin:0 0 6px; }
+  p.intro { color:#bbb; max-width:900px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:16px; margin-top:20px; }
+  figure { margin:0; background:#1c1c1c; border:1px solid #333; padding:8px; }
+  img { width:100%; height:auto; display:block; background:#000; }
+  figcaption { padding:6px 2px 2px; color:#cfcfcf; }
+  .host { color:#7fd1ff; }
+  .excluded { color:#888; margin-top:24px; }
+</style>
+</head>
+<body>
+<h1>P4MiniShell v1.5.0 — checked screenshot proofs</h1>
+<p class="intro">
+  These are the latest gallery captures verified by visual inspection and the
+  identity/colour/uniqueness gates. They are <strong>board-free release-candidate
+  evidence</strong>, not proof of hardware sign-off. The Gfx Toolkit image is an
+  honest host-generated proof from the real gfx core; all others are the existing
+  device captures. Excluded below are captures with known defects.
+</p>
+<div class="grid">
+  <figure><img src="apps/adventure.png" alt="ADVENTURE library room"><figcaption>ADVENTURE — library room</figcaption></figure>
+  <figure><img src="apps/bounce.png" alt="Bounce gfx demo"><figcaption>Bounce — gfx canvas</figcaption></figure>
+  <figure><img src="apps/companion.png" alt="P4 Companion menu"><figcaption>Companion — menu</figcaption></figure>
+  <figure><img src="apps/elite.png" alt="Elite Trader menu"><figcaption>Elite Trader — menu</figcaption></figure>
+  <figure><img src="apps/files-notes.png" alt="Files notes submenu"><figcaption>Files / Notes — submenu</figcaption></figure>
+  <figure><img src="apps/gfxtool.png" alt="Gfx Toolkit corrected proof"><figcaption><span class="host">Gfx Toolkit — host-generated proof</span> (text drawn after sprite stamps)</figcaption></figure>
+  <figure><img src="apps/mood.png" alt="Mood dashboard"><figcaption>Mood — heap trend</figcaption></figure>
+  <figure><img src="apps/net.png" alt="Network tools menu"><figcaption>Network Tools — menu</figcaption></figure>
+  <figure><img src="apps/notes.png" alt="Zettelkasten notes menu"><figcaption>Notes — menu</figcaption></figure>
+  <figure><img src="apps/palmtop.png" alt="PalmTop demos menu"><figcaption>PalmTop — menu</figcaption></figure>
+  <figure><img src="apps/pics.png" alt="Pictures image viewer"><figcaption>Pictures — image viewer</figcaption></figure>
+  <figure><img src="apps/plot.png" alt="Plot sin and cos graphs"><figcaption>Plot — sin/cos curves</figcaption></figure>
+  <figure><img src="apps/sys.png" alt="Live System dashboard"><figcaption>Live System — dashboard</figcaption></figure>
+  <figure><img src="apps/taskmgr.png" alt="Task Manager tasks menu"><figcaption>Task Manager — tasks</figcaption></figure>
+  <figure><img src="apps/tcmd.png" alt="Commander dual-pane file commander"><figcaption>Commander — dual pane</figcaption></figure>
+</div>
+<p class="excluded">
+  Excluded pending hardware recapture: <code>snake.png</code> (3-cell stub;
+  a host proof would fabricate gameplay), <code>web.png</code> (shell input row
+  visible by design), and five menu captures with a clipped last row
+  (<code>chat</code>, <code>diag</code>, <code>files</code>, <code>fun</code>,
+  <code>set</code>). None of these is presented as a corrected proof.
+</p>
+</body>
+</html>

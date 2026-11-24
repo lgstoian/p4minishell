@@ -108,8 +108,19 @@ Copyright protects expression, not ideas, so the architecture above is
 re-expressed in our own code (`components/browser/`, the `components/tui` page
 snapshots) with our own naming, structure and implementation. No file, function
 or table was copied and no licence text is required, because none was
-reproduced. The implementation deliberately **surpasses** their limits: we keep
-QuickJS (neither has JS), a CSS cascade (babe32 has none), native PNG/JPEG
+reproduced. The same discipline applies to the script-runtime ideas below (Lua
+and MicroPython are embeddable languages, deliberately **not** adopted as
+runtimes here) and to BMDS:
+
+| Reviewed idea | Licence / copyright | What was taken |
+|---------------|---------------------|----------------|
+| Lua scripting for handheld apps | MIT, © Lua.org / PUC-Rio | Design credit only: a tiny embeddable scripting surface with explicit host-owned state. No Lua source, interpreter, or binding is shipped; no code copied |
+| MicroPython scripting for handheld apps | MIT, © Damien P. George | Design credit only: exposing hardware-adjacent facilities to script-style apps. No MicroPython source, VM, or port is shipped; no code copied |
+| [BMDS](https://github.com/jthwho/bmds) | MIT, © 2026 Jason Howard — upstream `LICENSE` present in the repo | Design credit only: small-device multitasking / app-switching patterns behind the opt-in `.bat`-launched native payload. No source copied; the exact upstream licence text ships at [`tools/LICENSE-BMDS-MIT.txt`](tools/LICENSE-BMDS-MIT.txt) |
+
+Compared with the two browser projects, the implementation deliberately
+**surpasses** their limits: we keep QuickJS (neither has JS), a CSS cascade
+(babe32 has none), native PNG/JPEG
 decode (they need a resize proxy), CA-store TLS (babe32 accepts any
 certificate), a 1024x600 panel and 32 MB of PSRAM (versus 480x320 and 8 MB).
 
@@ -199,6 +210,7 @@ expression); the credit is recorded here rather than in the code:
 | `tools/lvgl_image_pack.py` | ESP-Brookesia `cmake/image_pack.cmake` (LVGL v9 `.bin` + `imageSet` index) |
 | `tools/make_pkg.py` | ESP-Brookesia `.bpk` container layout |
 | `tools/dev_mcp_server.py` | ESP-Brookesia `@brookesia/app-dev-plugin` (MCP dev plugin) |
+| `components/nativepay/` (envelope idea), `.bat`-only payload launch, hybrid app switching | ESP-Brookesia app-manager/multitasking model (native + app pages, per-app context) and BMDS (MIT, © 2026 Jason Howard) small-device app switching; re-expressed with our `start` pool, env overlays, `himem` ownership, shared modal/browser surfaces and shims — no code copied |
 
 **Not** taken from ESP-Brookesia, and deliberately avoided: the Lua/JS/WASM/ELF
 runtime backends, the ELF loader (P4MiniShell has no SD code execution —

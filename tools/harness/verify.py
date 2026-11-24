@@ -39,7 +39,7 @@ missing = sum(1 for _n, content, search in checks if search not in content)
 gates = [
     ('comment index', 'comment_index.py'),
     ('breadcrumbs', 'breadcrumbs.py'),
-    ('green guard', 'green_guard.py'),
+    ('green guard', 'green_guard.py', ['--strict']),
     # The shipped UI captures must not contain LVGL's default-theme primary:
     # a blob of it is an unstyled widget (the input-row buttons used to leak
     # it as a blue flash). Scans docs/assets/apps + the shell idle shot.
@@ -59,8 +59,10 @@ gates = [
 if os.path.exists(os.path.join(ROOT, 'build', 'p4minishell.elf')):
     gates.append(('size budget', 'size_budget.py'))
 failed = 0
-for label, script in gates:
-    rc = subprocess.run([sys.executable, os.path.join(ROOT, 'tools', script)],
+for spec in gates:
+    label, script = spec[:2]
+    args = spec[2] if len(spec) > 2 else ()
+    rc = subprocess.run([sys.executable, os.path.join(ROOT, 'tools', script)] + list(args),
                         cwd=ROOT).returncode
     print('GATE %s: %s' % (label, 'OK' if rc == 0 else 'FAIL'))
     if rc != 0:

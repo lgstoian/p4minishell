@@ -71,13 +71,24 @@ jobs:
           . $IDF_PATH/export.sh
           python3 tools/host_gen_runner.py --check
           python3 tools/host_unit_run.py --static
-      - name: Build and run the host unit suite
+      - name: Build host unit suite (native POSIX ELF)
         run: |
           . $IDF_PATH/export.sh
           # The "linux" target needs the libbsd compatibility headers
           # (components/linux/include/sys/cdefs.h includes <bsd/sys/cdefs.h>).
           apt-get update -qq && apt-get install -y -qq libbsd-dev
           python3 tools/host_unit_run.py --build
+      - name: Run host ELF (POSIX, no board)
+        run: |
+          . $IDF_PATH/export.sh
+          python3 tools/host_unit_run.py --no-build
+      - name: Host batch and webapp pre-gates (no board)
+        run: |
+          . $IDF_PATH/export.sh
+          # The build above produces test/host/build/*.elf; point both gates
+          # at it explicitly (the batch gate auto-discovers only build-* dirs).
+          python3 tools/host_batch_run.py --elf test/host/build/host_batch_run.elf --check
+          python3 tools/host_webapp_gate.py --renderer test/host/build/host_webapp_render.elf --check
 
   lint:
     runs-on: ubuntu-latest
@@ -87,6 +98,8 @@ jobs:
         run: |
           python3 -m pip install -q Pillow
           python3 tools/green_guard.py --strict
+          python3 tools/comment_index.py
+          python3 tools/breadcrumbs.py
           python3 tools/gallery_audit.py
           python3 tools/gallery_audit_selftest.py
           python3 tools/led_contract.py

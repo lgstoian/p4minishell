@@ -12,9 +12,9 @@
 # boards/<name>/board_config.yaml remains the hardware-pin source of truth.
 # sdkconfig remains the ESP-IDF build-configuration source of truth.
 #
-# Version: 1.4.4
+# Version: 1.5.0
 # Last updated: 2026-10-01 (1.3.1: Tab5 white-noise fix - amp gating, mic diagnostics)
-config_version: "1.4.4"  # LED2 follows CPU usage on two-LED boards (v1.4.4)  # LED2 follows CPU usage on two-LED boards (v1.4.4)
+config_version: "1.5.0"  # LED2 follows CPU usage on two-LED boards (v1.4.4)  # LED2 follows CPU usage on two-LED boards (v1.4.4)
 
 # ---- Shell Identity ----
 shell_identity:
@@ -2295,6 +2295,16 @@ batch_env:
     value: "applib-1"
     type: string
     description: "Native-app ABI tag; `pkg install` warns when a native/hybrid bundle abi= differs, execution refuses (P4_CONFIG_NATIVE_ABI, see ABI.md)"
+  natpay_header_bytes:
+    value: 148
+    type: size_t
+    description: "Fixed envelope header bytes for the opt-in NATIVE/<APP>.P4X payload (components/nativepay); must equal NATIVE_PAY_HEADER_BYTES (P4_CONFIG_NATPAY_HEADER_BYTES, see ABI.md 4.1)"
+    range: "148..148"
+  natpay_max_payload_bytes:
+    value: 2097152
+    type: size_t
+    description: "Largest verified payload body accepted by the pure envelope parser; the blob stays data until a signed payload is launched by a .bat shim (P4_CONFIG_NATPAY_MAX_PAYLOAD_BYTES, see ABI.md 4.1)"
+    range: "1..16777216"
   pkg_require_sign:
     value: 0
     type: int

@@ -9,7 +9,7 @@ self-contained computer: a persistent command shell, a real batch-file
 language, an SD-card application ecosystem, a native C app SDK, and a
 display/TUI/GFX stack you can build on.
 
-**Version:** 1.4.3 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
+**Version:** 1.5.0 · **Target:** ESP32-P4 + ESP32-C6 (ESP-Hosted SDIO) · **Display:** JD9165 1024x600 MIPI-DSI · **License:** MIT
 
 | Shell | TUI apps |
 |---|---|
@@ -71,15 +71,18 @@ background jobs, and a C app ABI included.
 
 ---
 
-## Current state (v1.4.3)
+## Current state (v1.5.0)
 
-v1.4.4 is the current release. The first public release was v1.0.0 (2026-09-18). The firmware is hardware-verified on the
+v1.5.0 is the current **board-free release candidate**: it has not been tested
+on hardware, and this cycle's gates are host-only (see
+[`harness.md`](harness.md) §2.2). The first public release was v1.0.0
+(2026-09-18). Earlier firmware was hardware-verified on the
 ESP32-P4 Function EV Board (JC1060P470C, JD9165 panel, GT911 touch, SD card)
 and on the M5Stack Tab5 (ILI9881C/ST7123 720x1280 DSI, ES8388 audio, hosted C6
 Wi-Fi + BLE, Tab5Keyboard input with two independent RGB LEDs, INA226 pack
 gauge with charging, RX8130CE RTC, BMI270 IMU with tilt auto-rotate, and an
-SC202CS MIPI-CSI camera that captures BMP stills); the on-board unit suite plus
-the host regression runners are green. See
+SC202CS MIPI-CSI camera that captures BMP stills) in the v1.4.x campaigns; the
+host gates are wired into CI for this candidate. See
 [`test/README.md`](test/README.md) for the current unit-test count and
 [`tools/README.md`](tools/README.md) for the hardware drivers.
 

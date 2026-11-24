@@ -1,21 +1,28 @@
-# P4MiniShell Unit Tests (firmware v1.4.3)
+# P4MiniShell Unit Tests (firmware v1.5.0)
 
 This directory contains the unit tests for the P4MiniShell components. They use
 the Unity framework (included in ESP-IDF) and run in two places:
 
 - **On the P4 target** - the authoritative run (`tools/unit_run.py COM3 COM6`).
-- **On the host** - a hardware-free pre-gate for the pure logic (`test/host/`,
-  ESP-IDF `linux` target, 285 cases at v1.4.3). See `harness.md` 2.2 and
+- **On the host** - a hardware-free pre-gate that compiles the real interpreter
+  (`test/host/`, ESP-IDF `linux` target, 345 cases). See `harness.md` 2.2 and
   section "Host suite" below.
 
-Current baseline: **699 tests, 0 failures, 2 ignored** on COM3 and COM6
-(v1.4.3, after the late browser/EPUB/grid/for cases), and the host lane is
-**285/285** green (last run). The static case count is **758** (what
-`tools/green_guard.py` sees in
-`test/main/test_*.c`); the difference is cases that only compile for the
-target. The runner completes cleanly with `=== All tests completed ===` and no
-reboot; if the board is reset-looping, check for a newly added test that calls
-an LVGL/heap path before `lv_init()`.
+Last recorded hardware baseline (v1.4.3): **699 tests, 0 failures, 2 ignored**
+on COM3 and COM6 (before the new trap/native-payload cases). The host lane has
+**345 generated cases** awaiting its next green run; the previously recorded
+285/285 run predates the interpreter-in-host expansion. The current static
+case count is **769** (what `tools/green_guard.py` sees in
+`test/main/test_*.c`: 717 `RUN_TEST` registrations + 52 self-registering
+`TEST_CASE`s, including 4 new `trap` cases — the pre-change baseline was 758),
+and the generated host runner expects **345** cases
+(`tools/host_test_manifest.json`, up from 285). Refresh the hardware and host
+run counts with `tools/unit_run.py` and `tools/host_unit_run.py` before quoting
+them as verified; the difference between the static target count and a
+hardware run is cases that only compile for the target. The runner completes
+cleanly with `=== All tests completed ===` and no reboot; if the board is
+reset-looping, check for a newly added test that calls an LVGL/heap path before
+`lv_init()`.
 
 The suite is organised by component. Dated round-by-round detail lives in
 `changelog.md`; this file documents the layout and how to run it.
@@ -47,6 +54,7 @@ test/
     test_batch_expr.c       # set /a integer evaluator
     test_batch_control.c    # labels, on/goto parsing, for/while/switch helpers, shift parser, forf defaults
     test_macro.c            # macro recorder
+    test_trap.c             # trap: install/clear, /raise, one-shot fire, ERRORLEVEL gate (4 cases)
     test_completion.c       # tab-completion and inline ghost providers
     test_history_search.c   # reverse-history search matching
     test_clock.c            # header-clock formatter
@@ -133,12 +141,18 @@ python ..\tools\unit_run.py COM3 COM6
 
 The same sources also build natively with ESP-IDF's preview `linux` target
 (`test/host/`), so the pure-logic cases run on the host and in CI without a
-board. Coverage today is **285 cases** (last run) - the leaf components with no board
-dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`), the
+board. Coverage today is **345 cases** (last run) - the leaf components with no
+board dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`), the
 hardware-free halves of the shell (`shell_core.c` for text/scanning/history/
 abort/help, `shell_transcript.c` for the transcript model behind an optional
 sink), header (`header_layout/status/notify_queue/refresh.c`), theme
-(`font/theme.c`) and clock (`clock_core.c`, `clock_timer.c`).
+(`font/theme.c`), clock (`clock_core.c`, `clock_timer.c`), and the batch layer:
+the **real interpreter** (`batch.c` plus `batch_trap.c`, `batch_dim.c`,
+`batch_str.c`, `batch_map.c`, `error_strings.c`) with new suites for control
+flow (`test_batch_control.c`), binds (`test_bind.c`), macros (`test_macro.c`),
+error strings (`test_error_strings.c`), `trap` (`test_trap.c`), variable
+expansion (`test_shell_variables.c`) and pipes/redirection
+(`test_shell_pipeline.c`). This is not a second implementation of the language.
 
 ```sh
 cd test/host && idf.py build && ./build/p4minishell_host_tests.elf
@@ -150,9 +164,22 @@ python3 tools/host_unit_run.py --static   # manifest/orphan/case-count gates
 included test files, the excluded ones with a reason, and the expected case
 count. `tools/host_gen_runner.py` generates `test/host/main/host_main.c` from it.
 To add a suite, the owning component must not pull a board-only `REQUIRES`
-(`shell`/`storage`/`display`/LVGL); add it to `test/host/CMakeLists.txt` and the
-manifest, then re-run the generator. This lane is a pre-gate only — see
+(`shell`/`storage`/`display`/LVGL); add it to `test/host/main/CMakeLists.txt`
+and the manifest, then re-run the generator. The firmware-only services the
+real interpreter needs are supplied by `test/host/main/host_batch_bridge.c`,
+which lives only in `test/host` and reports "unavailable" for board-only calls —
+never firmware behaviour. This lane remains a pre-gate only — see
 `harness.md` §2.2.
+
+Two further host-only pre-gates are separate from this Unity case count and
+open no serial port: `tools/host_webapp_gate.py` checks the shared HTML/CSS/TUI
+render path against `tools/host/fixtures/webapp/` fixtures through
+`tools/host/main/host_webapp_render.c` (1 fixture, 51 assertions OK), and
+`tools/host_batch_run.py` runs the real `tools/host/fixtures/batch/HELLO.BAT`
+through the real interpreter in `test/host/main/host_batch_run.c` over the
+host-only POSIX fixture-root backend (1 fixture, 7 assertions OK). Neither
+signs off hardware — the on-device suites remain authoritative (`harness.md`
+§2.2).
 
 ## False-green guard
 

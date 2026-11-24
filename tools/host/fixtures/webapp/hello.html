@@ -1,0 +1,39 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: 2026 Stoian Alexandru -->
+<!-- SPDX-License-Identifier: MIT -->
+<!--
+  Self-contained host render fixture. No external URLs, no clock, no randomness.
+  It exercises a heading, paragraphs, a local link, CSS colours and a canvas 2D
+  block with fallback content. The inline script documents what a browser with
+  QuickJS would do; the host harness renders the DOM/CSS path and the canvas
+  rasterizer core through their pure APIs, without executing the script.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Host webapp gate</title>
+<style>
+body { color: #aaaaaa; }
+h1 { color: #00ffff; }
+.accent { color: #ff5555; }
+nav a { color: #ffff55; }
+</style>
+</head>
+<body>
+<nav><a href="#notes">Local link</a></nav>
+<h1>Webapp host gate</h1>
+<p>A deterministic page for the hardware-free pre-gate.</p>
+<p><span class="accent">CSS colour</span> and a <a href="#notes">local link</a>.</p>
+<canvas id="c" width="32" height="16">
+<p>Canvas fallback text for surfaces without a 2D context.</p>
+</canvas>
+<p id="notes">Notes: this fixture uses no network and no external assets.</p>
+<script>
+var c = document.getElementById('c');
+var g = c.getContext('2d');
+g.fillStyle = '#ff5555'; g.fillRect(0, 0, 16, 16);
+g.fillStyle = '#55ffff'; g.fillRect(16, 0, 16, 16);
+document.getElementById('notes').textContent = 'canvas=' + c.width + 'x' + c.height;
+</script>
+</body>
+</html>

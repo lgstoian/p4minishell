@@ -12,7 +12,7 @@ See [`readme.md`](readme.md) for the feature tour and
 
 ---
 
-## Deferred to 1.4.4
+## Deferred (after v1.5.0)
 
 ### Tear-free partial presents on the DSI panels
 
@@ -38,6 +38,35 @@ buffer and blit it into the scanned framebuffer during vertical blanking:
 This needs no full-frame refresh (which drops the reference board back to
 about 15 fps) and no second full framebuffer (2.4 MB on the JC1060, 3.7 MB on
 the Tab5); the staging buffer is `width * changed_rows * 2`.
+
+### Opt-in signed native payloads (contract amendment, loader still deferred)
+
+The app contract now admits one additive capability ([`ABI.md`](ABI.md) §1 and
+§4.1): a `.bat` shim may launch the reserved `NATIVE/<APP>.P4X` blob when it
+carries a signed envelope and passes every trust gate. No ABI tag bump
+(`applib-1` stays), no new executable format, and no removal of batch, hybrid,
+or webapp apps. The format-only core `components/nativepay` (parse, bounds,
+CRC, hook-based SHA-256/ECDSA) and its on-target unit tests are in tree; the
+loader and its launch surface are **not** implemented and remain a
+hardware-verified step before any release claim.
+
+- **Workflow.** `payload=NATIVE/<APP>.P4X` is additive APPINFO metadata; the
+  shim is still the only front door. Pure native = batch shim hands off to the
+  one verified payload. Hybrid = batch setup + native payload + webapp page
+  (or any other batch step) in the same shim. Install-time manifest CRC and
+  `SIGN` verdicts, the single `p4sign` key, and the sign policy are unchanged;
+  a missing verifier/key is an explicit non-success verdict.
+- **Design study only.** BMDS (MIT, © 2026 Jason Howard) and ESP-Brookesia
+  (Apache-2.0) were read for small-device multitasking and app-switching
+  ideas: keeping a native panel, a document/web view, and the shell
+  switchable without a desktop process model. We re-express those ideas with
+  our existing `start` pool + task manager, per-job env overlays, `himem`
+  ownership, shared modal/browser surfaces, and `.bat` shims. No source was
+  copied; credit is recorded in [`licence.md`](licence.md).
+- **Non-goals.** No second runtime, dispatcher, loader, or package format;
+  no unsigned `.P4X`/`.bin` execution; no ELF/dynamic linker or per-app memory
+  isolation; no feature removal. `docs/native_packaging.md` §2.1 is the
+  packaging walk-through.
 
 ## Part 1 — How we got here
 
@@ -369,8 +398,8 @@ for the full adopt/adapt/reject analysis.
 
 | Item | Why not |
 |------|---------|
-| Second application-runtime model | Batch + hybrid/native is the contract ([`ABI.md`](ABI.md)) |
-| SD/flash code execution | C apps linked into firmware, reached through `.bat` shim |
+| Second application-runtime model | Batch + hybrid/native is the contract, now including the one opt-in signed payload launched by a `.bat` shim via the single loader path ([`ABI.md`](ABI.md)) |
+| SD/flash code execution | C apps linked into firmware, reached through `.bat` shim; the only exception is the signed envelope above, with no ELF/relocator |
 | Second display writer / windowing model | Transcript/TUI/modal/GFX surfaces are the contract |
 | Native Preferences GUI | Settings stay in `CONFIG.SYS` + `config`; `SET.BAT` is the touch UI |
 | Rich Text Format (RTF) | A large spec (font/colour tables, stylesheets, fields, `\pict`); a lossy subset would mislead. Markdown + HTML reading cover the on-device document needs |

@@ -20,6 +20,17 @@ from .session import DeviceSession, P4Error
 
 DEFAULT_OUT = os.path.join(os.getcwd(), "screenshots")
 
+# The ONE set of pixel-comparison tolerances. Suites import these instead of
+# inventing a private threshold (or a private Bmp/comparator). Byte-exact
+# comparisons against a saved RGB565 BMP use TOL_EXACT; sampled colours on a
+# live screenshot are deliberately looser.
+TOL_EXACT = 0        # saved BMP vs the exact RGB565 quantisation
+TOL_RGB = 24         # Bmp.count_near default (near-colour counting)
+TOL_LIVE = 40        # colour blob on a live screenshot (canvas/sprite)
+TOL_TEXT = 48        # bright text sampled on a live screenshot
+TOL_DIFF = 16        # diff_ratio default (frame-to-frame change)
+TOL_FRAME = 16       # golden-frame parity (appdiff / host gates)
+
 
 @dataclass
 class Bmp:
@@ -55,7 +66,7 @@ class Bmp:
         return (sr / n, sg / n, sb / n)
 
     def count_near(self, x: int, y: int, w: int, h: int,
-                   rgb: Tuple[int, int, int], tol: int = 24) -> int:
+                   rgb: Tuple[int, int, int], tol: int = TOL_RGB) -> int:
         tr, tg, tb = rgb
         n = 0
         for yy in range(max(0, y), min(self.height, y + h)):
@@ -181,7 +192,7 @@ def capture(dev: DeviceSession, out_dir: Optional[str] = None,
     return bmp
 
 
-def diff_ratio(a: Bmp, b: Bmp, tol: int = 16) -> float:
+def diff_ratio(a: Bmp, b: Bmp, tol: int = TOL_DIFF) -> float:
     """Fraction of sampled pixels that differ by more than ``tol``."""
     if a.width != b.width or a.height != b.height:
         return 1.0

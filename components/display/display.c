@@ -1235,7 +1235,7 @@ void display_mouse_report(int dx, int dy, uint8_t buttons)
         s_mouse.from_touch = false;
         if (s_mouse.cursor_enabled && s_mouse.cursor_obj != NULL &&
             lvgl_port_lock(10)) {
-            lv_obj_remove_flag(s_mouse.cursor_obj, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_mouse.cursor_obj, false);
             lvgl_port_unlock();
         }
     }

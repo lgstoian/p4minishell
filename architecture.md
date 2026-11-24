@@ -7,6 +7,9 @@ every detail. This file is deliberately **views, not details**: it never
 restates a module's feature list, a C prototype, a command's syntax, or a
 config value. Those live in the docs named below.
 
+- **Version:** v1.5.0 · **Status:** board-free release candidate (no hardware
+  sign-off for this version; the host gates are pre-flight only).
+
 | Question | Owning document |
 |----------|-----------------|
 | Who owns which module (ownership + responsibilities) | [`documentation.md`](documentation.md) §Module map |
@@ -62,6 +65,9 @@ The **MCP client** (`components/mcp/`) is a leaf: JSON-RPC over the shared
 no socket and no parser. The **browser** uses one DOM renderer
 (`components/markdown/dom_render.c`) for its TUI page and ANSI surfaces; CSS,
 images, and in-page JS are layered on the existing DOM/CSS/gfx/jsengine modules.
+The **native payload core** (`components/nativepay/`) is a format-only leaf:
+a `.bat` shim is its sole front door, one loader path consumes its verdict,
+and no second runtime or package format is introduced (§2.4).
 
 **Emoji, colour and alpha (v1.4.3).** `components/font/emoji_core.c` is the one
 emoji decision point (retro DOS/CP437 fallback map); the TUI/HTML text path and
@@ -178,6 +184,28 @@ out into the TUI page buffer. Network fetches go through
 render with no radio. The **JS engine** (`components/jsengine`, QuickJS) is
 driven by `js eval|run|call`; its bindings expose the shell, TUI, modal, FS,
 batch, GPIO, audio, locale, error and event surfaces (`batch.md`).
+
+### 2.4 Native payload launch (opt-in, additive)
+
+```
+signed NATIVE/<APP>.P4X envelope        (one reserved blob path, no new format)
+   -> pkg install: unchanged manifest CRC + ECDSA trust gates
+   -> .bat shim                          (the only front door)
+        -> one firmware loader path      (no second dispatcher)
+             -> nativepay: parse/bounds/CRC, hook-based SHA-256 + ECDSA
+             -> pure native entry  OR  batch + native + webapp page
+```
+
+- The loader is a single path; the pure core never reads a file, loads an
+  executable, or transfers control. A missing verifier or trust key is an
+  explicit non-success verdict, never an implicit trust decision.
+- App-switching and multitasking ideas from BMDS and ESP-Brookesia are
+  re-expressed with existing facilities (the `start` pool, env overlays,
+  `himem` ownership, shared modal/browser surfaces); design credit only, no
+  second scheduler or app manager. See [`licence.md`](licence.md).
+- The loader and its launch surface are a later, hardware-verified step; only
+  the format/verification core exists today. Contract: [`ABI.md`](ABI.md) §4.1;
+  packaging: [`docs/native_packaging.md`](docs/native_packaging.md) §2.1.
 
 ---
 
@@ -438,3 +466,9 @@ decision is enforced.
   the view registers (`shell_transcript_set_sink()`); a NULL sink is a supported
   "text only" mode. No fake hardware implementation exists in production code -
   if a component needs one, it is not ready for the host lane.
+- **ADR-14 - One opt-in signed payload path, launched only by a `.bat` shim.**
+  A native payload reuses the reserved `.P4X` blob and the one loader path; it
+  adds no executable format, dispatcher, runtime, or package format, and it
+  removes no existing feature. Trust gates are unchanged and crypto is an
+  installed hook seam with explicit degradation. Enforced by the pure core
+  (`components/nativepay/`) and specified in [`ABI.md`](ABI.md) §1/§4.1/§5.

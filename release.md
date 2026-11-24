@@ -16,8 +16,11 @@ in their owning docs and are linked, not repeated:
 | Change/verification workflow | [`ai-context.md`](ai-context.md) |
 | Open defects | [`bugs.md`](bugs.md) |
 
-Current target version: **v1.4.3** (`P4_CONFIG_VERSION_*` in
-`p4minishell_config.h`). Substitute your release version throughout.
+Current target version: **v1.5.0** (`P4_CONFIG_VERSION_*` in
+`p4minishell_config.h`). This is a **board-free release candidate**: the
+hardware rows in §2-§3 and the on-board boxes in §8 are **not** signed off for
+this version; the host/static gates are pre-flight only. Substitute your
+release version throughout.
 
 ---
 
@@ -210,7 +213,7 @@ python tools/make_release.py push <COMx> [--sign NAME.priv.pem]
 ([`ABI.md`](ABI.md)).
 
 **Complete SD payload archive.** `python tools/make_sd_archive.py` builds
-`release/p4minishell-sd-v1.4.3.zip` from the same `apps/app_manifest.py` list
+`release/p4minishell-sd-v1.5.0.zip` from the same `apps/app_manifest.py` list
 plus templates, dictionaries and the DejaVu reading fonts - the exact tree the
 pushers deploy. It is the public "copy to the card root" artifact; every file
 is a repository asset, nothing is invented.

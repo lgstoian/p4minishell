@@ -20,7 +20,7 @@ import os
 import random
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Callable, Dict, List, Optional
 
 from .asserts import Checklist
@@ -38,6 +38,16 @@ class Anomaly:
     detail: str
     step: int
     screenshot: Optional[str] = None
+
+
+REPEAT_MEDIUM_KINDS = ("static-frame", "off-screen-widget")
+
+
+def repeated_medium_counts(anomalies) -> dict:
+    """Count the MEDIUM anomalies whose repetition fails the dogfood verdict."""
+    return {kind: sum(1 for a in anomalies
+                      if a.severity == "MEDIUM" and a.kind == kind)
+            for kind in REPEAT_MEDIUM_KINDS}
 
 
 @dataclass
@@ -474,6 +484,7 @@ class DogfoodAgent:
             name = action.__name__.replace("action_", "")
             self.captured_this_step = False
             started = time.time()
+            anomaly_start = len(self.anomalies)
             try:
                 out = action()
                 err = None
@@ -498,22 +509,40 @@ class DogfoodAgent:
                         screenshot=self.current_shot,
                         anomalies=list(self.anomalies[-3:]))
             self.steps.append(step)
+            # Journal the anomalies raised by THIS step, not just the step's
+            # output: a MEDIUM static-frame or off-screen-widget verdict must
+            # stay reproducible from the seed long after the screenshots move.
             self._journal.write(json.dumps({
                 "step": index, "action": name, "duration_s": round(duration, 3),
                 "output": out[-400:], "error": err,
+                "anomalies": [asdict(a) for a in self.anomalies[anomaly_start:]],
             }) + "\n")
             self._journal.flush()
             if index % 10 == 0:
                 print("  ... step %d, %d anomalies, %.1f min left"
                       % (index, len(self.anomalies),
                          (deadline - time.time()) / 60.0))
-        self._journal.close()
         # verdict
         crit = sum(1 for a in self.anomalies if a.severity == "CRITICAL")
         high = sum(1 for a in self.anomalies if a.severity == "HIGH")
+        medium_counts = repeated_medium_counts(self.anomalies)
+        # A one-off static frame or an off-screen row is often a transient
+        # animation/scroll state. A repeat is not: the app really stopped
+        # repainting or kept a visible control outside the panel. Keep it
+        # journaled above and make it a hard verdict, not just an observation.
+        for kind, count in medium_counts.items():
+            c.check("no repeated %s anomalies" % kind, count < 2,
+                    "%d occurrence(s); >=2 repeats fail" % count)
         c.check("no panics", crit == 0, "%d critical anomalies" % crit)
         c.check("no high-severity anomalies", high == 0, "%d high anomalies" % high)
         c.check("actions completed", len(self.steps) > 0)
+        self._journal.write(json.dumps({
+            "verdict": "PASS" if c.ok else "FAIL",
+            "steps": len(self.steps),
+            "counts": {"CRITICAL": crit, "HIGH": high, "MEDIUM": medium_counts},
+            "anomalies": [asdict(a) for a in self.anomalies],
+        }) + "\n")
+        self._journal.close()
         self.write_report(c)
         return c
 
@@ -522,10 +551,14 @@ class DogfoodAgent:
         path = os.path.join(self.out_dir, "report.md")
         crit = sum(1 for a in self.anomalies if a.severity == "CRITICAL")
         high = sum(1 for a in self.anomalies if a.severity == "HIGH")
+        repeated = repeated_medium_counts(self.anomalies)
         with open(path, "w", encoding="utf-8") as fh:
             fh.write("# P4MiniShell dogfooding report\n\n")
             fh.write("- seed: %d\n- steps: %d\n- anomalies: %d (CRITICAL %d, HIGH %d)\n"
                      % (self.seed, len(self.steps), len(self.anomalies), crit, high))
+            fh.write("- repeated MEDIUM: static-frame %d, off-screen-widget %d "
+                     "(>=2 repeats fail the verdict)\n"
+                     % (repeated["static-frame"], repeated["off-screen-widget"]))
             if self.heap_samples:
                 fh.write("- heap samples: first=%d last=%d min=%d\n\n"
                          % (self.heap_samples[0], self.heap_samples[-1],
@@ -539,3 +572,32 @@ class DogfoodAgent:
             for s in self.steps:
                 fh.write("- %d %s (%.2fs)\n" % (s.index, s.action, s.duration_s))
         print("  report: %s" % path)
+
+
+def dogfood_self_test() -> int:
+    """Host canary for the repeated-MEDIUM verdict (no board, no screenshots)."""
+    def anomaly(kind, severity="MEDIUM"):
+        return Anomaly(severity, kind, "canary", 1)
+
+    cases = [
+        ("one static frame does not fail",
+         [anomaly("static-frame")], {"static-frame": 1, "off-screen-widget": 0}),
+        ("repeated static frames are counted",
+         [anomaly("static-frame"), anomaly("static-frame")],
+         {"static-frame": 2, "off-screen-widget": 0}),
+        ("repeated off-screen widgets are counted",
+         [anomaly("off-screen-widget"), anomaly("off-screen-widget")],
+         {"static-frame": 0, "off-screen-widget": 2}),
+        ("other severities do not contribute",
+         [anomaly("static-frame", "HIGH"), anomaly("off-screen-widget", "LOW")],
+         {"static-frame": 0, "off-screen-widget": 0}),
+    ]
+    bad = 0
+    for name, anomalies, want in cases:
+        got = repeated_medium_counts(anomalies)
+        ok = got == want
+        print("  [%s] %s -> %r" % ("PASS" if ok else "FAIL", name, got))
+        if not ok:
+            bad += 1
+    print("dogfood medium verdict self-test: %s" % ("PASS" if bad == 0 else "FAIL"))
+    return 1 if bad else 0

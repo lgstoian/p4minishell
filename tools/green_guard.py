@@ -39,7 +39,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import json
+import operator
 import os
 import re
 import sys
@@ -147,11 +149,9 @@ def body_has_assert(name, bodies, seen=None):
     return False
 
 
-def scan_c_file(path):
-    """Return (tests, errors, warnings) for one Unity test file."""
+def scan_c_text(text, path):
+    """Return (tests, errors, warnings) for one Unity test file's source."""
     errors, warnings, tests = [], [], []
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
-        text = fh.read()
     stripped = strip_c(text)
     bodies = function_bodies(stripped)
     bodies["__text__"] = stripped
@@ -197,6 +197,12 @@ def scan_c_file(path):
             warnings.append("%s: TEST_CASE(%r) is TEST_IGNORE-only"
                             % (rel(path), desc))
     return tests, errors, warnings
+
+
+def scan_c_file(path):
+    """Return (tests, errors, warnings) for one Unity test file."""
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        return scan_c_text(fh.read(), path)
 
 
 def parse_cmake_sources():
@@ -264,6 +270,117 @@ def scan_c_suite():
     return errors, warnings, all_tests
 
 
+_COMPARE_OPS = {
+    ast.Eq: operator.eq, ast.NotEq: operator.ne,
+    ast.Lt: operator.lt, ast.LtE: operator.le,
+    ast.Gt: operator.gt, ast.GtE: operator.ge,
+    ast.Is: operator.is_, ast.IsNot: operator.is_not,
+}
+
+
+def _const(node):
+    """Return a literal's value (including a leading minus), else None."""
+    if isinstance(node, ast.Constant):
+        return node.value
+    if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub)
+            and isinstance(node.operand, ast.Constant)):
+        return -node.operand.value
+    return None
+
+
+def _computed_tautology(node):
+    """True when a check argument can never fail (a computed tautology).
+
+    The old guard only caught the literal ``c.check(n, True)``. A check such as
+    ``c.check(n, x == x)`` or ``c.check(n, frames >= 0)`` is just as vacuous,
+    so inspect the expression as well. Both always-true and always-false
+    expressions are defects: neither can report a broken product.
+    """
+    if isinstance(node, ast.Compare) and len(node.ops) == 1:
+        op = node.ops[0]
+        left, right = node.left, node.comparators[0]
+        # x == x, x >= x, x <= x, x > x, x != x - all decided by structure.
+        if ast.dump(left) == ast.dump(right):
+            return True
+        lv, rv = _const(left), _const(right)
+        if lv is not None and rv is not None and type(op) in _COMPARE_OPS:
+            try:
+                return bool(_COMPARE_OPS[type(op)](lv, rv))
+            except Exception:  # noqa: BLE001 - exotic literal types
+                pass
+        # A parsed count/length compared against zero cannot be negative;
+        # assert a real bound instead (e.g. frames > 0).
+        if isinstance(op, ast.GtE) and _const(right) in (0, 0.0):
+            return True
+    if isinstance(node, ast.BoolOp):
+        truth = isinstance(node.op, ast.Or)
+        return any((_const(v) is True) if truth else (_const(v) is False)
+                   for v in node.values)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        value = _const(node.operand)
+        return value is not None and not bool(value)
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "bool" and len(node.args) == 1):
+        value = _const(node.args[0])
+        return value is not None
+    return False
+
+
+def scan_python_text(text, label):
+    """Inspect one host suite's source; return (errors, warnings)."""
+    errors, warnings = [], []
+    if "Checklist(" not in text:
+        return errors, warnings
+    calls = len(re.findall(r"\.(check|expect|equals)\s*\(", text))
+    if calls == 0:
+        errors.append("%s: Checklist created but no check/expect/equals call "
+                      "(zero-check suite -> false green)" % label)
+    # A tautology with a detail argument used to slip through the regex
+    # (`c.check(name, True, detail)`), so allow anything after the literal.
+    for m in re.finditer(r"\.check\s*\(\s*[^,]+,\s*(True|1)\b", text):
+        errors.append("%s: tautological check %r" % (label, m.group(0)))
+    # Note-heavy evidence. The hard error keeps its original threshold so the
+    # 769 Unity tests and the existing suites keep their classification; a
+    # smaller dominance pattern is only a warning (an error under --strict).
+    notes = len(re.findall(r"\.note\s*\(", text))
+    if notes > 20 and notes > 3 * calls:
+        errors.append("%s: %d note() calls vs %d checks - evidence is "
+                      "recorded but never asserted (false green)"
+                      % (label, notes, calls))
+    elif notes >= 6 and notes > calls:
+        warnings.append("%s: %d note() calls vs %d checks (below the hard note "
+                        "threshold) - evidence may be recorded but not asserted"
+                        % (label, notes, calls))
+    for m in re.finditer(r"\.equals\s*\(\s*[^,]+,\s*([^,]+),\s*([^,]+?)\s*\)", text):
+        if m.group(1).strip() == m.group(2).strip():
+            warnings.append("%s: tautological equals %r" % (label, m.group(0)))
+    for m in re.finditer(r"\.expect\s*\(\s*[^,]+,\s*(\"\"|'')\s*,", text):
+        warnings.append("%s: empty-needle expect always passes %r"
+                        % (label, m.group(0)))
+    for m in re.finditer(r"^\s*assert\s+(True|1)\s*$", text, re.MULTILINE):
+        errors.append("%s: tautological assert %r" % (label, m.group(0).strip()))
+    # Computed tautologies need the expression tree, not a textual match.
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as exc:
+        warnings.append("%s: cannot parse for computed tautologies: %s"
+                        % (label, exc))
+        return errors, warnings
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "check" and len(node.args) >= 2):
+            continue
+        arg = node.args[1]
+        if _const(arg) in (True, 1):
+            continue  # already reported by the literal regex above
+        if _computed_tautology(arg):
+            seg = ast.get_source_segment(text, arg) or ast.dump(arg)
+            errors.append("%s: computed tautology in .check %r"
+                          % (label, seg[:100]))
+    return errors, warnings
+
+
 def scan_python_suite():
     errors, warnings = [], []
     targets = []
@@ -277,32 +394,9 @@ def scan_python_suite():
     for path in targets:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             text = fh.read()
-        if "Checklist(" not in text:
-            continue
-        calls = len(re.findall(r"\.(check|expect|equals)\s*\(", text))
-        if calls == 0:
-            errors.append("%s: Checklist created but no check/expect/equals call "
-                          "(zero-check suite -> false green)" % rel(path))
-        # A tautology with a detail argument used to slip through the regex
-        # (`c.check(name, True, detail)`), so allow anything after the literal.
-        for m in re.finditer(r"\.check\s*\(\s*[^,]+,\s*(True|1)\b", text):
-            errors.append("%s: tautological check %r" % (rel(path), m.group(0)))
-        # A suite that records its load-bearing evidence only as notes can be
-        # green while proving nothing (s25 shipped 13 wrong gallery PNGs this
-        # way: every start/done/snap marker was `c.note`, never `c.check`).
-        notes = len(re.findall(r"\.note\s*\(", text))
-        if notes > 20 and notes > 3 * calls:
-            errors.append("%s: %d note() calls vs %d checks - evidence is "
-                          "recorded but never asserted (false green)"
-                          % (rel(path), notes, calls))
-        for m in re.finditer(r"\.equals\s*\(\s*[^,]+,\s*([^,]+),\s*([^,]+?)\s*\)", text):
-            if m.group(1).strip() == m.group(2).strip():
-                warnings.append("%s: tautological equals %r" % (rel(path), m.group(0)))
-        for m in re.finditer(r"\.expect\s*\(\s*[^,]+,\s*(\"\"|'')\s*,", text):
-            warnings.append("%s: empty-needle expect always passes %r"
-                            % (rel(path), m.group(0)))
-        for m in re.finditer(r"^\s*assert\s+(True|1)\s*$", text, re.MULTILINE):
-            errors.append("%s: tautological %r" % (rel(path), m.group(0).strip()))
+        e, w = scan_python_text(text, rel(path))
+        errors.extend(e)
+        warnings.extend(w)
     return errors, warnings
 
 
@@ -347,12 +441,71 @@ def scan_host_manifest():
     return errors
 
 
+def self_test():
+    """Red canary: prove every new guard rejects a source that must be red.
+
+    The checks run on synthetic source strings only; the real tree and its
+    report are untouched. If one guard stops firing, this exits non-zero even
+    though the shipped suites are all green.
+    """
+    header = ('from p4test.asserts import Checklist\n'
+              'def run(dev, ctx):\n'
+              '    c = Checklist("selftest")\n')
+
+    def body(*lines):
+        return header + "".join("    %s\n" % line for line in lines)
+
+    def scan(*lines):
+        return scan_python_text(body(*lines), "selftest.py")
+
+    clean_e, clean_w = scan('c.check("real", dev.run("about") != "")',
+                            'c.note("context")')
+    checks = [("clean suite accepted", not clean_e and not clean_w)]
+    cases = [
+        ("literal tautology rejected",
+         'c.check("n", True, "detail")', "tautological check"),
+        ("computed self-comparison rejected",
+         'c.check("n", x == x)', "computed tautology"),
+        ("computed non-negative floor rejected",
+         'c.check("n", stats.frames >= 0)', "computed tautology"),
+        ("computed or-True rejected",
+         'c.check("n", ok or True)', "computed tautology"),
+        ("constant comparison rejected",
+         'c.check("n", 2 > 1)', "computed tautology"),
+        ("tautological assert rejected",
+         'assert True', "tautological assert"),
+    ]
+    for name, line, needle in cases:
+        e, _w = scan(line)
+        checks.append((name, any(needle in item for item in e)))
+    notes = ['c.note("evidence %d")' % i for i in range(8)]
+    e, w = scan(*(notes + ['c.check("one", ok)']))
+    checks.append(("note-heavy evidence rejected",
+                   any("note()" in item for item in e + w)))
+    _tests, c_e, _c_w = scan_c_text('void test_x(void) { int y = 1; }\n',
+                                    os.path.join(TEST_DIR, "test_selftest.c"))
+    checks.append(("vacuous Unity test rejected",
+                   any("vacuous green" in item for item in c_e)))
+
+    for name, ok in checks:
+        print("  [%s] %s" % ("PASS" if ok else "FAIL", name))
+    bad = sum(1 for _n, ok in checks if not ok)
+    print("green_guard self-test: %s (%d canaries)"
+          % ("PASS" if bad == 0 else "FAIL", len(checks)))
+    return 1 if bad else 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Reject false-green / false-positive tests")
     ap.add_argument("--strict", action="store_true", help="warnings become errors")
     ap.add_argument("--json", default=REPORT, help="machine-readable report path")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--self-test", action="store_true",
+                    help="red-canary check that each guard can still go red")
     args = ap.parse_args(argv)
+
+    if args.self_test:
+        return self_test()
 
     c_errors, c_warnings, tests = scan_c_suite()
     py_errors, py_warnings = scan_python_suite()

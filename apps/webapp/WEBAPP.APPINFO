@@ -1,0 +1,4 @@
+title=Webapp Demo
+description=Batch shim presenting HTML/CSS/JS through the webapp facade (host-gate fixture)
+version=1.0
+type=batch

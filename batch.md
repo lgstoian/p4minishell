@@ -7,7 +7,7 @@
 > for architecture see [`documentation.md`](documentation.md); for the
 > step-by-step tutorial see [`tutorial_batch.md`](tutorial_batch.md).
 
-- **Version:** v1.4.3 · **Line endings:** CRLF or LF · **Encoding:** UTF-8
+- **Version:** v1.5.0 · **Line endings:** CRLF or LF · **Encoding:** UTF-8
   (FATFS long filenames are UTF-8) · **Size:** ≤128 KB runs RAM-resident
   (`P4_CONFIG_BATCH_FILE_MAX_BYTES`); larger files stream from SD with
   identical semantics.
@@ -148,7 +148,8 @@ table. `set NAME` prints one value. Undefined `%VAR%` expands to empty (so
 | `%%` | Literal `%`. |
 | `%ERRORLEVEL%` | Current errorlevel as decimal. |
 | `%ERRCODE%` | Last specific error code (from `error_strings.h`) as decimal. |
-| `%ERRMSG%` | Short status word from ERRORLEVEL (`success`/`error`/`usage`). |
+| `%ERRMSG%` | Short status word from ERRORLEVEL (`success`/`error`/`usage`). Virtual and read-only: `trap` does **not** write it (see `%TRAP_MSG%` below). |
+| `%TRAP_CODE%` `%TRAP_MSG%` | Ordinary variables published by a firing `trap` (or by `trap /raise`): the decimal code and the message. Unlike `%ERRCODE%`/`%ERRMSG%` they are normal writable slots, so a script can set or inspect them like any other variable. |
 | `%DATE%` `%TIME%` | `MM-DD-YYYY`, `HH:MM:SS` (device clock). |
 | `%RANDOM%` | `0..32767`. |
 | `%CD%` | Current directory. |
@@ -158,6 +159,8 @@ table. `set NAME` prints one value. Undefined `%VAR%` expands to empty (so
 | `!VAR!` | Delayed expansion: same named values and `:~`/`:` forms as `%VAR%`, but resolved at execution time. Only inside a `setlocal enabledelayedexpansion` scope; otherwise literal. `!!` is a literal `!`, `^!` never expands, `'...'` stays literal. |
 | `^%` | Literal percent (never expands). |
 | `'...'` | Single-quoted runs stay fully literal. |
+
+`local NAME=value` is a guarded front door over the one `set` implementation: inside a `call :label` / `gosub` scope it assigns into the existing frame-local slot class (same lifetime as other call-scope temporaries, no new variable table); outside one it refuses with ERRORLEVEL 2.
 
 **`%%` vs `%`:** batch files write `%%v` (the doubled percent is the file
 escape); the interactive prompt writes `%v`. The `for` loop variable accepts
@@ -199,7 +202,28 @@ echo [M-WEB-DONE]
 ```
 
 `emoji` renders through the same page text path; see `command.md` for the
-pack format and the retro default.
+pack format and the retro default. For a thin batch-facing facade over the same
+engine, see `webapp` in §5c.
+
+## 5c. The `webapp` facade (batch-facing page verbs)
+
+`webapp` is an additive scripting surface over the **one** browser/HTML/CSS/JS
+engine: every subcommand forwards to an existing verb and returns its
+ERRORLEVEL. There is no second renderer, JS runtime, colour model or surface.
+
+| Form | Delegates to | Purpose |
+|------|--------------|---------|
+| `webapp open [/no] <file\|url>` | `html [/no] ...` | Present a page (blocking modal by default; `/no` continues the script). |
+| `webapp dump [from] [to] [/a]` | `tui dump ...` | Read the rendered cell grid back as text (1-based rows); `/a` appends one `NNN@start-end:fg` colour-run line per row — the form the host/board suites assert. |
+| `webapp css` | `browser css` | Show the parsed rules and computed styles. |
+| `webapp js <code>` | `js eval <code>` | Evaluate code in the existing page JS engine. |
+
+The reference app `apps/webapp/WEBAPP.BAT` (`WEBAPP.APPINFO`, deployed by
+`apps/app_manifest.py`) is a batch front door for a webapp page: it opens
+`%APPDRIVE%/WEB/INDEX.HTML` (falling back to `sd:/WEB/INDEX.HTML`) with `/no`,
+dumps rows 1-8 with `/a`, prints `webapp css`, and emits `[M-WEBAPP]` /
+`[M-WEBAPP-DONE]` / `[M-WEBAPP-FAIL]` markers. A native payload can be added
+later behind the same `.bat` front door (the hybrid pattern in §17).
 
 ## 6. Arrays (indexed variables)
 
@@ -404,6 +428,48 @@ pristine text. Countdown: `while n GTR 0 do set /a n=n-1`.
   `/echo` `/stdin`); `proc /labels` and `proc /goto` report scanned
   labels / pending goto.
 - `exit /b [code]` leaves one file; bare `exit` unwinds every level.
+
+### 11.1 `trap` — one-shot error handlers
+
+`trap` installs a handler that fires on a batch line leaving ERRORLEVEL ≥ 2
+(the same range `if errorlevel 2` tests). `trap_init()` runs once from
+`batch_init()`, resetting the per-frame handler stacks and allocating the
+background-slot table, so no handler survives from a previous run.
+
+```
+trap :recover              rem install a :label handler for this frame
+trap /raise 3 "bad input"  rem raise one by hand: ERRORLEVEL=3, publish variables
+trap /clear                rem remove the top handler without firing it
+```
+
+The frame loop calls `batch_trap_maybe_fire()` after each line. On failure it
+publishes the code as ordinary variables `TRAP_CODE` (decimal) and `TRAP_MSG`
+(the message), **pops the handler** and jumps to its `:label` through the
+existing pending-goto slot — the very path `goto` uses, with no second
+dispatcher or control-flow mechanism. The handler is **one-shot**: it is
+consumed before the jump, so an error inside the handler cannot re-enter it
+forever; install it again if the frame needs another catch. A line that leaves
+ERRORLEVEL < 2 does not fire it.
+
+`trap /raise CODE "message"` sets ERRORLEVEL to CODE and publishes
+`TRAP_CODE=CODE` / `TRAP_MSG=message`; a firing handler overwrites both with the
+line's ERRORLEVEL and an `errorlevel N` message. `TRAP_MSG` is an **ordinary**
+variable (`set TRAP_MSG=...` works); `ERR` and `ERRMSG` remain virtual,
+read-only slots and are no longer written by `trap`. The
+`trap /on errorlevel|exit|int` form shown in the usage text is reserved but not
+implemented today (it reports `unknown switch`, ERRORLEVEL 2).
+
+```bat
+@echo off
+trap :recover
+trap /raise 3 "bad input"
+echo this line is skipped
+exit /b 0
+
+:recover
+echo failed with %TRAP_CODE%: %TRAP_MSG%
+exit /b 1
+```
 
 ---
 
@@ -683,7 +749,10 @@ prechecks, partial-file cleanup):
   `appdiff` golden gate — app transcript output must stay byte-stable).
   New language coverage belongs in `tools/suites/s06_batch.py` plus the
   on-board Unity pure-helper tests (`test/main/test_*.c`, run with
-  `python tools/unit_run.py <COM>`).
+  `python tools/unit_run.py <COM>`). A hardware-free pre-gate,
+  `python tools/host_batch_run.py --check`, also runs the real `HELLO.BAT`
+  fixture through the real interpreter with a POSIX fixture root; it covers a
+  small verb subset and never signs off hardware (`harness.md` §2.2).
 - **Background loops:** compute-only `while`/`for /L` bodies run fine under
   `start` (own batch context per worker; `taskkill` stops them cooperatively
   — `delay: stopped`). Display verbs refuse there by design (one shared

@@ -1,0 +1,8 @@
+# batch-baseline-v1 fixture=HELLO
+NAME=p4
+N=3
+HOST NAME OK
+in sub NAME=p4
+[M-HOST-BATCH-DONE]
+after call N=3
+ERRORLEVEL 0

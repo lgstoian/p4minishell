@@ -572,6 +572,12 @@ void browser_init(void);
  *  Returns an ERRORLEVEL: 0 ok, 1 error, 2 usage. */
 int shell_command_html(int argc, char **argv);
 
+/** `webapp` - a batch-facing facade over the SAME html/css/js engine.
+ *  Subcommands: open [/no] <file|url>, dump [from] [to] [/a], css, js <code>.
+ *  Each one delegates to an existing verb handler; no second renderer or
+ *  script runtime. Returns an ERRORLEVEL: 0 ok, 1 error, 2 usage. */
+int shell_command_webapp(int argc, char **argv);
+
 /** Render a page in the blocking HTML surface (the `html` implementation).
  *  @return 0 on a clean render/close, 1 on fetch/parse/render failure. */
 int browser_html_show(const char *target);

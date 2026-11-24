@@ -9,7 +9,7 @@
 > rules live in [`ai-context.md`](ai-context.md); open bugs in
 > [`bugs.md`](bugs.md).
 
-- **Version:** v1.4.3 · **Targets:** ESP32-P4 + ESP32-C6
+- **Version:** v1.5.0 · **Targets:** ESP32-P4 + ESP32-C6
 - **Boards:** `jc1060p470c` (reference, e.g. COM3) and `m5stack_tab5` (COM6)
 
 ---
@@ -79,27 +79,46 @@ calls `shell_session.hard_reset()`.
 Run these before a hardware run (or in CI without a board):
 
 ```powershell
-python tools/green_guard.py            # false-green / false-positive tests
 python tools/comment_index.py          # machine-readable tags + layering
 python tools/breadcrumbs.py            # breadcrumb map validity
-python tools/harness/verify.py         # on-disk invariants, incl. gallery identity
+python tools/green_guard.py --strict   # false-green / false-positive tests
+python tools/check_assets.py           # UI colours: no LVGL default-theme blobs
 python tools/gallery_audit.py          # gallery PNG identity + uniqueness
 python tools/gallery_audit_selftest.py # red canary: the identity guard must go red
-# all of the above through the runner, no board:
-python tools/p4test_run.py --static
+python tools/harness/verify.py         # on-disk invariants + harness markers
+# size budget runs only when build/p4minishell.elf exists
+python tools/p4test_run.py --static    # the SAME gate list, no board
 ```
 
-`--guard` runs the same gates before a hardware run and aborts on a red gate.
+`tools/harness/verify.py` and `tools/p4test/runner.py` now share one canonical
+gate list (asserted by `python tools/p4test_run.py --self-test`), so `--static`
+and `--guard` cannot silently diverge from the release gate. `--guard` runs the
+same gates before a hardware run and aborts on a red gate.
 A zero-assertion `Checklist`/`SuiteResult` is a failure at run time, not a pass.
 The tag vocabulary is in [`docs/comment-tags.md`](docs/comment-tags.md); the
 generated map is [`BREADCRUMBS.md`](BREADCRUMBS.md) / `breadcrumbs.json`.
 
+The guards themselves have red canaries: `green_guard.py --self-test` (9
+computed-tautology cases), `gallery_audit_selftest.py`,
+`appdiff.py --self-test`, and `p4test_run.py --self-test` (marker, gate-parity
+and dogfood cases). `p4test.session.read_until(..., required=True)` raises on a
+missing marker instead of returning a stale buffer; `appdiff` uses it for all
+load-bearing waits. A guard that has never been seen failing is not a guard.
+
 ## 2.2 Layer 1a — host unit suite (no hardware)
 
-The same pure-logic `test/main/test_*.c` sources also build and run natively on
-the host with ESP-IDF's preview `linux` target, so a logic regression is caught
-on every PR without a board. CI runs it in the `host-unit` job of
-`.github/workflows/build.yml`.
+The same `test/main/test_*.c` sources also build and run natively on the host
+with ESP-IDF's preview `linux` target, so a logic regression is caught on every
+PR without a board. CI runs it in the `host-unit` job of
+`.github/workflows/build.yml`. This lane compiles the **real interpreter** for
+the host (`batch.c`, `batch_trap.c`, `batch_dim.c`, `batch_str.c`,
+`batch_map.c`, `error_strings.c`, alongside the pure helpers) — not a second
+implementation. `components/storage/storage.h` hides its one FATFS-typed
+declaration behind `P4_STORAGE_NO_FATFS_TYPES`, which the interpreter defines
+before including it; `test/host/main/host_batch_bridge.c` supplies only the
+link-time symbols the firmware provides from command/storage/UI, returning an
+honest "unavailable" for board-only calls; it lives exclusively in `test/host`
+and is never part of a firmware image.
 
 ```powershell
 # Linux or WSL2 (the "linux" target is a POSIX host target), IDF 5.5.5 sourced:
@@ -111,9 +130,11 @@ idf.py build
 python3 tools/host_unit_run.py            # build (if needed) + run + parse
 python3 tools/host_unit_run.py --static   # manifest/orphan/case-count gates
 python3 tools/host_gen_runner.py --check  # generated runner is up to date
+python tools/host_webapp_gate.py --check  # webapp render pre-gate (separate; no board)
+python tools/host_batch_run.py --check    # real .bat fixture pre-gate (separate; no board)
 ```
 
-- **Coverage today: 285 cases** (last run) - the leaf components with no board
+- **Coverage today: 345 cases** (last run) - the leaf components with no board
   dependency (`ansi`, `json`, `markdown`/`html`, `gfx`, `filetype`, plus the
   `strutil`/`p4heap` helpers they use), the hardware-free halves of the shell
   (`shell_core.c`: text helpers, statement scanner, history store, abort/busy,
@@ -121,16 +142,24 @@ python3 tools/host_gen_runner.py --check  # generated runner is up to date
   sink; `shell_print.c`; `shell_log.c`), header
   (`header_layout/status/notify_queue/refresh.c`), theme (`font/theme.c`),
   clock (`clock_core.c`, `clock_timer.c`), the editor document model
-  (`editor_doc.c`, `editor_spell.c`), the batch environment and expression core
-  (`batch_env.c`, `batch_forf.c`, `calc.c`, `himem.c`, `batch_io.c`), the pure
+  (`editor_doc.c`, `editor_spell.c`), the batch environment, expression core and
+  verbs (`batch_env.c`, `batch_forf.c`, `calc.c`, `himem.c`, `batch_io.c`, plus
+  the real `batch.c` interpreter and `batch_trap.c`/`batch_dim.c`/`batch_str.c`/
+  `batch_map.c`/`error_strings.c` behind the host-only bridge), the pure
   storage path layer (`storage_path.c`), the modal argument parsers
   (`modal_args.c`), the browser page/image caches (`browser_cache.c`) and the
-  TUI page-shot model (`tui_page_shot.c`). Runs in well under a second.
-- **What cannot run yet, and why:** almost every other component reaches a
-  board-only component through `REQUIRES` — `batch → shell` (display/LVGL,
-  USB-Serial-JTAG), `archive → storage` (SDMMC/FAT), `modal → windows/keyboard`,
-  `clock → board RTC over I2C`. `tools/host_test_manifest.json` records the
-  reason for every excluded file. `tools/green_guard.py` and
+  TUI page-shot model (`tui_page_shot.c`). New suites cover batch control flow
+  (`test_batch_control.c`), F-key binds (`test_bind.c`), macros (`test_macro.c`),
+  the error-message table (`test_error_strings.c`), `trap` (`test_trap.c`),
+  variable expansion (`test_shell_variables.c`) and pipes/redirection
+  (`test_shell_pipeline.c`). Runs in well under a second.
+- **What cannot run yet, and why:** most other components still reach a
+  board-only component through `REQUIRES` — `batch → shell` is covered for the
+  real interpreter by the host-only bridge above (LVGL/display, USB-Serial-JTAG
+  and SD-backed paths still have no host backend), while `archive → storage`
+  (SDMMC/FAT), `modal → windows/keyboard` and `clock → board RTC over I2C`
+  remain excluded. `tools/host_test_manifest.json` records the reason for every
+  excluded file. `tools/green_guard.py` and
   `tools/host_unit_run.py --static` both fail if a new `test_*.c` is neither
   included nor excluded, so a new suite cannot silently miss both lanes.
 - **The split so far:** `shell.c` → `shell_core.c` moved the pure text helpers
@@ -142,9 +171,42 @@ python3 tools/host_gen_runner.py --check  # generated runner is up to date
   prompt/title), but the transcript's LVGL label and UART mirror must be
   separated first — that change is board-gated.
 - **Never a substitute:** this lane is a pre-gate. A host pass says nothing
-  about hardware behaviour, and `harness.md` §0 still governs. The honest way to
-  grow it is to split hardware out of the mixed components, not to stub the
-  hardware.
+  about hardware behaviour, and §0 still governs. The honest way to grow it is
+  to split hardware out of the mixed components or add a host-only bridge with
+  honest "unavailable" behaviour — a bridge stub must never become fake
+  hardware behaviour in production code, and `host_batch_bridge.c` is never
+  compiled into firmware.
+- **Webapp render pre-gate (separate from the Unity lane):** `tools/host_webapp_gate.py`
+  renders each HTML fixture in `tools/host/fixtures/webapp/` through the
+  firmware's **existing** DOM/CSS/render core via the standalone
+  `tools/host/main/host_webapp_render.c` harness, then checks `tui dump /a`-style
+  text and colour runs — and optional PNG/BMP frames through `p4test.screenshot`
+  — against committed baselines. The ELF is discovered under `test/host/build*`
+  (no hardcoded path: `--renderer` overrides) and a POSIX ELF is routed through
+  WSL on Windows. `--check` is the default, `--update` rebaselines after an
+  intentional render change, `--self-test` is the red canary, and `--no-png` is
+  text-only. Verified: 1 fixture, 51 assertions OK. It opens no serial port and
+  touches no board: a pass only says the shared render path is stable on the
+  host, never that hardware is signed off (§0 still governs).
+  `apps/webapp/WEBAPP.BAT` is the board-facing reference shim for the same
+  `webapp` facade.
+- **Batch app pre-gate (also separate from Unity):** `tools/host_batch_run.py`
+  runs a **real `.bat` fixture** (`tools/host/fixtures/batch/HELLO.BAT`) through
+  the real interpreter via `test/host/main/host_batch_run.c` (built as
+  `host_batch_run.elf` by `test/host/main/CMakeLists.txt`). A thin host-only
+  execute-command router calls the firmware's own `shell_command_*` verbs with
+  the real expander/tokenizer; it does not duplicate the language and does **not**
+  run every verb — lines needing full `command.c` dispatch are reported as
+  unsupported, never faked. `test/host/main/host_batch_bridge.c::host_batch_fs_init(root)`
+  installs a host-only POSIX I/O backend through the additive
+  `batch_io_ops_t.file_open` / `stat_path` hooks; the fixture root comes from
+  `--root` or `P4_HOST_SD_ROOT` (default: the fixture directory) and a missing
+  root is an honest failure, not a simulated card. `--fixture`, `--check`
+  (default), `--update` and `--self-test` (7 canaries) are supported; the ELF is
+  discovered under the repo build dirs and POSIX ELFs run through WSL on Windows.
+  Verified: 1 fixture, 7 assertions OK (Unity host lane 345/0/0). This is a
+  pre-gate only — never hardware sign-off; the on-device suites remain
+  authoritative (§0).
 - **Extending it:** add the source (or the hardware-free translation unit) to
   `test/host/main/CMakeLists.txt`, add the test file to
   `tools/host_test_manifest.json`, then re-run `tools/host_gen_runner.py` (it
@@ -155,10 +217,10 @@ python3 tools/host_gen_runner.py --check  # generated runner is up to date
 ## 3. Layer 1 — on-target unit tests (Unity)
 
 Pure/headless logic runs on the P4 in `test/` (Unity; the static case count is
-**758** after the v1.4.3 rounds - the browser-cache, grid-resolve and
-interactive-`for` cases included - refresh the hardware count with
-`tools/unit_run.py`; includes the software AES-256-GCM vectors in
-`test_sw_gcm.c`).
+**769** in the current tree - the v1.4.3 browser-cache, grid-resolve and
+interactive-`for` cases, plus 4 new `trap` cases in `test/main/test_trap.c` and
+7 native-payload cases - refresh the hardware count with `tools/unit_run.py`;
+includes the software AES-256-GCM vectors in `test_sw_gcm.c`).
 
 ```powershell
 cd test
@@ -482,7 +544,10 @@ it automatically.
 1. **Pure logic** — a `test/main/test_*.c` case + `RUN_TEST` in `test_main.c`,
    then classify the file in `tools/host_test_manifest.json`: either add it to
    the host lane (when the component's `REQUIRES` chain reaches no board-only
-   component) or list it under `excluded` **with a reason**. `green_guard` and
+   component) or list it under `excluded` **with a reason**. An interpreter-level
+   test whose source pulls board-only symbols goes in the host lane through
+   `test/host/main/host_batch_bridge.c` (host-only, honest "unavailable" stubs),
+   not by stubbing hardware in production code. `green_guard` and
    `host_unit_run.py --static` both fail on an unclassified file, because a
    test that runs in neither lane is a false green.
 2. **Behaviour on hardware** → extend the matching `tools/suites/sNN_*.py`; add

@@ -55,8 +55,8 @@
  * The boot message and all version commands read from these macros.
  */
 #define P4_CONFIG_VERSION_MAJOR             1
-#define P4_CONFIG_VERSION_MINOR             4
-#define P4_CONFIG_VERSION_PATCH             4
+#define P4_CONFIG_VERSION_MINOR             5
+#define P4_CONFIG_VERSION_PATCH             0
 
 /** Full version string assembled from the components above. */
 #define P4_CONFIG_VERSION_STRING             "v" STR(P4_CONFIG_VERSION_MAJOR) "." STR(P4_CONFIG_VERSION_MINOR) "." STR(P4_CONFIG_VERSION_PATCH)
@@ -2049,6 +2049,19 @@
 /** Native-app ABI tag (see ABI.md). `pkg install` warns
  *  when a native/hybrid bundle's `abi=` differs; execution refuses. */
 #define P4_CONFIG_NATIVE_ABI                 "applib-1"
+
+/* ---- Native payload envelope (opt-in, additive; see ABI.md §4.1) ----
+ * The reserved `NATIVE/<APP>.P4X` blob stays an opaque data blob on the card.
+ * These limits size the format-only parser in components/nativepay; they do
+ * not add a second loader or a second package format. */
+/** Fixed envelope header bytes. Must equal NATIVE_PAY_HEADER_LEN
+ *  (components/nativepay/native_payload.h); a static assert enforces it. */
+#define P4_CONFIG_NATPAY_HEADER_BYTES        148
+
+/** Largest payload body the envelope parser accepts. The body is still only
+ *  a verified byte span - the future loader alone decides what to do with it,
+ *  and only a signed payload launched by a `.bat` shim is eligible. */
+#define P4_CONFIG_NATPAY_MAX_PAYLOAD_BYTES   2097152
 
 /** Manifest trust policy: 1 refuses unsigned bundles at `pkg install`
  *  (warns otherwise); 0 warns on unsigned but still installs. A present but

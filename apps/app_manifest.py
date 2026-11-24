@@ -46,6 +46,10 @@ APP_PAYLOADS = [
     ("website", "PIX.PNG", "web"),
     ("website", "BGIMG.HTML", "web"),
 
+    # Batch + webapp hybrid: same html/css/js engine, .bat front door.
+    ("webapp", "WEBAPP.BAT", "root"),
+    ("webapp", "WEBAPP.APPINFO", "apps"),
+
     ("notes", "NOTES.BAT", "root"),
     ("notes", "NOTES.APPINFO", "apps"),
     ("notes", "ALIASES.BAT", "root"),

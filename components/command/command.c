@@ -156,188 +156,17 @@ static StackType_t s_worker_stack[(P4_CONFIG_COMMAND_TASK_STACK + sizeof(StackTy
  * FORWARD DECLARATIONS
  * ======================================================================== */
 
-/* Token bound for the redirection parser below. */
-#define SHELL_REDIRECT_TOKEN_MAX        4
-
 /* Defined near the lifecycle section; needed by the lazy worker ensure. */
 static void command_worker_task(void *arg);
 
 /* ========================================================================
  * REDIRECTION PARSING
  * ========================================================================
- * Handles the three DOS redirection operators on one pass:
- *   >   truncate output to a file
- *   >>  append output to a file
- *   <   read input from a file
- *
- * Quote state is tracked so an operator inside a quoted argument is treated
- * as data. The scan walks the whole line rather than stopping at the first
- * operator, so `sort < in.txt > out.txt` works in either order.
+ * `shell_parse_redirection()` and `shell_redirect_target_kind()` are pure and
+ * live in command_redirect.c, which both the firmware and the host unit lane
+ * compile. Keeping them here would force the host lane to link the display,
+ * USB and networking stack just to test a string parser.
  */
-
-/**
- * Remove quoting and escape markup from a redirection target.
- *
- * A target such as `"my file.txt"`, `'my file.txt'`, or `my^ file.txt` all
- * reach the filesystem layer as the literal path.
- */
-static char *shell_redirect_unquote(char *target)
-{
-    return shell_unescape_in_place(target);
-}
-
-/**
- * Split a command line into its command text and redirection targets.
- *
- * @param command        Line to parse, modified in place.
- * @param command_part   Receives the trimmed command text.
- * @param redirect_target Receives the `>` / `>>` target, or NULL.
- * @param append_mode    Receives true for `>>`.
- * @param input_source   Receives the `<` source, or NULL.
- * @return true when any redirection operator was found.
- */
-/**
- * Find the next redirection operator that is neither quoted nor escaped.
- *
- * Delegates to the shared shell-core scanner so redirection, pipes, and
- * chaining all agree on what counts as syntax.
- *
- * @return Pointer to the operator character, or NULL when none remains.
- */
-static char *shell_redirect_find_operator(char *cursor)
-{
-    return shell_find_unquoted_any(cursor, "><");
-}
-
-/** One redirection operator located during the scanning pass. */
-typedef struct {
-    char *position;   /**< The operator character within the line. */
-    char *target;     /**< First character of the target text. */
-    bool is_output;   /**< true for `>` / `>>`, false for `<`. */
-    bool is_append;   /**< true for `>>`. */
-    bool has_handle;  /**< true when a `0`/`1`/`2` handle prefix was consumed. */
-} shell_redirect_token_t;
-
-/**
- * Parse `>`, `>>`, and `<` out of a command line.
- *
- * Works in two passes so the operator characters can be located before any
- * of them is overwritten. The first pass records every unquoted operator and
- * where its target begins; the second pass writes a terminator over each
- * operator, which simultaneously ends the text that preceded it. Because
- * every operator becomes a NUL, each target is naturally terminated by the
- * next operator without any byte having to be restored.
- *
- * The last occurrence of each direction wins, matching COMMAND.COM.
- */
-bool shell_parse_redirection(char *command,
-                             char **command_part,
-                             char **redirect_target,
-                             bool *append_mode,
-                             char **input_source,
-                             bool *missing_target_out)
-{
-    shell_redirect_token_t tokens[SHELL_REDIRECT_TOKEN_MAX];
-    size_t token_count = 0;
-    char *cursor;
-    size_t index;
-
-    if (command_part == NULL || redirect_target == NULL ||
-        append_mode == NULL || input_source == NULL) {
-        return false;
-    }
-
-    *command_part = command;
-    *redirect_target = NULL;
-    *append_mode = false;
-    *input_source = NULL;
-    if (missing_target_out != NULL) {
-        *missing_target_out = false;
-    }
-
-    if (command == NULL) {
-        return false;
-    }
-
-    /* Pass 1: locate every unquoted operator. A `0`/`1`/`2` glued directly
-     * before the operator is a cmd.exe stream handle: with no separate
-     * stderr stream both handles merge into the transcript, so the digit is
-     * recorded for removal rather than leaking into the command text. */
-    cursor = shell_redirect_find_operator(command);
-    while (cursor != NULL && token_count < SHELL_REDIRECT_TOKEN_MAX) {
-        shell_redirect_token_t *token = &tokens[token_count++];
-
-        token->position = cursor;
-        token->is_output = (*cursor == '>');
-        token->is_append = token->is_output && (cursor[1] == '>');
-        token->target = cursor + (token->is_append ? 2 : 1);
-        token->has_handle = (cursor > command &&
-                             (cursor[-1] == '0' || cursor[-1] == '1' || cursor[-1] == '2'));
-
-        cursor = shell_redirect_find_operator(token->target);
-    }
-
-    if (token_count == 0) {
-        *command_part = shell_trim(command);
-        return false;
-    }
-
-    /* Pass 2: cut the line at every operator. A `>>` needs both characters
-     * blanked so the extra '>' cannot leak into the preceding text; a handle
-     * digit is blanked for the same reason. */
-    for (index = 0; index < token_count; index++) {
-        tokens[index].position[0] = '\0';
-        if (tokens[index].is_append) {
-            tokens[index].position[1] = '\0';
-        }
-        if (tokens[index].has_handle) {
-            tokens[index].position[-1] = '\0';
-        }
-    }
-
-    /* Pass 3: publish the targets. An empty target (`echo hi >`) is a DOS
-     * syntax error: flag it so the caller refuses the line. */
-    for (index = 0; index < token_count; index++) {
-        char *target = shell_redirect_unquote(shell_trim(tokens[index].target));
-
-        if (target[0] == '\0' && missing_target_out != NULL) {
-            *missing_target_out = true;
-        }
-        if (tokens[index].is_output) {
-            *redirect_target = target;
-            *append_mode = tokens[index].is_append;
-        } else {
-            *input_source = target;
-        }
-    }
-
-    *command_part = shell_trim(command);
-    return true;
-}
-
-/**
- * Classify a redirection target for DOS device handling: `NUL` (any case,
- * any extension) discards output / reads EOF, `CON` keeps the console path,
- * everything else is an SD file. Pure.
- */
-shell_redirect_target_kind_t shell_redirect_target_kind(const char *target)
-{
-    const char *dot;
-    size_t head_len;
-
-    if (target == NULL || target[0] == '\0') {
-        return SHELL_REDIRECT_FILE;
-    }
-    dot = strchr(target, '.');
-    head_len = (dot != NULL) ? (size_t)(dot - target) : strlen(target);
-    if (head_len == 3 && strncasecmp(target, "NUL", 3) == 0) {
-        return SHELL_REDIRECT_NUL;
-    }
-    if (head_len == 3 && strncasecmp(target, "CON", 3) == 0) {
-        return SHELL_REDIRECT_CON;
-    }
-    return SHELL_REDIRECT_FILE;
-}
 
 /**
  * Report whether a line contains a `|` pipe separator that is real syntax.
@@ -5625,6 +5454,11 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    if (shell_text_equals_ignore_case(argv[0], "local")) {
+        shell_command_local(argc, argv);
+        return true;
+    }
+
     /* `env` / `printenv` — Unix names for a bare `set` listing. */
     if (shell_text_equals_ignore_case(argv[0], "env") ||
         shell_text_equals_ignore_case(argv[0], "printenv")) {
@@ -6061,6 +5895,11 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "html")) {
         (void)shell_command_html(argc, argv);
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "webapp")) {
+        batch_set_errorlevel(shell_command_webapp(argc, argv));
         return true;
     }
 

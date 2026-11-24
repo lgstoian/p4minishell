@@ -7,6 +7,77 @@
 # generates host_main.c via tools/host_gen_runner.py).
 
 set(HOST_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../main")
+set(HOST_COMPONENTS "${CMAKE_CURRENT_SOURCE_DIR}/../../../components")
+
+# Production sources that are hardware-free by construction (see each file's
+# @hard-rule). Compiled directly so both host lanes exercise the real code
+# rather than a copy or a stub. Keeping the list shared between the Unity lane
+# and the standalone .bat runner means they can never drift. The interpreter
+# itself (batch.c) is in the list: compiling the real implementation is what
+# lets a .bat fixture execute on the host. host_batch_bridge.c supplies only
+# the missing link-time symbols; it is never part of a firmware image.
+set(HOST_PROD_SRCS
+    "${HOST_COMPONENTS}/shell/shell_core.c"
+    "${HOST_COMPONENTS}/shell/shell_print.c"
+    "${HOST_COMPONENTS}/shell/shell_log.c"
+    "${HOST_COMPONENTS}/shell/shell_transcript.c"
+    "${HOST_COMPONENTS}/storage/storage_path.c"
+    "${HOST_COMPONENTS}/batch/batch_env.c"
+    "${HOST_COMPONENTS}/batch/batch_forf.c"
+    "${HOST_COMPONENTS}/batch/calc.c"
+    "${HOST_COMPONENTS}/batch/himem.c"
+    "${HOST_COMPONENTS}/batch/batch.c"
+    "${HOST_COMPONENTS}/batch/batch_trap.c"
+    "${HOST_COMPONENTS}/batch/batch_dim.c"
+    "${HOST_COMPONENTS}/batch/batch_str.c"
+    "${HOST_COMPONENTS}/batch/batch_map.c"
+    "${HOST_COMPONENTS}/batch/error_strings.c"
+    # Pure DOS redirection parser, shared with the firmware. Was split out of
+    # command.c so the host lane compiles the real implementation instead of a
+    # failure stub; it needs no display, USB or network component.
+    "${HOST_COMPONENTS}/command/command_redirect.c"
+    # The batch verbs under test: the evaluator + `set` helpers and the
+    # service/sync cores. Their outside-world contact (SD session, input
+    # source, INI registry, console line, header notification) goes through
+    # optional registration tables that the firmware installs and the Unity
+    # lane leaves empty - no stub, no simulated filesystem.
+    "${HOST_COMPONENTS}/batch/batch_io.c"
+    "${HOST_COMPONENTS}/batch/batch_expr.c"
+    "${HOST_COMPONENTS}/batch/sync.c"
+    "${HOST_COMPONENTS}/batch/svc.c"
+    # Pure option parsers shared by the modal surfaces and `lock`/`wait`.
+    "${HOST_COMPONENTS}/modal/modal_args.c"
+    "${HOST_COMPONENTS}/header/header_layout.c"
+    "${HOST_COMPONENTS}/header/header_status.c"
+    "${HOST_COMPONENTS}/header/header_notify_queue.c"
+    "${HOST_COMPONENTS}/header/header_refresh.c"
+    "${HOST_COMPONENTS}/font/theme.c"
+    "${HOST_COMPONENTS}/clock/clock_core.c"
+    "${HOST_COMPONENTS}/clock/clock_timer.c"
+    "${HOST_COMPONENTS}/editor/editor_doc.c"
+    "${HOST_COMPONENTS}/editor/editor_spell.c"
+    # Page-shot blob model: capture/restore/release of a rendered page as
+    # bytes. Real production source, split out of tui.c so no LVGL is linked;
+    # the live page stays in tui.c behind the accessor seam
+    # (components/tui/tui_page_shot_internal.h).
+    "${HOST_COMPONENTS}/tui/tui_page_shot.c"
+    # Browser PSRAM caches (image LRU + rendered-page LRU). Reaches the page
+    # only through the public tui_page_shot_* API above.
+    "${HOST_COMPONENTS}/browser/src/browser_cache.c"
+    # HID report-descriptor decode: pure, no USB/LVGL. The firmware compiles
+    # the same TU, so the offsets a real mouse needs are tested with no mouse.
+    "${HOST_COMPONENTS}/usb/usb_hid_layout.c"
+    # Canvas 2D rasterizer: pure, no QuickJS/LVGL. The JS bindings are
+    # the thin layer on top; the drawing model is tested here.
+    "${HOST_COMPONENTS}/jsengine/js_canvas.c"
+    # Emoji core: pure detection + the retro DOS fallback map (no LVGL,
+    # no storage). The pack loader and image decode are on-target only.
+    "${HOST_COMPONENTS}/font/emoji_core.c"
+    # Host-lane backing for two storage-backed spellchecker calls (the lane
+    # has no SD card), plus the batch I/O bridge. Never in a firmware image.
+    "host_spell_storage.c"
+    "host_batch_bridge.c"
+)
 
 set(HOST_TEST_SRCS
     "${HOST_TEST_DIR}/test_ansi_format.c"
@@ -28,64 +99,20 @@ set(HOST_TEST_SRCS
     "${HOST_TEST_DIR}/test_editor.c"
     "${HOST_TEST_DIR}/test_himem.c"
     "${HOST_TEST_DIR}/test_batch_expr.c"
+    "${HOST_TEST_DIR}/test_batch_control.c"
+    "${HOST_TEST_DIR}/test_bind.c"
+    "${HOST_TEST_DIR}/test_macro.c"
+    "${HOST_TEST_DIR}/test_error_strings.c"
+    "${HOST_TEST_DIR}/test_trap.c"
+    "${HOST_TEST_DIR}/test_shell_variables.c"
+    "${HOST_TEST_DIR}/test_shell_pipeline.c"
     "${HOST_TEST_DIR}/test_svc.c"
     "${HOST_TEST_DIR}/test_usb_hid_layout.c"
     "${HOST_TEST_DIR}/test_css_color.c"
     "${HOST_TEST_DIR}/test_emoji.c"
     "${HOST_TEST_DIR}/test_js_canvas.c"
-    # Production sources that are hardware-free by construction (see each
-    # file's @hard-rule): compiled directly so the lane exercises the real
-    # code rather than a copy or a stub.
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/shell/shell_core.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/shell/shell_print.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/shell/shell_log.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/shell/shell_transcript.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/storage/storage_path.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/batch_env.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/batch_forf.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/calc.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/himem.c"
-    # The batch verbs under test: the evaluator + `set` helpers and the
-    # service/sync cores. Their outside-world contact (SD session, input
-    # source, INI registry, console line, header notification) goes through
-    # optional registration tables that the firmware installs and this lane
-    # leaves empty - no stub, no simulated filesystem.
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/batch_io.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/batch_expr.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/sync.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/batch/svc.c"
-    # Pure option parsers shared by the modal surfaces and `lock`/`wait`.
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/modal/modal_args.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/header/header_layout.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/header/header_status.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/header/header_notify_queue.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/header/header_refresh.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/font/theme.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/clock/clock_core.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/clock/clock_timer.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/editor/editor_doc.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/editor/editor_spell.c"
-    # Page-shot blob model: capture/restore/release of a rendered page as
-    # bytes. Real production source, split out of tui.c so no LVGL is linked;
-    # the live page stays in tui.c behind the accessor seam
-    # (components/tui/tui_page_shot_internal.h).
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/tui/tui_page_shot.c"
-    # Browser PSRAM caches (image LRU + rendered-page LRU). Reaches the page
-    # only through the public tui_page_shot_* API above.
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/browser/src/browser_cache.c"
     "${HOST_TEST_DIR}/test_browser_cache.c"
-    # HID report-descriptor decode: pure, no USB/LVGL. The firmware compiles
-    # the same TU, so the offsets a real mouse needs are tested with no mouse.
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/usb/usb_hid_layout.c"
-    # Canvas 2D rasterizer: pure, no QuickJS/LVGL. The JS bindings are
-    # the thin layer on top; the drawing model is tested here.
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/jsengine/js_canvas.c"
-    # Emoji core: pure detection + the retro DOS fallback map (no LVGL,
-    # no storage). The pack loader and image decode are on-target only.
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../components/font/emoji_core.c"
-    # Host-lane backing for the two storage-backed spellchecker calls (the
-    # lane has no SD card). Never part of the firmware image.
-    "host_spell_storage.c"
+    ${HOST_PROD_SRCS}
 )
 
 idf_component_register(
@@ -97,19 +124,19 @@ idf_component_register(
         # Header-only use: some host tests include command.h for a shared
         # type or a pure formatter prototype. The command component itself is
         # NOT built here (it pulls display/USB/networking).
-        "../../../components/command"
-        "../../../components/shell"
-        "../../../components/storage"
-        "../../../components/batch"
-        "../../../components/modal"
-        "../../../components/header"
-        "../../../components/font"
-        "../../../components/clock"
-        "../../../components/editor"
-        "../../../components/browser/include"
-        "../../../components/tui"
-        "../../../components/usb"
-        "../../../components/jsengine/include"
+        "${HOST_COMPONENTS}/command"
+        "${HOST_COMPONENTS}/shell"
+        "${HOST_COMPONENTS}/storage"
+        "${HOST_COMPONENTS}/batch"
+        "${HOST_COMPONENTS}/modal"
+        "${HOST_COMPONENTS}/header"
+        "${HOST_COMPONENTS}/font"
+        "${HOST_COMPONENTS}/clock"
+        "${HOST_COMPONENTS}/editor"
+        "${HOST_COMPONENTS}/browser/include"
+        "${HOST_COMPONENTS}/tui"
+        "${HOST_COMPONENTS}/usb"
+        "${HOST_COMPONENTS}/jsengine/include"
     REQUIRES
         unity
         strutil
@@ -120,4 +147,86 @@ idf_component_register(
         markdown
         p4heap
         esp_timer
+)
+
+# Standalone host webapp render probe. It has its own main() and prints a
+# tui dump /a-style report consumed by tools/host_webapp_gate.py as a host
+# pre-gate. It is deliberately NOT part of the Unity host_main.c sources.
+add_executable(host_webapp_render.elf
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../tools/host/main/host_webapp_render.c"
+    "${HOST_COMPONENTS}/jsengine/js_canvas.c"
+)
+target_include_directories(host_webapp_render.elf PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${HOST_COMPONENTS}/markdown"
+    "${HOST_COMPONENTS}/ansi"
+    "${HOST_COMPONENTS}/gfx"
+    "${HOST_COMPONENTS}/jsengine/include"
+    "${HOST_COMPONENTS}/p4heap/include"
+    "${HOST_COMPONENTS}/strutil/include"
+    "${HOST_COMPONENTS}/json/include"
+    "${CMAKE_BINARY_DIR}/config"
+)
+target_link_libraries(host_webapp_render.elf PRIVATE
+    __idf_markdown
+    __idf_ansi
+    __idf_gfx
+    __idf_p4heap
+    __idf_strutil
+    __idf_json
+    __idf_esp_timer
+)
+set_target_properties(host_webapp_render.elf PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# Standalone host .bat runner. Same production sources as the Unity lane
+# (HOST_PROD_SRCS) plus a non-Unity main(); no second interpreter, parser or
+# echo renderer. The only host-only code is the thin execute_command router in
+# host_batch_run.c and the I/O bridge in host_batch_bridge.c. Consumed by
+# tools/host_batch_run.py as a hardware-free pre-gate, never a firmware image.
+add_executable(host_batch_run.elf
+    "host_batch_run.c"
+    ${HOST_PROD_SRCS}
+)
+target_include_directories(host_batch_run.elf PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${HOST_COMPONENTS}/command"
+    "${HOST_COMPONENTS}/shell"
+    "${HOST_COMPONENTS}/storage"
+    "${HOST_COMPONENTS}/batch"
+    "${HOST_COMPONENTS}/modal"
+    "${HOST_COMPONENTS}/header"
+    "${HOST_COMPONENTS}/font"
+    "${HOST_COMPONENTS}/clock"
+    "${HOST_COMPONENTS}/editor"
+    "${HOST_COMPONENTS}/browser/include"
+    "${HOST_COMPONENTS}/tui"
+    "${HOST_COMPONENTS}/usb"
+    "${HOST_COMPONENTS}/jsengine/include"
+    "${HOST_COMPONENTS}/p4heap/include"
+    "${HOST_COMPONENTS}/strutil/include"
+    "${HOST_COMPONENTS}/json/include"
+    "${HOST_COMPONENTS}/markdown"
+    "${HOST_COMPONENTS}/ansi"
+    "${HOST_COMPONENTS}/gfx"
+    "${HOST_COMPONENTS}/filetype"
+    "${CMAKE_BINARY_DIR}/config"
+)
+target_link_libraries(host_batch_run.elf PRIVATE
+    __idf_markdown
+    __idf_ansi
+    __idf_gfx
+    __idf_p4heap
+    __idf_strutil
+    __idf_json
+    __idf_filetype
+    __idf_esp_timer
+)
+# Mirror the IDF app link so unreferenced TUs (and their board-only symbols)
+# are discarded exactly as they are in the Unity ELF.
+target_compile_options(host_batch_run.elf PRIVATE -ffunction-sections -fdata-sections)
+target_link_options(host_batch_run.elf PRIVATE -Wl,--gc-sections)
+set_target_properties(host_batch_run.elf PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )

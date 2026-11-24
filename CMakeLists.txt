@@ -47,6 +47,7 @@ components/imgdec
   components/markdown
   components/mcp
   components/modal
+  components/nativepay
   components/networking
   components/portal
   components/chat

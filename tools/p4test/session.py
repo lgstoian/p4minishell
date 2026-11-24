@@ -47,7 +47,7 @@ PANICS = (
     b"Task watchdog",
 )
 
-__all__ = ["DeviceSession", "P4Error", "PanicError"]
+__all__ = ["DeviceSession", "P4Error", "PanicError", "read_until_self_test"]
 
 
 class P4Error(RuntimeError):
@@ -170,8 +170,24 @@ class DeviceSession:
             raise P4Error("read_exact(%d) got %d bytes" % (n, len(out)))
         return bytes(out)
 
-    def read_until(self, marker: bytes, timeout: float = 15.0) -> bytes:
-        """Read through ``marker`` inclusive; leftover goes to the pushback."""
+    def read_until(self, marker: bytes, timeout: float = 15.0,
+                   required: bool = False) -> bytes:
+        """Read through ``marker`` inclusive; leftover goes to the pushback.
+
+        ``required=True`` is for callers whose next step is only meaningful if
+        the marker actually arrived (app start/done markers, binary frame magic,
+        confirmation prompts). On timeout it raises :class:`P4Error` instead of
+        handing back a buffer that merely happens to contain the *previous*
+        command's output - the stale-buffer false green recorded in
+        docs/AUDIT_2026-11.md (finding 4). The bytes read are kept in the
+        pushback so nothing is lost; a failed caller never receives them as a
+        successful result.
+
+        The default stays ``False`` for the deliberately optional waits (e.g.
+        "is a confirmation prompt present?"). Such a return is NOT proof that
+        the marker was seen: callers must check ``marker in result`` themselves,
+        or pass ``required=True``.
+        """
         marker = marker.encode() if isinstance(marker, str) else marker
         buf = bytearray(self._rx)
         self._rx.clear()
@@ -182,7 +198,14 @@ class DeviceSession:
                 buf += chunk
         idx = buf.find(marker)
         if idx < 0:
+            # Never discard bytes: a retry or a different caller can still use
+            # them. But a required marker must not produce a green result.
             self._rx.extend(buf)
+            if required:
+                tail = bytes(buf[-160:]).decode("utf-8", "replace")
+                raise P4Error("read_until(%r): marker not seen within %.1fs "
+                              "(%d byte(s) read, no marker)\n%s"
+                              % (marker, timeout, len(buf), tail))
             return bytes(buf)
         end_i = idx + len(marker)
         self._rx.extend(buf[end_i:])
@@ -343,10 +366,9 @@ class DeviceSession:
         # instead of assuming the very next bytes are the header. Without this,
         # a single log line between the "streaming" notice and the frame made
         # the capture fail with `bad frame magic` (the visual-sweep flake).
-        prelude = self.read_until(magic, size_timeout)
-        if magic not in prelude:
-            raise P4Error("no frame magic %r in stream (%r)"
-                          % (magic, bytes(prelude[-120:])))
+        # The magic is load-bearing: a missing one must raise, never fall
+        # through to reading a size out of stale transcript bytes.
+        prelude = self.read_until(magic, size_timeout, required=True)
         size = int.from_bytes(self.read_exact(4, size_timeout), "little")
         return self.read_exact(size, data_timeout)
 
@@ -378,3 +400,57 @@ class DeviceSession:
                 tail = text[start:idx + 1200].replace("\r", "")
                 raise PanicError("panic marker %r in output:\n%s"
                                  % (marker.decode(), tail))
+
+
+class _FakeReader:
+    """Minimal stand-in for the byte-I/O half of :class:`DeviceSession`."""
+
+    def __init__(self, chunks=(), pushback=b""):
+        self._rx = bytearray(pushback)
+        self._chunks = list(chunks)
+
+    def _read_serial(self, n, timeout):
+        return self._chunks.pop(0) if self._chunks else b""
+
+
+def read_until_self_test() -> int:
+    """Host-only red canary for marker-synchronised reads (no board needed).
+
+    Proves the three properties a suite depends on: a marker already in the
+    pushback is consumed through its end, a trailing byte stays buffered, and
+    ``required=True`` raises on a missing marker instead of returning stale
+    output that would otherwise be mistaken for success.
+    """
+    checks = []
+
+    fake = _FakeReader(pushback=b"junk[OK]tail")
+    got = DeviceSession.read_until(fake, b"[OK]", 0.05)
+    checks.append(("marker in pushback returned through end",
+                   got == b"junk[OK]" and bytes(fake._rx) == b"tail"))
+
+    fake = _FakeReader(chunks=[b"stale output"])
+    got = DeviceSession.read_until(fake, b"[OK]", 0.05)
+    checks.append(("optional wait keeps stale bytes without a marker",
+                   got == b"stale output" and bytes(fake._rx) == b"stale output"
+                   and b"[OK]" not in got))
+
+    fake = _FakeReader(chunks=[b"stale output"])
+    raised = False
+    try:
+        DeviceSession.read_until(fake, b"[OK]", 0.05, required=True)
+    except P4Error:
+        raised = True
+    checks.append(("required marker missing raises", raised and
+                   bytes(fake._rx) == b"stale output"))
+
+    fake = _FakeReader(chunks=[b"first ", b"chunk[OK]rest"])
+    got = DeviceSession.read_until(fake, b"[OK]", 0.05, required=True)
+    checks.append(("required marker arriving later is accepted",
+                   got == b"first chunk[OK]" and bytes(fake._rx) == b"rest"))
+
+    for name, ok in checks:
+        print("  [%s] %s" % ("PASS" if ok else "FAIL", name))
+    bad = sum(1 for _n, ok in checks if not ok)
+    print("read_until self-test: %s (%d canaries)"
+          % ("PASS" if bad == 0 else "FAIL", len(checks)))
+    return 1 if bad else 0

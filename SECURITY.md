@@ -4,7 +4,7 @@ How P4MiniShell protects secrets, what the device lock actually enforces,
 and what is still missing. Read this before exposing a device to an
 untrusted network.
 
-- **Version:** v1.4.3 · **License:** MIT (see [`licence.md`](licence.md))
+- **Version:** v1.5.0 · **License:** MIT (see [`licence.md`](licence.md))
 - Related docs: [`command.md`](command.md) (`security`, `crypt`, `httpd`,
   `pkg`), [`ABI.md`](ABI.md) (package signing), [`readme.md`](readme.md),
   [`roadmap.md`](roadmap.md) (platform/security row).
@@ -105,6 +105,34 @@ report. There is no bug-bounty program.
   its CRC manifest and optional signature — enable `P4_CONFIG_PKG_REQUIRE_SIGN`
   (or `pkg install /signed`) if the index server is not trusted.
 
+## Native payload trust (opt-in `.P4X`)
+
+- **Signed `.P4X` only, one trusted key.** The reserved
+  `NATIVE/<APP>.P4X` envelope is the sole payload path. Its canonical-bytes
+  digest is checked against an ECDSA P-256 signature using the same single raw
+  public key as package signing (`p4sign` NVS, installed with `pkg key
+  install`); CRC-32 is integrity only, never authenticity. A missing verifier
+  or trusted key is an explicit non-success verdict, never an implicit pass.
+  There is no revocation list or online trust ([`ABI.md`](ABI.md) §4.1).
+- **No unsigned execution.** Unsigned `.P4X`/`.bin` files and any blob failing
+  the CRC, SHA-256, arch/ABI-tag, size or signature gates stay inert data. The
+  format-only core (`components/nativepay`) parses a memory buffer; it never
+  reads a file or transfers control. The loader is **not** implemented in
+  v1.5.0, so no payload executes today; when it lands it will be one loader
+  path, not a second runtime (`docs/native_packaging.md` §2.1).
+- **No MMU isolation.** There is no `dlopen`, relocator, per-app address space
+  or memory isolation: a verified payload would run in the shell's single
+  address space with the firmware's privileges. Treat signed payload code as
+  trusted code, not as a sandbox boundary.
+- **`.bat` shim is the only front door.** A payload is launched only by the
+  app's ordinary `.bat` shim through the one loader path (pure native, or a
+  hybrid of batch setup + native payload + webapp page). There is no new verb,
+  no direct launch from a card path, and no bypass of the install-time
+  manifest CRC/`SIGN` checks.
+- **Board-free proof status.** The verifier has on-target unit cases
+  (`test/main/test_native_payload.c`); no on-device launch or hardware run is
+  claimed for this v1.5.0 release candidate.
+
 ## HTTP file server (`httpd`)
 
 - `httpd` serves SD files over the LAN and **auto-starts when the station
@@ -174,7 +202,7 @@ and keep their contract; prefer `link` for anything destructive.
   jobs run, and restores Wi-Fi afterwards.
 - SoftAP is station-only except the captive portal (`wifi setup on`, open AP
   `P4MiniShell-Setup` by config, TX-capped) and **board-to-board chat** (`chat host on`, open AP `P4MiniShell-Chat` by config, TX-capped); there is no open AP by default.
-- Secure boot / flash encryption: no provisioned profile ships in v1.4.4
+- Secure boot / flash encryption: no provisioned profile ships in v1.5.0
   (see `roadmap.md` platform row). Enable them via your own ESP-IDF signing
   flow if your deployment needs them.
 
@@ -215,6 +243,13 @@ and keep their contract; prefer `link` for anything destructive.
   `sd:/` is user-authored (the same trust as a `.bat`); an `http(s)` page is
   remote content and must be treated as untrusted. `P4_CONFIG_BROWSER_JS=0`
   disables execution entirely.
+- **The `webapp` facade adds no second trust boundary.** `webapp open`, `dump`,
+  `css` and `js` delegate to the existing `html` / `tui dump` / `browser css`
+  / `js eval` surfaces, so page JavaScript runs in that same QuickJS sandbox
+  with the same limits. `apps/webapp/WEBAPP.BAT` opens the local
+  `%APPDRIVE%/WEB/INDEX.HTML`; a page reached through `webapp open <url>` is
+  remote content and untrusted. `tools/host_webapp_gate.py` is a host render
+  pre-check, not a security boundary or a hardware proof.
 - **MCP is a remote client.** `mcp connect` uses the networking HTTP/TLS
   policy; responses are displayed, never auto-run. The optional `token` is not
   yet sent (bearer transport is a follow-up); do not rely on it for

@@ -191,18 +191,29 @@ void shell_command_map(int argc, char **argv);
  *   trap /raise CODE "message"     manual raise
  *   trap /clear                    remove handler
  *
- * Engine hooks (called from the dispatcher on errorlevel):
+ * Engine hooks (called from the batch frame loop after a line fails):
  *   trap_handler_installed()
  *   trap_handler_label()
  *   trap_handler_pop()
  *   trap_set_message(msg)
+ *   batch_trap_maybe_fire()   consume a handler on errorlevel >= 2
+ *
+ * A firing trap is one-shot: the handler is popped and execution jumps to
+ * its label through the same goto machinery `goto` uses. The failing code is
+ * published in the ordinary (non-virtual) TRAP_CODE / TRAP_MSG variables so
+ * a script can inspect it. No new dispatcher or jump path is introduced.
  */
 void shell_command_trap(int argc, char **argv);
 bool trap_handler_installed(void);
 const char *trap_handler_label(void);
 void trap_handler_pop(void);
 void trap_set_message(const char *msg);
+bool batch_trap_maybe_fire(void);
 void trap_init(void);
+
+/* Arm a goto from a non-command engine hook (trap). Uses the one pending-goto
+ * slot in the active batch task context; no second control-flow path. */
+void batch_goto_label(const char *label);
 
 /* ========================================================================
  * ENVIRONMENT VARIABLES AND EXPANSION
@@ -574,6 +585,16 @@ void shell_command_set_prompt(int argc, char **argv);
  *   set /p NAME=<prompt>       Prompt the user and store the typed line
  */
 void shell_command_set(int argc, char **argv);
+
+/**
+ * `local NAME=value` — assign in the frame-local slot class.
+ *
+ * This is a thin, guarded front door over shell_command_set(): the env core
+ * already routes names created inside a `call :label` / `gosub` scope to the
+ * frame-local class. Outside a call scope the assignment is refused instead
+ * of silently becoming global. No second variable table is introduced.
+ */
+void shell_command_local(int argc, char **argv);
 
 /** `path` — show or replace the PATH variable. */
 void shell_command_path(int argc, char **argv);

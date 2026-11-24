@@ -211,7 +211,7 @@ holder per port.
   (`icon/icon-512.png`, `main/assets/icon_splash.c/.h`) from the git-ignored
   `icon/icon.png` master.
 - `make_sd_archive.py` - assemble the complete public SD payload
-  (`release/p4minishell-sd-v1.4.3.zip`) from the same `apps/app_manifest.py`
+  (`release/p4minishell-sd-v1.5.0.zip`) from the same `apps/app_manifest.py`
   list plus templates, dictionaries and the DejaVu reading fonts. No invented
   files; it mirrors what the pushers deploy.
 - `size_budget.py` - static DIRAM gate over the built ELF/map (fails above the
@@ -299,8 +299,41 @@ holder per port.
   host subset of the same Unity sources on ESP-IDF's `linux` target, parses the
   same summaries, and (with `--static`) enforces `host_test_manifest.json`:
   every `test_*.c` included or excluded-with-reason, and the case count
-  unchanged. `host_gen_runner.py` generates `test/host/main/host_main.c` from
-  that manifest (`--check` for drift). See `harness.md` §2.2.
+  unchanged (345 cases in the current tree). The lane compiles the **real**
+  batch interpreter (`batch.c`, `batch_trap.c`, `batch_dim.c`, `batch_str.c`,
+  `batch_map.c`, `error_strings.c`), not a second implementation;
+  `test/host/main/host_batch_bridge.c` supplies the firmware/board symbols it
+  cannot link with honest "unavailable" behaviour and lives only in
+  `test/host` — never in a firmware image. `host_gen_runner.py` generates
+  `test/host/main/host_main.c` from that manifest (`--check` for drift). See
+  `harness.md` §2.2.
+- `host_webapp_gate.py` — host-only **webapp render pre-gate, never hardware
+  sign-off**: renders each HTML fixture in `tools/host/fixtures/webapp/` through
+  the firmware's ONE DOM/CSS/render engine via the standalone
+  `tools/host/main/host_webapp_render.c` harness and compares normalised
+  `tui dump /a`-style text and colour runs — plus optional PNG/BMP frames
+  through `p4test.screenshot` — against committed baselines in
+  `fixtures/webapp/baseline/`. The ELF is discovered under `test/host/build*`
+  (no hardcoded path; `--renderer` overrides) and a POSIX ELF is routed through
+  WSL on Windows. `--check` (default), `--update` rebaselines, `--self-test` is
+  the red canary, `--no-png` is text-only. Verified: 1 fixture, 51 assertions OK.
+  No serial port, no device; `apps/webapp/WEBAPP.BAT` is the board-facing
+  reference shim for the same `webapp` facade. See `harness.md` §2.2.
+- `host_batch_run.py` — host-only **real `.bat` fixture pre-gate, never hardware
+  sign-off**: runs `tools/host/fixtures/batch/HELLO.BAT` through the real
+  interpreter via the standalone `test/host/main/host_batch_run.c` ELF built by
+  `test/host/main/CMakeLists.txt`. The router calls the firmware's own
+  `shell_command_*` verbs with the real expander/tokenizer; it does not
+  reimplement the language and does **not** run every verb — lines needing full
+  `command.c` dispatch are reported as unsupported on this lane, never faked.
+  `test/host/main/host_batch_bridge.c::host_batch_fs_init(root)` installs a
+  host-only POSIX I/O backend through the additive `batch_io_ops_t.file_open` /
+  `stat_path` hooks; `--root` or `P4_HOST_SD_ROOT` selects the fixture root
+  (default `tools/host/fixtures/batch`), and a missing root fails honestly.
+  `--fixture`, `--check` (default), `--update` and `--self-test` (7 canaries);
+  ELFs are discovered under the repo build dirs and POSIX ELFs route through
+  WSL on Windows. Verified: 1 fixture, 7 assertions OK. Both host pre-gates are
+  hardware-free and never sign off a board — see `harness.md` §2.2.
 - `regression.py` — one-command host regression: one reset, then the full
   p4test suite plus the unique-coverage drivers (companion deep/db/alarm,
   package deploy/install, large-editor soak, touch sweep, TX integrity, boot

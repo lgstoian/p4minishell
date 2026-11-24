@@ -38,7 +38,13 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include "esp_err.h"
+/* A caller that only needs the guarded-session and service prototypes (the
+ * batch verbs, the host lane) defines P4_STORAGE_NO_FATFS_TYPES so this header
+ * does not pull the SDMMC/FATFS include chain. The single FATFS-typed
+ * declaration below is hidden the same way; nobody using that define calls it. */
+#ifndef P4_STORAGE_NO_FATFS_TYPES
 #include "esp_vfs_fat.h"
+#endif
 #include "storage_path.h"
 
 #ifdef __cplusplus
@@ -148,8 +154,10 @@ void shell_command_sd_mount(void);
 /** stat() wrapper mapping errno onto esp_err_t. */
 esp_err_t shell_sd_stat_path(const char *path, struct stat *st);
 
+#ifndef P4_STORAGE_NO_FATFS_TYPES
 /** Translate a FATFS FRESULT into the closest esp_err_t. */
 esp_err_t shell_sd_fresult_to_esp_err(FRESULT result);
+#endif
 
 /**
  * Convert a VFS path under the SD mount point to a raw FATFS path.
