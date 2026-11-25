@@ -27,7 +27,15 @@ set /a N19=19+%NX% > NUL
 set /a N20=20+%NX% > NUL
 set /a N22=22+%NX% > NUL
 draw clear screen
-gosub %APPROOT%/APPLIB.BAT::bar 1 3 single
+set DOS_THEME=ice
+gosub %APPROOT%/APPLIB.BAT::header "NETWORK TOOLS" "[M-RICH-NET] wifi + dns + mqtt"
+gosub %APPROOT%/APPLIB.BAT::tile 1 5 44 11 double "LINK QUALITY"
+gosub %APPROOT%/APPLIB.BAT::meter 4 8 36 82 "RSSI 82%"
+gosub %APPROOT%/APPLIB.BAT::meter 4 11 36 25 "NOISE 25%"
+gosub %APPROOT%/APPLIB.BAT::tile 47 5 33 11 single "KNOWN NETS"
+gosub %APPROOT%/APPLIB.BAT::table 49 8 "SSID|BSSID|Band" "lab|a4:11|2.4" "mesh|b8:02|5" "guest|c1:90|2.4"
+gosub %APPROOT%/APPLIB.BAT::statusbar 21 "link=offline  dns=local" "1 wifi  2 join  3 ping  4 dns  q quit"
+echo [M-DOS-NET] screen=NET-TOOLS panels=3 head="NETWORK TOOLS" theme=ice bars=2 table=Y spark=0 status=Y
 draw text 32 2 "NETWORK TOOLS ★" 14
 gosub %APPROOT%/APPLIB.BAT::panel 4 10 single "Tools"
 draw text 5 6 "Wi-Fi status, connect, ping, dns, fetch"

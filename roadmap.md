@@ -334,6 +334,28 @@ verified on hardware; host/static gates are pre-flight only.
   labelled as such. **Open:** the new transcripts need a board rebaseline of
   `tools/appdiff/baseline/*.transcript.txt`; no hardware sign-off is claimed.
 
+### 18. DOS visual direction (in progress, board-free)
+
+**Status: host proofs only.** No hardware result is claimed for this work.
+
+- **One explicit look:** a modern take on retro MS-DOS - an 80x25 CP437 cell
+  grid, box-drawn panels, the DOS/CGA palette, a chunky bitmap cell font, status
+  bars and keyboard menus. Denser information and smoother interaction, not web
+  cards or gradients; still the one cell renderer/sampler, one CSS colour
+  parser/DOS palette and one input/event model (ADR-16/17).
+- **Reference apps:** distinct DOS dashboards and boxed screens, ASCII/CP437
+  charts and a flagship showcase app; captions in `docs/apps.md` describe each
+  screen. Hardware recapture is pending.
+- **Web showcase:** functional `portal`/`dashboard`/`article`/`form` HTML
+  fixtures rendered through the real engine into `screenshots/web/*.png`
+  (byte-identical copies in `docs/assets/web/`), plus DOS-styled
+  `web-features.png` / `webapp-forms.png`. All are labelled host proofs and
+  linked from `readme.md` "HTML examples and screenshots".
+- **Proofs:** `tools/make_web_screenshots.py` and
+  `tools/visual_proof_gate.py --check` / `--self-test` (palette, CP437 box
+  borders, ink bands, distinct signatures, red canaries). Board-free pre-gates
+  only; no device capture and no hardware sign-off (`harness.md` sections 0/2.2).
+
 ## Part 2 — Where we are going
 
 Realistic directions grouped by device class. Priorities are suggestions, not
@@ -349,6 +371,7 @@ commitments.
 | CI board auto-discovery | Scaling | Done: `build.yml` discovers `boards/*/` for the matrix and completeness lint — adding a profile needs no workflow edit |
 | Hardware-free host unit lane | PR-time logic coverage | Done: `test/host/` on the IDF `linux` target, **375 generated cases** (manifest count; refresh the last-run count), CI `host-unit` job; manifest + generator + prelude + guard classification. Hardware sign-off unchanged ([`harness.md`](harness.md) 2.2) |
 | Host gate ladder (v1.6) | PR-time surface coverage | Done: batch, webapp, tui, modal, gfx wiring, native payload checker and the 33-app host proof gate; all compile/drive shipped code, honest SKIPs for hardware surfaces, never a board sign-off ([`harness.md`](harness.md) 2.2) |
+| DOS visual proof gates | Keep the DOS presentation honest | In progress: `make_web_screenshots.py --check` and `visual_proof_gate.py --check` / `--self-test` assert palette, CP437 box borders, ink bands and distinct signatures over labelled host proofs; board-free pre-gate only, no device capture ([`harness.md`](harness.md) 2.1) |
 | App transcript rebaseline | Hardware parity | Open: `[M-RICH-*]` lines changed all 33 apps, so `tools/appdiff/baseline/*.transcript.txt` needs a board rebaseline before hardware parity can be green |
 | Remaining hardware-coupled models | More host coverage | Open: `batch_expr` needs `shell_sd_begin/end` and `svc` needs `storage_ini_file_foreach` (a file-I/O seam); `tui` is NO-GO - the selftest needs real `lv_font_t` metrics and `tui_font_cell_t` embeds an LVGL pointer. LVGL-on-host is rejected (esp_lcd/esp_vfs_fat) |
 | Per-board release artifacts | Shippable images | Done: `make_release.py bins` verified for both boards (`p4minishell-<board>.bin` merge; `release/` stays ignored) |

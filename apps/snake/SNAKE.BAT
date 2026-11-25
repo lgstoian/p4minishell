@@ -42,7 +42,9 @@ set /a MID2=%MID%+2 > NUL
 set /a FOOT=%TUIROWS%-6 > NUL
 set /a FOOT2=%FOOT%+2 > NUL
 draw box 1 2 %TUICOLS% %SH% double "SNAKE ★"
-if errorlevel 1 goto nogfx
+set DOS_THEME=green
+echo [M-DOS-SNAKE] screen=SNAKE-ARENA panels=2 head="SNAKE" theme=green bars=0 table=N spark=0 status=Y
+gosub %APPROOT%/APPLIB.BAT::statusbar 23 "score=%score%  len=%len%" "wasd move  p snap  q quit"
 set dir=1
 set dc=d
 set len=3

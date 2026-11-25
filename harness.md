@@ -26,8 +26,10 @@ The **host unit lane** (§2.2) is an additional pre-gate: it catches logic
 regressions before a board is free, and it must stay green when a change
 touches a source it compiles. It is **never** a substitute for this rule — a
 host pass signs off nothing about hardware. The same applies to all v1.6 host
-gates (batch, webapp, gfx, tui, modal, native payload checker): they compile or
-drive shipped code, never a fake backend, and none requires or replaces a board.
+gates (batch, webapp, gfx, tui, modal, native payload checker) and the visual
+proof gates (web-screen generator, visual proof gate and its canaries): they
+compile or drive shipped code and the one shared pixel model, never a fake
+backend, and none requires or replaces a board.
 
 ---
 
@@ -93,7 +95,11 @@ python tools/host_modal_gate.py --check    # v1.6: focus/progress/session transi
 python tools/gfx_toolkit_test.py --host    # v1.6: gfx wiring/RGB565 contract
 python tools/host_batch_run.py --check     # v1.6: real .bat fixtures
 python tools/host_webapp_gate.py --check   # v1.6: shared DOM/CSS render path
-python tools/host_apps_gate.py --check     # v1.6: 33 enriched apps, 363 host assertions
+python tools/host_browser_gate.py --check  # real renderer: wiki + 4 DOS pages, 271 assertions
+python tools/host_apps_gate.py --check     # 34 apps, 679 host assertions, 45 honest SKIPs
+python tools/make_web_screenshots.py --check  # DOS web proof PNGs (host render)
+python tools/visual_proof_gate.py --check     # palette, box borders, ink bands, signatures
+python tools/visual_proof_gate.py --self-test # red canaries (no board)
 # size budget runs only when build/p4minishell.elf exists
 python tools/p4test_run.py --static    # the SAME gate list, no board
 ```
@@ -105,9 +111,40 @@ generates a harness from `tools/host/fixtures/modal/transitions.json` and links
 the real `components/modal/modal_args.c`; `gfx_toolkit_test.py --host` checks
 the RGB565 constants shared with `test/main/test_gfx.c` against
 `tools/host/fixtures/gfx/expected.json`; `host_apps_gate.py` loads
-`host_batch_run.py` as a library and checks the 33 `[M-RICH-*]` app fixtures,
-reporting the 40 hardware-only surfaces as honest SKIPs (never simulated).
+`host_batch_run.py` as a library and checks the 34 `[M-RICH-*]` app fixtures
+(including the flagship showcase), reporting the 45 hardware-only surfaces as
+honest SKIPs (never simulated). `host_browser_gate.py --check` discovers the
+shipped `host_webapp_render.elf` and **executes** the real DOM renderer on five
+fixtures (the ESP32 wiki proof plus the four DOS pages): 271 assertions against
+exact baselines captured from that renderer, plus 11 labelled STATIC wiring
+checks; `--self-test` runs 9 red canaries. It proves no device behaviour:
+live HTTPS, the full 2000-row page, real LVGL input and glass taps remain
+DEVICE-ONLY. `host_all_gates.py` now runs 35 gates / 15 canaries.
 Each has a red canary or exact baseline; none opens a serial port.
+
+**Visual proof (board-free, never sign-off).** `tools/visual_proof_gate.py
+--check` validates the committed 1024x600 proof PNGs using the ONE shared pixel
+model (`p4test.screenshot.Bmp`, never a copied parser): a real share of
+DOS-palette pixels, continuous CP437 box-border runs at the panel edges, ink in
+the header/body/footer bands (so an empty grid fails), no LVGL default-theme
+blue blobs (reusing `p4test.theme_guard.scan_bmp`) and no empty-box glyph runs,
+plus a distinct per-screen signature so no two pages/apps share a proof and a
+byte-exact `docs/assets/web/` mirror of each web page.
+`--update` rewrites the signature manifest; a missing or stale signature makes
+`--check` red. The checked set is the four DOS pages under `screenshots/web/`
+plus `docs/assets/web-features.png` and `docs/assets/webapp-forms.png`.
+`--self-test` runs seven in-memory canaries — blank frame, default-blue/shell
+chrome, wrong palette, broken border, tofu glyph cells, a duplicate page
+signature, and a clean frame that must be accepted — and is red if any bad case
+passes or the clean control fails. `host_all_gates.py` exposes these as gate ids
+`visual`/`visual_canary` and the real-execution page checks as `browser`/
+`browser_canary`. The PNGs come from
+`python tools/make_web_screenshots.py --update` (functional `portal`,
+`dashboard`, `article` and `form` fixtures rendered through the real engine)
+and `python tools/make_webapp_proof.py --update` (DOS feature/form proofs);
+both have `--check` and `--self-test`. These are host proofs labelled
+`HOST PROOF - NOT A DEVICE CAPTURE`: they assert presentation structure, not
+hardware behaviour, and no device capture or board result is claimed.
 
 `tools/harness/verify.py` and `tools/p4test/runner.py` now share one canonical
 gate list (asserted by `python tools/p4test_run.py --self-test`), so `--static`
@@ -205,11 +242,21 @@ python tools/host_batch_run.py --check    # real .bat fixture pre-gate (separate
   (no hardcoded path: `--renderer` overrides) and a POSIX ELF is routed through
   WSL on Windows. `--check` is the default, `--update` rebaselines after an
   intentional render change, `--self-test` is the red canary, and `--no-png` is
-  text-only. Verified: 1 fixture, 51 assertions OK. It opens no serial port and
+  text-only. Current result: 8 fixtures / 432 assertions OK. It opens no serial port and
   touches no board: a pass only says the shared render path is stable on the
   host, never that hardware is signed off (§0 still governs).
   `apps/webapp/WEBAPP.BAT` is the board-facing reference shim for the same
-  `webapp` facade.
+  `webapp` facade. The DOS-presentation slot adds visual assertions on those
+  parsed rows (boxed frame rows, a status/footer line, no empty-box glyphs and
+  no raw debug labels); its red canaries cover that check too.
+- **Browser real-execution pre-gate (v1.6 visual cycle):** `tools/host_browser_gate.py`
+  uses the same ELF but asserts what the renderer actually emitted for five
+  fixtures: the ESP32 wiki page (H1, infobox, bright-cyan `Espressif Systems`
+  link, `240 MHz`, both image outcomes) and the four DOS showcase pages.
+  `--check` reports 271 assertions plus 11 labelled STATIC wiring checks;
+  `--self-test` runs 9 red canaries. The wiki PNG is a first-25-rows host proof,
+  not live HTTPS or the full 2000-row device page; touch/mouse/keyboard-on-glass
+  is device-only. Board-free pre-gate only, never hardware sign-off.
 - **Batch app pre-gate (also separate from Unity):** `tools/host_batch_run.py`
   runs a **real `.bat` fixture** (`tools/host/fixtures/batch/HELLO.BAT`) through
   the real interpreter via `test/host/main/host_batch_run.c` (built as
@@ -247,23 +294,26 @@ python tools/host_batch_run.py --check    # real .bat fixture pre-gate (separate
 - **Reference-app host proof (v1.6):** `python tools/host_apps_gate.py --check`
   drives every enriched `.bat` app through the same real interpreter ELF used
   by `host_batch_run.py` (fixtures under `tools/host/fixtures/apps/`, baselines
-  under `baseline/`). Current result: **33/33 apps, 363 host assertions PASS,
-  40 hardware surfaces SKIP (gfx/TUI/modal/webapp/native, each with a named
-  reason) and 7 red-canary checks**. A SKIP is honest — the fixture contains no
+  under `baseline/`). Current result: **34 apps (33 plus the flagship showcase),
+  679 host assertions PASS, 45 hardware surfaces SKIP (gfx/TUI/modal/webapp/
+  native, each with a named reason) and 7 red-canary checks**. A SKIP is honest — the fixture contains no
   unsupported verb and the gate rejects the host-lane "unsupported command"
   string. `--update` rebaselines only after an intentional transcript change;
   `--self-test` proves the gate can fail. This is a host proof, not hardware
   sign-off. The new `[M-RICH-*]` lines intentionally change app transcripts, so
   `tools/appdiff/baseline/*.transcript.txt` must be regenerated on a board
-  before hardware transcript parity is green.
+  before hardware transcript parity is green. The DOS-redesign pass also
+  asserts per-app screen structure from the real fixture emission (panel/header
+  counts, box-border rows and colour runs where available) and distinct
+  structures across apps; hardware-dependent surfaces still SKIP honestly.
 - **Native payload checker:** `tools/make_native_payload.py check|selftest`
   verifies a signed test envelope in `tools/host/fixtures/native/` with a
   throwaway key; it never maps or runs the bytes. The keys are test-only and
   never installed on a board (`SECURITY.md`).
-- **App proofs:** `tools/host_apps_gate.py` drives all **33 updated reference
-  apps** through the real interpreter (363 host assertions PASS, 40
-  hardware-dependent surfaces honestly SKIP with a named reason, 7 self-test
-  canaries); hardware surfaces are never faked. The app identity/uniqueness
+- **App proofs:** `tools/host_apps_gate.py` drives all **34 reference apps** (33
+  updated ones plus the flagship showcase) through the real interpreter (679
+  host assertions PASS, 45 hardware-dependent surfaces honestly SKIP with a
+  named reason, 7 self-test canaries); hardware surfaces are never faked. The app identity/uniqueness
   gates (`gallery_audit.py` + `gallery_audit_selftest.py`) remain static
   pre-gates; a host-generated app proof is labelled as such in `docs/apps.md`
   and `docs/assets/proof-index.html`. **The v1.6 `[M-RICH-*]` transcript lines

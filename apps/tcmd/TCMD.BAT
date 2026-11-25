@@ -105,7 +105,12 @@ set RAC=7
 if %PA%==L set LAC=15
 if %PA%==R set RAC=15
 rem Frame.
-gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "Commander ★"
+set DOS_THEME=ice
+gosub %APPROOT%/APPLIB.BAT::header "COMMANDER" "[M-RICH-TCMD] dual-pane navigator"
+draw text 3 2 "dual-pane commander  (%APPNAME% on %APPDRIVE%)"
+draw text %HX% 2 "1:/ 2:/APPS"
+gosub %APPROOT%/APPLIB.BAT::statusbar %SY% "pane %PA%  L=%LN% R=%RN%" "j/k move  t pane  o open  q quit"
+echo [M-DOS-TCMD] screen=TCMD-DUALPANE panels=4 head="COMMANDER" theme=ice bars=0 table=N spark=0 status=Y
 rem [M-RICH-TCMD] styled status uses the v1.6 `draw run /fg /bg` colour path.
 draw run 40 2 "[M-RICH-TCMD] map/forK/str/func" /fg 11 /bg 1
 draw text 3 2 "dual-pane commander  (%APPNAME% on %APPDRIVE%)"

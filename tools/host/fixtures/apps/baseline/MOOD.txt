@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=MOOD
 [M-RICH-MOOD] host language extract
+[M-DOS-MOOD] screen=MOOD-LIVE panels=3 head="MOOD" theme=green bars=2 table=N spark=1 status=Y
 W=mood
 2
 [M-RICH-MOOD-K] host=p4

@@ -1,0 +1,60 @@
+# webapp-baseline-v1 fixture=portal.html
+webapp.image kind=background src=pixel.bmp state=ok native=32x4 fit=32x4 alt=-
+webapp.image kind=img src=pixel.bmp state=resized native=32x4 fit=32x2 alt=P4 badge
+webapp.render.begin fixture=portal.html cols=80 rows=25
+tui.dump cols=80 from=1 to=25
+001|
+001@1-80:16
+002|┌─[P4.NET/PORTAL.80COL]────────────────────────────────────────────────────────┐
+002@1-80:14
+003|├─Address:http://p4.local/portal.html──────────────────────────────────────────┤
+003@1-80:14
+004|│ WELCOME TO P4 NET                              (C) 2026 P4 NET              │
+004@1-79:14 80-80:16
+005|│ ┌─  FEATURED  ────────────────────────────────────────────────────────────┐ │
+005@1-79:14 80-80:16
+006|│ │ RETRO WEB / REAL HTML / ONE DOS RENDERER                                │ │
+006@1-79:14 80-80:16
+007|│ │ Modern markup with a 1990s browser face.                                │ │
+007@1-79:14 80-80:16
+008|│ │ Entities: copyright (c) registered (r) trademark (tm)           │ │
+008@1-64:14 65-80:16
+009|│ └───────────────────────────────────────────────────────────────────────┘ │
+009@1-77:14 78-80:16
+010|+--------------------------------+
+010@1-34:7 35-80:16
+011||    ....========XXXX    ....====|
+011@1-1:7 2-9:0 10-13:6 14-17:3 18-21:7 22-29:0 30-33:6 34-34:7 35-80:16
+012||========XXXX    ....========XXXX|
+012@1-1:7 2-5:6 6-9:3 10-13:7 14-21:0 22-25:6 26-29:3 30-34:7 35-80:16
+013|+--------------------------------+
+013@1-34:7 35-80:16
+014|│ MAIN MENU                                              [ 01 / 03 ]          │
+014@1-79:14 80-80:16
+015|│   > 01  DASHBOARD    panels, tables and a canvas chart                      │
+015@1-79:14 80-80:16
+016|│   > 02  ARTICLE      columns, typography, reading view                      │
+016@1-79:14 80-80:16
+017|│   > 03  FORM         inputs, a select, submit handler                       │
+017@1-79:14 80-80:16
+018|│   1 Dashboard   2 Article   3 Form                                           │
+018@1-80:14
+019|│   Select a page to continue.                                                 │
+019@1-80:14
+020|│ STATUS Online | 80 columns | no network                                     │
+020@1-79:14 80-80:16
+021|├─READY | 3 links | press F1 for help──────────────────────────────────────────┤
+021@1-80:14
+022|└──────────────────────────────────────────────────────────────────────────────┘
+022@1-80:14
+023|
+023@1-80:16
+024|
+024@1-80:16
+025|
+025@1-80:16
+tui.dump.end
+webapp.meta semantic=4 controls=0 grids=0 canvases=0
+webapp.events handlers=0
+webapp.entity &amp;=0026/5 &reg=00AE/4 &#x41;=0041/6 &#1114112;=FFFD/10 &#x80;=20AC/6 &hellip;=2026/8
+webapp.render.end fixture=portal.html rows=25 runs=25

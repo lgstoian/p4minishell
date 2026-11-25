@@ -38,6 +38,8 @@
 #include "css.h"
 #include "html.h"
 #include "js_canvas.h"
+#include "gfx.h"
+#include "p4minishell_config.h"
 
 #include <stdbool.h>
 #include <stdarg.h>
@@ -55,6 +57,7 @@
 typedef struct {
     char text[8];
     uint8_t fg;
+    uint8_t bg;
 } probe_cell_t;
 
 /** File-scope page grid: 80x25 cells stay off the stack. */
@@ -71,6 +74,17 @@ static char s_css_line[192];
 static char s_events_line[192];
 static char s_cascade_line[192];
 static char s_entity_line[192];
+static char s_fixture_dir[512];
+static js_canvas_t *s_chart_canvas = NULL;
+static int s_last_native_w = 0;
+static int s_last_native_h = 0;
+
+/* Image caps mirror the firmware's browser image budget. The host probe only
+ * decodes local BMP fixtures through the ONE gfx BMP decoder (the same decoder
+ * imagefile delegates to); no second decoder or pixel model is introduced. */
+#define HOST_IMG_MAX_BYTES (64u * 1024u)
+#define HOST_IMG_MAX_W     80
+#define HOST_IMG_MAX_H     40
 
 /** Append one key=value pair to a fixed report line (bounded, deterministic). */
 static void report_add(char *buf, size_t cap, const char *fmt, ...)
@@ -94,6 +108,7 @@ static void probe_reset(void)
         s_page.cells[i].text[0] = ' ';
         s_page.cells[i].text[1] = '\0';
         s_page.cells[i].fg = DEFAULT_FG;
+        s_page.cells[i].bg = 16;
     }
     s_page.emitted = 0;
 }
@@ -117,6 +132,22 @@ static void probe_put_cell(void *ctx, int col, int row, const char *utf8,
         cell->text[len] = '\0';
         cell->fg = fg;
         probe->emitted++;
+    }
+}
+
+/** Background sink: record the DOS bg index without touching the glyph, the
+ *  same contract the live page buffer's fill_bg has. */
+static void probe_fill_bg(void *ctx, int col, int row, int w, int h,
+                          uint8_t bg, uint8_t alpha)
+{
+    page_probe_t *probe = (page_probe_t *)ctx;
+
+    if (probe == NULL || alpha == 0 || bg > 15) return;
+    for (int r = row; r < row + h && r <= WEBAPP_ROWS; r++) {
+        if (r < 1) continue;
+        for (int c = col; c < col + w && c <= WEBAPP_COLS; c++) {
+            if (c >= 1) probe->cells[(r - 1) * WEBAPP_COLS + (c - 1)].bg = bg;
+        }
     }
 }
 
@@ -201,6 +232,7 @@ static void probe_canvas(dom_tree_t *tree)
     if (h > JS_CANVAS_MAX_H) h = JS_CANVAS_MAX_H;
     canvas = js_canvas_for_node(node, w, h);
     if (canvas == NULL) return;
+    s_chart_canvas = canvas;   /* the DOM canvas sink samples this same bitmap */
     if (!js_canvas_parse_color("#ff5555", &first)) return;
     if (!js_canvas_parse_color("#55ffff", &second)) return;
 
@@ -435,6 +467,180 @@ static const char *base_name(const char *path)
     return slash != NULL ? slash + 1 : path;
 }
 
+/** Resolve a DOM image source inside the fixture directory only. Absolute,
+ *  parent-traversal and URL sources are refused: the probe reads no network and
+ *  no path outside its fixture root. */
+static bool probe_image_path(const char *src, char *out, size_t cap)
+{
+    if (src == NULL || src[0] == '\0' || out == NULL || cap == 0) return false;
+    if (src[0] == '/' || src[0] == '\\' || strchr(src, ':') != NULL ||
+        strstr(src, "..") != NULL) {
+        return false;
+    }
+    if (snprintf(out, cap, "%s/%s", s_fixture_dir, src) >= (int)cap) {
+        return false;
+    }
+    return true;
+}
+
+/** Read a bounded fixture asset. Oversized or unreadable files fail honestly. */
+static uint8_t *probe_read_asset(const char *path, size_t *len_out)
+{
+    FILE *fh = fopen(path, "rb");
+    uint8_t *buf;
+    long size;
+    size_t got;
+
+    if (fh == NULL) return NULL;
+    if (fseek(fh, 0, SEEK_END) != 0) { fclose(fh); return NULL; }
+    size = ftell(fh);
+    if (size < 54 || (unsigned long)size > HOST_IMG_MAX_BYTES) {
+        fclose(fh);
+        return NULL;
+    }
+    rewind(fh);
+    buf = malloc((size_t)size);
+    if (buf == NULL) { fclose(fh); return NULL; }
+    got = fread(buf, 1, (size_t)size, fh);
+    fclose(fh);
+    if (got != (size_t)size) { free(buf); return NULL; }
+    *len_out = got;
+    return buf;
+}
+
+/** The one image sink for <img> and CSS background-image: decode the local BMP
+ *  through gfx (the BMP half of the one imagefile decoder), then pack cells
+ *  with dom_image_sample_rgb565 - the DOM's pure equivalent of the one TUI
+ *  sampler. No second decoder, ramp or palette. */
+static bool probe_load_image(void *ctx, const char *src, dom_image_t *out)
+{
+    char path[600];
+    uint8_t *data;
+    size_t len = 0;
+    gfx_bmp_info_t info;
+    gfx_surface_t surface;
+    int nw, nh, w, h;
+    uint8_t *cells;
+
+    (void)ctx;
+    memset(out, 0, sizeof(*out));
+    if (!probe_image_path(src, path, sizeof(path))) return false;
+    data = probe_read_asset(path, &len);
+    if (data == NULL) return false;
+    if (!gfx_bmp_parse_header_ex(data, len, &info, 256, 256)) {
+        free(data);
+        return false;
+    }
+    nw = info.w > 0 ? info.w : 1;
+    nh = info.h > 0 ? info.h : 1;
+    w = nw;
+    h = nh;
+    if (w > HOST_IMG_MAX_W) { h = h * HOST_IMG_MAX_W / w; w = HOST_IMG_MAX_W; }
+    if (h > HOST_IMG_MAX_H) { w = w * HOST_IMG_MAX_H / h; h = HOST_IMG_MAX_H; }
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    if (!gfx_bmp_decode_scaled_565(data, len, &info, w, h, &surface)) {
+        free(data);
+        return false;
+    }
+    cells = malloc((size_t)w * (size_t)h);
+    if (cells == NULL ||
+        !dom_image_sample_rgb565(surface.px, surface.w, surface.h,
+                                 cells, w, h)) {
+        free(cells);
+        gfx_surface_free(&surface);
+        free(data);
+        return false;
+    }
+    gfx_surface_free(&surface);
+    free(data);
+    out->width = w;
+    out->height = h;
+    s_last_native_w = nw;
+    s_last_native_h = nh;
+    out->pixels = cells;
+    return true;
+}
+
+/** <canvas> bitmap: snapshot the RGBA bytes the pure 2D core produced in
+ *  probe_canvas() and sample them through the SAME dom_image_sample_rgb565. */
+static bool probe_load_canvas(void *ctx, dom_node_t *node, dom_image_t *out)
+{
+    uint8_t *rgba;
+    uint16_t *rgb565;
+    int w, h;
+
+    (void)ctx;
+    memset(out, 0, sizeof(*out));
+    if (s_chart_canvas == NULL || node == NULL) return false;
+    w = P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH < 64
+            ? P4_CONFIG_BROWSER_IMAGE_MAX_WIDTH : 64;
+    h = P4_CONFIG_BROWSER_IMAGE_MAX_HEIGHT < 32
+            ? P4_CONFIG_BROWSER_IMAGE_MAX_HEIGHT : 32;
+    rgba = malloc((size_t)w * (size_t)h * 4u);
+    rgb565 = malloc((size_t)w * (size_t)h * sizeof(uint16_t));
+    if (rgba == NULL || rgb565 == NULL) {
+        free(rgba);
+        free(rgb565);
+        return false;
+    }
+    if (!js_canvas_snapshot_rgba(s_chart_canvas, w, h, rgba, &w, &h) ||
+        w < 1 || h < 1) {
+        free(rgba);
+        free(rgb565);
+        return false;
+    }
+    for (int i = 0; i < w * h; i++) {
+        rgb565[i] = (uint16_t)(((uint16_t)(rgba[i * 4u] >> 3) << 11) |
+                               ((uint16_t)(rgba[i * 4u + 1u] >> 2) << 5) |
+                               (uint16_t)(rgba[i * 4u + 2u] >> 3));
+    }
+    out->pixels = malloc((size_t)w * (size_t)h);
+    if (out->pixels == NULL ||
+        !dom_image_sample_rgb565(rgb565, w, h, out->pixels, w, h)) {
+        free(out->pixels);
+        out->pixels = NULL;
+        free(rgba);
+        free(rgb565);
+        return false;
+    }
+    for (int i = 0; i < w * h; i++) {
+        if (rgba[i * 4u + 3u] < 64) out->pixels[i] = 0;
+    }
+    out->width = w;
+    out->height = h;
+    s_last_native_w = w;
+    s_last_native_h = h;
+    free(rgba);
+    free(rgb565);
+    return true;
+}
+
+/** Print the same structured outcome the device `webapp images` facade emits. */
+static void probe_report_image(void *ctx, const dom_image_report_t *r)
+{
+    static const char *names[] = { "ok", "resized", "missing", "fallback" };
+    const char *state;
+    int native_w;
+    int native_h;
+
+    (void)ctx;
+    if (r == NULL) return;
+    state = (int)r->state >= 0 && (int)r->state < 4
+                ? names[r->state] : "unknown";
+    native_w = s_last_native_w > 0 ? s_last_native_w : r->native_w;
+    native_h = s_last_native_h > 0 ? s_last_native_h : r->native_h;
+    if (r->state == DOM_IMAGE_OK &&
+        (native_w > r->fit_w || native_h > r->fit_h)) {
+        state = "resized";
+    }
+    printf("webapp.image kind=%s src=%s state=%s native=%dx%d fit=%dx%d alt=%s\n",
+           r->kind != NULL ? r->kind : "-",
+           r->src != NULL ? r->src : "-", state,
+           native_w, native_h, r->fit_w, r->fit_h,
+           r->alt != NULL && r->alt[0] != '\0' ? r->alt : "-");
+}
+
 int main(int argc, char **argv)
 {
     char *html;
@@ -446,6 +652,22 @@ int main(int argc, char **argv)
     if (argc != 2) {
         fprintf(stderr, "usage: host_webapp_render <fixture.html>\n");
         return 2;
+    }
+    {
+        const char *slash = strrchr(argv[1], '/');
+        const char *back = strrchr(argv[1], '\\');
+        const char *last = back != NULL && (slash == NULL || back > slash)
+                               ? back : slash;
+
+        if (last != NULL) {
+            size_t n = (size_t)(last - argv[1]);
+
+            if (n >= sizeof(s_fixture_dir)) n = sizeof(s_fixture_dir) - 1;
+            memcpy(s_fixture_dir, argv[1], n);
+            s_fixture_dir[n] = '\0';
+        } else {
+            snprintf(s_fixture_dir, sizeof(s_fixture_dir), ".");
+        }
     }
     html = read_html(argv[1]);
     if (html == NULL) {
@@ -482,6 +704,11 @@ int main(int argc, char **argv)
 
     memset(&ops, 0, sizeof(ops));
     ops.put_cell = probe_put_cell;
+    ops.fill_bg = probe_fill_bg;
+    ops.load_image = probe_load_image;
+    ops.load_background = probe_load_image;
+    ops.load_canvas = probe_load_canvas;
+    ops.report_image = probe_report_image;
     ops.ctx = &s_page;
     ops.cols = WEBAPP_COLS;
     ops.rows = WEBAPP_ROWS;

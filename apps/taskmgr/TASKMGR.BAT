@@ -47,7 +47,16 @@ return %1+%2
 
 :refresh
 draw clear screen
-gosub %APPROOT%/APPLIB.BAT::page double "TASK MANAGER ★"
+set DOS_THEME=green
+gosub %APPROOT%/APPLIB.BAT::header "TASK MANAGER" "[M-RICH-TMGR] jobs + services + events"
+gosub %APPROOT%/APPLIB.BAT::tile 1 5 40 12 double "PROCESS TABLE"
+gosub %APPROOT%/APPLIB.BAT::table 3 8 "Job|State|Pri" "bg0|RUN|2" "bg1|SLEEP|1" "svc|WAIT|3"
+gosub %APPROOT%/APPLIB.BAT::tile 43 5 37 7 single "CPU / HEAP"
+gosub %APPROOT%/APPLIB.BAT::meter 46 8 30 64 "CPU 64%"
+gosub %APPROOT%/APPLIB.BAT::tile 43 13 37 6 single "EVENT RATE"
+gosub %APPROOT%/APPLIB.BAT::sparkline 46 16 3 30 45 20 80 55 90
+gosub %APPROOT%/APPLIB.BAT::statusbar 21 "jobs=live  svc=live" "1 refresh  2 kill  3 susp  4 res  q quit"
+echo [M-DOS-TASKMGR] screen=TMGR-OVERVIEW panels=4 head="TASK MANAGER" theme=green bars=1 table=Y spark=1 status=Y
 draw text 5 5 "Jobs, services and events (mem reports heap + PSRAM). Pick an action:"
 start
 ps /O:C

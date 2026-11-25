@@ -282,6 +282,7 @@ Every source file's trail (also in `breadcrumbs.json`):
 - `components/header/header_status.h` :: module=header :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_header.c :: rules=ai-context.md#header-bar-rules
 - `components/imagefile/imagefile.c` :: module=imagefile :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_emoji.c :: rules=ai-context.md#module-layering-rules
 - `components/imagefile/imagefile.h` :: module=imagefile :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_emoji.c :: rules=ai-context.md#module-layering-rules
+- `components/imagefile/imagefile_cells.h` :: module=imagefile :: layer=leaf :: domain=ui :: status=stable :: tests=test/main/test_emoji.c :: rules=ai-context.md#module-layering-rules
 - `components/imagefmt/imagefmt.c` :: module=imagefmt :: layer=leaf :: domain=media :: status=stable :: rules=ai-context.md#image-support-rules
 - `components/imagefmt/include/imagefmt.h` :: module=imagefmt :: layer=leaf :: domain=media :: status=stable :: rules=ai-context.md#image-support-rules
 - `components/imgdec/imgdec.c` :: module=imgdec :: layer=leaf :: domain=media :: status=stable :: tests=test/main/test_imgdec.c :: rules=ai-context.md#image-support-rules

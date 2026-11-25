@@ -7,6 +7,7 @@ rem  bundle PKGS/PKGTEST by `pkg install PKGTEST`; uninstalled with
 rem  `pkg remove PKGTEST`. Markers: [M-PKGTEST] / [M-PKGTEST-DONE].
 rem =====================================================================
 echo [M-PKGTEST] 
+echo [M-DOS-PKGTEST] screen=PKGTEST-HEADLESS panels=0 head="NONE" theme=mono bars=0 table=N spark=0 status=N
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 title "Package Test"
 echo pkgtest: installed package is running on %APPDRIVE%

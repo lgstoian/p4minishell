@@ -16,6 +16,7 @@
 #include "emoji.h"
 #include "imagefile.h"
 #include "modal.h"
+#include "modal_surf.h"   /* MODAL_KEY_PAGE_UP / MODAL_KEY_PAGE_DOWN */
 #include "browser.h"
 #include "clock.h"
 #include "command.h"
@@ -326,6 +327,92 @@ static css_ruleset_t *s_page_rules = NULL;
 static char s_page_base[BROWSER_URL_LEN];
 static size_t s_js_budget = 0;
 
+/* Image outcomes from the last render, kept as formatted lines so the
+ * `webapp images` facade can report them without a second renderer or a second
+ * copy of the state vocabulary. Fixed table, no heap: page state is transient. */
+#define BROWSER_IMAGE_REPORTS_MAX 12
+
+/* The report lines are bulk transient state: allocate them lazily from PSRAM
+ * instead of reserving several KiB of static DIRAM for a path that may never
+ * render an image. With no allocation the verb reports no lines. */
+static char (*s_image_reports)[320];
+
+static char (*image_reports_ensure(void))[320]
+{
+    if (s_image_reports == NULL) {
+        s_image_reports = p4heap_calloc_any(BROWSER_IMAGE_REPORTS_MAX,
+                                           sizeof(*s_image_reports));
+    }
+    return s_image_reports;
+}
+
+static int s_image_report_count = 0;
+/* The loader records the pre-fit size immediately before the renderer reports
+ * the same image, so no extra field is added to dom_image_t (the browser cache
+ * copies exactly width*height bytes). */
+static int s_last_native_w = 0;
+static int s_last_native_h = 0;
+
+static const char *browser_image_state_name(dom_image_state_t state)
+{
+    switch (state) {
+    case DOM_IMAGE_OK: return "ok";
+    case DOM_IMAGE_RESIZED: return "resized";
+    case DOM_IMAGE_MISSING: return "missing";
+    case DOM_IMAGE_FALLBACK: return "fallback";
+    default: return "unknown";
+    }
+}
+
+static void browser_report_image(void *ctx, const dom_image_report_t *report)
+{
+    const char *state;
+    int native_w;
+    int native_h;
+
+    (void)ctx;
+    if (report == NULL) return;
+    if (image_reports_ensure() == NULL) return;
+    if (s_image_report_count >= BROWSER_IMAGE_REPORTS_MAX) return;
+    state = browser_image_state_name(report->state);
+    native_w = s_last_native_w > 0 ? s_last_native_w : report->native_w;
+    native_h = s_last_native_h > 0 ? s_last_native_h : report->native_h;
+    /* Fitting is decided by the ONE renderer; restate it with the loader's
+     * native geometry so `resized` is never reported as a plain `ok`. */
+    if (report->state == DOM_IMAGE_OK &&
+        (native_w > report->fit_w || native_h > report->fit_h)) {
+        state = "resized";
+    }
+    snprintf(s_image_reports[s_image_report_count],
+             sizeof(s_image_reports[s_image_report_count]),
+             "webapp.image kind=%s src=%s state=%s native=%dx%d fit=%dx%d alt=%s",
+             report->kind != NULL ? report->kind : "-",
+             report->src != NULL ? report->src : "-", state,
+             native_w, native_h, report->fit_w, report->fit_h,
+             report->alt != NULL ? report->alt : "-");
+    s_image_report_count++;
+}
+
+int browser_image_report_count(void) { return s_image_report_count; }
+
+const char *browser_image_report_line(int index)
+{
+    if (s_image_reports == NULL || index < 0 ||
+        index >= s_image_report_count) return NULL;
+    return s_image_reports[index];
+}
+
+static void browser_image_reports_reset(void)
+{
+    s_image_report_count = 0;
+    s_last_native_w = 0;
+    s_last_native_h = 0;
+    if (s_image_reports != NULL) {
+        memset(s_image_reports, 0,
+               BROWSER_IMAGE_REPORTS_MAX * sizeof(*s_image_reports));
+    }
+}
+
 static void browser_page_release(void)
 {
     if (s_page_tree != NULL) {
@@ -356,29 +443,9 @@ static void browser_put_link(void *ctx, int x, int y, int w, int h, const char *
     tui_link_register(x, y, w, h, url);
 }
 
-static uint32_t browser_rgb565_to_rgb888(uint16_t c)
-{
-    uint32_t r = (c >> 11) & 0x1F;
-    uint32_t g = (c >> 5) & 0x3F;
-    uint32_t b = c & 0x1F;
-    return (((r * 255) / 31) << 16) | (((g * 255) / 63) << 8) | ((b * 255) / 31);
-}
-
-/* Map one RGB565 pixel to the packed DOS foreground + luminance level (0..9)
- * the renderer uses to pick a shade glyph. */
-static uint8_t browser_pixel_to_cell(uint16_t c565)
-{
-    uint32_t rgb = browser_rgb565_to_rgb888(c565);
-    uint8_t dos = tui_rgb_to_dos(rgb);
-    int lum = (int)((((rgb >> 16) & 0xFF) * 30 +
-                     ((rgb >> 8) & 0xFF) * 59 +
-                     (rgb & 0xFF) * 11) / 100);
-    int level = lum * 9 / 255;
-
-    if (level < 0) level = 0;
-    if (level > 9) level = 9;
-    return (uint8_t)((dos << 4) | level);
-}
+/* The browser never owns a pixel-to-cell mapper: dom_image_sample_rgb565() is
+ * the DOM path's pure equivalent of the one TUI cell sampler, and it shares the
+ * same luminance ramp and DOS palette as draw img / emoji packs. */
 
 /* Image loader for the renderer: resolve the src against the page URL, fetch
  * (HTTP) or read (SD), decode through the ONE image path (BMP in gfx, PNG and
@@ -396,8 +463,6 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
     uint8_t *pixels;
     int w;
     int h;
-    int x;
-    int y;
 
     if (src == NULL || out == NULL || !P4_CONFIG_BROWSER_IMAGES) return false;
     memset(out, 0, sizeof(*out));
@@ -438,6 +503,8 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
 
         if (browser_image_cache_get(target, &cached)) {
             *out = cached;
+            s_last_native_w = cached.width;
+            s_last_native_h = cached.height;
             return true;
         }
     }
@@ -502,13 +569,16 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
             browser_image_cache_mark_bad(target);
             return false;
         }
-        for (y = 0; y < h; y++) {
-            for (x = 0; x < w; x++) {
-                pixels[y * w + x] =
-                    browser_pixel_to_cell(surface.px[(size_t)y * (size_t)surface.w +
-                                                    (size_t)x]);
-            }
+        /* ONE sampler for the decoded RGB565 surface; no second ramp/palette. */
+        if (!dom_image_sample_rgb565(surface.px, surface.w, surface.h,
+                                     pixels, w, h)) {
+            free(pixels);
+            gfx_surface_free(&surface);
+            free(data);
+            return false;
         }
+        s_last_native_w = native_w > 0 ? native_w : w;
+        s_last_native_h = native_h > 0 ? native_h : h;
         gfx_surface_free(&surface);
     }
     free(data);
@@ -644,27 +714,40 @@ static bool browser_load_canvas(void *ctx, dom_node_t *node, dom_image_t *out)
         free(rgba);
         return false;
     }
-    out->pixels = malloc((size_t)w * (size_t)h);
-    if (out->pixels == NULL) {
-        free(rgba);
-        return false;
-    }
-    for (int i = 0; i < w * h; i++) {
-        const uint8_t *src = rgba + (size_t)i * 4u;
+    {
+        uint16_t *rgb565 = malloc((size_t)w * (size_t)h * sizeof(uint16_t));
 
-        if (src[3] < 64) {
-            out->pixels[i] = 0;       /* transparent / empty cell */
-        } else {
-            /* Premultiply against black is not needed: the cell ramp ignores
-             * alpha beyond the "is it visible" threshold, same as images. */
-            uint16_t rgb565 = (uint16_t)(((uint16_t)(src[0] >> 3) << 11) |
-                                         ((uint16_t)(src[1] >> 2) << 5) |
-                                         ((uint16_t)(src[2] >> 3)));
-            out->pixels[i] = browser_pixel_to_cell(rgb565);
+        if (rgb565 == NULL) {
+            free(rgba);
+            return false;
         }
+        for (int i = 0; i < w * h; i++) {
+            const uint8_t *src = rgba + (size_t)i * 4u;
+
+            rgb565[i] = (uint16_t)(((uint16_t)(src[0] >> 3) << 11) |
+                                   ((uint16_t)(src[1] >> 2) << 5) |
+                                   (uint16_t)(src[2] >> 3));
+        }
+        out->pixels = malloc((size_t)w * (size_t)h);
+        if (out->pixels == NULL ||
+            !dom_image_sample_rgb565(rgb565, w, h, out->pixels, w, h)) {
+            free(out->pixels);
+            out->pixels = NULL;
+            free(rgb565);
+            free(rgba);
+            return false;
+        }
+        for (int i = 0; i < w * h; i++) {
+            if (rgba[(size_t)i * 4u + 3u] < 64) {
+                out->pixels[i] = 0;   /* transparent / empty cell */
+            }
+        }
+        free(rgb565);
     }
     out->width = w;
     out->height = h;
+    s_last_native_w = w;
+    s_last_native_h = h;
     free(rgba);
     return true;
 }
@@ -750,6 +833,7 @@ static void browser_page_render(void)
     tui_viewport_init(P4_CONFIG_TUI_PAGE_ROWS);
     tui_page_clear();
     tui_link_clear();
+    browser_image_reports_reset();
     tui_address_bar_set(s_page_base);
     memset(&ops, 0, sizeof(ops));
     ops.put_cell = browser_put_cell;
@@ -759,6 +843,7 @@ static void browser_page_render(void)
     ops.fill_bg = browser_fill_bg;
     ops.put_emoji = browser_put_emoji;
     ops.emoji_fallback = browser_emoji_fallback;
+    ops.report_image = browser_report_image;
     ops.load_background = browser_load_image;
     ops.ctx = s_page_base;
     /* One source of truth: the page wraps to the live logical grid, which the
@@ -1394,6 +1479,18 @@ static bool html_surface_key(void *ctx_ptr, uint8_t key_code, uint8_t modifiers,
     }
     if (key_code == 0x51) {   /* Down */
         tui_viewport_scroll_by(1);
+        browser_page_present();
+        return true;
+    }
+    /* PageUp/PageDown scroll by one visible page. Same viewport, same present
+     * path as Up/Down - no second scroll state or input surface. */
+    if (key_code == MODAL_KEY_PAGE_UP) {
+        tui_viewport_scroll_by(-tui_viewport_get_page_rows());
+        browser_page_present();
+        return true;
+    }
+    if (key_code == MODAL_KEY_PAGE_DOWN) {
+        tui_viewport_scroll_by(tui_viewport_get_page_rows());
         browser_page_present();
         return true;
     }

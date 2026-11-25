@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=FUN
 [M-RICH-FUN] host language extract
+[M-DOS-FUN] screen=FUN-DEMOS panels=2 head="FUN / DEMOS" theme=amber bars=0 table=N spark=0 status=Y
 W=melody
 1
 [M-RICH-FUN-K] host=p4

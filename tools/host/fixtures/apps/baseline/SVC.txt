@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=SVC
 [M-RICH-SVC] host language extract
+[M-DOS-SVC] screen=SVC-HEADLESS panels=0 head="NONE" theme=mono bars=0 table=N spark=0 status=N
 W=service
 2
 [M-RICH-SVC-K] host=p4

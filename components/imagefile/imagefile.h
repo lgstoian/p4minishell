@@ -41,6 +41,18 @@ bool imagefile_decode_mem(const uint8_t *data, size_t len, int w, int h,
  *  Used by callers that fit an image into a cell grid before decoding. */
 bool imagefile_probe_mem(const uint8_t *data, size_t len, int *w, int *h);
 
+/**
+ * Decode an image through the ONE decoder at the largest size that fits
+ * @p max_w x @p max_h while preserving aspect (gfx_bmp_fit contract, never
+ * upscales). The native image is never materialised; @p out holds the fitted
+ * RGB565 surface and its dimensions on success. This is the web/markdown
+ * image path: callers that then need DOS cells use imagefile_cells.h, which
+ * wraps the ONE tui_sample_image_cells() sampler - no second decoder, no
+ * second sampler, no second palette.
+ */
+bool imagefile_decode_fit(const uint8_t *data, size_t len,
+                          int max_w, int max_h, gfx_surface_t *out);
+
 #ifdef __cplusplus
 }
 #endif

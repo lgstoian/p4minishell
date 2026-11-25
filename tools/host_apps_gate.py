@@ -28,6 +28,7 @@ import argparse
 import importlib.util
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -71,6 +72,7 @@ APPS: Dict[str, Tuple[str, str]] = {
     "SVC": ("apps/companion/SVC.BAT", "SVC"),
     "MEMLOG": ("apps/companion/MEMLOG.BAT", "MEMLOG"),
     "LIB": ("apps/companion/LIB.BAT", "LIB-COMPANION"),
+    "SHOWCASE": ("apps/showcase/SHOWCASE.BAT", "SHOWCASE"),
 }
 
 # Host-unsupported surfaces, with the honest reason for the SKIP. A token is
@@ -101,6 +103,76 @@ NEW_TOKENS = (
     "mpick ", "mprog ", "mformx ", "mstack ",
     "webapp event", "webapp tick", "webapp js", "natrun ",
 )
+
+# The v1.7 DOS redesign publishes ONE structural line from each real app and
+# its host-safe fixture. Parsing that line is an assertion on the app's own
+# output (baselined by host_batch_run), not a second app model.
+DOS_LINE_RE = re.compile(
+    r'^\[M-DOS-([A-Z0-9_-]+)\]\s+screen=(\S+)\s+panels=(\d+)\s+'
+    r'head="([^"]*)"\s+theme=(amber|green|ice|mono)\s+bars=(\d+)\s+'
+    r'table=([YN])\s+spark=(\d+)\s+status=([YN])\s*$')
+DOS_THEMES = ("amber", "green", "ice", "mono")
+
+
+@dataclass(frozen=True)
+class DosStructure:
+    tag: str
+    screen: str
+    panels: int
+    head: str
+    theme: str
+    bars: int
+    table: str
+    spark: int
+    status: str
+
+    @property
+    def fingerprint(self) -> Tuple[str, ...]:
+        """Every field that must distinguish one app's DOS page from another."""
+        return (self.screen, self.head, str(self.panels), self.theme,
+                str(self.bars), self.table, str(self.spark), self.status)
+
+
+def parse_dos_structure(transcript: Sequence[str], name: str) -> DosStructure:
+    """Assert one well-formed DOS structure line, then return its fields."""
+    matches = [DOS_LINE_RE.match(line.strip()) for line in transcript]
+    lines = [m for m in matches if m is not None]
+    if len(lines) != 1:
+        raise GateError("%s emitted %d DOS structure lines (expected exactly 1)"
+                        % (name, len(lines)))
+    m = lines[0]
+    st = DosStructure(m.group(1), m.group(2), int(m.group(3)), m.group(4),
+                      m.group(5), int(m.group(6)), m.group(7), int(m.group(8)),
+                      m.group(9))
+    if st.tag.upper() != name.upper() and st.tag not in ("LIB-COMPANION",):
+        raise GateError("%s DOS tag %r does not name the app" % (name, st.tag))
+    if st.theme not in DOS_THEMES:
+        raise GateError("%s has an unknown DOS theme %r" % (name, st.theme))
+    if st.screen.endswith("-HEADLESS"):
+        if (st.panels or st.bars or st.spark or st.table != "N" or
+                st.status != "N" or st.head != "NONE" or st.theme != "mono"):
+            raise GateError("%s headless DOS line is not an honest empty page: %s"
+                            % (name, st.fingerprint))
+    else:
+        if st.panels < 2:
+            raise GateError("%s DOS page has %d panels (needs a framed layout)"
+                            % (name, st.panels))
+        if len(st.head) < 3 or st.head.upper() == "NONE":
+            raise GateError("%s DOS page has no real header: %r" % (name, st.head))
+        if st.theme == "mono":
+            raise GateError("%s DOS page has no DOS colour theme" % name)
+        if not (st.bars or st.spark or st.table == "Y" or st.status == "Y"):
+            raise GateError("%s DOS page has no panel content at all" % name)
+    return st
+
+
+def register_structure(structures: Dict[str, str], name: str,
+                       structure: DosStructure) -> None:
+    """Two apps may not publish the same DOS fingerprint."""
+    seen = structures.setdefault(structure.fingerprint, name)
+    if seen != name:
+        raise GateError("%s duplicate DOS structure of %s: %s"
+                        % (name, seen, " ".join(structure.fingerprint)))
 
 
 def executable_lines(source: str) -> str:
@@ -174,6 +246,7 @@ def run_gate(hbr, update: bool) -> int:
     runner = hbr.discover_elf(None)
     total_assertions = 0
     total_skips = 0
+    structures: Dict[str, str] = {}
     failures: List[str] = []
     for name, (source_rel, tag) in APPS.items():
         fixture = FIXTURES / (name + ".BAT")
@@ -191,9 +264,25 @@ def run_gate(hbr, update: bool) -> int:
             failures.append("FAIL %-11s %s" % (name, exc))
             continue
         skips = hardware_skips(source)
-        total_assertions += result.assertions
+        try:
+            structure = parse_dos_structure(result.transcript, name)
+        except GateError as exc:
+            failures.append("FAIL %-11s %s" % (name, exc))
+            continue
+        try:
+            register_structure(structures, name, structure)
+        except GateError as exc:
+            failures.append("FAIL %-11s %s" % (name, exc))
+            continue
+        assertions = result.assertions + 8   # tag, fields, panel/header/theme/content, uniqueness
+        total_assertions += assertions
         total_skips += len(skips)
-        print("  " + format_app(name, result.assertions, skips))
+        print("  " + format_app(name, assertions, skips))
+        print("      DOS %s panels=%d head=%r theme=%s bars=%d table=%s "
+              "spark=%d status=%s" % (structure.screen, structure.panels,
+                                      structure.head, structure.theme,
+                                      structure.bars, structure.table,
+                                      structure.spark, structure.status))
     if failures:
         for line in failures:
             print("  " + line, file=sys.stderr)
@@ -270,6 +359,38 @@ def self_test(hbr) -> int:
             checks.append(("source without rich marker rejected", False))
         except GateError:
             checks.append(("source without rich marker rejected", True))
+
+    # DOS-structure canaries: a fixture with no distinct dashboard identity
+    # must never satisfy this gate, even when its baseline matches exactly.
+    dos_good = '[M-DOS-X] screen=X-OVERVIEW panels=3 head="EXPLORER" theme=amber bars=2 table=Y spark=1 status=Y'
+    try:
+        parse_dos_structure([dos_good], "X")
+        checks.append(("clean DOS structure accepted", True))
+    except GateError:
+        checks.append(("clean DOS structure accepted", False))
+    for label, lines in (
+        ("missing DOS structure rejected", []),
+        ("two DOS structures rejected", [dos_good, dos_good]),
+        ("fake headless DOS page rejected",
+         ['[M-DOS-X] screen=X-HEADLESS panels=3 head="NONE" theme=mono '
+          'bars=0 table=N spark=0 status=N']),
+        ("unframed DOS page rejected",
+         ['[M-DOS-X] screen=X-OVERVIEW panels=1 head="EXPLORER" theme=amber '
+          'bars=0 table=N spark=0 status=Y']),
+    ):
+        try:
+            parse_dos_structure(lines, "X")
+            checks.append((label, False))
+        except GateError:
+            checks.append((label, True))
+    try:
+        seen: Dict[str, str] = {}
+        register_structure(seen, "X", parse_dos_structure([dos_good], "X"))
+        register_structure(seen, "Y", parse_dos_structure(
+            [dos_good.replace("[M-DOS-X]", "[M-DOS-Y]")], "Y"))
+        checks.append(("duplicate DOS structure rejected", False))
+    except GateError:
+        checks.append(("duplicate DOS structure rejected", True))
 
     for label, ok in checks:
         print("  [%s] %s" % ("PASS" if ok else "FAIL", label))

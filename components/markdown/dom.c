@@ -864,13 +864,33 @@ static void dom_collect_text(const dom_node_t *node, char *buf, size_t cap, size
     }
 }
 
+/** Scratch arena for dom_get_text(). It is bulk data (4 KiB) that was a
+ * static .bss table on every board; allocate it lazily from PSRAM instead so
+ * the scarce internal DRAM stays free. p4heap's any-pool prefers PSRAM and
+ * falls back to malloc, so a failed PSRAM request still renders. The small
+ * static fallback keeps the "valid until the next call" contract even under
+ * extreme OOM (text is truncated, never NULL). */
+#define DOM_TEXT_SCRATCH_BYTES 4096
+static char *s_dom_text_scratch;
+static char s_dom_text_fallback[128];
+
 const char *dom_get_text(const dom_node_t *node) {
+    char *buf;
+    size_t pos = 0;
+    size_t cap;
+
     if (!node) return "";
     if (node->type == DOM_NODE_TEXT) return node->text;
-    static char buf[4096];
-    size_t pos = 0;
+
+    if (s_dom_text_scratch == NULL) {
+        s_dom_text_scratch = p4heap_alloc_any(DOM_TEXT_SCRATCH_BYTES);
+    }
+    buf = (s_dom_text_scratch != NULL) ? s_dom_text_scratch : s_dom_text_fallback;
+    cap = (buf == s_dom_text_scratch) ? (size_t)DOM_TEXT_SCRATCH_BYTES
+                                      : sizeof(s_dom_text_fallback);
+
     buf[0] = '\0';
-    dom_collect_text(node, buf, sizeof(buf), &pos);
+    dom_collect_text(node, buf, cap, &pos);
     buf[pos] = '\0';
     return buf;
 }

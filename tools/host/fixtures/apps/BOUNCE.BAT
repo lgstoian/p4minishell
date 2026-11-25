@@ -5,6 +5,7 @@ rem HOST-SAFE EXTRACT of BOUNCE.BAT's [M-RICH-*] block. The real app also uses
 rem hardware verbs (reported as SKIP by tools/host_apps_gate.py); this fixture
 rem runs ONLY the additive batch-language surfaces on the REAL interpreter.
 echo [M-RICH-BOUNCE] host language extract
+echo [M-DOS-BOUNCE] screen=BOUNCE-HEADLESS panels=0 head="NONE" theme=mono bars=0 table=N spark=0 status=N
 set W=bounce
 str /rev W RV
 str /count W o RC

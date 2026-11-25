@@ -10,10 +10,11 @@ Complete reference for all shell commands available in P4MiniShell.
 > `tools/host_tui_gate.py` for TUI frames, `tools/host_modal_gate.py` for modal
 > transitions and `tools/gfx_toolkit_test.py --host` for gfx wiring) check the
 > host build only; the on-device suites remain authoritative (`harness.md` §2.2).
-> **Marker contract (v1.6):** all 33 updated reference apps emit additive
-> `[M-RICH-*]` markers for the new batch/GFX/TUI/modal/webapp surfaces; every
-> pre-existing `[M-*]` marker is preserved. `tools/host_apps_gate.py --check`
-> proves 33/33 apps on the host (363 assertions, 40 honest hardware SKIPs).
+> **Marker contract (v1.6 + DOS redesign):** the 33 updated reference apps and
+> the flagship showcase app emit additive `[M-RICH-*]` markers for the new
+> batch/GFX/TUI/modal/webapp surfaces; every pre-existing `[M-*]` marker is
+> preserved. `tools/host_apps_gate.py --check` proves 34 apps on the host (679
+> assertions, 45 honest hardware SKIPs).
 > The new transcript lines require a board rebaseline of
 > `tools/appdiff/baseline/*.transcript.txt`.
 > Related docs: [`readme.md`](readme.md) (overview),
@@ -155,7 +156,7 @@ precision: `@c%-10s@R` and `@M%8.2f@R` behave as expected.
 | `math` (`new`/`open`/`close`/`edit`/`render`/`eval`/`cursor`/`insert`) | `components/command/math_disp_commands.c` + `components/math_disp/` (natural-display math; `eval` serializes and delegates to the one `calc_evaluate`) |
 | `epub` (`open`/`close`/`info`/`toc`/`read`/`next`/`prev`/`goto`/`extract`) | `components/command/epub_commands.c` + `components/epub/` (ZIP via `components/zip`, XML via Expat) |
 | `chat` (`host`/`peer`/`send`/`poll`/`log`/`clear`/`status`/`onmsg`) | `components/command/chat_commands.c` + `components/chat/` (SoftAP host + HTTP; host control serialized through networking's Wi-Fi init-task claim) |
-| `webapp` (`open`/`dump`/`css`/`js`) | `components/command/webapp_commands.c` (batch-facing facade over the ONE engine: `html`, `tui dump`, `browser css`, `js eval` — no second renderer) |
+| `webapp` (`open`/`dump`/`css`/`js`/`event`/`tick`/`images`) | `components/command/webapp_commands.c` (batch-facing facade over the ONE engine: `html`, `tui dump`, `browser css`, `js eval` — no second renderer) |
 | Batch file execution, `:label` scanning, `for` loops, `\|` pipes, setlocal scoping | `components/batch/batch.c` |
 | Keypress wait (`pause`, `choice`, `more`) and the `prompt` template engine | `components/shell/shell.c` |
 | `brightness`, `rotate`, `battery`, `power`, `sleep`, `deepsleep` | `components/command/power_commands.c` |
@@ -1502,6 +1503,7 @@ runtime, colour model or surface is introduced.
 | `webapp js <code>` | `js eval <code>` | Evaluate code in the existing page engine. |
 | `webapp event <id> <click\|load\|input\|change\|submit>` (v1.6) | the page engine's one DOM event dispatcher | Dispatch a scripted event to the element with that id, running its `onclick`/`addEventListener` handler. |
 | `webapp tick` (v1.6) | the page engine's JS timer queue | Run all due `setTimeout`/`setInterval` callbacks and repaint the page; use it to advance timers in a headless batch app. |
+| `webapp images` | browser image-outcome report | Print the last rendered page's image outcomes (decoded/scaled blits and missing files with visible alt text) as batch-friendly lines. |
 
 ```
 webapp open /no %APPDRIVE%/WEB/INDEX.HTML
@@ -1521,7 +1523,14 @@ The reference app `apps/webapp/WEBAPP.BAT` (`WEBAPP.APPINFO`) uses this facade
 and emits `[M-WEBAPP]` / `[M-WEBAPP-DONE]` / `[M-WEBAPP-FAIL]` markers; the
 host-only `tools/host_webapp_gate.py` checks the shared render path against
 fixtures in `tools/host/fixtures/webapp/` (pre-gate only, never hardware
-sign-off — see `harness.md` §2.2). See [`batch.md`](batch.md) §5c.
+sign-off — see `harness.md` §2.2). The four functional showcase pages
+(`portal`/`dashboard`/`article`/`form`) exercise the same render path and are
+screen-shotted as labelled DOS-presentation host proofs (`screenshots/web/`,
+`docs/assets/web/`), checked by `tools/visual_proof_gate.py --check`. The saved
+`wiki_esp32.html` fixture renders the ESP32 article's first 25 lines through the
+same engine (`docs/assets/web/wiki_esp32.png`): a first-screen host proof, not
+live HTTPS or the full 2000-row device page; `tools/host_browser_gate.py`
+executes that renderer over all five fixtures. See [`batch.md`](batch.md) §5c.
 
 ### receive <path> <size> [/crc]
 Push a binary from the host into an SD file over the USB-Serial/JTAG console.
@@ -3581,6 +3590,9 @@ pixels are ignored, never an error).
 | `gfx blit <slot> <x> <y> [transparent]` | Stamp a sprite onto the canvas (clipped; needs `gfx show`). Optional transparent color skips matching pixels. ERRORLEVEL `1` when the slot is empty. |
 | `gfx blitmany <slot> [/s:N] [/r:deg] [/a:<cols>,<cw>,<ch>] <x1> <y1> [<x2> <y2> ...] [transparent]` | Stamp one sprite at up to `P4_CONFIG_GFX_BLITMANY_MAX` (64) positions in a single command — a whole formation per line for batch games. `/s:1..4` upscales every stamp, `/r:0|90|180|270` rotates clockwise first (refused when the transformed sprite exceeds the canvas). `/a:<cols>,<cw>,<ch>` (v1.6) treats the slot as a sprite sheet and each x/y pair as an atlas cell index; it cannot be combined with `/r:`. A trailing odd token is the transparent color (same as `blit`). |
 | `gfx composite <slot> <x> <y> <alpha 0..256> [transparent]` (v1.6) | Alpha-blend a loaded sprite slot onto the canvas as a translucent layer; an optional transparent colour key skips matching source pixels. |
+| `gfx tile create|set|draw|free|list ...` | Named tile maps over a loaded sprite sheet: `create <map> <name> <sheet> <cols> <rows> <cw> <ch> [/t:<color>] [/z:<layer>]`, `set <map> <col> <row> <idx> [/f:<h\|v\|r\|->]` (flip/rotate), `draw <x> <y> [map ...]` (no maps draws all by z), `free <map>`, `list`. |
+| `gfx particles seed|emit|step|draw|clear ...` | Deterministic bounded particle emitter: `seed <uint32>`, `emit <n> <x> <y> [spread] [color]`, `step [ticks 1..64]`, `draw [x] [y]`, `clear`. |
+| `gfx layer bind|dirty|present|visible ...` | Alpha sprite layers composed through the one path: `bind <layer> <sheet> <name> <x> <y> <alpha 0..256> [/z:<n>]`, `dirty <layer> [x y w h]`, `present [all\|<layer>]`, `visible <layer> <on\|off>`. |
 | `gfx free <slot>` | Release one sprite slot. |
 | `gfx slots` | List live slots as `gfx.slot: <n> <w>x<h>` (batch `for /f`-friendly). |
 | `gfx save <path>` | Write the canvas as a 24-bit BMP (same layout `screenshot <file>` produces: shared `screenshot_write_bmp_headers`, guarded SD session, free-space precheck, partial removed on failure). |
@@ -5001,7 +5013,10 @@ diagnostic). The first render enters TUI mode so the page is visible;
 `draw close` (or `tui fullscreen off`) returns to the transcript. After
 rendering, `tui dump [from] [to] [/a]` reads the page back cell by cell;
 `/a` may appear before or after the row range and appends the per-row colour
-runs used by the suites.
+runs used by the suites. On a device, `PageUp`/`PageDown` scroll a whole visible
+page through the existing `MODAL_KEY_PAGE_UP`/`MODAL_KEY_PAGE_DOWN` constants
+and the same viewport/present path as Up/Down — no second scroll state or input
+surface.
 
 Caching (both in PSRAM, `components/browser/`):
 - **Image cache** — the decoded cell grid per source URL. A hit skips both the

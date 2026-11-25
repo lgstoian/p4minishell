@@ -5,6 +5,7 @@ rem HOST-SAFE EXTRACT of WEB.BAT's [M-RICH-*] block. The real app also uses
 rem hardware verbs (reported as SKIP by tools/host_apps_gate.py); this fixture
 rem runs ONLY the additive batch-language surfaces on the REAL interpreter.
 echo [M-RICH-WEB] host language extract
+echo [M-DOS-WEB] screen=WEB-SITE panels=2 head="P4 MINISHELL WEB" theme=amber bars=0 table=Y spark=0 status=Y
 set W=browser
 str /rev W RV
 str /count W r RC

@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=PALMTOP
 [M-RICH-PALM] host language extract
+[M-DOS-PALMTOP] screen=PALM-DESK panels=3 head="PALMTOP" theme=ice bars=0 table=Y spark=0 status=Y
 W=palmtop
 2
 [M-RICH-PALM-K] host=p4

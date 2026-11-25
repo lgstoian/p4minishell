@@ -1,0 +1,61 @@
+# webapp-baseline-v1 fixture=wiki_esp32.html
+webapp.image kind=img src=esp32-module.bmp state=resized native=64x8 fit=32x2 alt=ESP-WROOM-32 module
+webapp.image kind=img src=esp32-die-missing.bmp state=missing native=64x8 fit=0x0 alt=ESP32 die shot unavailable
+webapp.render.begin fixture=wiki_esp32.html cols=80 rows=25
+tui.dump cols=80 from=1 to=25
+001|
+001@1-80:16
+002|ESP32byEspressif Systems-
+002@1-7:7 8-24:11 25-26:7 27-80:16
+003|240 MHz dual-core, Wi-Fi and Bluetooth on one die.
+003@1-50:7 51-80:16
+004|
+004@1-80:16
+005|Guide:official ESP-IDF page- modules,
+005@1-6:7 7-27:11 28-38:7 39-80:16
+006|toolchains and bindings.
+006@1-24:7 25-80:16
+007|+--------------------------------+
+007@1-34:7 35-80:16
+008||..=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-|
+008@1-1:7 2-3:0 4-33:8 34-34:7 35-80:16
+009||.........-  .........  .........|
+009@1-1:7 2-10:0 11-11:8 12-13:0 14-22:8 23-24:0 25-25:8 26-33:0 34-34:7 35-80:16
+010|+--------------------------------+
+010@1-34:7 35-80:16
+011|[ESP32 die shot unavailable]
+011@1-28:7 29-80:16
+012|ESP32
+012@1-5:14 6-80:16
+013|=====
+013@1-5:14 6-80:16
+014|
+014@1-80:16
+015|ESP32is a family of low-cost, energy-efficient microcontrollers that
+015@1-69:7 70-80:16
+016|support both Wi-Fi and Bluetooth. The chips are designed byEspressif Systemsand
+016@1-59:7 60-76:11 77-80:7
+017|combine a
+017@1-10:7 11-80:16
+018|Tensilica Xtensa or RISC-V processor with wireless radios, SRAM and peripheral
+018@1-79:7 80-80:16
+019|controllers on one die.
+019@1-23:7 24-80:16
+020|
+020@1-80:16
+021|ESP32         Microcontroller
+021@1-12:14 13-14:7 15-48:14 49-80:16
+022|------------------------------------------------
+022@1-48:7 49-80:16
+023|Manufacturer  Espressif Systems
+023@1-12:14 13-48:7 49-80:16
+024|------------------------------------------------
+024@1-48:7 49-80:16
+025|Type          Microcontroller
+025@1-12:14 13-48:7 49-80:16
+tui.dump.end
+webapp.meta semantic=1 controls=0 grids=0 canvases=0
+webapp.events handlers=0
+webapp.cascade h1_color=h1 spec=0.0.1 imp=0 order=2 fg=14
+webapp.entity &amp;=0026/5 &reg=00AE/4 &#x41;=0041/6 &#1114112;=FFFD/10 &#x80;=20AC/6 &hellip;=2026/8
+webapp.render.end fixture=wiki_esp32.html rows=25 runs=25

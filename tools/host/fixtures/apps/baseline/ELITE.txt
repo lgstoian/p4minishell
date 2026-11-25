@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=ELITE
 [M-RICH-ELITE] host language extract
+[M-DOS-ELITE] screen=ELITE-MARKET panels=3 head="ELITE" theme=amber bars=2 table=Y spark=0 status=Y
 W=trader
 2
 [M-RICH-ELITE-K] host=p4

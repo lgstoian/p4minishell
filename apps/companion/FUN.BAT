@@ -31,7 +31,15 @@ set /a N11=7+4*%NS% > NUL
 set /a N12=7+5*%NS% > NUL
 set /a N13=7+6*%NS% > NUL
 draw clear screen
-gosub %APPROOT%/APPLIB.BAT::bar 1 3 single
+set DOS_THEME=amber
+gosub %APPROOT%/APPLIB.BAT::header "FUN / DEMOS" "[M-RICH-FUN] melody + rgb + games"
+gosub %APPROOT%/APPLIB.BAT::tile 1 5 40 10 double "DEMO REEL"
+draw text 4 8 "1 melody  2 rgb  3 guess  4 calc" 14
+gosub %APPROOT%/APPLIB.BAT::tile 43 5 37 10 single "BOX SAMPLER"
+draw box 46 8 12 4 single SINGLE
+draw box 62 8 14 4 double DOUBLE
+gosub %APPROOT%/APPLIB.BAT::statusbar 21 "demo=idle  palette=amber" "1..4 run  Esc back"
+echo [M-DOS-FUN] screen=FUN-DEMOS panels=2 head="FUN / DEMOS" theme=amber bars=0 table=N spark=0 status=Y
 draw text 35 2 "FUN / DEMOS 😀" 14
 gosub %APPROOT%/APPLIB.BAT::panel 4 10 single "Demos"
 draw text 5 6 "Melody, RGB, guessing, calc, snake, elite trader"

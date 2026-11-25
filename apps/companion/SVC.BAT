@@ -15,6 +15,7 @@ rem  maintenance running while the shell stays live.
 rem  Markers: [M-SVC] / [M-SVC-TICK] / [M-SVC] stopped.
 rem =====================================================================
 echo [M-SVC]  service started
+echo [M-DOS-SVC] screen=SVC-HEADLESS panels=0 head="NONE" theme=mono bars=0 table=N spark=0 status=N
 title "Companion Service"
 notify /t:3 "background service running"
 rem ---- v1.6 richer-language showcase -----------------------------------

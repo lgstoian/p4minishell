@@ -29,47 +29,98 @@ device - the live Wikipedia article is fetched and rendered whole. The showcase 
 
 ![The P4MiniShell browser rendering the device dashboard from sd:/WEB/INDEX.HTML](docs/assets/browser-website.png)
 
+**Visual direction.** P4MiniShell deliberately looks like a modern take on
+retro MS-DOS: an 80x25 CP437 cell grid, box-drawn panels, the DOS/CGA palette,
+a chunky bitmap cell font, status bars and keyboard menus. The point is richer
+information density and smoother keyboard/touch interaction, not modern web
+cards or gradients. Every surface goes through the one TUI cell renderer, CSS
+colour parser/DOS palette and input path (see
+[`documentation.md`](documentation.md), "Rendering"), so a `.bat` app, a browser
+page and a native app share the same screen language.
+
 ---
 
-## HTML examples and screenshots (shipped and screenshot-proofed)
+## HTML examples and screenshots
 
 **HTML5, CSS and JavaScript examples ship with this repository.** They are not
 just a capability claim: the browser/HTML engine renders them from SD or from a
 host fixture, and the rendered pages are screenshot-proofed. The `webapp`
 facade lets a `.bat` app present the same pages, read the cell grid and dispatch
-events/timers through the one DOM/CSS/JS engine (no second renderer).
+events/timers through the one DOM/CSS/JS engine (no second renderer). The pages
+are laid out into the same 80x25 DOS grid as the shell: box-drawn panels, CGA
+colours, a chunky bitmap font, a status line and keyboard menus, rather than
+web-style cards or gradients.
 
 | What | Where |
 |------|-------|
 | HTML5 feature fixture (semantic elements, forms/inputs, grid, table `colspan`, selectors, CSS gradients/opacity, canvas gradients/shadows, JS timers/events) | [`tools/host/fixtures/webapp/features.html`](tools/host/fixtures/webapp/features.html) |
 | Minimal page fixture | [`tools/host/fixtures/webapp/hello.html`](tools/host/fixtures/webapp/hello.html) |
+| Functional showcase pages: portal, dashboard, article and form | [`portal.html`](tools/host/fixtures/webapp/portal.html), [`dashboard.html`](tools/host/fixtures/webapp/dashboard.html), [`article.html`](tools/host/fixtures/webapp/article.html), [`form.html`](tools/host/fixtures/webapp/form.html) |
+| ESP32 Wikipedia article fixture (H1, infobox, link colour, image outcomes) | [`wiki_esp32.html`](tools/host/fixtures/webapp/wiki_esp32.html) |
 | Exact rendered text/colour-run baselines | [`features.txt`](tools/host/fixtures/webapp/baseline/features.txt), [`hello.txt`](tools/host/fixtures/webapp/baseline/hello.txt) |
 | Richer shipped example page (deployed via `apps/app_manifest.py`) | [`apps/webapp/RICH.HTML`](apps/webapp/RICH.HTML) |
 | Batch-facing app shim | [`apps/webapp/WEBAPP.BAT`](apps/webapp/WEBAPP.BAT) |
 | Fixture format and gate rules | [`tools/host/fixtures/webapp/README.md`](tools/host/fixtures/webapp/README.md) |
 
-**Proof images (host-generated from the real render path, not device captures):**
+**DOS presentation proofs (host-generated from the real render path, not device
+captures).** Every image below is 1024x600 and carries a
+`HOST PROOF - NOT A DEVICE CAPTURE` footer; all are checked by the board-free
+visual proof gate. The four functional pages show the DOS screen language in
+four roles: a menu-style portal, a data dashboard with boxed panels and ASCII
+charts, a long-form article, and a form driven by the keyboard.
+
+| Portal | Dashboard |
+|--------|-----------|
+| ![DOS portal page](screenshots/web/portal.png) | ![DOS dashboard page](screenshots/web/dashboard.png) |
+
+| Article | Form |
+|---------|------|
+| ![DOS article page](screenshots/web/article.png) | ![DOS form page](screenshots/web/form.png) |
+
+**Wikipedia article (first screen only).** This is the saved
+`wiki_esp32.html` fixture rendered through the same DOM/CSS/sampler into the
+DOS grid — the H1, infobox, a bright-cyan `Espressif Systems` link, `240 MHz`
+and both image outcomes (a resized BMP and visible alt text for the missing
+one). It is a **first-25-rows host proof**, not a live HTTPS capture and not the
+full 2000-row page the device can hold in PSRAM; on a board, `browser`/`html`
+fetches and renders the real article whole, and tap links/PageUp/PageDown are
+device behaviour.
+
+![ESP32 Wikipedia article, first 25 rows, as a labelled DOS host proof](docs/assets/web/wiki_esp32.png)
+
+The feature-detail and form-detail proofs are regenerated in the same DOS
+presentation:
 
 ![HTML5 feature render: forms, semantics, grid, table, CSS and canvas](docs/assets/web-features.png)
 
 ![Webapp forms render: labels, inputs, select, button and events](docs/assets/webapp-forms.png)
 
-Both images are labelled host-generated proofs; hardware recapture is pending.
-The checked gallery of verified captures — with host proofs explicitly marked —
+The four showcase PNGs are committed both under [`screenshots/web/`](screenshots/web/)
+and as byte-identical documentation copies under [`docs/assets/web/`](docs/assets/web/).
+All of these images are labelled host-generated proofs; hardware recapture is
+pending. The checked gallery of verified captures — with host proofs explicitly marked —
 is [`docs/assets/proof-index.html`](docs/assets/proof-index.html), and the richer
 per-app proofs (including the browser, dashboard and live Wikipedia render) are
 in the [reference app gallery](docs/apps.md) and
 [`docs/assets/README.md`](docs/assets/README.md).
 
-Reproduce the HTML proof without a board (Linux/WSL2, ESP-IDF v5.5.5 sourced):
+Reproduce the HTML and visual proofs without a board (Linux/WSL2, ESP-IDF v5.5.5
+sourced):
 
 ```powershell
-python tools/host_webapp_gate.py --check      # renders both fixtures, compares text/colour-run baselines
+python tools/host_webapp_gate.py --check      # renders fixtures, compares text/colour-run baselines
 python tools/host_webapp_gate.py --self-test  # red canary: a wrong baseline must fail
 python tools/host_webapp_gate.py --update     # intentional re-baseline; review the diff
+python tools/make_web_screenshots.py --update # four pages -> screenshots/web + docs/assets/web
+python tools/make_web_screenshots.py --check  # verify the committed DOS proofs
+python tools/make_webapp_proof.py --update    # DOS feature + form proofs (--check / --self-test too)
+python tools/visual_proof_gate.py --check     # DOS palette, box borders, ink bands, distinct signatures
+python tools/visual_proof_gate.py --self-test # 7 canaries: blank/blue/palette/border/tofu/duplicate + clean control
+python tools/host_browser_gate.py --check     # real renderer on wiki + 4 DOS fixtures (271 assertions)
+python tools/host_browser_gate.py --self-test # 9 red canaries, no board
 ```
 
-This gate opens no serial port and is a **pre-gate only** — never hardware
+These gates open no serial port and are **pre-gates only** — never hardware
 sign-off (`harness.md` §0 and §2.2). On a board, `webapp open
 sd:/WEB/INDEX.HTML` (or `launch WEBAPP`) renders the shipped showcase page
 through the same engine; `webapp event`/`webapp tick` drive JS handlers/timers.
@@ -78,7 +129,8 @@ All other screenshots are captured live from the device over USB serial
 (`python tools/capture_docs.py <COM_PORT>`); the full set is in
 [`docs/assets/`](docs/assets/README.md), and every visual app has a captured main screen in the
 [`app gallery`](docs/apps.md); headless services and one-shot transcript emitters
-are verified by markers instead.
+are verified by markers instead. `screenshots/` is git-ignored scratch except
+for the committed `screenshots/web/*.png` proof set linked above.
 
 The `screenshot` command reports success in the header notification only
 (v1.4.3); the transcript stays clean, and only errors are printed.
@@ -160,6 +212,14 @@ host gates are wired into CI for this candidate. See
   `[M-RICH-*]` transcript lines require a **board rebaseline of
   `tools/appdiff/baseline/*.transcript.txt`**; no hardware parity is claimed
   for v1.6.0. All host passes are pre-gates; board sign-off is still open.
+
+**Visual redesign (in progress, board-free).** Alongside v1.6.0, the reference
+apps are being redrawn as distinct DOS dashboards (boxed panels, status bars,
+ASCII/CP437 charts, one flagship showcase), and the HTML fixtures above are
+rendered into DOS-style browser screenshots. These are host-generated proofs
+checked by `tools/visual_proof_gate.py --check`, not device captures; no
+hardware result is claimed. See the [changelog](changelog.md) `[Unreleased]`
+section and the [app gallery](docs/apps.md).
 
 **Implemented and verified**
 
@@ -678,6 +738,7 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
 | [tools/README.md](tools/README.md) | Host-side drivers and hardware tests |
 | [PORTING.md](PORTING.md) | Board profiles (`boards/`) and bring-up checklist |
 | [schematics.md](schematics.md) | Per-board hardware reference: pinouts, buses, power tree, expander maps |
+| [docs/apps.md](docs/apps.md) | Reference app gallery: each app's distinct DOS screen and proof origin |
 | [docs/native_packaging.md](docs/native_packaging.md) | Package spec: bundle layout, hybrid/native types, signed manifests (packaging spec v1.3) |
 | [docs/assets/README.md](docs/assets/README.md) | Public screenshot set + capture guide |
 | [apps/companion/FINDINGS.md](apps/companion/FINDINGS.md) | Companion batch-app findings log (test campaigns) |
@@ -689,8 +750,8 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
 
 > **Screenshots:** curated public captures live in `docs/assets/` (see its
 > README for the naming convention and the build-mode capture commands).
-> `screenshots/` at the repo root is git-ignored test scratch and is
-> intentionally empty here.
+> `screenshots/` at the repo root is git-ignored test scratch, except for the
+> committed DOS web proofs under `screenshots/web/` linked above.
 
 ---
 
@@ -712,12 +773,17 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
 - **Host pre-gates (no board, CI-enforced):** `python tools/host_gen_runner.py
   --check`, `python tools/host_unit_run.py --static/--build`,
   `python tools/host_batch_run.py --check`, `python tools/host_webapp_gate.py
-  --check`, `python tools/host_tui_gate.py --check`,
+  --check`, `python tools/host_browser_gate.py --check` (real renderer, 5
+  fixtures), `python tools/host_tui_gate.py --check`,
   `python tools/host_modal_gate.py --check`, `python tools/gfx_toolkit_test.py
-  --host`, `python tools/host_apps_gate.py --check` (33 enriched apps), plus the
-  false-green/identity gates (`green_guard.py --strict`, `gallery_audit.py`,
-  `gallery_audit_selftest.py`). A pass is never hardware sign-off
-  (`harness.md` §0/§2.2); the app transcript goldens await a board rebaseline.
+  --host`, `python tools/host_apps_gate.py --check` (34 apps incl. the flagship),
+  plus the false-green/identity gates (`green_guard.py --strict`,
+  `gallery_audit.py`, `gallery_audit_selftest.py`) and the visual proof gates
+  (`python tools/make_web_screenshots.py --check`,
+  `python tools/visual_proof_gate.py --check` / `--self-test`).
+  `python tools/host_all_gates.py` runs 35 gates / 15 canaries; a pass is never
+  hardware sign-off (`harness.md` §0/§2.2); the app transcript goldens await a
+  board rebaseline.
 
 See [bugs.md](bugs.md) for the reporting template and [ai-context.md](ai-context.md)
 for the change/verification rules.

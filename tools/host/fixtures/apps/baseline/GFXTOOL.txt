@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=GFXTOOL
 [M-RICH-GFXTOOL] host language extract
+[M-DOS-GFXTOOL] screen=GFXTOOL-HEADLESS panels=0 head="NONE" theme=mono bars=0 table=N spark=0 status=N
 W=toolkit
 2
 [M-RICH-GFXTOOL-K] host=p4

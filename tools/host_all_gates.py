@@ -180,6 +180,17 @@ GATES: Tuple[Gate, ...] = (
     Gate("webapp", "webapp render fixtures", ("host_webapp_gate.py", "--check"), "host"),
     Gate("webapp_canary", "webapp render canary",
          ("host_webapp_gate.py", "--self-test"), "selftest"),
+    # REAL-EXECUTION browser contract: drives the shipped host_webapp_render.elf
+    # on wiki_esp32 + four showcases, asserts emitted H1/anchor/spec/image lines,
+    # exact baselines and STATIC link/keyboard wiring. No board, no fake render.
+    Gate("browser", "browser real-render contract",
+         ("host_browser_gate.py", "--check"), "host",
+         "real ELF: wiki H1/fg=11 anchor/240 MHz/infobox/image outcomes, "
+         "four DOS showcases, exact baselines, static wiring only"),
+    Gate("browser_canary", "browser contract canary",
+         ("host_browser_gate.py", "--self-test"), "selftest",
+         "wrong page, missing infobox, uncoloured link, dropped image, "
+         "tofu, blank render, broken keyboard/link wiring"),
     Gate("tui", "TUI cell-frame scenes", ("host_tui_gate.py", "--check"), "host"),
     Gate("tui_canary", "TUI scene canary",
          ("host_tui_gate.py", "--self-test"), "selftest"),
@@ -200,6 +211,24 @@ GATES: Tuple[Gate, ...] = (
     Gate("web_proof", "webapp proof images", ("make_webapp_proof.py", "--check"), "proof"),
     Gate("web_proof_canary", "webapp proof canary",
          ("make_webapp_proof.py", "--self-test"), "selftest"),
+    Gate("visual", "DOS visual proof quality", ("visual_proof_gate.py", "--check"), "proof",
+         "1024x600, DOS palette, CP437 box frames, ink bands, no blue/tofu, "
+         "distinct signatures - host proofs only, never hardware sign-off"),
+    Gate("visual_canary", "visual proof canary",
+         ("visual_proof_gate.py", "--self-test"), "selftest"),
+    # Deterministic proof images driven by the shipped real-code host gate.
+    # These are board-free pre-gates only, never hardware sign-off.
+    Gate("web_screens", "web screenshot proofs",
+         ("make_web_screenshots.py", "--check"), "proof",
+         "real HTML in the one DOS renderer: cell grid, CP437 frame, "
+         "palette, feature report, distinct signatures"),
+    Gate("web_screens_canary", "web screenshot proof canary",
+         ("make_web_screenshots.py", "--self-test"), "selftest"),
+    Gate("apps_proof", "app dashboard proofs",
+         ("make_app_screenshots.py", "--check"), "proof",
+         "gated APPLIB cell grids: frame, palette, identity, no shell chrome"),
+    Gate("apps_proof_canary", "app dashboard proof canary",
+         ("make_app_screenshots.py", "--self-test"), "selftest"),
     Gate("native_canary", "native payload tamper canary",
          ("make_native_payload.py", "selftest"), "selftest"),
     Gate("native_verify", "signed demo payload verify",

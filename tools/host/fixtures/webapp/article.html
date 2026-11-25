@@ -1,0 +1,66 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: 2026 Stoian Alexandru -->
+<!-- SPDX-License-Identifier: MIT -->
+<!--
+  Deterministic host fixture: a real modern HTML/CSS/JS page rendered through
+  the firmware's ONE dom_parse / css_compute_styles / dom_render_tree path by
+  tools/host/main/host_webapp_render.c. The visible 80x25 surface is a
+  DOS-browser presentation of the page: CP437 box panels, DOS palette and a
+  status line. No network, clock, randomness or second renderer is involved.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>P4.NET/ARTICLE.80COL</title>
+<style>
+  body { color: #cccccc; background-color: #0c0c0c; }
+  .bar { color: #f9f1a5; }
+  .dim { color: #767676; }
+  .ink { color: #f2f2f2; }
+  .cyan { color: #61d6d6; }
+  .blue { color: #3a96dd; }
+  .green { color: #16c60c; }
+  .red { color: #e74856; }
+  .yellow { color: #f9f1a5; }
+  .mag { color: #b4009e; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); }
+  .tile { color: #61d6d6; }
+</style>
+</head>
+<body>
+<header><nav><a href="portal.html">Home</a> | <a href="dashboard.html">Dashboard</a> | <a href="article.html">Article</a> | <a href="form.html">Form</a></nav></header>
+<main>
+<div class="screen">
+<span class="bar">┌─[P4.NET/ARTICLE.80COL]───────────────────────────────────────────────────────┐<br></span>
+<span class="bar">├─Address:http://p4.local/article.html─────────────────────────────────────────┤<br></span>
+<span class="dim"><br></span>
+<span class="bar">│ THE DOS BROWSER REVISITED              issue 07 / reading view              │<br></span>
+<span class="bar">│ ┌─  LEAD  ────────────────────────────────────────────────────────────────┐ │<br></span>
+<span class="bar">│ │ A modern page in an 80-column cell grid: real HTML,                     │ │<br></span>
+<span class="bar">│ │ one cascade, one renderer, CP437 panels, status line.                   │ │<br></span>
+<span class="bar">│ └───────────────────────────────────────────────────────────────────────┘ │<br></span>
+<span class="dim"><br></span>
+<span class="bar">│ Typography: &mdash; em dash  &hellip; ellipsis  &euro; euro                 │<br></span>
+<span class="bar">│ Temp 21&deg;C   &copy; 2026   &reg; P4   &trade; mark                       │<br></span>
+<div class="grid"><span class="ink">Columns keep the reading rhythm</span><span class="ink">short lines, wide gutters, clear type</span></div><span class="dim"><br></span>
+<span class="bar">│ > Quoted: the grid is the interface, not a dump.                            │<br></span>
+<span class="bar">│ > Read on: the article continues in two columns.                            │<br></span>
+<span class="dim"><br></span>
+<span class="bar">│ NEXT: <a href="form.html">Form</a> / <a href="portal.html">Portal</a>       │<br></span>
+<span class="dim"><br></span>
+<span class="bar">├─READY | 2-column reading view | F1 help──────────────────────────────────────┤<br></span>
+<span class="bar">└──────────────────────────────────────────────────────────────────────────────┘<br></span>
+</div>
+
+</main>
+<footer>P4 NET - DOS presentation of real HTML - host proof only</footer>
+<script>
+function go() {
+  var r = document.getElementById('result');
+  if (r) r.textContent = 'RESULT: SAVED';
+}
+setTimeout(function () { document.title = 'ready'; }, 0);
+Promise.resolve().then(function () { document.title += ':micro'; });
+</script>
+</body>
+</html>

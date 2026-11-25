@@ -112,6 +112,24 @@ These are the host-side systems behind [`AGENTS.md`](../AGENTS.md),
   dump and a duplicate and requires the audit to reject both (and accept a
   clean set), so a silently broken guard cannot stay green. Also wired into
   `tools/harness/verify.py`.
+- `make_web_screenshots.py` — renders the four functional HTML fixtures
+  (`portal.html`, `dashboard.html`, `article.html`, `form.html`) through the
+  device's one DOM/CSS/JS engine into 1024x600 DOS-presentation PNGs under
+  `screenshots/web/`, with byte-identical copies in `docs/assets/web/`.
+  `--check` verifies the committed proofs, `--update` rebuilds them and
+  `--self-test` runs the red canaries. The images carry a
+  `HOST PROOF - NOT A DEVICE CAPTURE` footer.
+- `visual_proof_gate.py` — board-free **visual proof gate, never hardware
+  sign-off**. `--check` validates committed proof PNGs using the ONE shared
+  pixel model: 1024x600 RGB frame, real DOS-palette pixel share, continuous
+  CP437 box borders, ink in header/body/footer bands, no LVGL default-theme
+  blue blobs or empty-box glyph runs, a distinct per-screen signature and a
+  byte-exact `docs/assets/web/` mirror of each web page. `--update` rewrites the
+  signature manifest; `--self-test` runs seven in-memory
+  canaries (blank, default-blue/shell-chrome, wrong palette, broken border,
+  tofu glyph cells, a duplicate-page signature and a clean frame that must be
+  accepted). `host_all_gates.py` exposes gate ids `visual` and
+  `visual_canary`. See `harness.md` §2.1.
 
 The p4test runner also treats a zero-assertion `Checklist`/`SuiteResult` as a
 failure at run time, so a suite that asserts nothing can never report green.
@@ -317,10 +335,23 @@ holder per port.
   (no hardcoded path; `--renderer` overrides) and a POSIX ELF is routed through
   WSL on Windows. `--check` (default), `--update` rebaselines, `--self-test` is
   the red canary, `--no-png` is text-only. The v1.6 fixture set adds
-  `features.html` (forms/semantics/grid/table/CSS/canvas/JS timers); refresh
-  the exact assertion count with `--check`. No serial port, no device;
+  `features.html` (forms/semantics/grid/table/CSS/canvas/JS timers) and the
+  functional `portal.html`/`dashboard.html`/`article.html`/`form.html` pages;
+  DOS-presentation assertions (boxed frame rows, status/footer line, no
+  empty-box glyphs or raw debug labels) were added to the parsed-row checks.
+  Refresh the exact assertion count with `--check`. No serial port, no device;
   `apps/webapp/WEBAPP.BAT` is the board-facing
   reference shim for the same `webapp` facade. See `harness.md` §2.2.
+- `host_browser_gate.py` — host-only **real-execution browser pre-gate, never
+  hardware sign-off**: discovers the shipped `host_webapp_render.elf`, WSL-routes
+  the POSIX ELF on Windows and executes the ONE firmware DOM renderer on five
+  fixtures — `wiki_esp32.html` (H1, infobox, bright-cyan `Espressif Systems`
+  anchor, `240 MHz`, both image outcomes) and the four DOS showcase pages.
+  `--check` asserts 271 exact renderer baselines plus 11 labelled STATIC
+  wiring checks; `--self-test` runs 9 red canaries; `--renderer PATH` overrides
+  the ELF. The wiki PNG is a first-25-rows host proof, not live HTTPS or the
+  full 2000-row device page; live input and glass taps are DEVICE-ONLY. Gate ids
+  `browser`/`browser_canary` in `host_all_gates.py`. See `harness.md` §2.2.
 - `host_batch_run.py` — host-only **real `.bat` fixture pre-gate, never hardware
   sign-off**: runs `tools/host/fixtures/batch/HELLO.BAT` through the real
   interpreter via the standalone `test/host/main/host_batch_run.c` ELF built by
@@ -360,13 +391,17 @@ holder per port.
   `check` never maps or runs the payload; the throwaway P-256 key is test-only
   and never installed on a board (`SECURITY.md`).
 - `host_apps_gate.py` — v1.6 host-only **reference-app pre-gate**: drives all
-  **33 updated `.bat` apps** through the SAME real interpreter ELF by loading
-  `host_batch_run.py` as a library (fixtures in `tools/host/fixtures/apps/`,
-  exact baselines in `baseline/`). Every app carries an additive `[M-RICH-*]`
-  block; all pre-existing `[M-*]` markers are preserved. Current result:
-  **33/33 apps, 363 host assertions PASS, 40 hardware-dependent surfaces SKIP
+  **34 `.bat` apps** (33 updated ones plus the flagship showcase) through the
+  SAME real interpreter ELF by loading `host_batch_run.py` as a library
+  (fixtures in `tools/host/fixtures/apps/`, exact baselines in `baseline/`).
+  Every app carries an additive `[M-RICH-*]` block; all pre-existing `[M-*]`
+  markers are preserved. Current result:
+  **34 apps, 679 host assertions PASS, 45 hardware-dependent surfaces SKIP
   with a named reason (gfx/TUI/modal/webapp/native — never faked), 7 canaries**.
-  `--check` (default), `--update` and `--self-test`. No serial port, no
+  The DOS-redesign pass adds per-app screen-structure assertions (panel/header
+  counts, box-border rows and colour runs where available) and distinctness
+  across apps; hardware surfaces still SKIP honestly. `--check` (default),
+  `--update` and `--self-test`. No serial port, no
   hardware sign-off. Because the new markers intentionally change app
   transcripts, `tools/appdiff/baseline/*.transcript.txt` goldens **must be
   regenerated on a board** before hardware transcript parity can pass.

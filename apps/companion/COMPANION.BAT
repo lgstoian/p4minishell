@@ -35,7 +35,15 @@ draw clear screen
 rem Layout: the shell publishes the grid (80x25 landscape, 80x97 portrait).
 rem The Main Menu panel takes the extra rows; the hint bar stays on the
 rem bottom rows (20..22) and its text inside it (row 22).
-gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "P4 COMPANION ★"
+set DOS_THEME=amber
+gosub %APPROOT%/APPLIB.BAT::header "P4 COMPANION" "[M-RICH-COMPANION] pure-batch hub"
+gosub %APPROOT%/APPLIB.BAT::tile 1 5 46 12 double "MODULES"
+gosub %APPROOT%/APPLIB.BAT::table 3 8 "Module|Role|State" "SYS|dashboard|READY" "FILES|tools|READY" "NET|link|IDLE"
+gosub %APPROOT%/APPLIB.BAT::tile 49 5 31 12 single "ACTIVITY"
+gosub %APPROOT%/APPLIB.BAT::meter 52 9 24 70 "TASKS 70%"
+gosub %APPROOT%/APPLIB.BAT::meter 52 12 24 30 "IDLE 30%"
+gosub %APPROOT%/APPLIB.BAT::statusbar 21 "hub=companion  drive=%APPDRIVE%" "1 sys  2 files  3 net  4 fun  5 set"
+echo [M-DOS-COMPANION] screen=COMPANION-HUB panels=3 head="P4 COMPANION" theme=amber bars=2 table=Y spark=0 status=Y
 draw text 22 2 "Pure-batch helper for P4MiniShell (%APPDRIVE%)" 14
 gosub %APPROOT%/APPLIB.BAT::panel 4 15 single "Main Menu"
 if "%TUIROWS%"=="" set TUIROWS=25

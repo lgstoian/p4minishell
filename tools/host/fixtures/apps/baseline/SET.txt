@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=SET
 [M-RICH-SET] host language extract
+[M-DOS-SET] screen=SET-PREFS panels=2 head="PREFERENCES" theme=ice bars=2 table=Y spark=0 status=Y
 W=settings
 2
 [M-RICH-SET-K] host=p4

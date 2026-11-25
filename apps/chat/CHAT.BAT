@@ -65,7 +65,14 @@ set /a R12=7+5*%CS% > NUL
 set /a R13=7+6*%CS% > NUL
 set /a R14=7+7*%CS% > NUL
 set /a R15=7+8*%CS% > NUL
-gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "P4 CHAT 🎵"
+set DOS_THEME=ice
+gosub %APPROOT%/APPLIB.BAT::header "P4 CHAT" "[M-RICH-CHAT] sequenced link messages"
+gosub %APPROOT%/APPLIB.BAT::tile 2 5 46 11 double "INBOX / LINK"
+gosub %APPROOT%/APPLIB.BAT::tile 50 5 29 11 single "PEER STATUS"
+gosub %APPROOT%/APPLIB.BAT::meter 53 8 22 88 "LINK 88%"
+gosub %APPROOT%/APPLIB.BAT::meter 53 11 22 35 "QUEUE 35%"
+gosub %APPROOT%/APPLIB.BAT::statusbar 21 "host=offline  seq=live" "1 host  2 join  3 send  4 poll  q quit"
+echo [M-DOS-CHAT] screen=CHAT-INBOX panels=3 head="P4 CHAT" theme=ice bars=2 table=N spark=0 status=Y
 draw run 54 2 "[M-RICH-CHAT] seq+str" /fg 11 /bg 0
 draw text 24 2 "Board-to-board chat over the local link" 14
 gosub %APPROOT%/APPLIB.BAT::panel 5 13 single "Menu"

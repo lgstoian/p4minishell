@@ -1176,3 +1176,414 @@ void gfx_surface_composite_keyed(gfx_surface_t *dst, const gfx_surface_t *src,
         }
     }
 }
+
+/* -------------------------------------------------------------------------
+ * Bounded game helpers: tilemaps, particles and layers.
+ * ------------------------------------------------------------------------- */
+
+bool gfx_tilemap_create(gfx_tilemap_t *map, const char *name,
+                        const gfx_surface_t *sheet, int cols, int rows,
+                        int cell_w, int cell_h, int z,
+                        bool use_transparent, uint16_t transparent)
+{
+    size_t n;
+
+    if (map == NULL) return false;
+    memset(map, 0, sizeof(*map));
+    if (name == NULL || sheet == NULL || sheet->px == NULL) return false;
+    if (cols < 1 || cols > GFX_TILEMAP_MAX_COLS ||
+        rows < 1 || rows > GFX_TILEMAP_MAX_ROWS) return false;
+    if (cell_w < 1 || cell_w > GFX_TILEMAP_MAX_CELL ||
+        cell_h < 1 || cell_h > GFX_TILEMAP_MAX_CELL) return false;
+    if ((int64_t)cols * (int64_t)cell_w > sheet->w ||
+        (int64_t)rows * (int64_t)cell_h > sheet->h) return false;
+    n = (size_t)cols * (size_t)rows;
+    map->cells = (uint32_t *)p4heap_alloc_psram(n * sizeof(uint32_t));
+    if (map->cells == NULL) return false;
+    memset(map->cells, 0, n * sizeof(uint32_t));
+    strncpy(map->name, name, sizeof(map->name) - 1);
+    map->sheet = sheet;
+    map->cols = cols;
+    map->rows = rows;
+    map->cell_w = cell_w;
+    map->cell_h = cell_h;
+    map->z = z;
+    map->use_transparent = use_transparent;
+    map->transparent = transparent;
+    return true;
+}
+
+void gfx_tilemap_free(gfx_tilemap_t *map)
+{
+    if (map == NULL) return;
+    heap_caps_free(map->cells);
+    memset(map, 0, sizeof(*map));
+}
+
+bool gfx_tilemap_set(gfx_tilemap_t *map, int col, int row, int index,
+                     unsigned flags)
+{
+    if (map == NULL || map->cells == NULL) return false;
+    if (col < 0 || col >= map->cols || row < 0 || row >= map->rows) return false;
+    if (index < 0 || index > 0xFFFF) return false;
+    map->cells[(size_t)row * (size_t)map->cols + (size_t)col] =
+        (uint32_t)index | ((uint32_t)(flags & 0xFFu) << 16);
+    return true;
+}
+
+uint32_t gfx_tilemap_get(const gfx_tilemap_t *map, int col, int row)
+{
+    if (map == NULL || map->cells == NULL) return 0;
+    if (col < 0 || col >= map->cols || row < 0 || row >= map->rows) return 0;
+    return map->cells[(size_t)row * (size_t)map->cols + (size_t)col];
+}
+
+/** Mirror a scratch cell in place. Pairwise swaps only: no second blit path. */
+static void gfx_tile_flip_inplace(gfx_surface_t *s, bool flip_x, bool flip_y)
+{
+    uint16_t tmp;
+
+    if (s == NULL || s->px == NULL) return;
+    if (flip_x) {
+        for (int y = 0; y < s->h; y++) {
+            for (int x = 0; x < s->w / 2; x++) {
+                tmp = s->px[(size_t)y * (size_t)s->w + (size_t)x];
+                s->px[(size_t)y * (size_t)s->w + (size_t)x] =
+                    s->px[(size_t)y * (size_t)s->w + (size_t)(s->w - 1 - x)];
+                s->px[(size_t)y * (size_t)s->w + (size_t)(s->w - 1 - x)] = tmp;
+            }
+        }
+    }
+    if (flip_y) {
+        for (int y = 0; y < s->h / 2; y++) {
+            for (int x = 0; x < s->w; x++) {
+                tmp = s->px[(size_t)y * (size_t)s->w + (size_t)x];
+                s->px[(size_t)y * (size_t)s->w + (size_t)x] =
+                    s->px[(size_t)(s->h - 1 - y) * (size_t)s->w + (size_t)x];
+                s->px[(size_t)(s->h - 1 - y) * (size_t)s->w + (size_t)x] = tmp;
+            }
+        }
+    }
+}
+
+void gfx_tilemap_draw(const gfx_tilemap_t *map, gfx_surface_t *dst, int x, int y)
+{
+    gfx_surface_t cell = {NULL, 0, 0};
+    gfx_surface_t rot = {NULL, 0, 0};
+
+    if (map == NULL || map->cells == NULL || map->sheet == NULL ||
+        map->sheet->px == NULL || dst == NULL || dst->px == NULL) return;
+    if (!gfx_surface_alloc(&cell, map->cell_w, map->cell_h)) return;
+    for (int row = 0; row < map->rows; row++) {
+        for (int col = 0; col < map->cols; col++) {
+            uint32_t packed = map->cells[(size_t)row * (size_t)map->cols +
+                                         (size_t)col];
+            unsigned flags = (packed >> 16) & 0xFFu;
+            const gfx_surface_t *stamp = &cell;
+
+            if (flags & GFX_TILE_HIDDEN) continue;
+            /* Extract the sheet cell through the ONE atlas blit core. */
+            gfx_surface_clear(&cell, map->transparent);
+            gfx_surface_blit_atlas(&cell, map->sheet, map->cell_w, map->cell_h,
+                                   map->cols, (int)(packed & 0xFFFFu),
+                                   0, 0, map->use_transparent,
+                                   map->transparent);
+            if (flags & (GFX_TILE_FLIP_X | GFX_TILE_FLIP_Y)) {
+                gfx_tile_flip_inplace(&cell,
+                                      (flags & GFX_TILE_FLIP_X) != 0,
+                                      (flags & GFX_TILE_FLIP_Y) != 0);
+            }
+            if (flags & GFX_TILE_ROT90) {
+                gfx_surface_free(&rot);
+                if (!gfx_surface_rotate_cw(&cell, 1, &rot)) continue;
+                stamp = &rot;
+            }
+            /* Stamp the transformed cell through that same core (a 1-cell
+             * view), so every tile pixel follows one clipping/blit routine. */
+            gfx_surface_blit_atlas(dst, stamp, stamp->w, stamp->h, 1, 0,
+                                   x + col * map->cell_w,
+                                   y + row * map->cell_h,
+                                   map->use_transparent, map->transparent);
+        }
+    }
+    gfx_surface_free(&rot);
+    gfx_surface_free(&cell);
+}
+
+void gfx_tilemap_draw_all(gfx_tilemap_t **maps, int count,
+                          gfx_surface_t *dst, int x, int y)
+{
+    int order[GFX_TILEMAP_SLOTS];
+    int n = 0;
+
+    if (maps == NULL || dst == NULL || dst->px == NULL) return;
+    if (count > GFX_TILEMAP_SLOTS) count = GFX_TILEMAP_SLOTS;
+    for (int i = 0; i < count; i++) {
+        if (maps[i] != NULL) order[n++] = i;
+    }
+    /* Insertion sort: small fixed bound, no scratch allocation. */
+    for (int i = 1; i < n; i++) {
+        int key = order[i];
+        int j = i - 1;
+
+        while (j >= 0 && maps[order[j]]->z > maps[key]->z) {
+            order[j + 1] = order[j];
+            j--;
+        }
+        order[j + 1] = key;
+    }
+    for (int i = 0; i < n; i++) {
+        gfx_tilemap_draw(maps[order[i]], dst, x, y);
+    }
+}
+
+uint32_t gfx_rand_next(uint32_t *state)
+{
+    if (state == NULL) return 0;
+    *state = *state * 1664525u + 1013904223u;
+    return *state;
+}
+
+void gfx_emitter_reset(gfx_emitter_t *e, uint32_t seed)
+{
+    if (e == NULL) return;
+    memset(e, 0, sizeof(*e));
+    e->rng = seed;
+}
+
+int gfx_emitter_emit(gfx_emitter_t *e, int n, int x, int y, int spread,
+                     uint16_t color, uint16_t life)
+{
+    int spawned = 0;
+
+    if (e == NULL || n < 1) return 0;
+    if (spread < 0) spread = 0;
+    if (spread > 1024) spread = 1024;  /* keep the modulo span in range */
+    for (int i = 0; i < GFX_PARTICLE_MAX && spawned < n; i++) {
+        gfx_particle_t *p = &e->p[i];
+        int dx;
+        int dy;
+        int vx;
+
+        if (p->alive) continue;
+        dx = (int)(gfx_rand_next(&e->rng) % (uint32_t)(2 * spread + 1)) - spread;
+        dy = (int)(gfx_rand_next(&e->rng) % (uint32_t)(2 * spread + 1)) - spread;
+        vx = (int)(gfx_rand_next(&e->rng) % 201u) - 100;
+        {
+            int64_t px = (int64_t)(x + dx) * 256;
+            int64_t py = (int64_t)(y + dy) * 256;
+
+            if (px < -32768) px = -32768;
+            if (px > 32767) px = 32767;
+            if (py < -32768) py = -32768;
+            if (py > 32767) py = 32767;
+            p->x = (int16_t)px;
+            p->y = (int16_t)py;
+        }
+        p->vx = (int16_t)vx;
+        p->vy = (int16_t)(-(int)(gfx_rand_next(&e->rng) % 161u) - 16);
+        p->life = life;
+        p->max_life = (life > 0) ? life : 1;
+        p->color = color;
+        p->size = 1;
+        p->alive = 1;
+        spawned++;
+    }
+    return spawned;
+}
+
+int gfx_emitter_step(gfx_emitter_t *e, int ticks, int gravity)
+{
+    int live = 0;
+
+    if (e == NULL || ticks < 1) return gfx_emitter_live(e);
+    for (int i = 0; i < GFX_PARTICLE_MAX; i++) {
+        gfx_particle_t *p = &e->p[i];
+
+        if (!p->alive) continue;
+        {
+            int32_t nx = (int32_t)p->x + (int32_t)p->vx * ticks;
+            int32_t ny = (int32_t)p->y + (int32_t)p->vy * ticks +
+                         (int32_t)gravity * ticks;
+            int32_t nv = (int32_t)p->vy + (int32_t)gravity * ticks;
+
+            if (nx < -32768) nx = -32768;
+            if (nx > 32767) nx = 32767;
+            if (ny < -32768) ny = -32768;
+            if (ny > 32767) ny = 32767;
+            if (nv < -32768) nv = -32768;
+            if (nv > 32767) nv = 32767;
+            p->x = (int16_t)nx;
+            p->y = (int16_t)ny;
+            p->vy = (int16_t)nv;
+        }
+        if (p->life <= (uint16_t)ticks) {
+            p->alive = 0;
+            p->life = 0;
+        } else {
+            p->life -= (uint16_t)ticks;
+            live++;
+        }
+    }
+    return live;
+}
+
+int gfx_emitter_live(const gfx_emitter_t *e)
+{
+    int live = 0;
+
+    if (e == NULL) return 0;
+    for (int i = 0; i < GFX_PARTICLE_MAX; i++) {
+        if (e->p[i].alive) live++;
+    }
+    return live;
+}
+
+void gfx_emitter_draw(const gfx_emitter_t *e, gfx_surface_t *dst,
+                      int ox, int oy)
+{
+    if (e == NULL || dst == NULL || dst->px == NULL) return;
+    for (int i = 0; i < GFX_PARTICLE_MAX; i++) {
+        const gfx_particle_t *p = &e->p[i];
+        unsigned coverage;
+
+        if (!p->alive) continue;
+        coverage = (unsigned)p->life * 256u / (unsigned)p->max_life;
+        if (coverage > 256u) coverage = 256u;
+        for (int sy = 0; sy < p->size; sy++) {
+            for (int sx = 0; sx < p->size; sx++) {
+                int px = ox + (p->x >> 8) + sx;
+                int py = oy + (p->y >> 8) + sy;
+
+                gfx_surface_pixel(dst, px, py,
+                                  gfx_blend_565(gfx_surface_get(dst, px, py),
+                                                p->color, coverage));
+            }
+        }
+    }
+}
+
+void gfx_layer_bind(gfx_layer_t *layer, const char *name,
+                    const gfx_surface_t *surface, int x, int y,
+                    unsigned alpha, int z)
+{
+    if (layer == NULL) return;
+    memset(layer, 0, sizeof(*layer));
+    layer->surface = surface;
+    if (name != NULL) {
+        strncpy(layer->name, name, sizeof(layer->name) - 1);
+    }
+    layer->x = x;
+    layer->y = y;
+    layer->z = z;
+    layer->alpha = (alpha > 256u) ? 256u : alpha;
+    layer->visible = true;
+}
+
+bool gfx_layer_mark_dirty(gfx_layer_t *layer, int x, int y, int w, int h)
+{
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+
+    if (layer == NULL || layer->surface == NULL ||
+        layer->surface->px == NULL) return false;
+    if (w < 1 || h < 1) {
+        x0 = 0;
+        y0 = 0;
+        x1 = layer->surface->w;
+        y1 = layer->surface->h;
+    } else {
+        x0 = (x < 0) ? 0 : x;
+        y0 = (y < 0) ? 0 : y;
+        x1 = x + w;
+        y1 = y + h;
+        if (x1 > layer->surface->w) x1 = layer->surface->w;
+        if (y1 > layer->surface->h) y1 = layer->surface->h;
+    }
+    if (x0 >= x1 || y0 >= y1) return false;
+    if (!layer->dirty) {
+        layer->dx = x0;
+        layer->dy = y0;
+        layer->dw = x1 - x0;
+        layer->dh = y1 - y0;
+    } else {
+        int nx0 = (x0 < layer->dx) ? x0 : layer->dx;
+        int ny0 = (y0 < layer->dy) ? y0 : layer->dy;
+        int nx1 = (x1 > layer->dx + layer->dw) ? x1 : layer->dx + layer->dw;
+        int ny1 = (y1 > layer->dy + layer->dh) ? y1 : layer->dy + layer->dh;
+
+        layer->dx = nx0;
+        layer->dy = ny0;
+        layer->dw = nx1 - nx0;
+        layer->dh = ny1 - ny0;
+    }
+    layer->dirty = true;
+    return true;
+}
+
+void gfx_layer_clear_dirty(gfx_layer_t *layer)
+{
+    if (layer == NULL) return;
+    layer->dirty = false;
+    layer->dx = 0;
+    layer->dy = 0;
+    layer->dw = 0;
+    layer->dh = 0;
+}
+
+bool gfx_layer_dirty_rect(const gfx_layer_t *layer,
+                          int *x, int *y, int *w, int *h)
+{
+    if (layer == NULL || !layer->dirty || layer->surface == NULL) return false;
+    if (x != NULL) *x = layer->x + layer->dx;
+    if (y != NULL) *y = layer->y + layer->dy;
+    if (w != NULL) *w = layer->dw;
+    if (h != NULL) *h = layer->dh;
+    return true;
+}
+
+void gfx_layer_present(gfx_surface_t *dst, gfx_layer_t *layer)
+{
+    gfx_surface_t view;
+
+    if (dst == NULL || dst->px == NULL || layer == NULL) return;
+    if (!layer->visible || !layer->dirty || layer->alpha == 0 ||
+        layer->surface == NULL || layer->surface->px == NULL) return;
+    /* A window into the SAME borrowed pixels: still one gfx_surface_t, so the
+     * one composite primitive does all blending and clipping. */
+    view.px = layer->surface->px +
+              (size_t)layer->dy * (size_t)layer->surface->w +
+              (size_t)layer->dx;
+    view.w = layer->dw;
+    view.h = layer->dh;
+    gfx_surface_composite(dst, &view, layer->x + layer->dx,
+                          layer->y + layer->dy, layer->alpha);
+    gfx_layer_clear_dirty(layer);
+}
+
+void gfx_layer_present_all(gfx_surface_t *dst, gfx_layer_t **layers, int count)
+{
+    int order[GFX_LAYER_SLOTS];
+    int n = 0;
+
+    if (dst == NULL || dst->px == NULL || layers == NULL) return;
+    if (count > GFX_LAYER_SLOTS) count = GFX_LAYER_SLOTS;
+    for (int i = 0; i < count; i++) {
+        if (layers[i] != NULL) order[n++] = i;
+    }
+    for (int i = 1; i < n; i++) {
+        int key = order[i];
+        int j = i - 1;
+
+        while (j >= 0 && layers[order[j]]->z > layers[key]->z) {
+            order[j + 1] = order[j];
+            j--;
+        }
+        order[j + 1] = key;
+    }
+    for (int i = 0; i < n; i++) {
+        gfx_layer_present(dst, layers[order[i]]);
+    }
+}

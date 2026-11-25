@@ -5,6 +5,7 @@ rem HOST-SAFE EXTRACT of WEBAPP.BAT's [M-RICH-*] block. The real app also uses
 rem hardware verbs (reported as SKIP by tools/host_apps_gate.py); this fixture
 rem runs ONLY the additive batch-language surfaces on the REAL interpreter.
 echo [M-RICH-WEBAPP] host language extract
+echo [M-DOS-WEBAPP] screen=WEBAPP-FORMS panels=2 head="WEBAPP FORMS" theme=ice bars=0 table=N spark=0 status=Y
 set W=webapp
 str /rev W RV
 str /count W e RC

@@ -28,6 +28,20 @@ rem    :emoji_demo     report the retro DOS fallback and any EMOJI/ pack
 rem    :html_demo      prove the `html` page verb is reachable
 rem    :locale_demo    print the active locale's date/time/number samples
 rem    :cookie_show    show the persisted HTTP cookie jar
+rem
+rem ---- DOS UI vocabulary (one renderer, one palette decision point) -----
+rem Apps set `DOS_THEME` to amber|green|ice|mono before calling these. Every
+rem helper resolves the theme through :palette: there is no second palette and
+rem no second drawing engine. All primitives are shipped batch verbs (draw
+rem box/line/text/run/bar/table/list, tui dump).
+rem   :header   <title> [subtitle]      box-drawn title band + colour run
+rem   :tile     <x> <y> <w> <h> <style> <title>   tiled CP437 panel
+rem   :statusbar <y> <left> <right>     bottom key-hint/status band
+rem   :meter    <x> <y> <w> <pct> [label]        CP437 progress/data bar
+rem   :table    <x> <y> <heads> <r1> <r2> <r3>   bordered data table
+rem   :sparkline <x> <y> <w> v1..v6     six-cell ASCII sparkline
+rem   :pager    <title> <y> <h> <file>  scrollable panel over a real file
+rem   :themebox <x> <y> <w>             palette swatch panel
 rem =====================================================================
 
 rem ---- feature probe ---------------------------------------------------
@@ -51,6 +65,7 @@ rem [M-RICH-LIB-*] proof that the new batch surfaces are live: str, map,
 rem for /K, func/return and %RESULT%. All values are library-scope temporaries.
 :rich
 echo [M-RICH-LIB]
+echo [M-DOS-APPLIB] screen=APPLIB-HEADLESS panels=0 head="NONE" theme=mono bars=0 table=N spark=0 status=N
 set RTAG=%1
 if "%RTAG%"=="" set RTAG=APP
 set RWORD=p4mini
@@ -160,6 +175,102 @@ set /a MINY=%TUIROWS% - %2 + 1 > NUL
 if %PY% GTR %MINY% set PY=%MINY%
 if %PY% LSS 1 set PY=1
 draw box 1 %PY% %TUICOLS% %2 %3 %4
+goto :eof
+
+rem ---- DOS UI palette --------------------------------------------------
+rem The ONE colour decision point. `call :palette` from a helper sets local
+rem PFG/PBG/PACC/PSTYLE for the rest of that helper's scope. A library gosub
+rem cannot export variables, so callers only publish DOS_THEME (amber, green,
+rem ice or mono); the default is green. All values are DOS 0-15 CGA entries,
+rem never CSS gradients or 24-bit art colours.
+:palette
+set PFG=10
+set PBG=0
+set PACC=14
+set PSTYLE=double
+if "%DOS_THEME%"=="amber" set PFG=14
+if "%DOS_THEME%"=="amber" set PACC=12
+if "%DOS_THEME%"=="ice" set PFG=11
+if "%DOS_THEME%"=="ice" set PBG=1
+if "%DOS_THEME%"=="ice" set PACC=15
+if "%DOS_THEME%"=="mono" set PFG=7
+if "%DOS_THEME%"=="mono" set PACC=15
+if "%DOS_THEME%"=="mono" set PSTYLE=single
+goto :eof
+
+rem ---- DOS UI helpers --------------------------------------------------
+rem Title band: a full-width double-line box with the app title in the top
+rem border and a coloured one-line subtitle/identity run in row 2.
+:header
+if "%TUICOLS%"=="" set TUICOLS=80
+call :palette
+draw box 1 1 %TUICOLS% 3 %PSTYLE% %PFG% %PBG% %1
+draw line 1 3 %TUICOLS% 3 single %PFG% %PBG%
+if not "%2"=="" draw run 3 2 %2 /fg %PACC% /bg %PBG%
+goto :eof
+
+rem Tiled panel: an individually titled CP437 box (single/double/rounded).
+:tile
+call :palette
+draw box %1 %2 %3 %4 %5 %PFG% %PBG% %6
+goto :eof
+
+rem Bottom status/key band. The right-hand text is a colour run so key hints
+rem stay legible on every theme while the left text carries live data.
+:statusbar
+if "%TUICOLS%"=="" set TUICOLS=80
+call :palette
+set /a SBROW=%1+1 > NUL
+draw box 1 %1 %TUICOLS% 3 single %PFG% %PBG%
+draw run 3 %SBROW% %2 /fg %PACC% /bg %PBG%
+if not "%3"=="" draw run 42 %SBROW% %3 /fg %PACC% /bg %PBG%
+goto :eof
+
+rem Data bar (the panel-embedded meter, distinct from the legacy :bar frame).
+:meter
+call :palette
+draw bar %1 %2 %3 %4 # . %PACC% %PBG%
+if not "%5"=="" draw run %1 %2 %5 /fg %PFG% /bg %PBG%
+goto :eof
+
+rem Bordered table over the shipped `draw table` primitive.
+:table
+call :palette
+draw table %1 %2 %PFG% %PBG% %3 %4 %5 %6
+goto :eof
+
+rem Six-cell ASCII/CP437 sparkline: one short `draw bar` per sample.
+:sparkline
+call :palette
+set SPX=%1
+draw bar %SPX% %2 %3 %4 # . %PACC% %PBG%
+set /a SPX+=%3+1 > NUL
+draw bar %SPX% %2 %3 %5 # . %PACC% %PBG%
+set /a SPX+=%3+1 > NUL
+draw bar %SPX% %2 %3 %6 # . %PACC% %PBG%
+set /a SPX+=%3+1 > NUL
+draw bar %SPX% %2 %3 %7 # . %PACC% %PBG%
+set /a SPX+=%3+1 > NUL
+draw bar %SPX% %2 %3 %8 # . %PACC% %PBG%
+set /a SPX+=%3+1 > NUL
+draw bar %SPX% %2 %3 %9 # . %PACC% %PBG%
+goto :eof
+
+rem Scrollable pager panel over a real on-device file.
+:pager
+call :palette
+draw list 1 %2 %TUICOLS% %3 %APPDRIVE%/%4 %PFG% %PBG% /title:%1
+goto :eof
+
+rem Theme swatch: four labelled colour runs inside a titled panel.
+:themebox
+call :palette
+set /a TBX=%1+2 > NUL
+set /a TBY=%2+2 > NUL
+set /a TBY2=%2+3 > NUL
+draw box %1 %2 %3 5 double %PFG% %PBG% PALETTE
+draw run %TBX% %TBY% "AMBER  GREEN  ICE  MONO" /fg %PACC% /bg %PBG%
+draw run %TBX% %TBY2% "%DOS_THEME% / %PSTYLE%" /fg %PFG% /bg %PBG%
 goto :eof
 
 rem ---- emoji -----------------------------------------------------------

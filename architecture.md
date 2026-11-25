@@ -85,6 +85,19 @@ existing pane/modal/event state; `components/command/modal_commands.c`
 `webapp` delegates every verb to the existing HTML/CSS/DOM/JS engine. All new
 surface state stays behind those seams (ADR-15..17).
 
+**Visual direction (in progress, board-free).** The presentation target is a
+modern take on retro MS-DOS: an 80x25 CP437 cell grid, box-drawn panels, the
+DOS/CGA palette, a chunky bitmap cell font, status bars and keyboard menus —
+denser information and smoother interaction rather than web cards or gradients.
+This constrains how the existing seams are used (the one cell renderer/sampler,
+one CSS colour parser and DOS palette, the one cell font and one input/event
+path); it adds no new layer, renderer or event model. Reference apps are being
+given distinct boxed dashboards, and the functional HTML fixtures are rendered
+through the same engine into DOS-style browser proofs. The screenshots are
+1024x600 host proofs, labelled `HOST PROOF - NOT A DEVICE CAPTURE` and checked
+by `tools/visual_proof_gate.py --check`; a pass is a pre-gate only
+(`harness.md` §0/§2.2).
+
 **Emoji, colour and alpha (v1.4.3).** `components/font/emoji_core.c` is the one
 emoji decision point (retro DOS/CP437 fallback map); the TUI/HTML text path and
 the LVGL font chain are its two adapters. `components/emoji/` reads optional

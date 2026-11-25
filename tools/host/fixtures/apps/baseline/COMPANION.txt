@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=COMPANION
 [M-RICH-COMPANION] host language extract
+[M-DOS-COMPANION] screen=COMPANION-HUB panels=3 head="P4 COMPANION" theme=amber bars=2 table=Y spark=0 status=Y
 W=companion
 1
 [M-RICH-COMPANION-K] host=p4

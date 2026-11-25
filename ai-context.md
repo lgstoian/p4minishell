@@ -89,7 +89,10 @@ atlas/composite; batch gained `func`/`return <expr>`/`%RESULT%`, `for /K`,
 `trap /on`, `str /rev|count|pad` and `map /values|incr`; HTML5/CSS/JS, the TUI
 cell frame and the modal runtime gained additive surfaces; all 33 reference
 apps emit additive `[M-RICH-*]` markers (pre-existing `[M-*]` preserved); and
-the host gate set now covers batch, webapp, gfx, tui, modal and apps. Everything is host/static
+the host gate set now covers batch, webapp, gfx, tui, modal and apps. An
+in-progress visual redesign gives those apps distinct DOS dashboards and
+renders the HTML fixtures to labelled DOS-style host proof screenshots
+(`changelog.md` `[Unreleased]`). Everything is host/static
 verified only — the on-board suites remain the authority (`harness.md` §0/§2.2).
 See [`changelog.md`](changelog.md) §1.6.0 and [`architecture.md`](architecture.md)
 ADR-15..17.
@@ -680,10 +683,21 @@ tools use a webcam to observe the device; prefer them over guessing.
   palette, and input through the ONE modal chord/tap/event path. `webapp`,
   `draw run`, `tui frame` and the new modal verbs are thin facades, not new
   runtimes.
+- **One visual direction, not a second UI toolkit.** Every screen follows a
+  modern take on retro MS-DOS: an 80x25 CP437 cell grid, box-drawn panels, the
+  DOS/CGA palette, a chunky bitmap cell font, status bars and keyboard menus.
+  Prefer denser information and smooth keyboard/touch interaction over web-style
+  cards and gradients; keep using the one cell renderer/sampler, the one CSS
+  colour parser and DOS palette, and the one input/event path. Host-rendered
+  proof PNGs are labelled `HOST PROOF - NOT A DEVICE CAPTURE` and checked by
+  `tools/visual_proof_gate.py --check` (red canaries with `--self-test`). That is
+  a board-free pre-gate only, never hardware sign-off (`harness.md` §0/§2.2).
 - **Host-only backends never fake hardware or firmware behaviour.** Every
   host gate (`host_batch_run.py`, `host_webapp_gate.py`, `host_tui_gate.py`,
   `host_modal_gate.py`, `gfx_toolkit_test.py --host`, the native payload
-  checker) compiles or drives the real shipped translation units. Fixture
+  checker, `make_web_screenshots.py` and `visual_proof_gate.py`) compiles or
+  drives the real shipped translation units and the one shared pixel model.
+  Fixture
   roots, POSIX I/O hooks and generated harnesses live in `test/host/` or
   `tools/host/`; a missing root/key/backend is an honest failure or an explicit
   "unavailable" verdict, never an invented card, file, key, pixel or success.

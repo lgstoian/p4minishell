@@ -21,6 +21,7 @@ setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 set ERR=0
 echo [M-WRITER]
+echo [M-DOS-WRITER] screen=WRITER-HEADLESS panels=0 head="NONE" theme=mono bars=0 table=N spark=0 status=N
 title "Writer Deck"
 gosub :rich_writer
 echo WRITER:  P4MiniShell writerdeck (%APPNAME% on %APPDRIVE%)

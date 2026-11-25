@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=DIAG
 [M-RICH-DIAG] host language extract
+[M-DOS-DIAG] screen=DIAG-HEALTH panels=4 head="P4 DIAGNOSTICS" theme=green bars=0 table=Y spark=1 status=Y
 W=diagnostics
 2
 [M-RICH-DIAG-K] host=p4

@@ -382,6 +382,15 @@ Extend it through these seams only:
   Host render gates compile the shipped DOM/CSS/TUI cores; a pass is a
   pre-gate only (harness.md 2.2).
 
+**Visual direction for app authors (in progress).** Build screens as a modern
+take on retro MS-DOS: an 80x25 CP437 cell grid, box-drawn panels, the DOS/CGA
+palette, a chunky bitmap cell font, status bars and keyboard menus. Prefer
+dense, keyboard-driven dashboards over web-style cards and gradients; use the
+`draw`/`tui` verbs, the shared font/palette and the one modal input path, and
+give each app a distinct screen identity. Web pages rendered through `webapp`/
+`html` land in the same grid, so keep their captions and proofs labelled as
+host-generated (`tools/visual_proof_gate.py --check`, board-free pre-gate only).
+
 ## Writerdeck surfaces (v1.2.0)
 
 The writing features are additive surfaces on the existing editor, markdown,

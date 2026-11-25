@@ -43,7 +43,41 @@ typedef struct {
     int width;
     int height;
     uint8_t *pixels;
+    /* Native size is tracked by the caller's report sink, not in this struct:
+     * the browser cache copies exactly width*height bytes and must not see a
+     * layout change. */
 } dom_image_t;
+
+/** Sample an RGB565 pixel grid into packed DOS cells: the pure, hardware-free
+ *  equivalent of tui_sample_image_cells() for the DOM image sink. It uses the
+ *  ONE shared luminance ramp (ansi_image_glyph) and the ONE DOS palette
+ *  (ansi_cga_nearest) - the same mapping the live TUI sampler applies - so an
+ *  image, a canvas bitmap and a CSS backdrop never get a second sampler or a
+ *  second colour model. Nearest-neighbour sampling preserves the source
+ *  aspect when dst_w/dst_h are derived from it. Pure; no allocation. */
+bool dom_image_sample_rgb565(const uint16_t *src, int src_w, int src_h,
+                             uint8_t *dst, int dst_w, int dst_h);
+
+/** Outcome of one image on a rendered page (report sink below). */
+typedef enum {
+    DOM_IMAGE_OK,        /**< decoded and drawn at native cell size */
+    DOM_IMAGE_RESIZED,   /**< decoded, fitted to the page budget */
+    DOM_IMAGE_MISSING,   /**< decode/load failed; alt text is shown */
+    DOM_IMAGE_FALLBACK   /**< no bitmap; element fallback content is shown */
+} dom_image_state_t;
+
+/** Structured report for one image sink call. No formatted string is baked
+ *  into the leaf: each surface renders these fields in its own idiom. */
+typedef struct {
+    const char *kind;       /**< "img", "background" or "canvas" */
+    const char *src;        /**< resolved source (basename is fine) */
+    dom_image_state_t state;
+    int native_w;
+    int native_h;
+    int fit_w;
+    int fit_h;
+    const char *alt;        /**< NULL or "" when the element has no alt text */
+} dom_image_report_t;
 
 /** Output sinks. Set exactly one of the cell/ANSI paths. */
 typedef struct {
@@ -78,6 +112,11 @@ typedef struct {
      *  (0 for a zero-width modifier). Called before emoji_fallback. */
     bool (*put_emoji)(void *ctx, int col, int row, const char *seq, size_t len,
                       int *cells_out);
+    /** Optional image outcome sink: one call per <img>, <canvas> or CSS
+     *  background-image. A missing decode is reported before the alt text is
+     *  drawn and an oversized image reports its fitted size, so a host gate or
+     *  a batch caller can prove nothing was dropped silently. */
+    void (*report_image)(void *ctx, const dom_image_report_t *report);
     void *ctx;
     int cols;             /**< TUI columns / ANSI wrap width. */
     int rows;             /**< TUI rows. */

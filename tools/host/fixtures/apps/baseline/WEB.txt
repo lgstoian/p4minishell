@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=WEB
 [M-RICH-WEB] host language extract
+[M-DOS-WEB] screen=WEB-SITE panels=2 head="P4 MINISHELL WEB" theme=amber bars=0 table=Y spark=0 status=Y
 W=browser
 2
 [M-RICH-WEB-K] host=p4

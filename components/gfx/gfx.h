@@ -320,6 +320,149 @@ void gfx_surface_composite_keyed(gfx_surface_t *dst, const gfx_surface_t *src,
                                  int x, int y, unsigned coverage,
                                  uint16_t transparent);
 
+/*
+ * Bounded game helpers. Tilemaps stamp cells through the ONE atlas blit core,
+ * particles write through the ONE pixel/blend pair, and layers composite
+ * through the ONE composite primitive. No second surface type or blit path.
+ * All of it is pure buffer math, headless-safe and unit tested (test_gfx.c).
+ */
+
+/** Named tilemaps: 4 maps x at most 64x64 cells = 16 KB of cell indices each. */
+#define GFX_TILEMAP_SLOTS 4
+#define GFX_TILEMAP_MAX_COLS 64
+#define GFX_TILEMAP_MAX_ROWS 64
+#define GFX_TILEMAP_MAX_CELL 64
+#define GFX_TILEMAP_NAME_MAX 16
+
+/** Per-tile flags, stored in the upper byte of a packed cell. */
+#define GFX_TILE_HIDDEN  0x01u /**< Skip this cell when drawing. */
+#define GFX_TILE_FLIP_X  0x02u /**< Mirror the cell horizontally. */
+#define GFX_TILE_FLIP_Y  0x04u /**< Mirror the cell vertically. */
+#define GFX_TILE_ROT90   0x08u /**< Rotate the cell 90 degrees clockwise. */
+
+/** One named map over a borrowed sprite sheet. The cell array is bounded
+ *  PSRAM; the sheet stays owned by the caller (a `gfx load` sprite slot). */
+typedef struct {
+    char name[GFX_TILEMAP_NAME_MAX];
+    const gfx_surface_t *sheet;
+    uint32_t *cells;   /**< index in bits 0..15, flags in bits 16..23. */
+    int cols;
+    int rows;
+    int cell_w;
+    int cell_h;
+    int z;             /**< Draw order: lower z is painted first. */
+    bool use_transparent;
+    uint16_t transparent;
+} gfx_tilemap_t;
+
+/** Bind a sheet to a map and allocate its bounded cell grid (zeroed). */
+bool gfx_tilemap_create(gfx_tilemap_t *map, const char *name,
+                        const gfx_surface_t *sheet, int cols, int rows,
+                        int cell_w, int cell_h, int z,
+                        bool use_transparent, uint16_t transparent);
+
+/** Release the cell grid; the borrowed sheet is never freed. NULL-safe. */
+void gfx_tilemap_free(gfx_tilemap_t *map);
+
+/** Set one cell's tile index (0..65535) and flag mask. @return false OOB. */
+bool gfx_tilemap_set(gfx_tilemap_t *map, int col, int row, int index,
+                     unsigned flags);
+
+/** Read a packed cell (index | flags<<16), or 0 for an unbound/out-of-range map. */
+uint32_t gfx_tilemap_get(const gfx_tilemap_t *map, int col, int row);
+
+/** Draw one map at x,y. Every stamp goes through gfx_surface_blit_atlas();
+ *  flip/rotate use scratch gfx_surface_t cells, never a second blit routine. */
+void gfx_tilemap_draw(const gfx_tilemap_t *map, gfx_surface_t *dst, int x, int y);
+
+/** Draw @p count maps in ascending z order (ties keep caller order). */
+void gfx_tilemap_draw_all(gfx_tilemap_t **maps, int count,
+                          gfx_surface_t *dst, int x, int y);
+
+/** Deterministic LCG (one RNG for emitter tests and games). */
+uint32_t gfx_rand_next(uint32_t *state);
+
+/** Bounded particle pool: 8.8 fixed-point motion, deterministic seed. */
+#define GFX_PARTICLE_MAX 128
+
+typedef struct {
+    int16_t x;        /**< 8.8 fixed point. */
+    int16_t y;        /**< 8.8 fixed point. */
+    int16_t vx;       /**< 8.8 fixed point per tick. */
+    int16_t vy;       /**< 8.8 fixed point per tick. */
+    uint16_t life;    /**< Remaining ticks. */
+    uint16_t max_life;
+    uint16_t color;
+    uint8_t size;
+    uint8_t alive;
+} gfx_particle_t;
+
+typedef struct {
+    uint32_t rng;     /**< Seed state; identical seed => identical particle stream. */
+    gfx_particle_t p[GFX_PARTICLE_MAX];
+} gfx_emitter_t;
+
+/** Clear the pool and seed the generator (seed 0 is a valid state). */
+void gfx_emitter_reset(gfx_emitter_t *e, uint32_t seed);
+
+/** Spawn up to @p n particles around x,y. Offsets/velocities/lifetimes all
+ *  come from the seeded LCG, so a host test can replay them exactly.
+ *  @return the number actually spawned (bounded by free slots). */
+int gfx_emitter_emit(gfx_emitter_t *e, int n, int x, int y, int spread,
+                     uint16_t color, uint16_t life);
+
+/** Advance @p ticks steps with @p gravity (8.8 per tick); retire at life 0.
+ *  @return the number still alive. */
+int gfx_emitter_step(gfx_emitter_t *e, int ticks, int gravity);
+
+/** Draw live particles with life-proportional coverage via gfx_blend_565()
+ *  and the existing pixel/rect primitives. */
+void gfx_emitter_draw(const gfx_emitter_t *e, gfx_surface_t *dst,
+                      int ox, int oy);
+
+/** Number of live particles. */
+int gfx_emitter_live(const gfx_emitter_t *e);
+
+/** Layers: metadata over a borrowed gfx_surface_t, never a second surface. */
+#define GFX_LAYER_SLOTS 8
+#define GFX_LAYER_NAME_MAX 16
+
+typedef struct {
+    const gfx_surface_t *surface; /**< Borrowed pixel buffer. */
+    char name[GFX_LAYER_NAME_MAX];
+    int x;
+    int y;
+    int z;            /**< Present order: lower z first. */
+    unsigned alpha;   /**< 0..256 integer coverage. */
+    bool visible;
+    bool dirty;
+    int dx;           /**< Layer-local dirty rectangle. */
+    int dy;
+    int dw;
+    int dh;
+} gfx_layer_t;
+
+/** Bind a borrowed surface to a layer slot (alpha clamped to 0..256). */
+void gfx_layer_bind(gfx_layer_t *layer, const char *name,
+                    const gfx_surface_t *surface, int x, int y,
+                    unsigned alpha, int z);
+
+/** Union a layer-local rect into the dirty rect (no rect = whole surface). */
+bool gfx_layer_mark_dirty(gfx_layer_t *layer, int x, int y, int w, int h);
+
+/** Clear the dirty flag after a successful present. */
+void gfx_layer_clear_dirty(gfx_layer_t *layer);
+
+/** Dirty rectangle in destination coordinates. @return false when clean. */
+bool gfx_layer_dirty_rect(const gfx_layer_t *layer,
+                          int *x, int *y, int *w, int *h);
+
+/** Present one dirty layer through gfx_surface_composite() (no second path). */
+void gfx_layer_present(gfx_surface_t *dst, gfx_layer_t *layer);
+
+/** Present all dirty layers in ascending z order. */
+void gfx_layer_present_all(gfx_surface_t *dst, gfx_layer_t **layers, int count);
+
 /**
  * @brief Frame-present statistics for a graphical app loop.
  *

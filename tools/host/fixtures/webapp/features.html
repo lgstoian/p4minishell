@@ -32,6 +32,9 @@ p + p { color: #55ff55; }
 <header><nav><a href="#go">Go</a></nav></header>
 <main>
 <h1>HTML5 gate</h1>
+<!-- A deliberately missing local image: the renderer must show its alt text
+     and report state=missing rather than dropping the element silently. -->
+<img src="does-not-exist.bmp" alt="NO SIGNAL">
 <section id="card">Gradient card</section>
 <form id="go">
 <label>Name</label><input id="n" type="text" value="Ada" placeholder="Name">

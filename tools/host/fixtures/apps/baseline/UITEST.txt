@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=UITEST
 [M-RICH-UITEST] host language extract
+[M-DOS-UITEST] screen=UITEST-HEADLESS panels=0 head="NONE" theme=mono bars=0 table=N spark=0 status=N
 W=target
 2
 [M-RICH-UITEST-K] host=p4

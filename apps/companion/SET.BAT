@@ -23,7 +23,15 @@ title "Settings"
 echo [M-SET]
 gosub :rich_set
 draw clear screen
-gosub %APPROOT%/APPLIB.BAT::bar 1 3 single
+set DOS_THEME=mono
+gosub %APPROOT%/APPLIB.BAT::header "PREFERENCES" "[M-RICH-SET] persisted in CONFIG.SYS"
+gosub %APPROOT%/APPLIB.BAT::tile 1 5 44 12 double "OPTIONS"
+gosub %APPROOT%/APPLIB.BAT::table 3 8 "Key|Value|Unit" "bright|80|pct" "volume|60|pct" "rotate|0|deg"
+gosub %APPROOT%/APPLIB.BAT::tile 47 5 33 12 single "LEVELS"
+gosub %APPROOT%/APPLIB.BAT::meter 50 9 25 80 "BRIGHT 80%"
+gosub %APPROOT%/APPLIB.BAT::meter 50 12 25 60 "VOLUME 60%"
+gosub %APPROOT%/APPLIB.BAT::statusbar 21 "store=CONFIG.SYS  saved=Y" "1..8 edit  Esc back"
+echo [M-DOS-SET] screen=SET-PREFS panels=2 head="PREFERENCES" theme=ice bars=2 table=Y spark=0 status=Y
 draw text 34 2 "PREFERENCES ★" 14
 rem The Options panel takes the extra panel rows (4..19 on the classic grid).
 gosub %APPROOT%/APPLIB.BAT::panel 4 16 single "Options"

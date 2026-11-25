@@ -44,6 +44,11 @@
 
 /** Implemented in host_batch_bridge.c (host-only, not a public firmware API). */
 extern bool host_batch_fs_init(const char *root);
+/** `draw`/`tui` verbs drive the ONE pure tui_frame_t cell core in the bridge;
+ *  host_tui_dump() prints its `tui dump /a`-style grid after the batch report. */
+extern void host_tui_reset(void);
+extern bool host_tui_command(int argc, char **argv);
+extern void host_tui_dump(const char *name);
 
 #define HOST_BATCH_ARGV_MAX 24
 #define HOST_DEFAULT_SD_ROOT "tools/host/fixtures/batch"
@@ -146,6 +151,12 @@ static void host_batch_execute_command(char *command)
         shell_command_endlocal(argc, argv);
     } else if (shell_text_equals_ignore_case(first, "exit")) {
         shell_command_exit(argc, argv);
+    } else if (shell_text_equals_ignore_case(first, "draw") ||
+               shell_text_equals_ignore_case(first, "tui")) {
+        /* The firmware draw verb needs LVGL; on this lane the SAME pure cell
+         * core host_tui_gate.py drives receives the layout the fixture draws.
+         * No transcript line is emitted, so marker baselines stay exact. */
+        (void)host_tui_command(argc, argv);
     } else {
         shell_transcript_appendf("batch: unsupported command on this host lane: %s\n",
                                  first);
@@ -245,6 +256,9 @@ void app_main(void)
     batch_set_default_echo(true);
     batch_set_errorlevel(0);
     batch_register_command_ops(&ops);
+    /* Start from an empty, committed cell grid: the dirty rect then measures
+     * only what THIS fixture's draw verbs wrote. */
+    host_tui_reset();
 
     error = shell_execute_batch_file(script, 0, NULL);
     if (error != ESP_OK) {
@@ -265,6 +279,21 @@ void app_main(void)
     }
     printf("=== BATCH DONE ===\n");
     printf("ERRORLEVEL %d\n", level);
+    /* Real draw calls produce a real 80x25 cell grid + colour runs. Printed
+     * after ERRORLEVEL so the shipped transcript gates (which only read the
+     * transcript block and the ERRORLEVEL line) are unchanged. */
+    {
+        const char *slash = strrchr(script, '/');
+        const char *base = slash != NULL ? slash + 1 : script;
+        size_t len = strlen(base);
+        char name[64];
+
+        if (len >= 4 && strcasecmp(base + len - 4, ".bat") == 0) len -= 4;
+        if (len > sizeof(name) - 1) len = sizeof(name) - 1;
+        memcpy(name, base, len);
+        name[len] = '\0';
+        host_tui_dump(name);
+    }
 
     /* The linux IDF target keeps the scheduler alive after app_main returns;
      * exit explicitly so the gate sees EOF and the real exit status. */

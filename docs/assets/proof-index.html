@@ -24,9 +24,10 @@
   Only the latest visually inspected, identity-checked screenshots are listed
   here. These are <strong>board-free release-candidate evidence</strong>, not
   hardware sign-off: the 14 app screens below are existing
-  <span class="device">device captures</span>; the Gfx Toolkit and HTML images
-  are explicitly <span class="host">host-generated proofs</span> made without a
-  board attached. Captions say which is which.
+  <span class="device">device captures</span>; the 17 new DOS app dashboards,
+  Gfx Toolkit and HTML images are explicitly
+  <span class="host">host-generated proofs</span> made without a board
+  attached. Captions say which is which.
 </p>
 
 <h2>App screens — device captures</h2>
@@ -45,6 +46,44 @@
   <figure><img src="apps/sys.png" alt="Live System dashboard"><figcaption>Live System — dashboard</figcaption></figure>
   <figure><img src="apps/taskmgr.png" alt="Task Manager tasks menu"><figcaption>Task Manager — tasks</figcaption></figure>
   <figure><img src="apps/tcmd.png" alt="Commander dual-pane file commander"><figcaption>Commander — dual pane</figcaption></figure>
+</div>
+
+<h2>DOS app dashboards — host-generated proofs</h2>
+<p class="note">
+  These 17 images are <span class="host">host-generated proofs</span>, not
+  device captures. <code>tools/make_app_screenshots.py</code> runs the 16
+  APPLIB-tiled dashboards plus the flagship SHOWCASE through the same real host
+  batch interpreter and baseline gate as <code>tools/host_apps_gate.py</code>.
+  The fixtures' real <code>draw</code> calls execute into the same pure 80&times;25
+  <code>tui_frame.h</code> cell core that <code>tools/host_tui_gate.py</code>
+  checks; the resulting cell grid and colour runs are rendered with the one
+  shipped unscii-8 12&times;20 cell font and DOS palette. The marker transcript
+  is still baselined, but it is not the picture: these are tiled CP437 panels,
+  not transcript dumps. Each footer says “HOST PROOF — NOT A DEVICE CAPTURE”.
+  The originals are
+  committed under <code>screenshots/apps/</code>; the copies below let the
+  browser display them without touching the older
+  <code>docs/assets/apps/*.png</code> device captures. Hardware recapture for
+  the v1.6 icon/dashboard markers is still pending.
+</p>
+<div class="grid">
+  <figure><img src="apps-proof/ADVENT.png" alt="ADVENT DOS dashboard host proof"><figcaption><span class="host">ADVENT — ADVENT-MAP (amber)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/TCMD.png" alt="Commander DOS dashboard host proof"><figcaption><span class="host">TCMD — TCMD-DUALPANE (ice)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/MOOD.png" alt="Mood DOS dashboard host proof"><figcaption><span class="host">MOOD — MOOD-LIVE (green)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/CHAT.png" alt="Chat DOS dashboard host proof"><figcaption><span class="host">CHAT — CHAT-INBOX (ice)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/DIAG.png" alt="Diagnostics DOS dashboard host proof"><figcaption><span class="host">DIAG — DIAG-HEALTH (green)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/ELITE.png" alt="Elite DOS dashboard host proof"><figcaption><span class="host">ELITE — ELITE-MARKET (amber)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/NOTES.png" alt="Notes DOS dashboard host proof"><figcaption><span class="host">NOTES — NOTES-ZETTEL (amber)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/PALMTOP.png" alt="PalmTop DOS dashboard host proof"><figcaption><span class="host">PALMTOP — PALM-DESK (ice)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/PICS.png" alt="Pics DOS dashboard host proof"><figcaption><span class="host">PICS — PICS-VIEWER (green)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/TASKMGR.png" alt="Task Manager DOS dashboard host proof"><figcaption><span class="host">TASKMGR — TMGR-OVERVIEW (green)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/COMPANION.png" alt="Companion DOS dashboard host proof"><figcaption><span class="host">COMPANION — COMPANION-HUB (amber)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/SYS.png" alt="System DOS dashboard host proof"><figcaption><span class="host">SYS — SYS-DASHBOARD (green)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/NET.png" alt="Network DOS dashboard host proof"><figcaption><span class="host">NET — NET-TOOLS (ice)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/FILES.png" alt="Files DOS dashboard host proof"><figcaption><span class="host">FILES — FILES-TOOLS (ice)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/FUN.png" alt="Fun DOS dashboard host proof"><figcaption><span class="host">FUN — FUN-DEMOS (amber)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/SET.png" alt="Settings DOS dashboard host proof"><figcaption><span class="host">SET — SET-PREFS (ice)</span> — host-generated proof</figcaption></figure>
+  <figure><img src="apps-proof/SHOWCASE.png" alt="Six-panel showcase DOS dashboard host proof"><figcaption><span class="host">SHOWCASE — SHOWCASE-MASTER (ice, six panels)</span> — host-generated proof</figcaption></figure>
 </div>
 
 <h2>Graphics — host-generated proof</h2>
@@ -70,20 +109,22 @@
   <figure><img src="webapp-forms.png" alt="HTML form and semantic elements detail proof"><figcaption><span class="host">Form controls &amp; semantic elements — host-generated proof</span> (2&times; detail of the same <code>features.html</code> host render; no dedicated form fixture)</figcaption></figure>
 </div>
 
-<h2>Modern-site fixtures — host-generated proofs from <code>screenshots/web/</code></h2>
+<h2>Functional web pages — DOS browser host proofs from <code>screenshots/web/</code></h2>
 <p class="note">
-  These three images are the checked v1.6 browser proofs. They are rendered by
-  <code>tools/make_web_screenshots.py</code> from the <code>modern.html</code> and
-  <code>recovery.html</code> fixtures through the real DOM/CSS/entities/JS host
-  renderer (the same kernels the firmware ships). Caption text on each image
-  says “HOST PROOF — NOT A DEVICE CAPTURE”. The originals are committed under
-  <code>screenshots/web/</code>; copies live here so the browser can display
-  them. Live HTTPS/live-site rendering still needs a board.
+  These four images are the checked browser proofs. They are rendered by
+  <code>tools/make_web_screenshots.py</code> from real HTML/CSS/JS fixtures
+  (<code>portal.html</code>, <code>dashboard.html</code>, <code>article.html</code>,
+  <code>form.html</code>) through the shipped DOM/CSS/entities/JS kernels, then
+  presented in a CP437 DOS-browser frame. Each image says “HOST PROOF — NOT A
+  DEVICE CAPTURE”. Originals are under <code>screenshots/web/</code>, with copies
+  here for display. Live HTTPS still needs a board.
 </p>
 <div class="grid">
-  <figure><img src="web/modern.png" alt="Modern site subset host proof"><figcaption><span class="host">Modern site subset — host-generated proof</span> (entities, cascade specificity, source order, duplicate attributes, JS event)</figcaption></figure>
-  <figure><img src="web/modern-entities.png" alt="Entity and cascade detail host proof"><figcaption><span class="host">Entities &amp; cascade, 2&times; detail — host-generated proof</span> ((c), (r), EUR and the clamped numeric reference render as DOS-renderable text, not empty boxes)</figcaption></figure>
-  <figure><img src="web/recovery.png" alt="Parse recovery host proof"><figcaption><span class="host">Parse recovery — host-generated proof</span> (truncated markup, implied end tags, first-duplicate-attribute-wins)</figcaption></figure>
+  <figure><img src="web/portal.png" alt="DOS browser portal proof"><figcaption><span class="host">Portal — host-generated DOS browser proof</span> (boxed hero, menu, links, entities)</figcaption></figure>
+  <figure><img src="web/dashboard.png" alt="DOS browser dashboard proof"><figcaption><span class="host">Dashboard — host-generated DOS browser proof</span> (gauges, ASCII traffic chart, node table)</figcaption></figure>
+  <figure><img src="web/article.png" alt="DOS browser article proof"><figcaption><span class="host">Article — host-generated DOS browser proof</span> (reading view, typography, columns)</figcaption></figure>
+  <figure><img src="web/form.png" alt="DOS browser form proof"><figcaption><span class="host">Form — host-generated DOS browser proof</span> (inputs, select, checkboxes, JS submit)</figcaption></figure>
+  <figure><img src="web/wiki_esp32.png" alt="DOS rendered ESP32 Wikipedia first screen"><figcaption><span class="host">Wikipedia ESP32 — host-generated DOS browser proof</span> (first 25 rows only; H1, infobox, `Espressif Systems` link in bright cyan, `240 MHz`, image/alt outcomes; no tap links on host. Live HTTPS and the full ~2000-row page need a board.)</figcaption></figure>
 </div>
 
 <p class="excluded">

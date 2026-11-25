@@ -5,6 +5,7 @@ rem HOST-SAFE EXTRACT of HYBRID.BAT's [M-RICH-*] block. The real app also uses
 rem hardware verbs (reported as SKIP by tools/host_apps_gate.py); this fixture
 rem runs ONLY the additive batch-language surfaces on the REAL interpreter.
 echo [M-RICH-HYBRID] host language extract
+echo [M-DOS-HYBRID] screen=HYBRID-HEADLESS panels=0 head="NONE" theme=mono bars=0 table=N spark=0 status=N
 set W=hybrid
 str /rev W RV
 str /count W y RC

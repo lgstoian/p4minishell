@@ -1208,6 +1208,13 @@ const lv_image_dsc_t *emoji_pack_lvgl_image(uint32_t cp, int px);
 the retro CP437 glyph. The image is drawn by LVGL's normal image path from the
 descriptor, so there is no filesystem driver and no second decoder.
 
+The retro glyph map belongs to the explicit visual direction: screens are laid
+out on an 80x25 CP437 cell grid with box-drawn panels, the DOS/CGA palette, a
+chunky bitmap cell font, status bars and keyboard menus. These are presentation
+conventions on the existing `tui`/`font`/`ansi` APIs, not new surfaces; the
+host proof PNGs are labelled and checked by `tools/visual_proof_gate.py --check`
+(a board-free pre-gate, never hardware sign-off).
+
 ### Blocking HTML surface and native apps
 
 ```c

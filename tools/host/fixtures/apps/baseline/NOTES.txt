@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=NOTES
 [M-RICH-NOTE] host language extract
+[M-DOS-NOTES] screen=NOTES-ZETTEL panels=2 head="ZETTELKASTEN" theme=amber bars=0 table=N spark=0 status=Y
 W=zettel
 2
 [M-RICH-NOTE-K] host=p4

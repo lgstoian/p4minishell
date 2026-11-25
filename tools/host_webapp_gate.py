@@ -13,6 +13,11 @@ Baselines live next to the fixtures in ``baseline/``. Text baselines are exact;
 an optional ``webapp.frame path=...`` line asks the gate to compare a PNG (or
 BMP) frame as well, through the ONE pixel model in ``p4test.screenshot``.
 
+The four DOS showcase fixtures (portal/dashboard/article/form) additionally
+assert presentation on the renderer's own rows: CP437 boxed frames, a status
+line, and no empty-box glyph or raw debug label. Legacy feature probes keep
+their classic DOM/CSS/entity checks only.
+
 A pass here says the host render is stable. It says nothing about a board:
 harness.md still governs hardware sign-off.
 
@@ -68,6 +73,7 @@ END = "webapp.render.end"
 DUMP_HEAD = "tui.dump cols="
 DUMP_END = "tui.dump.end"
 CANVAS = "webapp.canvas "
+IMAGE = "webapp.image "
 FRAME = "webapp.frame "
 META = "webapp."   # any other webapp.* line is a feature/capability report
 ROW_RE = re.compile(r"^(\d{3})\|(.*)$")
@@ -82,6 +88,34 @@ PNG_MAX_RATIO = 0.01
 PNG_MIN_INK = 16
 RENDER_TIMEOUT = 60
 
+# DOS-presentation assertions on the rows the ONE DOM renderer emitted. These
+# are text checks on real renderer output, never a second render or colour
+# model. A marker-only gate cannot tell a framed DOS page from a debug dump.
+BOX_GLYPHS = ("┌", "┐", "└", "┘", "├", "┤", "┬", "┴", "─", "│",
+              "╔", "╗", "╚", "╝", "═", "║")
+EMPTY_BOX_GLYPHS = ("□", "▯", "⎕", "\ufffd")
+DEBUG_LABELS = ("webapp.", "dom_", "css_", "debug", "trace", "todo",
+                "\\u00", "\\u25")
+STATUS_TOKENS = ("STATUS", "READY", "ESC", "F1", "URL", "HTTP", "P4 NET")
+MIN_BOXED_ROWS = 2
+# Only the four showcase pages are DOS presentation proofs. Legacy feature
+# probes (features.html, modern.html, recovery.html, hello.html in the
+# self-test) stay on the classic DOM/CSS/entity assertions.
+DOS_FIXTURES = frozenset(("portal.html", "dashboard.html", "article.html",
+                          "form.html"))
+WIKI_FIXTURE = "wiki_esp32.html"
+# Image outcomes are reported by the ONE renderer through its optional image
+# sink. The two image-bearing showcase fixtures must always report these kinds;
+# dropping a decode silently is therefore a gate failure, not a quiet diff.
+REQUIRED_IMAGE_KINDS = {
+    "portal.html": frozenset(("background", "img")),
+    "dashboard.html": frozenset(("canvas",)),
+}
+IMAGE_STATES = frozenset(("ok", "resized", "missing", "fallback"))
+IMAGE_RE = re.compile(
+    r"^webapp\.image kind=(\S+) src=(\S+) state=(\S+) "
+    r"native=(\d+)x(\d+) fit=(\d+)x(\d+) alt=(.*)$")
+
 
 class GateError(RuntimeError):
     """Any condition that must make the gate red."""
@@ -94,6 +128,7 @@ class RenderResult:
     rows: Dict[int, str] = field(default_factory=dict)
     runs: Dict[int, List[str]] = field(default_factory=dict)
     frames: List[Path] = field(default_factory=list)
+    images: List[str] = field(default_factory=list)
     assertions: int = 0
 
 
@@ -112,6 +147,7 @@ def parse_emission(raw: str, fixture: str, fixture_dir: Path) -> RenderResult:
     rows: Dict[int, str] = {}
     runs: Dict[int, List[str]] = {}
     frames: List[Path] = []
+    images: List[str] = []
     canvas_lines = 0
     meta_lines = 0
 
@@ -152,6 +188,19 @@ def parse_emission(raw: str, fixture: str, fixture_dir: Path) -> RenderResult:
 
         if line.startswith(CANVAS):
             canvas_lines += 1
+            canonical.append(line)
+            continue
+
+        if line.startswith(IMAGE):
+            match = IMAGE_RE.match(line)
+
+            if match is None:
+                raise GateError("malformed image report: %s" % line)
+            state = match.group(3)
+            if state not in IMAGE_STATES:
+                raise GateError("unknown image state %r in %s" % (state, line))
+            images.append(line)
+            meta_lines += 1
             canonical.append(line)
             continue
 
@@ -206,8 +255,98 @@ def parse_emission(raw: str, fixture: str, fixture_dir: Path) -> RenderResult:
         raise GateError("zero assertions: no webapp.* feature report was emitted")
 
     return RenderResult(fixture=fixture, lines=canonical, rows=rows, runs=runs,
-                        frames=frames,
+                        frames=frames, images=images,
                         assertions=len(rows) + len(runs) + canvas_lines + meta_lines)
+
+
+def check_dos_presentation(result: RenderResult) -> List[str]:
+    """Assert the rendered rows show a framed DOS page, not a debug transcript."""
+    fails: List[str] = []
+    boxed = [idx for idx, text in result.rows.items()
+             if sum(glyph in text for glyph in BOX_GLYPHS) >= 2]
+    if len(boxed) < MIN_BOXED_ROWS:
+        fails.append("only %d boxed row(s), expected at least %d"
+                     % (len(boxed), MIN_BOXED_ROWS))
+    if not any(token in text.upper()
+               for text in result.rows.values() for token in STATUS_TOKENS):
+        fails.append("no status/footer token in any rendered row")
+    if boxed and not any(idx in result.runs for idx in boxed):
+        fails.append("boxed rows carry no DOS colour runs")
+    for idx, text in sorted(result.rows.items()):
+        for glyph in EMPTY_BOX_GLYPHS:
+            if glyph in text:
+                fails.append("row %03d has an empty-box glyph %r" % (idx, glyph))
+        for label in DEBUG_LABELS:
+            if label in text.lower():
+                fails.append("row %03d has a raw debug label %r" % (idx, label))
+    return fails
+
+
+def check_image_reports(result: RenderResult) -> List[str]:
+    """Assert image degradation is visible and honest, not a silent drop.
+
+    This is a text check on the ONE renderer's own report, never a second
+    decoder or a re-render: one outcome per image, an alt text for every failed
+    decode, a cell aspect derived from the native size, and a required-kind
+    check on the showcase fixtures so a missing image line goes red.
+    """
+    fails: List[str] = []
+    kinds = set()
+
+    for line in result.images:
+        match = IMAGE_RE.match(line)
+        if match is None:
+            fails.append("malformed image report %r" % line)
+            continue
+        kind, _src, state = match.group(1), match.group(2), match.group(3)
+        native_w, native_h = int(match.group(4)), int(match.group(5))
+        fit_w, fit_h = int(match.group(6)), int(match.group(7))
+        alt = match.group(8).strip()
+        kinds.add(kind)
+
+        if state in ("missing", "fallback"):
+            if state == "missing" and kind == "img" and alt in ("", "-"):
+                fails.append("missing image %r has no visible alt text" % line)
+            if fit_w != 0 or fit_h != 0:
+                fails.append("%s image reports a fitted size" % state)
+            continue
+        if native_w < 1 or native_h < 1 or fit_w < 1 or fit_h < 1:
+            fails.append("decoded image has degenerate geometry: %r" % line)
+            continue
+        # Cells are roughly 2:1, so the correct fit ratio is
+        # fit_w/fit_h ~= 2*native_w/native_h. Generous bounds accommodate the
+        # integer clamping at 80x25; a mirrored or stretched image cannot hide.
+        expected = (2.0 * native_w) / native_h
+        actual = fit_w / fit_h
+        ratio = actual / expected
+        if ratio < 0.5 or ratio > 2.0:
+            fails.append("wrong image aspect %r (fit %.2f, expected %.2f)"
+                         % (line, actual, expected))
+
+    for kind in REQUIRED_IMAGE_KINDS.get(result.fixture, ()):  # type: ignore[index]
+        if kind not in kinds:
+            fails.append("image kind %r was silently dropped" % kind)
+    return fails
+
+
+def check_wiki_block(result: RenderResult) -> List[str]:
+    """The Wikipedia proof must show an infobox row and a decoded image.
+
+    Both are checked on the renderer's own 25 rows / outcome report. A fixture
+    that loses its infobox or whose image silently disappears must go red.
+    """
+    fails: List[str] = []
+    if not any("Manufacturer" in text for text in result.rows.values()):
+        fails.append("wiki infobox block is missing")
+    if not any(line.startswith(IMAGE) and "kind=img " in line and
+               " state=missing" not in line and " state=fallback" not in line
+               for line in result.images):
+        fails.append("wiki image block is missing")
+    if not any("state=missing" in line and "alt=" in line
+               and line.rstrip().endswith("-") is False
+               for line in result.images):
+        fails.append("wiki missing-image alt fallback is missing")
+    return fails
 
 
 def write_baseline(path: Path, fixture: str, result: RenderResult) -> None:
@@ -311,6 +450,20 @@ def evaluate(raw: str, fixture: str, fixture_dir: Path, baseline_dir: Path,
     result = parse_emission(raw, fixture, fixture_dir)
     if result.assertions <= 0:
         raise GateError("zero assertions for %s" % fixture)
+    image_fails = check_image_reports(result)
+    if image_fails:
+        raise GateError("image report for %s: %s"
+                        % (fixture, "; ".join(image_fails)))
+    if Path(fixture).name == WIKI_FIXTURE:
+        wiki_fails = check_wiki_block(result)
+        if wiki_fails:
+            raise GateError("wiki block for %s: %s"
+                            % (fixture, "; ".join(wiki_fails)))
+    if Path(fixture).name in DOS_FIXTURES:
+        presentation = check_dos_presentation(result)
+        if presentation:
+            raise GateError("DOS presentation for %s: %s"
+                            % (fixture, "; ".join(presentation)))
     base = baseline_dir / (Path(fixture).stem + ".txt")
 
     if update:
@@ -433,17 +586,19 @@ def self_test() -> int:
     good = "\n".join([
         BEGIN + " fixture=hello.html cols=80 rows=25",
         DUMP_HEAD + " 80 from=1 to=25",
-        "001|Title",
-        "001@1-5:15",
-        "002|Second",
-        "002@1-80:7",
+        "001|┌── P4 NET ──┐",
+        "001@1-14:14",
+        "002|│ STATUS READY │",
+        "002@1-15:10",
+        "003|└────────────┘",
+        "003@1-14:7",
         DUMP_END,
         "webapp.meta semantic=2 controls=3 grids=1 canvases=1",
         "webapp.css id=card radius=3 shadow=1 gradient=1 opacity=128",
         "webapp.cascade h1_color=.win spec=0.1.0 imp=1 order=6 fg=14",
         "webapp.entity &amp;=26/5 &reg=AE/4 &#x41;=41/5",
         CANVAS + " id=c w=96 h=48 pixel0=ff5555ff",
-        END + " fixture=hello.html rows=2 runs=2",
+        END + " fixture=hello.html rows=3 runs=3",
     ]) + "\n"
     checks: List[Tuple[str, bool]] = []
 
@@ -462,7 +617,7 @@ def self_test() -> int:
             print("  clean report unexpectedly failed: %s" % exc)
             checks.append(("clean report accepted", False))
 
-        wrong = good.replace("001|Title", "001|TitlX")
+        wrong = good.replace("002|│ STATUS READY │", "002|│ STATXS READY │")
         try:
             evaluate(wrong, "hello.html", fixture_dir, base, update=False)
             checks.append(("wrong baseline rejected", False))
@@ -481,7 +636,7 @@ def self_test() -> int:
         except GateError:
             checks.append(("zero assertions rejected", True))
 
-        no_end = good.replace(END + " fixture=hello.html rows=2 runs=2\n", "")
+        no_end = good.replace(END + " fixture=hello.html rows=3 runs=3\n", "")
         try:
             evaluate(no_end, "hello.html", fixture_dir, base, update=False)
             checks.append(("missing marker rejected", False))
@@ -519,6 +674,129 @@ def self_test() -> int:
             checks.append(("tampered entity mapping rejected", False))
         except GateError:
             checks.append(("tampered entity mapping rejected", True))
+
+        # DOS-presentation canaries: text-only, no baseline ambiguity.
+        for label, line, needle in (
+            ("unboxed DOS report rejected",
+             good.replace("┌── P4 NET ──┐", "P4 NET")
+                 .replace("│ STATUS READY │", "STATUS READY")
+                 .replace("└────────────┘", "END"), "boxed row"),
+            ("missing status line rejected",
+             good.replace("STATUS READY", "STATE UNKNOWN")
+                 .replace("P4 NET", "XNET"), "status/footer"),
+            ("empty-box glyph rejected",
+             good.replace("│ STATUS READY │", "□ STATUS READY │"), "empty-box"),
+            ("raw debug label rejected",
+             good.replace("STATUS READY", "webapp.debug STATUS"), "debug label"),
+        ):
+            try:
+                fails = check_dos_presentation(parse_emission(line, "hello.html",
+                                                              fixture_dir))
+                checks.append((label, any(needle in item for item in fails)))
+            except GateError as exc:
+                checks.append((label, False))
+                print("  %s: %s" % (label, exc))
+
+        # Image canaries: a missing decode must carry alt text, the cell fit
+        # must preserve the native aspect, and a required image line may not
+        # vanish. All three are checked on the renderer's own report.
+        img_good = "\n".join([
+            BEGIN + " fixture=portal.html cols=80 rows=25",
+            DUMP_HEAD + " 80 from=1 to=25",
+            "001|┌── P4 NET ──┐",
+            "001@1-14:14",
+            "002|│ STATUS READY │",
+            "002@1-15:10",
+            "003|└────────────┘",
+            "003@1-14:7",
+            DUMP_END,
+            "webapp.image kind=background src=pixel.bmp state=ok "
+            "native=32x4 fit=32x4 alt=-",
+            "webapp.image kind=img src=pixel.bmp state=resized "
+            "native=32x4 fit=32x2 alt=P4 badge",
+            END + " fixture=portal.html rows=3 runs=3",
+        ]) + "\n"
+        (fixture_dir / "portal.html").write_text("<html></html>\n", encoding="utf-8")
+        write_baseline(base / "portal.txt", "portal.html",
+                       parse_emission(img_good, "portal.html", fixture_dir))
+        try:
+            evaluate(img_good, "portal.html", fixture_dir, base, update=False)
+            checks.append(("honest image report accepted", True))
+        except GateError as exc:
+            print("  honest image report unexpectedly failed: %s" % exc)
+            checks.append(("honest image report accepted", False))
+
+        for label, line, needle in (
+            ("missing image without alt rejected",
+             img_good.replace("state=resized native=32x4 fit=32x2 alt=P4 badge",
+                              "state=missing native=0x0 fit=0x0 alt=-"),
+             "no visible alt text"),
+            ("wrong image aspect rejected",
+             img_good.replace("fit=32x2 alt=P4 badge", "fit=32x32 alt=P4 badge"),
+             "wrong image aspect"),
+            ("silently dropped image rejected",
+             img_good.replace(
+                 "webapp.image kind=img src=pixel.bmp state=resized "
+                 "native=32x4 fit=32x2 alt=P4 badge\n", ""),
+             "silently dropped"),
+        ):
+            try:
+                parse = parse_emission(line, "portal.html", fixture_dir)
+                fails = check_image_reports(parse)
+                checks.append((label, any(needle in item for item in fails)))
+            except GateError as exc:
+                checks.append((label, needle in str(exc)))
+
+        # Wikipedia proof canaries: the infobox row and the decoded image must
+        # be present; dropping either must go red on the renderer's report.
+        wiki_good = "\n".join([
+            BEGIN + " fixture=wiki_esp32.html cols=80 rows=25",
+            DUMP_HEAD + " 80 from=1 to=25",
+            "001|ESP32",
+            "001@1-5:0",
+            "002|Manufacturer  Espressif Systems",
+            "002@1-30:0",
+            DUMP_END,
+            "webapp.image kind=img src=esp32-module.bmp state=resized "
+            "native=64x8 fit=32x2 alt=ESP-WROOM-32 module",
+            "webapp.image kind=img src=esp32-die-missing.bmp state=missing "
+            "native=0x0 fit=0x0 alt=ESP32 die shot unavailable",
+            END + " fixture=wiki_esp32.html rows=2 runs=2",
+        ]) + "\n"
+        (fixture_dir / "wiki_esp32.html").write_text("<html></html>\n",
+                                                      encoding="utf-8")
+        write_baseline(base / "wiki_esp32.txt", "wiki_esp32.html",
+                       parse_emission(wiki_good, "wiki_esp32.html", fixture_dir))
+        try:
+            evaluate(wiki_good, "wiki_esp32.html", fixture_dir, base,
+                     update=False)
+            checks.append(("wiki infobox + image report accepted", True))
+        except GateError as exc:
+            print("  wiki report unexpectedly failed: %s" % exc)
+            checks.append(("wiki infobox + image report accepted", False))
+
+        for label, line, needle in (
+            ("wiki infobox dropped rejected",
+             wiki_good.replace("002|Manufacturer  Espressif Systems\n", "")
+                      .replace("002@1-30:0\n", "")
+                      .replace(END + " fixture=wiki_esp32.html rows=2 runs=2",
+                               END + " fixture=wiki_esp32.html rows=1 runs=1"),
+             "infobox block is missing"),
+            ("wiki image block dropped rejected",
+             "\n".join(
+                 [l for l in wiki_good.splitlines()
+                  if not l.startswith(IMAGE) and not l.startswith(END)] +
+                 ["webapp.meta semantic=1 controls=0 grids=0 canvases=0",
+                  END + " fixture=wiki_esp32.html rows=2 runs=2"]) + "\n",
+             "image block is missing"),
+        ):
+            try:
+                fails = check_wiki_block(parse_emission(
+                    line, "wiki_esp32.html", fixture_dir))
+                checks.append((label, any(needle in item for item in fails)))
+            except GateError as exc:
+                checks.append((label, False))
+                print("  %s: %s" % (label, exc))
 
         stale = base / "hello.txt"
         stale.write_text(stale.read_text(encoding="utf-8").replace(

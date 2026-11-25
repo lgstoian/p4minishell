@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=SYS
 [M-RICH-SYS] host language extract
+[M-DOS-SYS] screen=SYS-DASHBOARD panels=4 head="SYSTEM DASHBOARD" theme=green bars=2 table=Y spark=1 status=Y
 W=sysinfo
 2
 [M-RICH-SYS-K] host=p4

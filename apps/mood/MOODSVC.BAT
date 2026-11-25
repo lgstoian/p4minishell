@@ -13,6 +13,7 @@ rem  job-private environment cannot leak into the dashboard either way).
 rem  Runs headless (mem/for/set/signal/delay only). Markers: [M-MOODSVC].
 rem =====================================================================
 echo [M-MOODSVC]  sampler started
+echo [M-DOS-MOODSVC] screen=MOODSVC-HEADLESS panels=0 head="NONE" theme=mono bars=0 table=N spark=0 status=N
 rem ---- v1.6 richer-language showcase -----------------------------------
 rem [M-RICH-MOODSVC] one-shot headless str/map/forK/func tour; the sampling
 rem loop and the SD-only store are unchanged.

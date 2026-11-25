@@ -80,11 +80,16 @@ last campaign:
    python tools/host_tui_gate.py --check
    python tools/host_modal_gate.py --check
    python tools/gfx_toolkit_test.py --host
-   python tools/host_apps_gate.py --check  # 33 apps, 363 host assertions, 40 SKIPs, 7 canaries
+   python tools/host_apps_gate.py --check  # 34 apps (incl. flagship), 679 host assertions, 45 SKIPs, 7 canaries
+   python tools/make_web_screenshots.py --check  # DOS web proof PNGs
+   python tools/visual_proof_gate.py --check     # palette/box borders/ink/signatures
+   python tools/visual_proof_gate.py --self-test # red canaries
    ```
 
-   These v1.6 host gates compile or drive shipped code and open no serial
-   port; a pass is a pre-gate only (`harness.md` §0/§2.2).
+   These v1.6 host gates and the visual proof gates compile or drive shipped
+   code and the one shared pixel model, and open no serial port; a pass is a
+   pre-gate only, never hardware sign-off (`harness.md` §0/§2.2). The proof PNGs
+   are labelled host proofs, not device captures.
 3. **Version freeze** — update, in one change:
    - `p4minishell_config.h` `P4_CONFIG_VERSION_{MAJOR,MINOR,PATCH}` (+ the
      string macro) and `p4minishell_config.yaml` `config_version`;
@@ -136,7 +141,8 @@ a raw serial port.
 |---|------|---------|----------------|
 | 0 | Static gates | `python tools/p4test_run.py --static` | green guard + comment index + breadcrumbs all OK |
 | 0b | Host unit lane (pre-gate) | `python3 tools/host_gen_runner.py --check && python3 tools/host_unit_run.py --static && python3 tools/host_unit_run.py --build` | up to date, manifest OK, 0 failures. Needs Linux/WSL2; **never** a substitute for step 2 |
-| 0c | v1.6 host gates (pre-gate) | `python tools/host_batch_run.py --check`, `host_webapp_gate.py --check`, `host_tui_gate.py --check`, `host_modal_gate.py --check`, `gfx_toolkit_test.py --host`, `host_apps_gate.py --check` | 33/33 apps, 363 host assertions PASS, 40 honest SKIPs, 7 canaries; no serial port, no hardware sign-off |
+| 0c | v1.6 host gates + app/browser/visual pre-gates | `python tools/host_batch_run.py --check`, `host_webapp_gate.py --check`, `host_browser_gate.py --check`, `host_tui_gate.py --check`, `host_modal_gate.py --check`, `gfx_toolkit_test.py --host`, `host_apps_gate.py --check`, `host_all_gates.py` (incl. `browser`/`browser_canary`, `visual`/`visual_canary`) | 34 apps (incl. flagship), 679 host assertions PASS, 45 honest SKIPs; `host_all_gates.py` 35/35 gates (15 canaries); webapp gate 8 fixtures / 432 assertions, browser gate 5 fixtures / 271 assertions; no serial port, no hardware sign-off |
+| 0d | Visual proof gates (pre-gate) | `python tools/make_web_screenshots.py --check`, `python tools/visual_proof_gate.py --check`, `python tools/visual_proof_gate.py --self-test` | DOS palette, CP437 box borders, ink bands, distinct screen signatures, red canaries all pass; host proofs only, no device capture or hardware sign-off |
 | 1 | Static checks | `python -m compileall tools apps` | no errors |
 | 2 | On-target unit tests | `python tools/unit_run.py COM3 COM6` | `=== All tests completed ===`, 0 failures on both; **refresh `test/README.md` count** |
 | 3 | Hardware suites | `python tools/p4test_run.py --boards COM3,COM6 --tier full --fail-fast --retry 1` | merged PASS table (both boards) + no board differential |
@@ -283,6 +289,9 @@ the archive tool, not a golden image.
   `python tools/gallery_audit_selftest.py` (the red canary); both are wired into
   `tools/harness/verify.py` as static gates, so a shell screenshot published as
   an app image fails the release.
+- DOS visual proofs re-checked with `python tools/visual_proof_gate.py --check`
+  and `--self-test`; `docs/apps.md` captions match the distinct DOS screens and
+  every web/app proof is labelled as host-generated, not a device capture.
 - `roadmap.md` curated (completed work folded into history, open items listed).
 
 ---
@@ -295,9 +304,14 @@ Release is ready when **all** boxes below are true:
       section updated; `bugs.md` header current.
 - [ ] Zero build warnings on both boards (firmware + `test/`).
 - [ ] Unit suite green on both boards; `test/README.md` count refreshed.
-- [ ] v1.6 host gates green (batch/webapp/tui/modal/gfx/apps, 33 apps) and
+- [ ] v1.6 host gates + browser/visual pre-gates green (batch/webapp/browser/
+      tui/modal/gfx/apps, 34 apps incl. the flagship, 35/35 gates, 15 canaries) and
       `tools/appdiff/baseline/*.transcript.txt` rebaselined on a board for the
       new `[M-RICH-*]` lines.
+- [ ] Board-free visual proof gates green (`make_web_screenshots.py --check`,
+      `visual_proof_gate.py --check` / `--self-test`); web proofs are labelled
+      host-generated and `docs/apps.md` captions match the DOS screens. No
+      device capture is claimed for them.
 - [ ] Documentation screenshots refreshed and pixel-checked
       (`python tools/screenshot_gate.py --update`, then
       `python tools/screenshot_gate.py`; the browser dashboard shot comes from

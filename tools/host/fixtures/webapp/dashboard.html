@@ -1,0 +1,56 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: 2026 Stoian Alexandru -->
+<!-- SPDX-License-Identifier: MIT -->
+<!--
+  Deterministic host fixture: a real modern HTML/CSS/JS page rendered through
+  the firmware's ONE dom_parse / css_compute_styles / dom_render_tree path by
+  tools/host/main/host_webapp_render.c. The visible 80x25 surface is a
+  DOS-browser presentation of the page: CP437 box panels, DOS palette and a
+  status line. No network, clock, randomness or second renderer is involved.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>P4.NET/DASHBOARD.80COL</title>
+<style>
+  body { color: #cccccc; background-color: #0c0c0c; }
+  .bar { color: #f9f1a5; }
+  .dim { color: #767676; }
+  .ink { color: #f2f2f2; }
+  .cyan { color: #61d6d6; }
+  .blue { color: #3a96dd; }
+  .green { color: #16c60c; }
+  .red { color: #e74856; }
+  .yellow { color: #f9f1a5; }
+  .mag { color: #b4009e; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); }
+  .tile { color: #61d6d6; }
+</style>
+</head>
+<body>
+<header><nav><a href="portal.html">Home</a> | <a href="dashboard.html">Dashboard</a> | <a href="article.html">Article</a> | <a href="form.html">Form</a></nav></header>
+<main>
+<div class="screen">
+<span class="bar">┌─[P4.NET/DASHBOARD.80COL]─────────────────────────────────────────────────────┐<br></span>
+<span class="bar">├─Address:http://p4.local/dashboard.html───────────────────────────────────────┤<br></span>
+<span class="bar">│ LIVE DASHBOARD                              24-hour view / 5 nodes          │<br></span>
+<div class="grid"><span class="tile">┌UPTIME 99.7%───────────────┐</span><span class="tile">┌LOAD 0.42──────────────────┐</span></div><span class="bar">│ ┌─  TRAFFIC  ─────────────────────────────────────────────────────────────┐ │<br></span>
+<canvas id="chart" width="64" height="8">CHART OFFLINE</canvas>
+<span class="bar">│ └───────────────────────────────────────────────────────────────────────┘ │<br></span>
+<table><tr><th> NODE │ STATE │ MS </th></tr><tr><td> alpha │ up │ 12 </td></tr><tr><td> beta │ up │ 18 </td></tr><tr><td> gamma │ warn │ 97 </td></tr></table>
+<span class="bar">│ TRAFFIC / LAST 24 HOURS              74% PEAK / 61% LOW                      │<br></span>
+<span class="bar">├─READY | panels + table + chart | F1 help─────────────────────────────────────┤<br></span>
+<span class="bar">└──────────────────────────────────────────────────────────────────────────────┘<br></span>
+</div>
+</main>
+<footer>P4 NET - DOS presentation of real HTML - host proof only</footer>
+<script>
+function go() {
+  var r = document.getElementById('result');
+  if (r) r.textContent = 'RESULT: SAVED';
+}
+setTimeout(function () { document.title = 'ready'; }, 0);
+Promise.resolve().then(function () { document.title += ':micro'; });
+</script>
+</body>
+</html>

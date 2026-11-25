@@ -108,6 +108,48 @@ static gfx_frame_stats_t s_gfx_stats;
  * a slot is live exactly when px != NULL. */
 static gfx_surface_t s_gfx_spr[GFX_SPR_SLOTS];
 
+/* Additive toolkit state: named tilemaps, one bounded particle emitter and
+ * layer descriptors over borrowed sprite slots. The descriptor tables are
+ * bulk data too: allocate them lazily from PSRAM (p4heap's any-pool prefers
+ * SPIRAM and falls back to malloc) instead of reserving internal DRAM for
+ * the life of the process. NULL means out of memory; the verbs report an
+ * error and degrade instead of dereferencing it. */
+static gfx_tilemap_t *s_gfx_tilemaps_store;
+static gfx_layer_t *s_gfx_layers_store;
+
+static bool gfx_toolkit_ensure(void)
+{
+    if (s_gfx_tilemaps_store == NULL) {
+        s_gfx_tilemaps_store = p4heap_calloc_any(GFX_TILEMAP_SLOTS,
+                                                sizeof(*s_gfx_tilemaps_store));
+    }
+    if (s_gfx_layers_store == NULL) {
+        s_gfx_layers_store = p4heap_calloc_any(GFX_LAYER_SLOTS,
+                                              sizeof(*s_gfx_layers_store));
+    }
+    return s_gfx_tilemaps_store != NULL && s_gfx_layers_store != NULL;
+}
+
+/* Keep the verb bodies readable: the names still denote slot arrays. */
+#define s_gfx_tilemaps (s_gfx_tilemaps_store)
+#define s_gfx_layers (s_gfx_layers_store)
+
+/* The emitter holds the bounded particle state. It is bulk data, so it is
+ * allocated lazily from PSRAM; a failed allocation leaves the particle verbs
+ * reporting an error. */
+static gfx_emitter_t *s_gfx_particles;
+
+static gfx_emitter_t *particles_ensure(void)
+{
+    if (s_gfx_particles == NULL) {
+        s_gfx_particles = p4heap_calloc_any(1, sizeof(*s_gfx_particles));
+    }
+    return s_gfx_particles;
+}
+
+static uint32_t s_gfx_particle_seed;
+#define GFX_PARTICLE_GRAVITY 16  /**< 8.8 fixed point per step. */
+
 /** Map a color arg to RGB565: 0..15 = CGA table, 16 = black (canvas has no
  * "default"), larger = 24-bit RGB hex. */
 static uint16_t gfx_color_arg(const char *s, uint16_t fallback)
@@ -134,6 +176,27 @@ static void gfx_sprites_free_all(void)
 
     for (i = 0; i < GFX_SPR_SLOTS; i++) {
         gfx_surface_free(&s_gfx_spr[i]);
+    }
+}
+
+/** Free tilemap cell grids and drop layer bindings; sprite slots are freed
+ *  separately. Called on every teardown path, so a session never leaks PSRAM. */
+static void gfx_toolkit_state_free(void)
+{
+    int i;
+
+    if (s_gfx_tilemaps_store != NULL) {
+        for (i = 0; i < GFX_TILEMAP_SLOTS; i++) {
+            gfx_tilemap_free(&s_gfx_tilemaps[i]);
+        }
+    }
+    if (s_gfx_layers_store != NULL) {
+        for (i = 0; i < GFX_LAYER_SLOTS; i++) {
+            memset(&s_gfx_layers[i], 0, sizeof(s_gfx_layers[i]));
+        }
+    }
+    if (s_gfx_particles != NULL) {
+        gfx_emitter_reset(s_gfx_particles, 0);
     }
 }
 
@@ -404,6 +467,7 @@ static void gfx_teardown(void)
     gfx_surface_free(&s_gfx);
     gfx_shadow_free();
     gfx_sprites_free_all();
+    gfx_toolkit_state_free();
 }
 
 /**
@@ -463,8 +527,9 @@ bool shell_command_gfx(int argc, char **argv)
 {
     if (argc < 2) {
         shell_transcript_appendf_ansi(SH_ERR "gfx: missing subcommand\n" SH_RST);
-            shell_transcript_appendf_ansi("Usage: gfx init|close|status|stats|clear|pixel|line|lineaa|rect|rectaa|circle|circleaa|hline|vline|triangle|ellipse|polygon|gradient|fill|text|show|image|load|blit|blitmany|composite|free|slots|save <args>\n");
+            shell_transcript_appendf_ansi("Usage: gfx init|close|status|stats|clear|pixel|line|lineaa|rect|rectaa|circle|circleaa|hline|vline|triangle|ellipse|polygon|gradient|fill|text|show|image|load|blit|blitmany|composite|free|slots|tile|particles|layer|save <args>\n");
             shell_transcript_appendf_ansi("       blitmany [/a:<cols>,<cw>,<ch>] takes idx x y triples (sprite sheet); composite blends a slot as a translucent layer\n");
+            shell_transcript_appendf_ansi("       tile create|set|draw|free|list; particles seed|emit|step|draw|clear; layer bind|dirty|present|visible\n");
         batch_set_errorlevel(2);
         return false;
     }
@@ -1489,6 +1554,468 @@ bool shell_command_gfx(int argc, char **argv)
         }
         batch_set_errorlevel(0);
         return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "tile")) {
+        /* gfx tile create|set|draw|free|list - named sprite-sheet maps with
+         * per-tile flags and ascending-z draw order. Pure raster work; every
+         * stamp goes through gfx_surface_blit_atlas(). */
+        if (!gfx_toolkit_ensure()) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx tile: out of memory (descriptor tables)\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (argc < 3) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx tile: usage: gfx tile create|set|draw|free|list <args>\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "create")) {
+            /* gfx tile create <map> <name> <sheet> <cols> <rows> <cw> <ch>
+             *                 [/t:<color>] [/z:<layer>] */
+            int map;
+            int sheet;
+            int cols;
+            int rows;
+            int cw;
+            int ch;
+            int z = 0;
+            bool use_t = false;
+            uint16_t tcolor = 0;
+            char *end = NULL;
+
+            if (argc < 9 || argc > 11) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx tile create: usage: gfx tile create <map 0..%d> <name> <sheet 0..%d> <cols> <rows> <cw> <ch> [/t:<color>] [/z:<layer>]\n" SH_RST,
+                                              GFX_TILEMAP_SLOTS - 1, GFX_SPR_SLOTS - 1);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            map = (int)strtol(argv[3], &end, 10);
+            if (end == argv[3] || *end != '\0' || map < 0 || map >= GFX_TILEMAP_SLOTS) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx tile create: bad map '%s'\n" SH_RST, argv[3]);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            end = NULL;
+            sheet = (int)strtol(argv[5], &end, 10);
+            if (end == argv[5] || *end != '\0' || sheet < 0 || sheet >= GFX_SPR_SLOTS ||
+                s_gfx_spr[sheet].px == NULL) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx tile create: bad/empty sheet '%s' (gfx load first)\n" SH_RST, argv[5]);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            cols = atoi(argv[6]);
+            rows = atoi(argv[7]);
+            cw = atoi(argv[8]);
+            ch = atoi(argv[9]);
+            for (int i = 10; i < argc; i++) {
+                if (strncasecmp(argv[i], "/t:", 3) == 0) {
+                    use_t = true;
+                    tcolor = gfx_color_arg(argv[i] + 3, 0x0000);
+                } else if (strncasecmp(argv[i], "/z:", 3) == 0) {
+                    z = atoi(argv[i] + 3);
+                } else {
+                    shell_transcript_appendf_ansi(SH_ERR "gfx tile create: unknown option %s\n" SH_RST, argv[i]);
+                    batch_set_errorlevel(2);
+                    return false;
+                }
+            }
+            gfx_tilemap_free(&s_gfx_tilemaps[map]);
+            if (!gfx_tilemap_create(&s_gfx_tilemaps[map], argv[4], &s_gfx_spr[sheet],
+                                    cols, rows, cw, ch, z, use_t, tcolor)) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx tile create: bad grid or out of memory (max %dx%d cells of %dx%d)\n" SH_RST,
+                                              GFX_TILEMAP_MAX_COLS, GFX_TILEMAP_MAX_ROWS,
+                                              GFX_TILEMAP_MAX_CELL, GFX_TILEMAP_MAX_CELL);
+                batch_set_errorlevel(1);
+                return false;
+            }
+            shell_transcript_appendf("gfx: tilemap %d '%s' %dx%d of %dx%d z=%d\n",
+                                     map, s_gfx_tilemaps[map].name, cols, rows, cw, ch, z);
+            batch_set_errorlevel(0);
+            return true;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "set")) {
+            /* gfx tile set <map> <col> <row> <idx> [/f:<h|v|r|-...>] */
+            int map;
+            int index;
+            unsigned flags = 0;
+            char *end = NULL;
+
+            if (argc < 7 || argc > 8) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx tile set: usage: gfx tile set <map> <col> <row> <idx> [/f:<h|v|r|-...>]\n" SH_RST);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            map = (int)strtol(argv[3], &end, 10);
+            if (end == argv[3] || *end != '\0' || map < 0 || map >= GFX_TILEMAP_SLOTS ||
+                s_gfx_tilemaps[map].cells == NULL) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx tile set: bad/empty map '%s' (gfx tile create first)\n" SH_RST, argv[3]);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            index = atoi(argv[6]);
+            if (argc > 7) {
+                if (strncasecmp(argv[7], "/f:", 3) != 0) {
+                    shell_transcript_appendf_ansi(SH_ERR "gfx tile set: bad flag '%s' (want /f:<h|v|r|->)\n" SH_RST, argv[7]);
+                    batch_set_errorlevel(2);
+                    return false;
+                }
+                for (const char *f = argv[7] + 3; *f != '\0'; f++) {
+                    if (*f == 'h' || *f == 'H') flags |= GFX_TILE_FLIP_X;
+                    else if (*f == 'v' || *f == 'V') flags |= GFX_TILE_FLIP_Y;
+                    else if (*f == 'r' || *f == 'R') flags |= GFX_TILE_ROT90;
+                    else if (*f == '-') flags |= GFX_TILE_HIDDEN;
+                    else {
+                        shell_transcript_appendf_ansi(SH_ERR "gfx tile set: unknown tile flag '%c'\n" SH_RST, *f);
+                        batch_set_errorlevel(2);
+                        return false;
+                    }
+                }
+            }
+            if (!gfx_tilemap_set(&s_gfx_tilemaps[map], atoi(argv[4]), atoi(argv[5]),
+                                 index, flags)) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx tile set: bad cell or tile index\n" SH_RST);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            shell_transcript_appendf("gfx: tilemap %d cell %s,%s idx=%d flags=0x%02X\n",
+                                     map, argv[4], argv[5], index, flags);
+            batch_set_errorlevel(0);
+            return true;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "draw")) {
+            /* gfx tile draw <x> <y> [map ...] - no maps draws all by z. */
+            gfx_tilemap_t *maps[GFX_TILEMAP_SLOTS];
+            int count = 0;
+
+            if (argc < 5) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx tile draw: usage: gfx tile draw <x> <y> [map ...]\n" SH_RST);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            for (int i = 5; i < argc; i++) {
+                int map;
+                char *end = NULL;
+
+                map = (int)strtol(argv[i], &end, 10);
+                if (end == argv[i] || *end != '\0' || map < 0 || map >= GFX_TILEMAP_SLOTS ||
+                    s_gfx_tilemaps[map].cells == NULL) {
+                    shell_transcript_appendf_ansi(SH_ERR "gfx tile draw: bad/empty map '%s'\n" SH_RST, argv[i]);
+                    batch_set_errorlevel(2);
+                    return false;
+                }
+                maps[count++] = &s_gfx_tilemaps[map];
+            }
+            if (count == 0) {
+                for (int i = 0; i < GFX_TILEMAP_SLOTS; i++) {
+                    if (s_gfx_tilemaps[i].cells != NULL) maps[count++] = &s_gfx_tilemaps[i];
+                }
+            }
+            gfx_tilemap_draw_all(maps, count, &s_gfx, atoi(argv[3]), atoi(argv[4]));
+            batch_set_errorlevel(0);
+            return true;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "free")) {
+            int map;
+            char *end = NULL;
+
+            if (argc != 4) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx tile free: usage: gfx tile free <map 0..%d>\n" SH_RST,
+                                              GFX_TILEMAP_SLOTS - 1);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            map = (int)strtol(argv[3], &end, 10);
+            if (end == argv[3] || *end != '\0' || map < 0 || map >= GFX_TILEMAP_SLOTS) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx tile free: bad map '%s'\n" SH_RST, argv[3]);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            gfx_tilemap_free(&s_gfx_tilemaps[map]);
+            batch_set_errorlevel(0);
+            return true;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "list")) {
+            for (int i = 0; i < GFX_TILEMAP_SLOTS; i++) {
+                if (s_gfx_tilemaps[i].cells != NULL) {
+                    shell_transcript_appendf("gfx.tilemap: %d %s %dx%d %dx%d z=%d\n",
+                                             i, s_gfx_tilemaps[i].name,
+                                             s_gfx_tilemaps[i].cols,
+                                             s_gfx_tilemaps[i].rows,
+                                             s_gfx_tilemaps[i].cell_w,
+                                             s_gfx_tilemaps[i].cell_h,
+                                             s_gfx_tilemaps[i].z);
+                }
+            }
+            batch_set_errorlevel(0);
+            return true;
+        }
+        shell_transcript_appendf_ansi(SH_ERR "gfx tile: unknown option %s\n" SH_RST, argv[2]);
+        batch_set_errorlevel(2);
+        return false;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "particles")) {
+        /* gfx particles seed|emit|step|draw|clear - bounded deterministic
+         * pool; draws through the existing pixel/blend primitives. */
+        if (argc < 3) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx particles: usage: gfx particles seed|emit|step|draw|clear <args>\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "seed")) {
+            char *end = NULL;
+            unsigned long seed;
+
+            if (argc != 4) {
+                shell_transcript_append_text("gfx particles seed: usage: gfx particles seed <uint32>\n");
+                batch_set_errorlevel(2);
+                return false;
+            }
+            seed = strtoul(argv[3], &end, 0);
+            if (end == argv[3] || *end != '\0') {
+                shell_transcript_appendf_ansi(SH_ERR "gfx particles seed: bad seed '%s'\n" SH_RST, argv[3]);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            s_gfx_particle_seed = (uint32_t)seed;
+            if (particles_ensure() == NULL) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx particles: out of memory\n" SH_RST);
+                batch_set_errorlevel(1);
+                return false;
+            }
+            gfx_emitter_reset(s_gfx_particles, s_gfx_particle_seed);
+            shell_transcript_appendf("gfx: particle seed %u\n", (unsigned)s_gfx_particle_seed);
+            batch_set_errorlevel(0);
+            return true;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "emit")) {
+            int n;
+            int spread = 4;
+
+            if (argc < 6 || argc > 8) {
+                shell_transcript_append_text("gfx particles emit: usage: gfx particles emit <n> <x> <y> [spread] [color]\n");
+                batch_set_errorlevel(2);
+                return false;
+            }
+            n = atoi(argv[3]);
+            if (argc > 6) spread = atoi(argv[6]);
+            if (n < 1 || n > GFX_PARTICLE_MAX || spread < 0) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx particles emit: bad count/spread (1..%d)\n" SH_RST, GFX_PARTICLE_MAX);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            if (particles_ensure() == NULL) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx particles: out of memory\n" SH_RST);
+                batch_set_errorlevel(1);
+                return false;
+            }
+            n = gfx_emitter_emit(s_gfx_particles, n, atoi(argv[4]), atoi(argv[5]),
+                                 spread, argc > 7 ? gfx_color_arg(argv[7], 0xFFFF) : 0xFFFF,
+                                 24);
+            shell_transcript_appendf("gfx: particles emitted %d (live %d)\n",
+                                     n, gfx_emitter_live(s_gfx_particles));
+            batch_set_errorlevel(0);
+            return true;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "step")) {
+            int ticks = (argc > 3) ? atoi(argv[3]) : 1;
+            int live;
+
+            if (argc > 4 || ticks < 1 || ticks > 64) {
+                shell_transcript_append_text("gfx particles step: usage: gfx particles step [ticks 1..64]\n");
+                batch_set_errorlevel(2);
+                return false;
+            }
+            if (particles_ensure() == NULL) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx particles: out of memory\n" SH_RST);
+                batch_set_errorlevel(1);
+                return false;
+            }
+            live = gfx_emitter_step(s_gfx_particles, ticks, GFX_PARTICLE_GRAVITY);
+            shell_transcript_appendf("gfx: particles live %d\n", live);
+            batch_set_errorlevel(0);
+            return true;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "draw")) {
+            if (argc > 5) {
+                shell_transcript_append_text("gfx particles draw: usage: gfx particles draw [x] [y]\n");
+                batch_set_errorlevel(2);
+                return false;
+            }
+            if (particles_ensure() == NULL) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx particles: out of memory\n" SH_RST);
+                batch_set_errorlevel(1);
+                return false;
+            }
+            gfx_emitter_draw(s_gfx_particles, &s_gfx,
+                             argc > 3 ? atoi(argv[3]) : 0,
+                             argc > 4 ? atoi(argv[4]) : 0);
+            batch_set_errorlevel(0);
+            return true;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "clear")) {
+            if (particles_ensure() == NULL) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx particles: out of memory\n" SH_RST);
+                batch_set_errorlevel(1);
+                return false;
+            }
+            gfx_emitter_reset(s_gfx_particles, s_gfx_particle_seed);
+            batch_set_errorlevel(0);
+            return true;
+        }
+        shell_transcript_appendf_ansi(SH_ERR "gfx particles: unknown option %s\n" SH_RST, argv[2]);
+        batch_set_errorlevel(2);
+        return false;
+    }
+
+    if (shell_text_equals_ignore_case(argv[1], "layer")) {
+        /* gfx layer bind|dirty|present|visible - per-layer alpha and dirty
+         * rect over borrowed sprite surfaces, composed with the one path. */
+        if (!gfx_toolkit_ensure()) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx layer: out of memory (descriptor tables)\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (argc < 3) {
+            shell_transcript_appendf_ansi(SH_ERR "gfx layer: usage: gfx layer bind|dirty|present|visible <args>\n" SH_RST);
+            batch_set_errorlevel(2);
+            return false;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "bind")) {
+            /* gfx layer bind <layer> <sheet> <name> <x> <y> <alpha> [/z:<n>] */
+            int layer;
+            int sheet;
+            int alpha;
+            int z = 0;
+            char *end = NULL;
+
+            if (argc < 9 || argc > 10) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx layer bind: usage: gfx layer bind <layer 0..%d> <sheet 0..%d> <name> <x> <y> <alpha 0..256> [/z:<n>]\n" SH_RST,
+                                              GFX_LAYER_SLOTS - 1, GFX_SPR_SLOTS - 1);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            layer = (int)strtol(argv[3], &end, 10);
+            if (end == argv[3] || *end != '\0' || layer < 0 || layer >= GFX_LAYER_SLOTS) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx layer bind: bad layer '%s'\n" SH_RST, argv[3]);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            end = NULL;
+            sheet = (int)strtol(argv[4], &end, 10);
+            if (end == argv[4] || *end != '\0' || sheet < 0 || sheet >= GFX_SPR_SLOTS ||
+                s_gfx_spr[sheet].px == NULL) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx layer bind: bad/empty sheet '%s' (gfx load first)\n" SH_RST, argv[4]);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            alpha = atoi(argv[8]);
+            if (alpha < 0 || alpha > 256) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx layer bind: bad alpha '%s' (0..256)\n" SH_RST, argv[8]);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            if (argc > 9) {
+                if (strncasecmp(argv[9], "/z:", 3) != 0) {
+                    shell_transcript_appendf_ansi(SH_ERR "gfx layer bind: unknown option %s\n" SH_RST, argv[9]);
+                    batch_set_errorlevel(2);
+                    return false;
+                }
+                z = atoi(argv[9] + 3);
+            }
+            gfx_layer_bind(&s_gfx_layers[layer], argv[5], &s_gfx_spr[sheet],
+                           atoi(argv[6]), atoi(argv[7]), (unsigned)alpha, z);
+            shell_transcript_appendf("gfx: layer %d '%s' %dx%d alpha=%d z=%d\n",
+                                     layer, s_gfx_layers[layer].name,
+                                     s_gfx_spr[sheet].w, s_gfx_spr[sheet].h, alpha, z);
+            batch_set_errorlevel(0);
+            return true;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "dirty")) {
+            int layer;
+            char *end = NULL;
+
+            if (argc != 4 && argc != 8) {
+                shell_transcript_append_text("gfx layer dirty: usage: gfx layer dirty <layer> [x y w h]\n");
+                batch_set_errorlevel(2);
+                return false;
+            }
+            layer = (int)strtol(argv[3], &end, 10);
+            if (end == argv[3] || *end != '\0' || layer < 0 || layer >= GFX_LAYER_SLOTS ||
+                s_gfx_layers[layer].surface == NULL) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx layer dirty: bad/unbound layer '%s'\n" SH_RST, argv[3]);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            if (!gfx_layer_mark_dirty(&s_gfx_layers[layer],
+                                      argc > 4 ? atoi(argv[4]) : 0,
+                                      argc > 4 ? atoi(argv[5]) : 0,
+                                      argc > 4 ? atoi(argv[6]) : 0,
+                                      argc > 4 ? atoi(argv[7]) : 0)) {
+                shell_transcript_append_text("gfx layer dirty: empty rectangle\n");
+                batch_set_errorlevel(2);
+                return false;
+            }
+            batch_set_errorlevel(0);
+            return true;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "present")) {
+            if (argc == 3 || (argc == 4 && shell_text_equals_ignore_case(argv[3], "all"))) {
+                gfx_layer_t *layers[GFX_LAYER_SLOTS];
+                int count = 0;
+
+                for (int i = 0; i < GFX_LAYER_SLOTS; i++) {
+                    if (s_gfx_layers[i].surface != NULL) layers[count++] = &s_gfx_layers[i];
+                }
+                gfx_layer_present_all(&s_gfx, layers, count);
+            } else if (argc == 4) {
+                int layer;
+                char *end = NULL;
+
+                layer = (int)strtol(argv[3], &end, 10);
+                if (end == argv[3] || *end != '\0' || layer < 0 || layer >= GFX_LAYER_SLOTS) {
+                    shell_transcript_appendf_ansi(SH_ERR "gfx layer present: bad layer '%s'\n" SH_RST, argv[3]);
+                    batch_set_errorlevel(2);
+                    return false;
+                }
+                gfx_layer_present(&s_gfx, &s_gfx_layers[layer]);
+            } else {
+                shell_transcript_append_text("gfx layer present: usage: gfx layer present [all|<layer>]\n");
+                batch_set_errorlevel(2);
+                return false;
+            }
+            batch_set_errorlevel(0);
+            return true;
+        }
+        if (shell_text_equals_ignore_case(argv[2], "visible")) {
+            int layer;
+            char *end = NULL;
+
+            if (argc != 5) {
+                shell_transcript_append_text("gfx layer visible: usage: gfx layer visible <layer> <on|off>\n");
+                batch_set_errorlevel(2);
+                return false;
+            }
+            layer = (int)strtol(argv[3], &end, 10);
+            if (end == argv[3] || *end != '\0' || layer < 0 || layer >= GFX_LAYER_SLOTS) {
+                shell_transcript_appendf_ansi(SH_ERR "gfx layer visible: bad layer '%s'\n" SH_RST, argv[3]);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            if (shell_text_equals_ignore_case(argv[4], "on")) s_gfx_layers[layer].visible = true;
+            else if (shell_text_equals_ignore_case(argv[4], "off")) s_gfx_layers[layer].visible = false;
+            else {
+                shell_transcript_appendf_ansi(SH_ERR "gfx layer visible: bad value '%s' (on|off)\n" SH_RST, argv[4]);
+                batch_set_errorlevel(2);
+                return false;
+            }
+            batch_set_errorlevel(0);
+            return true;
+        }
+        shell_transcript_appendf_ansi(SH_ERR "gfx layer: unknown option %s\n" SH_RST, argv[2]);
+        batch_set_errorlevel(2);
+        return false;
     }
 
     if (shell_text_equals_ignore_case(argv[1], "save")) {

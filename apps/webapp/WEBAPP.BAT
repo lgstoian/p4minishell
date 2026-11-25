@@ -4,6 +4,7 @@ rem The page, CSS and JS come from the same html/css/js engine the browser uses;
 rem a native payload can be added later with the same .bat front door.
 setlocal
 echo [M-WEBAPP] starting
+echo [M-DOS-WEBAPP] screen=WEBAPP-FORMS panels=2 head="WEBAPP FORMS" theme=ice bars=0 table=N spark=0 status=Y
 
 set WEBAPP_PAGE=%APPDRIVE%/WEB/INDEX.HTML
 if not exist "%WEBAPP_PAGE%" set WEBAPP_PAGE=sd:/WEB/INDEX.HTML

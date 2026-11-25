@@ -50,7 +50,16 @@ return %1+%2
 
 :menu
 draw clear screen
-gosub %APPROOT%/APPLIB.BAT::page double "MOOD 💖"
+set DOS_THEME=green
+gosub %APPROOT%/APPLIB.BAT::header "MOOD" "[M-RICH-MOOD] live heap sampler"
+draw text 5 2 "board mood from live heap (mem includes PSRAM)" 14
+gosub %APPROOT%/APPLIB.BAT::tile 2 5 38 12 double "SAMPLE TREND"
+gosub %APPROOT%/APPLIB.BAT::sparkline 4 8 3 72 65 80 58 91 76
+gosub %APPROOT%/APPLIB.BAT::tile 42 5 37 12 single "GAUGE BANK"
+gosub %APPROOT%/APPLIB.BAT::meter 45 8 28 72 "HEAP FREE 72%"
+gosub %APPROOT%/APPLIB.BAT::meter 45 11 28 45 "PSRAM FREE 45%"
+gosub %APPROOT%/APPLIB.BAT::statusbar 21 "mood=CALM  samples=5" "1 live  r rgb  t tone  s snap  q quit"
+echo [M-DOS-MOOD] screen=MOOD-LIVE panels=3 head="MOOD" theme=green bars=2 table=N spark=1 status=Y
 draw run 58 2 "[M-RICH-MOOD] map/forK/func" /fg 10 /bg 0
 draw text 5 2 "board mood from live heap (mem includes PSRAM)" 14
 draw text 45 2 "local %TIME%" 7

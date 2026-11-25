@@ -23,7 +23,16 @@ set /a RX=%LW%+1 > NUL
 set /a RW=%TUICOLS%-%RX%+1 > NUL
 tui fullscreen on
 draw clear screen
-gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "LIVE SYSTEM DASHBOARD ★"
+set DOS_THEME=green
+gosub %APPROOT%/APPLIB.BAT::header "SYSTEM DASHBOARD" "[M-RICH-SYS] heap + tasks + uptime"
+gosub %APPROOT%/APPLIB.BAT::tile 1 5 40 12 double "MEMORY BANKS"
+gosub %APPROOT%/APPLIB.BAT::meter 4 8 32 72 "HEAP 72%"
+gosub %APPROOT%/APPLIB.BAT::meter 4 11 32 45 "PSRAM 45%"
+gosub %APPROOT%/APPLIB.BAT::tile 43 5 37 12 single "TASK LOAD"
+gosub %APPROOT%/APPLIB.BAT::table 45 8 "Task|State|Hz" "idle|RUN|60" "wifi|SLEEP|10" "tui|RUN|30"
+gosub %APPROOT%/APPLIB.BAT::sparkline 46 14 3 20 40 60 35 75 55
+gosub %APPROOT%/APPLIB.BAT::statusbar 21 "uptime=live  panels=4" "v view  s save  q quit"
+echo [M-DOS-SYS] screen=SYS-DASHBOARD panels=4 head="SYSTEM DASHBOARD" theme=green bars=2 table=Y spark=1 status=Y
 gosub %APPROOT%/APPLIB.BAT::panel 4 10 single "System - View opens the local HTML guide"
 draw box 1 %BM% %LW% 10 single "Memory (heap + PSRAM)"
 draw box %RX% %BM% %RW% 10 single "Tasks"

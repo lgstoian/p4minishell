@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=NET
 [M-RICH-NET] host language extract
+[M-DOS-NET] screen=NET-TOOLS panels=3 head="NETWORK TOOLS" theme=ice bars=2 table=Y spark=0 status=Y
 W=network
 1
 [M-RICH-NET-K] host=p4

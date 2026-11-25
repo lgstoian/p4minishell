@@ -22,6 +22,11 @@
 
 #define WEBAPP_MAX_ARGV 16
 
+/* The browser owns the last rendered page's image outcomes; this facade only
+ * prints them, exactly as `webapp dump` prints the browser's cell grid. */
+extern int browser_image_report_count(void);
+extern const char *browser_image_report_line(int index);
+
 static int webapp_call_html(int argc, char **argv, int from)
 {
     char *args[WEBAPP_MAX_ARGV];
@@ -80,7 +85,8 @@ int shell_command_webapp(int argc, char **argv)
             "       webapp css                      show computed CSS\n"
             "       webapp js <code>                evaluate JS in the page engine\n"
             "       webapp event <id> <type>        dispatch click/input/change/submit\n"
-            "       webapp tick                     run due JS timers, repaint");
+            "       webapp tick                     run due JS timers, repaint\n"
+            "       webapp images                   report image outcomes on the page");
         batch_set_errorlevel(2);
         return 2;
     }
@@ -116,6 +122,18 @@ int shell_command_webapp(int argc, char **argv)
         int fired = browser_tick_timers();
 
         shell_transcript_appendf("webapp: %d timer(s) fired\n", fired);
+        batch_set_errorlevel(0);
+        return 0;
+    }
+    if (strcmp(argv[1], "images") == 0) {
+        int count = browser_image_report_count();
+
+        for (int i = 0; i < count; i++) {
+            const char *line = browser_image_report_line(i);
+
+            if (line != NULL) shell_transcript_appendf("%s\n", line);
+        }
+        shell_transcript_appendf("webapp: %d image outcome(s)\n", count);
         batch_set_errorlevel(0);
         return 0;
     }

@@ -5,6 +5,7 @@ rem HOST-SAFE EXTRACT of LIB.BAT's [M-RICH-*] block. The real app also uses
 rem hardware verbs (reported as SKIP by tools/host_apps_gate.py); this fixture
 rem runs ONLY the additive batch-language surfaces on the REAL interpreter.
 echo [M-RICH-LIB-COMPANION] host language extract
+echo [M-DOS-LIB-COMPANION] screen=LIB-COMPANION panels=2 head="COMPANION LIB" theme=ice bars=0 table=N spark=0 status=Y
 set W=companion
 str /rev W RV
 str /count W a RC

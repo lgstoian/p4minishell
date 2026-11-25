@@ -21,7 +21,11 @@ Coverage (one or more real checks per row):
   * draw run|sprite and tui frame|focus|layout|scroll|route: on-device fields,
     dirty-rect transitions, and real geometry / clamping;
   * webapp event|tick: RICH.HTML's DOM state changes, read back with
-    ``webapp dump`` from the one browser engine.
+    ``webapp dump`` from the one browser engine;
+  * the DOS dashboard identity of the shipped apps: each real screen publishes
+    its own ``[M-DOS-*]`` panels/header/theme/status line, and a live dashboard
+    frame is checked through the ONE p4test pixel model for DOS palette ink and
+    the absence of LVGL default-theme blue.
 
 Honest limits: a genuine signature verification is NOT attempted with the
 host fixture key (it is test-only and must never be installed on a board); a
@@ -37,7 +41,10 @@ import tempfile
 from pathlib import Path
 
 from p4test.asserts import Checklist
+from p4test import screenshot as shot
+from p4test import theme_guard
 from p4test.screenshot import parse_bmp
+from p4test.session import PanicError
 
 NAME = "v16_features"
 TAGS = ["apps", "batch", "gfx", "tui", "modal", "webapp", "native", "slow"]
@@ -46,6 +53,23 @@ NEEDS_CLEAN_BOOT = True
 
 ROOT = Path(__file__).resolve().parents[2]
 APPS = ROOT / "apps"
+OUT_DIR = os.path.join("screenshots", "regression")
+# The one shipped DOS identity line every redesigned app publishes on the
+# board and in its host fixture. Parsing the board text is a real assertion,
+# not a host-side imitation of the app's screen.
+DOS_LINE_RE = re.compile(
+    r'^\[M-DOS-[A-Z0-9_-]+\]\s+screen=(\S+)\s+panels=(\d+)\s+'
+    r'head="([^"]*)"\s+theme=(amber|green|ice|mono)\s+bars=(\d+)\s+'
+    r'table=([YN])\s+spark=(\d+)\s+status=([YN])', re.MULTILINE)
+# Only the apps whose shipped fixture is a framed dashboard are asserted as
+# dashboards here; the gfx/native/control-flow apps honestly publish a
+# headless identity and are asserted as such instead.
+DOS_DASHBOARDS = (
+    ("ELITE", "ELITE"), ("WEBAPP", "WEBAPP"), ("TASKMGR", "TMGR"),
+)
+DOS_HEADLESS = (
+    ("CONTROL", "CONTROL"), ("GFXTOOL", "GFXTOOL"), ("HYBRID", "HYBRID"),
+)
 sys.path.insert(0, str(APPS))
 from app_manifest import APP_PAYLOADS, payload_path, remote_target  # noqa: E402
 from suites.s25_apps_gallery import _make_sprites  # noqa: E402 (one sprite recipe)
@@ -229,6 +253,7 @@ def _language(dev, c):
     c.expect("ELITE market tour marker", "[M-RICH-ELITE]", elite)
     c.expect("ELITE map /values marker", "[M-RICH-ELITE-S] vals=", elite)
     c.expect("ELITE func result marker", "[M-RICH-ELITE-F] cargo=", elite)
+    return {"CONTROL": control, "ELITE": elite}
 
 
 def _gfx(dev, c, tmp):
@@ -242,7 +267,7 @@ def _gfx(dev, c, tmp):
     except Exception as exc:  # noqa: BLE001
         c.check("GFXTOOL saved a decodable BMP", False,
                 "%s: %s" % (type(exc).__name__, exc))
-        return
+        return out
     c.equals("GFXTOOL canvas width", bmp.width, 320)
     c.equals("GFXTOOL canvas height", bmp.height, 200)
     left, right = bmp.px(40, 5), bmp.px(280, 5)
@@ -259,6 +284,63 @@ def _gfx(dev, c, tmp):
     c.check("atlas stamps put sprite ink on the canvas", ink > 5,
             "%d bright atlas pixels" % ink)
     c.note("GFXTOOL.BMP is pulled from the device; no host proof is substituted")
+    return out
+
+
+def _shipped_palette():
+    """Read the one DOS palette from the shipped config header, not a copy."""
+    text = (ROOT / "p4minishell_config.h").read_text(encoding="utf-8")
+    names = ("BLACK", "RED", "GREEN", "YELLOW", "BLUE", "MAGENTA", "CYAN",
+             "WHITE", "BRIGHT_BLACK", "BRIGHT_RED", "BRIGHT_GREEN",
+             "BRIGHT_YELLOW", "BRIGHT_BLUE", "BRIGHT_MAGENTA",
+             "BRIGHT_CYAN", "BRIGHT_WHITE")
+    found = {}
+    for name, value in re.findall(
+            r"#define\s+P4_CONFIG_ANSI_([A-Z0-9_]+)\s+0x([0-9A-Fa-f]{6})", text):
+        found[name] = tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+    missing = [n for n in names if n not in found]
+    if missing:
+        raise RuntimeError("config header lacks DOS palette entries: %s"
+                           % ", ".join(missing))
+    return [found[n] for n in names]
+
+
+def _dos_frame(dev, c):
+    """Measure the LIVE dashboard frame with the one p4test pixel model.
+
+    unwind=False is deliberate: TASKMGR owns the serial input at this point,
+    and the screenshot retry's Ctrl-C would abort the app under test.
+    """
+    try:
+        bmp = dev.screenshot(out_dir=OUT_DIR, name="s28_dos_taskmgr",
+                             unwind=False)
+    except PanicError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - a miss is a real failed check
+        c.check("live DOS dashboard frame captured", False,
+                "%s: %s" % (type(exc).__name__, exc))
+        return
+    c.check("live DOS dashboard frame captured", bmp.width > 0 and bmp.height > 0,
+            "decoded frame is %dx%d" % (bmp.width, bmp.height))
+    c.equals("DOS frame matches the live panel", (bmp.width, bmp.height),
+             dev.display_size())
+    ink = sum(1 for y in range(0, bmp.height, 4)
+              for x in range(0, bmp.width, 4)
+              if sum(bmp.px(x, y)) > 240)
+    c.check("DOS frame carries visible text ink", ink > 40,
+            "%d bright sampled pixels" % ink)
+    hits = theme_guard.scan_bmp(bmp)
+    c.check("DOS frame has no LVGL default-theme blue", not hits,
+            theme_guard.describe(hits))
+    palette = _shipped_palette()
+    samples = [bmp.px(x, y) for y in range(0, bmp.height, 4)
+               for x in range(0, bmp.width, 4)]
+    near = sum(1 for rgb in samples
+               if any(max(abs(rgb[i] - p[i]) for i in range(3)) <= shot.TOL_LIVE
+                      for p in palette))
+    share = near / max(1, len(samples))
+    c.check("DOS frame uses the shipped palette", share >= 0.50,
+            "share=%.3f (%d/%d sampled)" % (share, near, len(samples)))
 
 
 def _modal(dev, c):
@@ -274,9 +356,11 @@ def _modal(dev, c):
     c.expect("mstack list is readable", "mstack/list:", lst)
     interactive = _send(dev, c, "TASKMGR.BAT", timeout=20)
     c.expect("TASKMGR modal app starts", "[M-TMGR]", interactive)
+    _dos_frame(dev, c)
     # Its full picker/progress path is operator-driven; stop before a modal
     # owns the worker so the following suites get a live shell.
     _send(dev, c, "\x03", timeout=20)
+    return interactive
 
 
 def _tui(dev, c):
@@ -351,6 +435,7 @@ def _webapp(dev, c):
     c.check("event/tick changed the live page",
             "clicked" in out or "ready" in out,
             "dump tail=%r" % out[-260:])
+    return app
 
 
 def _native_shim(dev, c):
@@ -362,6 +447,60 @@ def _native_shim(dev, c):
     skipped = "[M-RICH-HYBRID-SKIP] no signed demo payload installed" in out
     c.check("natrun shim reports launch or honest skip", launched or skipped,
             "tail=%r" % out[-240:])
+    return out
+
+
+def _dos_identity(c, outputs):
+    """Assert each shipped app publishes its own DOS dashboard on the board.
+
+    These are real lines emitted by the firmware apps; the fields are not
+    inferred from host fixtures and no host rendering is substituted.
+    """
+    screens = {}
+    for app, tag in DOS_DASHBOARDS:
+        text = outputs.get(app, "")
+        matches = DOS_LINE_RE.findall(text)
+        c.check("%s publishes one DOS identity line" % app, len(matches) == 1,
+                "%d line(s) in %d char(s) of output" % (len(matches), len(text)))
+        if len(matches) != 1:
+            continue
+        screen, panels, head, theme, bars, table, spark, status = matches[0]
+        c.check("%s DOS screen id is its own" % app,
+                screen.upper().startswith(tag.upper() + "-"), "screen=%r" % screen)
+        c.check("%s DOS dashboard has framed panels" % app, int(panels) >= 2,
+                "panels=%s" % panels)
+        c.check("%s DOS dashboard has a real header" % app,
+                len(head) >= 3 and head.upper() != "NONE", "head=%r" % head)
+        c.check("%s DOS dashboard uses a colour theme" % app,
+                theme in ("amber", "green", "ice"), "theme=%r" % theme)
+        c.check("%s DOS dashboard has panel content" % app,
+                int(bars) > 0 or int(spark) > 0 or table == "Y" or status == "Y",
+                "bars=%s table=%s spark=%s status=%s" % (bars, table, spark, status))
+        screens[app] = (screen, head, panels, theme, bars, table, spark, status)
+    c.check("shipped DOS dashboards have distinct signatures",
+            len(set(screens.values())) == len(screens),
+            "screens=%r" % {k: v[0] for k, v in sorted(screens.items())})
+    c.check("all real DOS dashboards were exercised",
+            len(screens) == len(DOS_DASHBOARDS),
+            "%d/%d" % (len(screens), len(DOS_DASHBOARDS)))
+
+    # Headless apps must not claim a dashboard they never draw.
+    for app, tag in DOS_HEADLESS:
+        text = outputs.get(app, "")
+        matches = DOS_LINE_RE.findall(text)
+        c.check("%s publishes one DOS identity line" % app, len(matches) == 1,
+                "%d line(s)" % len(matches))
+        if len(matches) != 1:
+            continue
+        screen, panels, head, theme, bars, table, spark, status = matches[0]
+        c.check("%s DOS screen id is its own" % app,
+                screen.upper().startswith(tag.upper() + "-"), "screen=%r" % screen)
+        c.check("%s honestly reports a headless DOS page" % app,
+                int(panels) == 0 and int(bars) == 0 and int(spark) == 0 and
+                table == "N" and status == "N" and head.upper() == "NONE" and
+                theme == "mono",
+                "%s panels=%s head=%r theme=%s bars=%s table=%s spark=%s status=%s"
+                % (screen, panels, head, theme, bars, table, spark, status))
 
 
 def run(dev, ctx):
@@ -369,12 +508,14 @@ def run(dev, ctx):
     with tempfile.TemporaryDirectory(prefix="s28_v16_") as tmp:
         _deploy(dev, c, tmp)
         _verb_surface(dev, c)
-        _language(dev, c)
-        _gfx(dev, c, tmp)
-        _modal(dev, c)
+        outputs: dict = {}
+        outputs.update(_language(dev, c))
+        outputs["GFXTOOL"] = _gfx(dev, c, tmp)
+        outputs["TASKMGR"] = _modal(dev, c)
         _tui(dev, c)
-        _webapp(dev, c)
-        _native_shim(dev, c)
+        outputs["WEBAPP"] = _webapp(dev, c)
+        outputs["HYBRID"] = _native_shim(dev, c)
+        _dos_identity(c, outputs)
         for name in ("P4V16.BAT", "P4V16M.BAT", "P4V16W.BAT",
                      "NATIVE/%s.P4X" % NATIVE_BAD):
             _send(dev, c, "del /f %s" % name, timeout=20)

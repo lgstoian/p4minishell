@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=TASKMGR
 [M-RICH-TMGR] host language extract
+[M-DOS-TASKMGR] screen=TMGR-OVERVIEW panels=4 head="TASK MANAGER" theme=green bars=1 table=Y spark=1 status=Y
 W=tasks
 2
 [M-RICH-TMGR-K] host=p4

@@ -4,6 +4,7 @@ rem even when the work happens in a linked-in C entry (see ABI.md).
 rem Runs the `hello` native entry, then branches on its ERRORLEVEL and
 rem environment results exactly like a pure-batch app would.
 echo [M-HYBRID] start 
+echo [M-DOS-HYBRID] screen=HYBRID-HEADLESS panels=0 head="NONE" theme=mono bars=0 table=N spark=0 status=N
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 title "Hybrid Demo"
 hello test

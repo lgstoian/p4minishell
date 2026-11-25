@@ -219,10 +219,10 @@ webapp event btn click
 webapp tick
 ```
 
-All 33 updated reference apps emit `[M-RICH-*]` markers exercising these
-surfaces; pre-existing `[M-*]` markers are preserved. `python
-tools/host_apps_gate.py --check` proves them on the host (363 assertions, 40
-honest hardware SKIPs). The new transcript lines require a board rebaseline of
+All 34 apps (including flagship `SHOWCASE`) emit `[M-RICH-*]`/`[M-DOS-*]`
+markers exercising these surfaces; pre-existing `[M-*]` markers are preserved.
+`python tools/host_apps_gate.py --check` proves them on the host (679
+assertions, 45 honest hardware SKIPs). The new transcript lines require a board rebaseline of
 `tools/appdiff/baseline/*.transcript.txt`.
 
 **Emoji.** Text renders emoji with a retro MS-DOS/CP437 look by default - no

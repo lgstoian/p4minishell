@@ -62,7 +62,15 @@ switch %room% hall:room_hall library:room_library tower:room_tower cellar:room_c
 :room_courtyard
 set room=courtyard
 draw clear screen
-gosub %APPROOT%/APPLIB.BAT::page double "COURTYARD ⚔"
+set DOS_THEME=amber
+gosub %APPROOT%/APPLIB.BAT::header "COURTYARD" "[M-RICH-ADV] map+str+forK live"
+gosub %APPROOT%/APPLIB.BAT::tile 2 5 38 11 single "MAP / EXITS"
+gosub %APPROOT%/APPLIB.BAT::tile 42 5 37 11 double "INVENTORY"
+draw text 5 7 "N: great hall     E: garden" 14
+draw text 45 7 "lantern  key  amulet" 12
+gosub %APPROOT%/APPLIB.BAT::meter 45 10 24 60 "TORCH 60%"
+gosub %APPROOT%/APPLIB.BAT::statusbar 21 "room=COURTYARD  turn=live" "n/e/s/w move  i inv  q quit"
+echo [M-DOS-ADVENT] screen=ADVENT-MAP panels=3 head="COURTYARD" theme=amber bars=1 table=N spark=0 status=Y
 draw text 5 %RT% "A quiet stone courtyard. A hall lies north, a garden east." 15
 draw text 5 %EX% "Exits: n e    (%APPNAME% on %APPDRIVE%)"
 goto prompt

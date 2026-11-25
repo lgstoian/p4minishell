@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=CHAT
 [M-RICH-CHAT] host language extract
+[M-DOS-CHAT] screen=CHAT-INBOX panels=3 head="P4 CHAT" theme=ice bars=2 table=N spark=0 status=Y
 W=chat
 1
 [M-RICH-CHAT-K] host=p4

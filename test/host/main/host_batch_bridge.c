@@ -44,6 +44,13 @@
 #include "shell_transcript_internal.h"
 #include "storage.h"
 #include "tui.h"
+/* The ONE pure cell core, the ONE DOS palette and the ONE CSS colour parser.
+ * These are the same production sources host_tui_gate.py compiles; no second
+ * renderer, sampler or colour model is introduced on this lane. */
+#include "tui_frame.h"
+#include "ansi.h"
+#include "ansi_palette.h"
+#include "css_color.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -54,6 +61,10 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+
+/* The cell-grid backing at the end of this file. A fixture that actually draws
+ * into the pure tui_frame_t owns the grid; without one there is no TUI here. */
+static bool host_tui_is_ready(void);
 
 /* ========================================================================
  * POSIX-BACKED SD FIXTURE ROOT (host_batch_run only)
@@ -795,7 +806,7 @@ void shell_app_mode_enter(bool full_screen)
 
 bool tui_is_active(void)
 {
-    return false;
+    return host_tui_is_ready();
 }
 
 void tui_deinit(void)
@@ -810,9 +821,10 @@ void tui_new_app_session(void)
 
 void tui_app_grid(int *cols_out, int *rows_out, int *cell_w_out, int *cell_h_out)
 {
-    /* Report the configured headless grid; no panel geometry is available. */
-    if (cols_out != NULL) *cols_out = 0;
-    if (rows_out != NULL) *rows_out = 0;
+    /* Report the configured headless grid; only a fixture that drew cells has
+     * a live grid. No panel geometry exists on this lane. */
+    if (cols_out != NULL) *cols_out = host_tui_is_ready() ? 80 : 0;
+    if (rows_out != NULL) *rows_out = host_tui_is_ready() ? 25 : 0;
     if (cell_w_out != NULL) *cell_w_out = 0;
     if (cell_h_out != NULL) *cell_h_out = 0;
 }
@@ -835,4 +847,427 @@ struct tm time_get_local(void)
 
     memset(&unset, 0, sizeof(unset));
     return unset;
+}
+
+/* ========================================================================
+ * THE ONE PURE TUI CELL CORE, driven by real `draw` / `tui` batch verbs
+ * ========================================================================
+ * The firmware's draw verbs call components/tui/tui.c, which owns LVGL and
+ * cannot be linked here. This lane instead drives the SAME hardware-free cell
+ * core the on-device tui.c and tools/host_tui_gate.py drive: tui_frame.h.
+ * The two wrappers below are the ones host_tui_render.c defines: they forward
+ * to the same ansi_cga_* palette, so there is no second palette. Drawing goes
+ * through tui_frame_set()/tui_frame_render_runs(), never a copied formatter.
+ * A fixture supplies the layout (the APPLIB :header/:tile/:meter/:table/
+ * :sparkline calls); this file only routes those verbs at cell granularity.
+ */
+
+uint32_t tui_dos_color_rgb(uint8_t index)
+{
+    return index > 15 ? 0 : ansi_cga_color(index);
+}
+
+uint8_t tui_rgb_to_dos(uint32_t rgb)
+{
+    return ansi_cga_nearest(rgb);
+}
+
+#define HOST_TUI_COLS 80
+#define HOST_TUI_ROWS 25
+
+static tui_cell_t s_tui_shown[HOST_TUI_ROWS][HOST_TUI_COLS];
+static tui_cell_t s_tui_next[HOST_TUI_ROWS][HOST_TUI_COLS];
+static tui_frame_t s_tui_frame;
+static bool s_tui_ready = false;
+static unsigned s_tui_draws = 0;
+
+static bool host_tui_is_ready(void)
+{
+    return s_tui_ready && s_tui_draws > 0;
+}
+
+void host_tui_reset(void)
+{
+    s_tui_draws = 0;
+    memset(s_tui_shown, 0, sizeof(s_tui_shown));
+    memset(s_tui_next, 0, sizeof(s_tui_next));
+    tui_frame_bind(&s_tui_frame, HOST_TUI_COLS, HOST_TUI_ROWS,
+                   s_tui_shown[0], s_tui_next[0]);
+    tui_frame_clear(&s_tui_frame, 7, 16);
+    /* Clean presented frame: a later diff measures only the fixture's draws. */
+    tui_frame_commit(&s_tui_frame);
+    s_tui_ready = true;
+}
+
+/** Resolve a verb colour: DOS 0..16 passes through; CSS/24-bit is quantised
+ *  through the ONE palette. Never invents a colour when the token is invalid. */
+static bool host_tui_color(const char *token, uint8_t *out)
+{
+    css_rgba_t css;
+    unsigned long v;
+    char *end = NULL;
+
+    if (token == NULL || *token == '\0') return false;
+    if (strncmp(token, "dos:", 4) == 0) token += 4;
+    v = strtoul(token, &end, 0);
+    if (end != token && *end == '\0' && v <= 16) {
+        *out = (uint8_t)v;
+        return true;
+    }
+    if (css_color_parse(token, &css)) {
+        uint32_t rgb = ((uint32_t)css.r << 16) | ((uint32_t)css.g << 8) | css.b;
+
+        *out = tui_rgb_to_dos(rgb);
+        return true;
+    }
+    if (end != token && *end == '\0' && v <= 0xFFFFFF) {
+        *out = tui_rgb_to_dos((uint32_t)v);
+        return true;
+    }
+    return false;
+}
+
+/** Bytes in one UTF-8 codepoint, so a 3-byte CP437 glyph stays in one cell. */
+static int host_utf8_len(unsigned char lead)
+{
+    if (lead < 0x80) return 1;
+    if ((lead & 0xE0) == 0xC0) return 2;
+    if ((lead & 0xF0) == 0xE0) return 3;
+    if ((lead & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+
+static void host_tui_puts(int col, int row, const char *text,
+                          uint8_t fg, uint8_t bg)
+{
+    const unsigned char *p = (const unsigned char *)(text != NULL ? text : "");
+
+    while (*p != '\0') {
+        char cell[5];
+        int n = host_utf8_len(*p);
+
+        if (n > (int)sizeof(cell) - 1) n = 1;
+        memcpy(cell, p, (size_t)n);
+        cell[n] = '\0';
+        tui_frame_set(&s_tui_frame, col, row, cell, fg, bg, 0);
+        col++;
+        p += n;
+    }
+}
+
+static void host_tui_box(int x, int y, int w, int h, const char *style,
+                         uint8_t fg, uint8_t bg, const char *title)
+{
+    const char *tl = SH_BOX_TL, *tr = SH_BOX_TR;
+    const char *bl = SH_BOX_BL, *br = SH_BOX_BR;
+    const char *hz = SH_BOX_H, *vt = SH_BOX_V;
+
+    if (!tui_frame_valid(&s_tui_frame)) return;
+    if (w < 3) w = 3;
+    if (h < 3) h = 3;
+    if (x < 1) x = 1;
+    if (y < 1) y = 1;
+    if (x + w - 1 > HOST_TUI_COLS) w = HOST_TUI_COLS - x + 1;
+    if (y + h - 1 > HOST_TUI_ROWS) h = HOST_TUI_ROWS - y + 1;
+    if (w < 3 || h < 3) return;
+    if (shell_text_equals_ignore_case(style, "double")) {
+        tl = SH_BOX_TL2; tr = SH_BOX_TR2; bl = SH_BOX_BL2; br = SH_BOX_BR2;
+        hz = SH_BOX_H2; vt = SH_BOX_V2;
+    } else if (shell_text_equals_ignore_case(style, "rounded")) {
+        tl = SH_BOX_TLR; tr = SH_BOX_TRR; bl = SH_BOX_BLR; br = SH_BOX_BRR;
+    }
+    for (int c = x; c < x + w; c++) {
+        tui_frame_set(&s_tui_frame, c, y, c == x ? tl : (c == x + w - 1 ? tr : hz),
+                      fg, bg, 0);
+        tui_frame_set(&s_tui_frame, c, y + h - 1,
+                      c == x ? bl : (c == x + w - 1 ? br : hz), fg, bg, 0);
+    }
+    for (int r = y + 1; r < y + h - 1; r++) {
+        tui_frame_set(&s_tui_frame, x, r, vt, fg, bg, 0);
+        tui_frame_set(&s_tui_frame, x + w - 1, r, vt, fg, bg, 0);
+        for (int c = x + 1; c < x + w - 1; c++) {
+            tui_frame_set(&s_tui_frame, c, r, " ", fg, bg, 0);
+        }
+    }
+    if (title != NULL && title[0] != '\0') {
+        /* One leading/trailing space so the title sits in the top rule like
+         * tui_draw_box does on device. Byte length is enough for ASCII/CP437
+         * titles in the fixtures. */
+        int len = (int)strlen(title);
+        int tx = x + (w - len - 2) / 2;
+
+        if (tx < x + 1) tx = x + 1;
+        if (tx + len + 1 > x + w - 1) len = x + w - 2 - tx;
+        if (len > 0) {
+            host_tui_puts(tx, y, " ", fg, bg);
+            {
+                char clipped[128];
+                int n = len < (int)sizeof(clipped) - 1 ? len : (int)sizeof(clipped) - 1;
+
+                memcpy(clipped, title, (size_t)n);
+                clipped[n] = '\0';
+                host_tui_puts(tx + 1, y, clipped, fg, bg);
+            }
+            host_tui_puts(tx + 1 + len, y, " ", fg, bg);
+        }
+    }
+    s_tui_draws++;
+}
+
+static void host_tui_line(int x1, int y1, int x2, int y2,
+                          const char *style, uint8_t fg, uint8_t bg)
+{
+    const char *hz = SH_BOX_H, *vt = SH_BOX_V;
+
+    if (!tui_frame_valid(&s_tui_frame)) return;
+    if (shell_text_equals_ignore_case(style, "double")) { hz = SH_BOX_H2; vt = SH_BOX_V2; }
+    if (y1 == y2) {
+        int a = x1 < x2 ? x1 : x2;
+        int b = x1 < x2 ? x2 : x1;
+
+        for (int c = a; c <= b; c++) tui_frame_set(&s_tui_frame, c, y1, hz, fg, bg, 0);
+    } else if (x1 == x2) {
+        int a = y1 < y2 ? y1 : y2;
+        int b = y1 < y2 ? y2 : y1;
+
+        for (int r = a; r <= b; r++) tui_frame_set(&s_tui_frame, x1, r, vt, fg, bg, 0);
+    }
+    s_tui_draws++;
+}
+
+static void host_tui_fill(int x, int y, int w, int h, const char *ch,
+                          uint8_t fg, uint8_t bg)
+{
+    char one[5] = " ";
+    int n;
+
+    if (!tui_frame_valid(&s_tui_frame)) return;
+    if (ch != NULL && ch[0] != '\0') {
+        n = host_utf8_len((unsigned char)ch[0]);
+        if (n > 3) n = 1;
+        memcpy(one, ch, (size_t)n);
+        one[n] = '\0';
+    }
+    for (int r = y; r < y + h; r++) {
+        for (int c = x; c < x + w; c++) {
+            tui_frame_set(&s_tui_frame, c, r, one, fg, bg, 0);
+        }
+    }
+    s_tui_draws++;
+}
+
+/** A data bar: `pct` filled cells of `fill`, then `empty` up to `w`. */
+static void host_tui_bar(int x, int y, int w, int pct, const char *fill,
+                         const char *empty, uint8_t fg, uint8_t bg)
+{
+    char f[5] = "#", e[5] = ".";
+    int filled;
+
+    if (!tui_frame_valid(&s_tui_frame)) return;
+    if (fill != NULL && fill[0] != '\0') snprintf(f, sizeof(f), "%c", fill[0]);
+    if (empty != NULL && empty[0] != '\0') snprintf(e, sizeof(e), "%c", empty[0]);
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    filled = w * pct / 100;
+    for (int c = 0; c < w; c++) {
+        tui_frame_set(&s_tui_frame, x + c, y, c < filled ? f : e, fg, bg, 0);
+    }
+    s_tui_draws++;
+}
+
+/** `draw run`: text at (x,y) with optional `/fg N`, `/bg N` (or `/fg:N`). */
+static void host_tui_run(int x, int y, const char *text, uint8_t default_fg,
+                         uint8_t default_bg, int argc, char **argv, int from)
+{
+    uint8_t fg = default_fg;
+    uint8_t bg = default_bg;
+
+    for (int i = from; i < argc; i++) {
+        const char *a = argv[i];
+        uint8_t value;
+
+        if (strncmp(a, "/fg", 3) == 0 && a[3] != '\0' &&
+            host_tui_color(a[3] == ':' ? a + 4 : a + 3, &value)) {
+            fg = value;
+        } else if (strncmp(a, "/bg", 3) == 0 && a[3] != '\0' &&
+                   host_tui_color(a[3] == ':' ? a + 4 : a + 3, &value)) {
+            bg = value;
+        }
+    }
+    host_tui_puts(x, y, text, fg, bg);
+    s_tui_draws++;
+}
+
+/** Simplified `draw table`: header + `|`-separated rows, box glyph columns.
+ *  The layout is decided by the fixture; only cell writes happen here. */
+static void host_tui_table(int x, int y, uint8_t fg, uint8_t bg,
+                           int argc, char **argv, int from)
+{
+    if (!tui_frame_valid(&s_tui_frame) || from >= argc) return;
+    for (int i = from, row = 0; i < argc && row < HOST_TUI_ROWS; i++, row++) {
+        const char *p = argv[i];
+        int col = x;
+
+        while (*p != '\0') {
+            if (*p == '|') {
+                tui_frame_set(&s_tui_frame, col++, y + row, SH_BOX_V, fg, bg, 0);
+                p++;
+            } else {
+                char cell[5];
+                int n = host_utf8_len((unsigned char)*p);
+
+                if (n > 3) n = 1;
+                memcpy(cell, p, (size_t)n);
+                cell[n] = '\0';
+                tui_frame_set(&s_tui_frame, col++, y + row, cell, fg, bg, 0);
+                p += n;
+            }
+        }
+    }
+    s_tui_draws++;
+}
+
+/** Route the real batch `draw` / `tui` verbs to the pure cell core. No verb
+ *  writes to the transcript: the marker/baseline stream stays byte-identical. */
+bool host_tui_command(int argc, char **argv)
+{
+    const char *sub;
+
+    if (argc < 2 || argv == NULL) return false;
+    sub = argv[1];
+    if (!s_tui_ready) host_tui_reset();
+
+    if (shell_text_equals_ignore_case(sub, "box") && argc >= 6) {
+        uint8_t fg = 7, bg = 16;
+
+        if (argc > 7) (void)host_tui_color(argv[7], &fg);
+        if (argc > 8) (void)host_tui_color(argv[8], &bg);
+        host_tui_box(atoi(argv[2]), atoi(argv[3]), atoi(argv[4]), atoi(argv[5]),
+                     argc > 6 ? argv[6] : "single", fg, bg,
+                     argc > 9 ? argv[9] : NULL);
+    } else if (shell_text_equals_ignore_case(sub, "line") && argc >= 5) {
+        uint8_t fg = 7, bg = 16;
+
+        if (argc > 7) (void)host_tui_color(argv[7], &fg);
+        if (argc > 8) (void)host_tui_color(argv[8], &bg);
+        host_tui_line(atoi(argv[2]), atoi(argv[3]), atoi(argv[4]), atoi(argv[5]),
+                      argc > 6 ? argv[6] : "single", fg, bg);
+    } else if (shell_text_equals_ignore_case(sub, "text") && argc >= 5) {
+        uint8_t fg = 7, bg = 16;
+
+        if (argc > 5) (void)host_tui_color(argv[5], &fg);
+        if (argc > 6) (void)host_tui_color(argv[6], &bg);
+        host_tui_puts(atoi(argv[2]), atoi(argv[3]), argv[4], fg, bg);
+        s_tui_draws++;
+    } else if (shell_text_equals_ignore_case(sub, "fill") && argc >= 6) {
+        uint8_t fg = 7, bg = 16;
+
+        if (argc > 7) (void)host_tui_color(argv[7], &fg);
+        if (argc > 8) (void)host_tui_color(argv[8], &bg);
+        host_tui_fill(atoi(argv[2]), atoi(argv[3]), atoi(argv[4]), atoi(argv[5]),
+                      argv[6], fg, bg);
+    } else if (shell_text_equals_ignore_case(sub, "bar") && argc >= 9) {
+        uint8_t fg = 7, bg = 16;
+
+        if (argc > 8) (void)host_tui_color(argv[8], &fg);
+        if (argc > 9) (void)host_tui_color(argv[9], &bg);
+        host_tui_bar(atoi(argv[2]), atoi(argv[3]), atoi(argv[4]), atoi(argv[5]),
+                     argv[6], argv[7], fg, bg);
+    } else if (shell_text_equals_ignore_case(sub, "run") && argc >= 5) {
+        host_tui_run(atoi(argv[2]), atoi(argv[3]), argv[4], 7, 16, argc, argv, 5);
+    } else if (shell_text_equals_ignore_case(sub, "table") && argc >= 7) {
+        uint8_t fg = 7, bg = 16;
+
+        (void)host_tui_color(argv[4], &fg);
+        (void)host_tui_color(argv[5], &bg);
+        host_tui_table(atoi(argv[2]), atoi(argv[3]), fg, bg, argc, argv, 6);
+    } else if (shell_text_equals_ignore_case(sub, "clear")) {
+        tui_frame_clear(&s_tui_frame, 7, 16);
+        s_tui_draws++;
+    }
+    /* `tui frame|layout|dump|focus|scroll|route|status` and `draw hold|refresh`
+     * have no extra meaning on a headless cell grid: they are accepted without
+     * changing the transcript. A fixture asks for the grid with draw verbs. */
+    if (s_tui_draws > 0) s_tui_ready = true;
+    batch_set_errorlevel(0);
+    return true;
+}
+
+/** The `tui dump /a`-style report consumed by the screenshot builder. The
+ *  format is the one host_tui_gate.py already validates; it is printed AFTER
+ *  the batch ERRORLEVEL line, so the shipped transcript gates ignore it. */
+/** Decode one cell's UTF-8 codepoint. Cells are written only by this file, so
+ *  the bounded 1..4 byte forms below cover every glyph that can be stored. */
+static uint32_t host_cell_codepoint(const tui_cell_t *cell)
+{
+    const unsigned char *p = (const unsigned char *)cell->utf8;
+
+    if (p[0] == '\0') return 0x20;
+    if (p[0] < 0x80) return p[0];
+    if ((p[0] & 0xE0) == 0xC0)
+        return (uint32_t)((p[0] & 0x1F) << 6) | (uint32_t)(p[1] & 0x3F);
+    if ((p[0] & 0xF0) == 0xE0)
+        return (uint32_t)((p[0] & 0x0F) << 12) |
+               (uint32_t)((p[1] & 0x3F) << 6) | (uint32_t)(p[2] & 0x3F);
+    return (uint32_t)((p[0] & 0x07) << 18) |
+           (uint32_t)((p[1] & 0x3F) << 12) |
+           (uint32_t)((p[2] & 0x3F) << 6) | (uint32_t)(p[3] & 0x3F);
+}
+
+void host_tui_dump(const char *name)
+{
+    /* Four ASCII hex digits + a separator per cell, so the report survives a
+     * cp1252 subprocess pipe on Windows: no raw UTF-8 byte ever reaches the
+     * shipped Python gates. make_app_screenshots.py decodes 250C -> U+250C. */
+    char line[HOST_TUI_COLS * 6 + 1];
+    char runs[HOST_TUI_COLS * HOST_TUI_ROWS * 4 + 1];
+    tui_dirty_t dirty;
+    const char *label = name != NULL ? name : "APP";
+
+    if (s_tui_draws == 0 || !tui_frame_valid(&s_tui_frame)) return;
+    printf("=== TUI CELL GRID ===\n");
+    printf("tui.scene.begin name=%s cols=%d rows=%d\n", label,
+           HOST_TUI_COLS, HOST_TUI_ROWS);
+    for (int row = 1; row <= HOST_TUI_ROWS; row++) {
+        size_t pos = 0;
+
+        size_t useful = 0;
+
+        for (int col = 1; col <= HOST_TUI_COLS; col++) {
+            const tui_cell_t *cell =
+                &s_tui_frame.working[(row - 1) * HOST_TUI_COLS + (col - 1)];
+            uint32_t cp = host_cell_codepoint(cell);
+            int n = snprintf(line + pos, sizeof(line) - pos, "%s%04X",
+                             col > 1 ? " " : "", (unsigned)cp);
+
+            if (n < 0 || (size_t)n >= sizeof(line) - pos) break;
+            pos += (size_t)n;
+            if (cp != 0x20) useful = pos;
+        }
+        /* Trim only trailing default-space cells from the row text. */
+        line[useful] = '\0';
+        printf("%03d|%s\n", row, line);
+    }
+    tui_frame_render_runs(&s_tui_frame, 1, HOST_TUI_ROWS, runs, sizeof(runs));
+    {
+        char *cursor = runs;
+
+        while (*cursor != '\0') {
+            char *end = strchr(cursor, '\n');
+
+            if (end != NULL) *end = '\0';
+            printf("%s\n", cursor);
+            if (end == NULL) break;
+            cursor = end + 1;
+        }
+    }
+    dirty = tui_frame_diff(&s_tui_frame);
+    printf("tui.scene.dirty any=%s rect=%d,%d-%d,%d\n",
+           dirty.any ? "yes" : "no", dirty.min_col, dirty.min_row,
+           dirty.max_col, dirty.max_row);
+    tui_frame_commit(&s_tui_frame);
+    dirty = tui_frame_diff(&s_tui_frame);
+    printf("tui.scene.clean any=%s\n", dirty.any ? "yes" : "no");
+    printf("tui.scene.end name=%s\n", label);
+    printf("=== TUI CELL GRID END ===\n");
 }

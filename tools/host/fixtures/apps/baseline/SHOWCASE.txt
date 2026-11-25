@@ -1,0 +1,12 @@
+# batch-baseline-v1 fixture=SHOWCASE
+[M-RICH-SHOWCASE] str+map+forK+func
+[M-DOS-SHOWCASE] screen=SHOWCASE-MASTER panels=6 head="DOS SHOWCASE" theme=ice bars=3 table=Y spark=2 status=Y
+SCW=showcase
+1
+[M-RICH-SHOWCASE-K] batch=1
+[M-RICH-SHOWCASE-K] tui=2
+[M-RICH-SHOWCASE-F] total=14
+[M-RICH-SHOWCASE-S] rev=esacwohs count=1 pad=showcase--
+[M-HOST-BATCH-DONE]
+exit: leaving this batch file (errorlevel 0)
+ERRORLEVEL 0

@@ -193,18 +193,37 @@ serial port:
   `components/modal/modal_args.c` for focus/progress/session transitions.
 - `tools/gfx_toolkit_test.py --host` checks the exact RGB565 constants shared
   with `test/main/test_gfx.c` and the verb coverage of `GFXAA.BAT`.
-- `tools/host_apps_gate.py --check` drives all **33 updated reference apps**
-  through the same real interpreter ELF as the batch gate: **363 host assertions
-  PASS, 40 hardware surfaces honestly SKIP (gfx/TUI/modal/webapp/native, reason
-  named) and 7 red-canary checks**. The `[M-RICH-*]` markers are additive;
+- `tools/host_apps_gate.py --check` drives all **34 reference apps** (33 updated
+  ones plus the flagship showcase) through the same real interpreter ELF as the
+  batch gate: **679 host assertions PASS, 45 hardware surfaces honestly SKIP
+  (gfx/TUI/modal/webapp/native, reason named) and 7 red-canary checks**. The `[M-RICH-*]` markers are additive;
   pre-existing `[M-*]` markers are unchanged. The new transcript lines mean
   `tools/appdiff/baseline/*.transcript.txt` goldens need a board rebaseline.
 - `tools/make_native_payload.py check|selftest` verifies the signed test
   envelope in `tools/host/fixtures/native/` with a throwaway key; no bytes are
   mapped or executed, and the key is never installed on a board.
+- `tools/make_web_screenshots.py --check` regenerates/verifies the four
+  functional DOS-style web proofs (`portal`, `dashboard`, `article`, `form`)
+  in `screenshots/web/` and `docs/assets/web/`; `--update` rebuilds them and
+  `--self-test` runs the red canaries. `python tools/visual_proof_gate.py
+  --check` then validates the committed PNGs (1024x600 frame, DOS-palette
+  pixels, CP437 box borders, ink bands, no default-theme blue/empty-box runs,
+  and a distinct signature per screen). Its seven `--self-test` canaries cover
+  blank, default-blue/shell-chrome, wrong palette, broken border, tofu glyphs
+  and a duplicate page, with a clean frame that must be accepted. The
+  `host_webapp_gate.py` and `host_apps_gate.py` suites above also gained DOS
+  visual-structure assertions over their parsed rows.
+- `tools/host_browser_gate.py --check` executes the real renderer on five HTML
+  fixtures (the ESP32 wiki first-screen proof plus the four DOS pages): 271
+  assertions and 11 labelled STATIC wiring checks; `--self-test` runs 9 red
+  canaries. The wiki PNG is the first 25 rows of a saved fixture, not live HTTPS
+  or the 2000-row device page. Live input and glass taps remain DEVICE-ONLY.
+  `python tools/host_all_gates.py` now reports **35/35 gates, 15 canaries**
+  (`browser`/`browser_canary` and `visual`/`visual_canary` included).
 
-All of these are pre-gates only — none signs off hardware, and the on-device
-suites remain authoritative (`harness.md` §2.2).
+All of these are board-free pre-gates only — none signs off hardware, no
+device capture is claimed, and the on-device suites remain authoritative
+(`harness.md` §2.1/§2.2).
 
 ## False-green guard
 

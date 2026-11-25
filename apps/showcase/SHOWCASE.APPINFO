@@ -1,0 +1,7 @@
+; APPINFO metadata for the flagship DOS showcase (INI format, read by `launch`).
+; Copied to sd:/APPS/SHOWCASE.APPINFO by push_apps.py.
+title=DOS Showcase
+description=One 80x25 CP437 dashboard tiling batch, TUI, modal, webapp and gfx proofs
+version=1.0
+alpha=93%
+scrim=45%

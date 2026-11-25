@@ -62,6 +62,18 @@ bool imagefile_decode_mem(const uint8_t *data, size_t len, int w, int h,
     }
 }
 
+bool imagefile_decode_fit(const uint8_t *data, size_t len,
+                          int max_w, int max_h, gfx_surface_t *out)
+{
+    int w = 0;
+    int h = 0;
+
+    if (out == NULL) return false;
+    if (!imagefile_probe_mem(data, len, &w, &h)) return false;
+    gfx_bmp_fit(w, h, max_w, max_h, &w, &h);
+    return imagefile_decode_mem(data, len, w, h, out);
+}
+
 bool imagefile_probe_mem(const uint8_t *data, size_t len, int *w, int *h)
 {
     imgdec_format_t fmt;

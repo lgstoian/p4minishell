@@ -90,6 +90,10 @@ APP_PAYLOADS = [
     ("hybrid", "HYBRID.APPINFO", "apps"),
     ("taskmgr", "TASKMGR.BAT", "root"),
     ("taskmgr", "TASKMGR.APPINFO", "apps"),
+
+    # Flagship DOS showcase: one CP437 dashboard for all five surfaces.
+    ("showcase", "SHOWCASE.BAT", "root"),
+    ("showcase", "SHOWCASE.APPINFO", "apps"),
     ("pkgtest", "PKGTEST.BAT", "root"),
     ("pkgtest", "PKGTEST.APPINFO", "apps"),
 

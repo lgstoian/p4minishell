@@ -1,4 +1,6 @@
 # webapp-baseline-v1 fixture=features.html
+webapp.image kind=img src=does-not-exist.bmp state=missing native=0x0 fit=0x0 alt=NO SIGNAL
+webapp.image kind=canvas src=c state=fallback native=32x16 fit=0x0 alt=-
 webapp.render.begin fixture=features.html cols=80 rows=25
 tui.dump cols=80 from=1 to=25
 001|
@@ -7,7 +9,7 @@ tui.dump cols=80 from=1 to=25
 002@1-10:11 11-80:7
 003|==========
 003@1-10:11 11-80:7
-004|
+004|[NO SIGNAL]
 004@1-80:7
 005|Gradient card
 005@1-13:8 14-80:7

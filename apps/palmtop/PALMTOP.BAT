@@ -40,7 +40,15 @@ return %1*9/5+32
 
 :menu
 draw clear screen
-gosub %APPROOT%/APPLIB.BAT::page double "PALMTOP ★"
+set DOS_THEME=ice
+gosub %APPROOT%/APPLIB.BAT::header "PALMTOP" "[M-RICH-PALM] palmtop-parity primitives"
+draw text 5 2 "palmtop-parity primitives demo  (%APPNAME% on %APPDRIVE%)" 14
+gosub %APPROOT%/APPLIB.BAT::tile 2 5 38 11 double "UNIT ALIASES"
+gosub %APPROOT%/APPLIB.BAT::table 4 8 "Unit|Meaning|Expr" "c|celsius|c2f" "mm|millimetre|in2mm" "lb|pound|lb2kg"
+gosub %APPROOT%/APPLIB.BAT::tile 42 5 37 11 single "DESK CLOCK"
+draw text 46 9 "local %TIME%" 15
+gosub %APPROOT%/APPLIB.BAT::statusbar 20 "tool=desk  grid=80x25" "1 calc  2 timer  3 csv  4 crypt  q quit"
+echo [M-DOS-PALMTOP] screen=PALM-DESK panels=3 head="PALMTOP" theme=ice bars=0 table=Y spark=0 status=Y
 draw run 52 2 "[M-RICH-PALM] func/str/map" /fg 14 /bg 0
 draw text 5 2 "palmtop-parity primitives demo  (%APPNAME% on %APPDRIVE%)" 14
 draw text 45 2 "local %TIME%" 7

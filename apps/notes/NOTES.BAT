@@ -51,7 +51,13 @@ dialog "Notes" "Created the zettel store." "OK"
 
 :menu
 draw clear screen
-gosub %APPROOT%/APPLIB.BAT::page double "ZETTELKASTEN ★"
+set DOS_THEME=mono
+gosub %APPROOT%/APPLIB.BAT::header "ZETTELKASTEN" "[M-RICH-NOTE] linked notes on the db store"
+gosub %APPROOT%/APPLIB.BAT::tile 1 5 30 12 double "CATEGORIES"
+gosub %APPROOT%/APPLIB.BAT::tile 33 5 47 12 single "NOTE PAGER"
+gosub %APPROOT%/APPLIB.BAT::pager "LINKS" 8 6 NOTES.TXT
+gosub %APPROOT%/APPLIB.BAT::statusbar 21 "store=db  notes=live" "1 new  2 open  3 links  q quit"
+echo [M-DOS-NOTES] screen=NOTES-ZETTEL panels=2 head="ZETTELKASTEN" theme=amber bars=0 table=N spark=0 status=Y
 draw run 52 2 "[M-RICH-NOTE] map/str/func" /fg 11 /bg 0
 draw text 5 2 "linked notes on the db store" 14
 echo [M-NOTE-MENU]

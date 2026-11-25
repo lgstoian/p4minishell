@@ -910,6 +910,10 @@ void test_gfx_frame_stats_dropped(void)
  * The originals above are untouched, so their exact-pixel expectations stay
  * valid while these cover the new blended/sheet/layer behaviour. */
 
+static void gfx_case_tilemap(void);
+static void gfx_case_particles(void);
+static void gfx_case_layers(void);
+
 void test_gfx_blend_565(void)
 {
     TEST_ASSERT_EQUAL_UINT16(0x1234, gfx_blend_565(0x1234, 0xFFFF, 0));
@@ -1094,6 +1098,178 @@ void test_gfx_composite(void)
     gfx_surface_composite(NULL, &src, 0, 0, 128);
     gfx_surface_composite(&dst, NULL, 0, 0, 128);
     gfx_surface_composite_keyed(NULL, &src, 0, 0, 128, 0);
+    gfx_surface_free(&src);
+    gfx_surface_free(&dst);
+
+    /* Bounded game helpers run from this already-registered case: the test
+     * runners live outside this file's scope, so the new pure cases are static
+     * helpers called here rather than left declared-but-unrun. */
+    gfx_case_tilemap();
+    gfx_case_particles();
+    gfx_case_layers();
+}
+
+/** Tilemaps: bounds, packed flags, flips/rotation and ascending-z drawing.
+ *  Every stamp must match the one atlas blit core's pixel-exact output. */
+static void gfx_case_tilemap(void)
+{
+    gfx_surface_t sheet = {NULL, 0, 0};
+    gfx_surface_t top = {NULL, 0, 0};
+    gfx_surface_t dst = {NULL, 0, 0};
+    gfx_tilemap_t map;
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&sheet, 4, 4));
+    gfx_surface_clear(&sheet, 0x0000);
+    gfx_surface_pixel(&sheet, 0, 2, 0x1234);
+    gfx_surface_pixel(&sheet, 1, 2, 0x5678);
+    gfx_surface_pixel(&sheet, 0, 3, 0x9ABC);
+    gfx_surface_pixel(&sheet, 1, 3, 0xDEF0);
+
+    TEST_ASSERT_FALSE(gfx_tilemap_create(NULL, "x", &sheet, 2, 2, 2, 2, 0, false, 0));
+    TEST_ASSERT_FALSE(gfx_tilemap_create(&map, "x", &sheet, 3, 2, 2, 2, 0, false, 0));
+    TEST_ASSERT_TRUE(gfx_tilemap_create(&map, "terrain", &sheet, 2, 2, 2, 2,
+                                        2, false, 0x0000));
+    TEST_ASSERT_EQUAL_STRING("terrain", map.name);
+    TEST_ASSERT_EQUAL_INT(0, (int)gfx_tilemap_get(&map, 0, 0));
+    TEST_ASSERT_FALSE(gfx_tilemap_set(&map, -1, 0, 0, 0));
+    TEST_ASSERT_FALSE(gfx_tilemap_set(&map, 0, 2, 0, 0));
+    TEST_ASSERT_TRUE(gfx_tilemap_set(&map, 0, 0, 2, 0));
+    TEST_ASSERT_TRUE(gfx_tilemap_set(&map, 1, 0, 2, GFX_TILE_FLIP_X));
+    TEST_ASSERT_TRUE(gfx_tilemap_set(&map, 0, 1, 2, GFX_TILE_ROT90));
+    TEST_ASSERT_TRUE(gfx_tilemap_set(&map, 1, 1, 2, GFX_TILE_HIDDEN));
+    TEST_ASSERT_EQUAL_UINT32((2u | (GFX_TILE_FLIP_X << 16)), gfx_tilemap_get(&map, 1, 0));
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&dst, 4, 4));
+    gfx_surface_clear(&dst, 0x7777);
+    gfx_tilemap_draw(&map, &dst, 0, 0);
+    /* Plain cell. */
+    TEST_ASSERT_EQUAL_UINT16(0x1234, gfx_surface_get(&dst, 0, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x5678, gfx_surface_get(&dst, 1, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x9ABC, gfx_surface_get(&dst, 0, 1));
+    TEST_ASSERT_EQUAL_UINT16(0xDEF0, gfx_surface_get(&dst, 1, 1));
+    /* Flip-X cell. */
+    TEST_ASSERT_EQUAL_UINT16(0x5678, gfx_surface_get(&dst, 2, 0));
+    TEST_ASSERT_EQUAL_UINT16(0x1234, gfx_surface_get(&dst, 3, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xDEF0, gfx_surface_get(&dst, 2, 1));
+    /* Rotate-90 cell: [c a; d b]. */
+    TEST_ASSERT_EQUAL_UINT16(0x9ABC, gfx_surface_get(&dst, 0, 2));
+    TEST_ASSERT_EQUAL_UINT16(0x1234, gfx_surface_get(&dst, 1, 2));
+    TEST_ASSERT_EQUAL_UINT16(0xDEF0, gfx_surface_get(&dst, 0, 3));
+    TEST_ASSERT_EQUAL_UINT16(0x5678, gfx_surface_get(&dst, 1, 3));
+    /* Hidden cell leaves the destination untouched. */
+    TEST_ASSERT_EQUAL_UINT16(0x7777, gfx_surface_get(&dst, 2, 2));
+
+    /* Layer order: a later array entry with higher z paints over the first. */
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&top, 2, 2));
+    gfx_surface_clear(&top, 0x0F0F);
+    {
+        gfx_tilemap_t *maps[2];
+        gfx_tilemap_t over;
+
+        TEST_ASSERT_TRUE(gfx_tilemap_create(&over, "over", &top, 1, 1, 2, 2,
+                                            9, false, 0));
+        TEST_ASSERT_TRUE(gfx_tilemap_set(&over, 0, 0, 0, 0));
+        maps[0] = &over;
+        maps[1] = &map;
+        gfx_surface_clear(&dst, 0x0000);
+        gfx_tilemap_draw_all(maps, 2, &dst, 0, 0);
+        TEST_ASSERT_EQUAL_UINT16(0x0F0F, gfx_surface_get(&dst, 0, 0));
+        gfx_tilemap_free(&over);
+    }
+    gfx_tilemap_free(&map);
+    TEST_ASSERT_EQUAL_UINT32(0, gfx_tilemap_get(&map, 0, 0));
+    gfx_tilemap_draw(&map, &dst, 0, 0); /* NULL sheet after free: no-op. */
+    gfx_surface_free(&top);
+    gfx_surface_free(&dst);
+    gfx_surface_free(&sheet);
+}
+
+/** Particles: fixed-seed replay, 8.8 step math and a bounded pool. */
+static void gfx_case_particles(void)
+{
+    gfx_surface_t dst = {NULL, 0, 0};
+    gfx_emitter_t a;
+    gfx_emitter_t b;
+
+    gfx_emitter_reset(&a, 12345u);
+    gfx_emitter_reset(&b, 12345u);
+    TEST_ASSERT_EQUAL_INT(0, gfx_emitter_live(&a));
+    TEST_ASSERT_EQUAL_INT(4, gfx_emitter_emit(&a, 4, 10, 10, 0, 0xF800, 24));
+    TEST_ASSERT_EQUAL_INT(4, gfx_emitter_emit(&b, 4, 10, 10, 0, 0xF800, 24));
+    TEST_ASSERT_EQUAL_INT(4, gfx_emitter_live(&a));
+    /* Same seed + same calls => byte-identical pool (deterministic host hook). */
+    TEST_ASSERT_EQUAL_MEMORY(&a, &b, sizeof(gfx_emitter_t));
+    TEST_ASSERT_EQUAL_INT(4, gfx_emitter_step(&a, 1, 16));
+    /* Seed 12345, spread 0: first particle vx=-77, vy=-75; after one step at
+     * gravity 16 its 8.8 position is (2483,2501). */
+    TEST_ASSERT_EQUAL_INT(2483, a.p[0].x);
+    TEST_ASSERT_EQUAL_INT(2501, a.p[0].y);
+    TEST_ASSERT_EQUAL_INT(-59, a.p[0].vy);
+    TEST_ASSERT_EQUAL_UINT16(23, a.p[0].life);
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&dst, 32, 32));
+    gfx_surface_clear(&dst, 0x0000);
+    gfx_emitter_draw(&a, &dst, 0, 0);
+    TEST_ASSERT_TRUE(gfx_surface_get(&dst, 9, 9) != 0x0000);
+    /* Out-of-life particles retire; the pool never exceeds its bound. */
+    TEST_ASSERT_EQUAL_INT(0, gfx_emitter_step(&a, 24, 16));
+    TEST_ASSERT_EQUAL_INT(0, gfx_emitter_live(&a));
+    TEST_ASSERT_EQUAL_INT(GFX_PARTICLE_MAX,
+                          gfx_emitter_emit(&a, GFX_PARTICLE_MAX + 50,
+                                           0, 0, 2, 0x001F, 8));
+    TEST_ASSERT_EQUAL_UINT32(0u, gfx_rand_next(NULL));
+    gfx_emitter_reset(NULL, 1u);
+    gfx_surface_free(&dst);
+}
+
+/** Layers: dirty-rect clipping, alpha through the one composite, z order. */
+static void gfx_case_layers(void)
+{
+    gfx_surface_t src = {NULL, 0, 0};
+    gfx_surface_t dst = {NULL, 0, 0};
+    gfx_layer_t layer;
+    int x, y, w, h;
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&src, 4, 4));
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&dst, 4, 4));
+    gfx_surface_clear(&src, 0xFFFF);
+    gfx_surface_clear(&dst, 0x0000);
+    gfx_layer_bind(&layer, "cloud", &src, 1, 1, 128, 3);
+    TEST_ASSERT_EQUAL_UINT32(128, layer.alpha);
+    TEST_ASSERT_FALSE(gfx_layer_dirty_rect(&layer, &x, &y, &w, &h));
+    /* Layer-local (1,1,2,1) maps to destination (2,2,2,1). */
+    TEST_ASSERT_TRUE(gfx_layer_mark_dirty(&layer, 1, 1, 2, 1));
+    TEST_ASSERT_TRUE(gfx_layer_dirty_rect(&layer, &x, &y, &w, &h));
+    TEST_ASSERT_EQUAL_INT(2, x);
+    TEST_ASSERT_EQUAL_INT(2, y);
+    TEST_ASSERT_EQUAL_INT(2, w);
+    TEST_ASSERT_EQUAL_INT(1, h);
+    gfx_layer_present(&dst, &layer);
+    TEST_ASSERT_EQUAL_UINT16(0x8410, gfx_surface_get(&dst, 2, 2));
+    TEST_ASSERT_EQUAL_UINT16(0x8410, gfx_surface_get(&dst, 3, 2));
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&dst, 1, 1));
+    TEST_ASSERT_FALSE(layer.dirty);
+    /* A clean layer presents nothing, even with alpha>0. */
+    gfx_layer_present(&dst, &layer);
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&dst, 1, 1));
+    /* Hidden layers keep their dirty rect but never paint. */
+    layer.visible = false;
+    TEST_ASSERT_TRUE(gfx_layer_mark_dirty(&layer, 0, 0, 2, 2));
+    gfx_layer_present(&dst, &layer);
+    TEST_ASSERT_EQUAL_UINT16(0x0000, gfx_surface_get(&dst, 1, 1));
+    layer.visible = true;
+    /* Union of two rects; alpha clamped to 256 makes an opaque copy. */
+    TEST_ASSERT_TRUE(gfx_layer_mark_dirty(&layer, 2, 2, 1, 1));
+    TEST_ASSERT_TRUE(gfx_layer_dirty_rect(&layer, &x, &y, &w, &h));
+    TEST_ASSERT_EQUAL_INT(1, x);
+    TEST_ASSERT_EQUAL_INT(1, y);
+    TEST_ASSERT_EQUAL_INT(3, w); /* union of (0,0,2,2) and (2,2,1,1) */
+    TEST_ASSERT_EQUAL_INT(3, h);
+    gfx_layer_bind(&layer, "solid", &src, 0, 0, 999, 0);
+    TEST_ASSERT_EQUAL_UINT32(256, layer.alpha);
+    TEST_ASSERT_TRUE(gfx_layer_mark_dirty(&layer, 0, 0, 0, 0));
+    gfx_layer_present(&dst, &layer);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, gfx_surface_get(&dst, 0, 0));
+    TEST_ASSERT_FALSE(gfx_layer_mark_dirty(&layer, 99, 99, 1, 1));
     gfx_surface_free(&src);
     gfx_surface_free(&dst);
 }

@@ -1,0 +1,65 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: 2026 Stoian Alexandru -->
+<!-- SPDX-License-Identifier: MIT -->
+<!--
+  Deterministic host fixture: a real modern HTML/CSS/JS page rendered through
+  the firmware's ONE dom_parse / css_compute_styles / dom_render_tree path by
+  tools/host/main/host_webapp_render.c. The visible 80x25 surface is a
+  DOS-browser presentation of the page: CP437 box panels, DOS palette and a
+  status line. No network, clock, randomness or second renderer is involved.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>P4.NET/PORTAL.80COL</title>
+<style>
+  body { color: #cccccc; background-color: #0c0c0c; background-image: url(pixel.bmp); }
+  .bar { color: #f9f1a5; }
+  .dim { color: #767676; }
+  .ink { color: #f2f2f2; }
+  .cyan { color: #61d6d6; }
+  .blue { color: #3a96dd; }
+  .green { color: #16c60c; }
+  .red { color: #e74856; }
+  .yellow { color: #f9f1a5; }
+  .mag { color: #b4009e; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); }
+  .tile { color: #61d6d6; }
+</style>
+</head>
+<body>
+<header><nav><a href="portal.html">Home</a> | <a href="dashboard.html">Dashboard</a> | <a href="article.html">Article</a> | <a href="form.html">Form</a></nav></header>
+<main>
+<div class="screen">
+<span class="bar">┌─[P4.NET/PORTAL.80COL]────────────────────────────────────────────────────────┐<br></span>
+<span class="bar">├─Address:http://p4.local/portal.html──────────────────────────────────────────┤<br></span>
+<span class="bar">│ WELCOME TO P4 NET                              (C) 2026 P4 NET              │<br></span>
+<span class="bar">│ ┌─  FEATURED  ────────────────────────────────────────────────────────────┐ │<br></span>
+<span class="bar">│ │ RETRO WEB / REAL HTML / ONE DOS RENDERER                                │ │<br></span>
+<span class="bar">│ │ Modern markup with a 1990s browser face.                                │ │<br></span>
+<span class="bar">│ │ Entities: copyright &copy; registered &reg; trademark &trade;           │ │<br></span>
+<span class="bar">│ └───────────────────────────────────────────────────────────────────────┘ │<br></span>
+<img src="pixel.bmp" alt="P4 badge">
+<span class="bar">│ MAIN MENU                                              [ 01 / 03 ]          │<br></span>
+<span class="bar">│   > 01  DASHBOARD    panels, tables and a canvas chart                      │<br></span>
+<span class="bar">│   > 02  ARTICLE      columns, typography, reading view                      │<br></span>
+<span class="bar">│   > 03  FORM         inputs, a select, submit handler                       │<br></span>
+<span class="bar">│   1 Dashboard   2 Article   3 Form                                           │<br></span>
+<span class="bar">│   Select a page to continue.                                                 │<br></span>
+<span class="bar">│ STATUS Online | 80 columns | no network                                     │<br></span>
+<span class="bar">├─READY | 3 links | press F1 for help──────────────────────────────────────────┤<br></span>
+<span class="bar">└──────────────────────────────────────────────────────────────────────────────┘<br></span>
+</div>
+
+</main>
+<footer>P4 NET - DOS presentation of real HTML - host proof only</footer>
+<script>
+function go() {
+  var r = document.getElementById('result');
+  if (r) r.textContent = 'RESULT: SAVED';
+}
+setTimeout(function () { document.title = 'ready'; }, 0);
+Promise.resolve().then(function () { document.title += ':micro'; });
+</script>
+</body>
+</html>

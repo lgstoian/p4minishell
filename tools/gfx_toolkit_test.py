@@ -68,8 +68,25 @@ NEW_API = {
     "gfx_surface_gradient": "test_gfx_gradient",
     "gfx_surface_blit_atlas": "test_gfx_blit_atlas",
     "gfx_surface_composite": "test_gfx_composite",
+    # Bounded game toolkit: one atlas core, one deterministic RNG, one
+    # composite primitive. Every entry point maps to a pure case in test_gfx.c.
+    "gfx_tilemap_create": "gfx_case_tilemap",
+    "gfx_tilemap_draw_all": "gfx_case_tilemap",
+    "gfx_rand_next": "gfx_case_particles",
+    "gfx_emitter_emit": "gfx_case_particles",
+    "gfx_emitter_step": "gfx_case_particles",
+    "gfx_emitter_draw": "gfx_case_particles",
+    "gfx_layer_bind": "gfx_case_layers",
+    "gfx_layer_mark_dirty": "gfx_case_layers",
+    "gfx_layer_present": "gfx_case_layers",
+}
+# Image helpers: declaration/source/case live in different scoped files.
+IMAGEFILE_API = {
+    "imagefile_decode_fit": "imgdec_case_fit_decode",
+    "imagefile_sample_rgb565_cells": "imgdec_case_cell_sampler",
 }
 NEW_VERBS = ["lineaa", "circleaa", "rectaa", "gradient", "composite"]
+GAME_VERBS = ["tile", "particles", "layer"]
 KEPT_VERBS = ["init", "close", "pixel", "line", "rect", "circle", "fill",
               "text", "blit", "blitmany", "save", "show"]
 
@@ -79,15 +96,20 @@ def read_text(path):
         return fh.read()
 
 
-def host_checks_texts(header, raster, verbs, tests, expected, fixture):
-    """Check one set of gfx sources; no file I/O, so canaries can tamper them."""
+def host_checks_texts(header, raster, verbs, tests, expected, fixture, extra):
+    """Check one set of gfx sources; no file I/O, so canaries can tamper them.
+
+    ``extra`` holds the image-side sources: test_imgdec.c, imagefile.h/.c and
+    the one-sampler adapter header. Keeping them in one dict lets every
+    canary mutate exactly one source at a time through this same checker.
+    """
     for func, case in NEW_API.items():
         pattern = r"\b" + re.escape(func) + r"\s*\("
         check("gfx.h declares " + func, re.search(pattern, header) is not None, True)
         check("gfx.c defines " + func, re.search(pattern, raster) is not None, True)
-        check("Unity case " + case, re.search(r"\b" + re.escape(case) + r"\s*\(",
-                                              tests) is not None, True)
-    for verb in NEW_VERBS:
+        check("pure case " + case, re.search(r"\b" + re.escape(case) + r"\s*\(",
+                                             tests) is not None, True)
+    for verb in NEW_VERBS + GAME_VERBS:
         check("verb dispatch " + verb, '"' + verb + '"' in verbs, True)
     for verb in KEPT_VERBS:
         check("kept verb " + verb, '"' + verb + '"' in verbs, True)
@@ -96,9 +118,42 @@ def host_checks_texts(header, raster, verbs, tests, expected, fixture):
     check("composite plain layer", "gfx_surface_composite(&s_gfx" in verbs, True)
     check("composite keyed layer", "gfx_surface_composite_keyed(&s_gfx" in verbs, True)
 
+    # Tilemap / particle / layer verbs must reach the one core primitives.
+    for token in ("gfx_tilemap_create(&s_gfx_tilemaps",
+                  "gfx_tilemap_draw_all(maps, count, &s_gfx",
+                  "gfx_emitter_reset(s_gfx_particles",
+                  "gfx_emitter_emit(s_gfx_particles",
+                  "gfx_emitter_step(s_gfx_particles",
+                  "gfx_layer_mark_dirty(&s_gfx_layers",
+                  "gfx_layer_present_all(&s_gfx",
+                  "gfx_toolkit_state_free();"):
+        check("core call " + token, token in verbs, True)
+
+    # Image side: one decoder, one sampler, one fit contract.
+    for func, case in IMAGEFILE_API.items():
+        pattern = r"\b" + re.escape(func) + r"\s*\("
+        where = extra["cells_h"] if func == "imagefile_sample_rgb565_cells" \
+                else extra["imagefile_h"]
+        check("imagefile declares " + func, re.search(pattern, where) is not None, True)
+        check("pure case " + case, re.search(r"\b" + re.escape(case) + r"\s*\(",
+                                             extra["imgdec_tests"]) is not None, True)
+    check("fit decode reuses one decoder",
+          "imagefile_decode_mem(data, len, w, h, out)" in extra["imagefile_c"], True)
+    check("no second PNG/JPEG decoder in imagefile",
+          "lodepng" not in extra["imagefile_c"] and
+          "tjpgd" not in extra["imagefile_c"], True)
+    check("cell adapter delegates to one sampler",
+          "tui_sample_image_cells(" in extra["cells_h"], True)
+    check("cell adapter packs dom_image_t byte",
+          "dos_fg << 4" in extra["cells_h"], True)
+
     for key in ("blend_midpoint", "blend_three_quarters_red", "line_aa_half_coverage",
                 "gradient_one_third", "gradient_red_end", "gradient_blue_end",
                 "keyed_composite_background"):
+        check("host baseline " + key, expected[key] in tests, True)
+    for key in ("tile_flip_x_pixel", "tile_rot90_pixel", "tile_hidden_pixel",
+                "particle_step_x", "particle_step_y", "layer_dirty_origin",
+                "layer_alpha_128_blend"):
         check("host baseline " + key, expected[key] in tests, True)
     for value in expected["atlas_cell_pixels"]:
         check("host baseline atlas " + value, value in tests, True)
@@ -108,9 +163,29 @@ def host_checks_texts(header, raster, verbs, tests, expected, fixture):
     for verb in NEW_VERBS:
         check("fixture exercises " + verb, "gfx " + verb + " " in fixture, True)
     check("fixture atlas blitmany", "/a:1,16,16" in fixture, True)
+    rich = extra["rich"]
+    for marker in ("[M-GFXRICH]", "[M-GFXRICH-TILE]", "[M-GFXRICH-PARTICLE]",
+                   "[M-GFXRICH-LAYER]", "[M-GFXRICH-DONE]"):
+        check("rich fixture marker " + marker, marker in rich, True)
+    for verb in ("gfx tile create ", "gfx tile set ", "gfx tile draw ",
+                 "gfx particles seed ", "gfx particles emit ",
+                 "gfx particles step", "gfx particles draw ",
+                 "gfx layer bind ", "gfx layer dirty ", "gfx layer present "):
+        check("rich fixture verb " + verb, verb in rich, True)
 
     print("\nRESULT %s (%d fail)" % ("OK" if not FAILS else "FAIL", len(FAILS)))
     return 0 if not FAILS else 1
+
+
+def read_extra():
+    """The image-side sources checked alongside the raster core."""
+    return {
+        "imgdec_tests": read_text(os.path.join(ROOT, "test", "main", "test_imgdec.c")),
+        "imagefile_h": read_text(os.path.join(ROOT, "components", "imagefile", "imagefile.h")),
+        "imagefile_c": read_text(os.path.join(ROOT, "components", "imagefile", "imagefile.c")),
+        "cells_h": read_text(os.path.join(ROOT, "components", "imagefile", "imagefile_cells.h")),
+        "rich": read_text(os.path.join(GFX_FIXTURES, "GFXRICH.BAT")),
+    }
 
 
 def host_checks():
@@ -122,14 +197,13 @@ def host_checks():
     tests = read_text(os.path.join(ROOT, "test", "main", "test_gfx.c"))
     expected = json.loads(read_text(os.path.join(GFX_FIXTURES, "expected.json")))
     fixture = read_text(os.path.join(GFX_FIXTURES, "GFXAA.BAT"))
-    return host_checks_texts(header, raster, verbs, tests, expected, fixture)
+    return host_checks_texts(header, raster, verbs, tests, expected, fixture,
+                             read_extra())
 
 
 def host_self_test():
-    """Red canaries: every host contract must be seen failing on bad sources.
-
-    The real files are only read, never modified. Each mutation is applied to
-    an in-memory copy and fed through the exact checker ``--host`` uses.
+    """Red canaries: each new primitive must be seen missing when its wiring
+    is removed from one source. Real files are only read, never modified.
     """
     global FAILS
     header = read_text(os.path.join(ROOT, "components", "gfx", "gfx.h"))
@@ -138,16 +212,25 @@ def host_self_test():
     tests = read_text(os.path.join(ROOT, "test", "main", "test_gfx.c"))
     expected = json.loads(read_text(os.path.join(GFX_FIXTURES, "expected.json")))
     fixture = read_text(os.path.join(GFX_FIXTURES, "GFXAA.BAT"))
+    extra = read_extra()
     checks = []
 
     def run(name, expect_red=True, h=header, r=raster, v=verbs, t=tests,
-            e=expected, f=fixture):
+            e=expected, f=fixture, x=extra):
         global FAILS
         FAILS = []
         with contextlib.redirect_stdout(io.StringIO()):
-            rc = host_checks_texts(h, r, v, t, e, f)
+            rc = host_checks_texts(h, r, v, t, e, f, x)
         checks.append((name, (rc != 0 and len(FAILS) > 0) if expect_red
                        else (rc == 0 and not FAILS)))
+
+    def mutated(**kwargs):
+        out = dict(extra)
+        out.update(kwargs)
+        return out
+
+    def rich_replace(old, new):
+        return extra["rich"].replace(old, new)
 
     run("clean sources accepted", expect_red=False)
     run("missing AA declaration rejected", h=header.replace("gfx_surface_line_aa", "gfx_surface_line_xx"))
@@ -162,6 +245,31 @@ def host_self_test():
            for k, val in expected.items()})
     run("fixture without gradient rejected", f=fixture.replace("gfx gradient ", "gfx gradxxx "))
     run("fixture without atlas stamp rejected", f=fixture.replace("/a:1,16,16", "/x:1,16,16"))
+
+    # Per-primitive canaries for the new toolkit.
+    run("tilemap declaration rejected", h=header.replace("gfx_tilemap_create", "gfx_tilemap_creatX"))
+    run("tilemap definition rejected", r=raster.replace("gfx_tilemap_draw_all", "gfx_tilemap_draw_alX"))
+    run("tilemap pure case rejected", t=tests.replace("gfx_case_tilemap", "gfx_case_tilemaX"))
+    run("tilemap verb rejected", v=verbs.replace('"tile"', '"tilX"'))
+    run("particle RNG declaration rejected", h=header.replace("gfx_rand_next", "gfx_rand_nexX"))
+    run("particle definition rejected", r=raster.replace("gfx_emitter_emit", "gfx_emitter_emiX"))
+    run("particle pure case rejected", t=tests.replace("gfx_case_particles", "gfx_case_particule"))
+    run("particle verb rejected", v=verbs.replace('"particles"', '"particleX"'))
+    run("layer declaration rejected", h=header.replace("gfx_layer_mark_dirty", "gfx_layer_mark_dirtX"))
+    run("layer definition rejected", r=raster.replace("gfx_layer_present", "gfx_layer_presenX"))
+    run("layer pure case rejected", t=tests.replace("gfx_case_layers", "gfx_case_layerX"))
+    run("layer verb rejected", v=verbs.replace('"layer"', '"layeX"'))
+    run("fit decode declaration rejected",
+        x=mutated(imagefile_h=extra["imagefile_h"].replace("imagefile_decode_fit", "imagefile_decode_fiX")))
+    run("fit decode pure case rejected",
+        x=mutated(imgdec_tests=extra["imgdec_tests"].replace("imgdec_case_fit_decode", "imgdec_case_fit_decodX")))
+    run("sampler adapter delegation rejected",
+        x=mutated(cells_h=extra["cells_h"].replace("tui_sample_image_cells(", "other_sample_image_cells(")))
+    run("sampler pure case rejected",
+        x=mutated(imgdec_tests=extra["imgdec_tests"].replace("imgdec_case_cell_sampler", "imgdec_case_cell_sampleX")))
+    run("rich fixture tile marker rejected", f=rich_replace("[M-GFXRICH-TILE]", "[M-GFXRICH-TILX]"))
+    run("rich fixture particle verb rejected", f=rich_replace("gfx particles emit ", "gfx particles emiX "))
+    run("rich fixture layer marker rejected", f=rich_replace("[M-GFXRICH-LAYER]", "[M-GFXRICH-LAYEX]"))
 
     for name, ok in checks:
         print("  [%s] %s" % ("PASS" if ok else "FAIL", name))

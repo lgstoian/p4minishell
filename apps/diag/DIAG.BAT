@@ -43,7 +43,14 @@ set /a R14=7+7*%DS% > NUL
 
 :menu
 draw clear screen
-gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "P4 DIAGNOSTICS ★"
+set DOS_THEME=green
+gosub %APPROOT%/APPLIB.BAT::header "P4 DIAGNOSTICS" "[M-RICH-DIAG] health + frame benchmark"
+gosub %APPROOT%/APPLIB.BAT::tile 1 5 40 12 double "SUBSYSTEMS"
+gosub %APPROOT%/APPLIB.BAT::table 3 8 "Name|State|Ms" "Heap|OK|12" "Wi-Fi|UP|34" "Board|OK|8"
+gosub %APPROOT%/APPLIB.BAT::tile 43 5 37 12 single "FRAME JITTER"
+gosub %APPROOT%/APPLIB.BAT::sparkline 46 9 3 40 55 35 70 60 85
+gosub %APPROOT%/APPLIB.BAT::statusbar 21 "health=PASS  panels=4" "1..8 select  Esc back"
+echo [M-DOS-DIAG] screen=DIAG-HEALTH panels=4 head="P4 DIAGNOSTICS" theme=green bars=0 table=Y spark=1 status=Y
 draw text 3 2 "System health, capabilities and frame-rate benchmark"
 gosub %APPROOT%/APPLIB.BAT::panel 5 15 single "Diagnostics"
 draw text 5 %R7% "Full report"

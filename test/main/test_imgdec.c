@@ -13,8 +13,13 @@
 
 #include "unity.h"
 #include "imgdec.h"
+#include "imagefile.h"
+#include "imagefile_cells.h" /* the ONE sampler adapter, header-only */
 #include "p4minishell_config.h"
 #include <string.h>
+
+static void imgdec_case_fit_decode(void);
+static void imgdec_case_cell_sampler(void);
 
 /** Minimal PNG: 8-byte signature + IHDR with width at [16..19], height at [20..23]. */
 static void imgdec_case_png(void)
@@ -84,6 +89,8 @@ void test_imgdec_probe_all(void)
     imgdec_case_png();
     imgdec_case_jpeg();
     imgdec_case_bmp_unknown();
+    imgdec_case_fit_decode();
+    imgdec_case_cell_sampler();
 }
 
 /** Probe rejections: the documented native-size cap and malformed headers. */
@@ -161,4 +168,82 @@ void test_imgdec_probe_bmp_dims(void)
     hdr[25] = 0xFF;   /* -50 (0xFFFFFFCE) */
     TEST_ASSERT_EQUAL_INT(IMGDEC_FMT_BMP, imgdec_probe(hdr, sizeof(hdr), &w, &h));
     TEST_ASSERT_EQUAL_INT(50, h);
+}
+
+/** Minimal 2x2 24-bit BMP, bottom-up rows, 4-byte padding (the sprite format). */
+static size_t imgdec_bmp_2x2(uint8_t *buf, const uint8_t bgr[12])
+{
+    static const int stride = 8;
+
+    memset(buf, 0, 70);
+    buf[0] = 'B'; buf[1] = 'M';
+    buf[2] = 70;
+    buf[10] = 54;
+    buf[14] = 40;
+    buf[18] = 2; buf[22] = 2;
+    buf[26] = 1; buf[28] = 24;
+    buf[34] = 16;
+    /* File row 0 is the caller's bottom row. */
+    memcpy(buf + 54, bgr + 6, 6);
+    memcpy(buf + 54 + stride, bgr, 6);
+    return 70;
+}
+
+/** Fit-to-target decode goes through the ONE imagefile decoder; the native
+ *  2x2 source is never materialised and the fitted surface is RGB565. */
+static void imgdec_case_fit_decode(void)
+{
+    uint8_t buf[70];
+    static const uint8_t red[12] = {
+        0,0,255, 0,0,255, 0,0,255, 0,0,255,
+    };
+    gfx_surface_t out = {NULL, 0, 0};
+
+    imgdec_bmp_2x2(buf, red);
+    TEST_ASSERT_TRUE(imagefile_decode_fit(buf, sizeof(buf), 1, 1, &out));
+    TEST_ASSERT_EQUAL_INT(1, out.w);
+    TEST_ASSERT_EQUAL_INT(1, out.h);
+    TEST_ASSERT_NOT_NULL(out.px);
+    TEST_ASSERT_EQUAL_HEX16(0xF800, gfx_surface_get(&out, 0, 0));
+    gfx_surface_free(&out);
+
+    /* A source that already fits keeps native size; invalid bytes fail. */
+    TEST_ASSERT_TRUE(imagefile_decode_fit(buf, sizeof(buf), 8, 8, &out));
+    TEST_ASSERT_EQUAL_INT(2, out.w);
+    TEST_ASSERT_EQUAL_INT(2, out.h);
+    gfx_surface_free(&out);
+    TEST_ASSERT_FALSE(imagefile_decode_fit((const uint8_t *)"XX", 2, 4, 4, &out));
+}
+
+/** The DOM cell adapter must reuse the ONE tui sampler and ramp, never a
+ *  second nearest-neighbour loop or palette. Cell packing is
+ *  (dos_fg << 4) | ramp_level, exactly dom_image_t's byte format. */
+static void imgdec_case_cell_sampler(void)
+{
+    gfx_surface_t img = {NULL, 0, 0};
+    imagefile_cell_grid_t grid;
+    uint8_t cells[4] = {0, 0, 0, 0};
+
+    TEST_ASSERT_TRUE(gfx_surface_alloc(&img, 2, 2));
+    gfx_surface_clear(&img, 0x0000);
+    gfx_surface_pixel(&img, 1, 0, 0xFFFF);
+    gfx_surface_pixel(&img, 0, 1, 0x001F);
+    grid.pixels = cells;
+    grid.grid_w = 2;
+    grid.grid_h = 2;
+    grid.origin_col = 1;
+    grid.origin_row = 1;
+    imagefile_sample_rgb565_cells(1, 1, 2, 2, &img,
+                                  imagefile_grid_cell_sink, &grid);
+    TEST_ASSERT_EQUAL_INT(0, cells[0] & 0x0F);   /* black -> ramp level 0 */
+    TEST_ASSERT_EQUAL_INT(ANSI_IMAGE_RAMP_LAST, cells[1] & 0x0F); /* white */
+    TEST_ASSERT_EQUAL_INT(ANSI_IMAGE_RAMP_LAST, imagefile_ramp_level(
+                              ANSI_IMAGE_RAMP[ANSI_IMAGE_RAMP_LAST]));
+    /* Out-of-grid writes are clipped and a NULL sink is a no-op. */
+    imagefile_sample_rgb565_cells(5, 5, 2, 2, &img,
+                                  imagefile_grid_cell_sink, &grid);
+    TEST_ASSERT_EQUAL_INT(0, cells[0] & 0x0F);
+    imagefile_sample_rgb565_cells(1, 1, 2, 2, &img, NULL, &grid);
+    TEST_ASSERT_EQUAL_INT(ANSI_IMAGE_RAMP_LAST, cells[1] & 0x0F);
+    gfx_surface_free(&img);
 }

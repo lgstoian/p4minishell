@@ -3,41 +3,58 @@
 <!-- SPDX-License-Identifier: MIT -->
 <!--
   RICH.HTML - the v1.6 webapp showcase page for WEBAPP.BAT.
-  One browser engine: HTML5 forms, a canvas gradient, CSS gradients/shadows,
-  semantic sections and a JS timer. WEBAPP.BAT drives it with webapp open,
-  webapp event, webapp tick and webapp dump; no network is touched.
+  DOS/CGA presentation of the SAME webapp engine: forms, a canvas gradient,
+  CSS gradients/shadows, semantic sections and a JS timer. WEBAPP.BAT drives
+  it with webapp open, webapp event, webapp tick and webapp dump; no network.
+  The gradient is kept as a 32x16 canvas sample so the CSS/canvas feature
+  gates still exercise it; it is not a page-wide modern card background.
 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>P4 Webapp Rich</title>
+<title>P4 WEBAPP / FORMS</title>
 <style>
-body { color: #aaaaaa; }
+body { color: #aaaaaa; background: #000000; font-family: monospace; }
 h1 { color: #00ffff; }
+.panel { border: 1px solid #aaaaaa; }
+.legend { color: #ffff55; }
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); }
 #card {
-  border-radius: 3px;
+  border-radius: 0px;
+  border: 1px solid #ff0000;
   box-shadow: 1px 1px #000000;
   background: linear-gradient(90deg, #ff0000 0%, #0000ff 100%);
+  color: #ffffff;
 }
 input[type=text] { color: #ffff55; }
-.grid { display: grid; grid-template-columns: repeat(2, 1fr); }
+footer { color: #00ffff; }
 </style>
 </head>
 <body>
-<header><nav><a href="#go">Go</a></nav></header>
+<header class="panel">
++==============================================================+
+|  P4 WEBAPP / FORMS               ICE THEME  PANELS=2        |
++==============================================================+
+<nav><a href="#go">[F1] Go</a>  <a href="#c">[F2] Canvas</a>  [Esc] Back</nav>
+</header>
 <main>
+<section class="panel" id="forms">
++--- FORM SUBMIT -----------------------------------------------+
+| Name   [input]   Checkbox [x]   Action [ RUN ]                 |
++--- 1..9 select / Enter submit --------------------------------+
+</section>
 <h1>[M-RICH-WEBAPP]</h1>
-<section id="card">CSS gradient + shadow</section>
+<section id="card">CSS gradient + shadow (canvas sample only)</section>
 <form id="go">
 <label>Name</label><input id="n" type="text" value="P4" placeholder="Name">
 <input id="ok" type="checkbox" checked>
 <button id="p4run" onclick="console.log('p4-run')">Run</button>
 </form>
 <div class="grid"><div>Forms</div><div>Canvas</div></div>
-<p id="p4state">boot</p>
+<p id="p4state" class="legend">boot</p>
 <canvas id="c" width="32" height="16">Fallback pixels</canvas>
 </main>
-<footer>webapp open | dump | css | js | event | tick</footer>
+<footer class="panel">[ESC] back   [ENTER] submit   webapp open | dump | css | js | event | tick</footer>
 <script>
 document.addEventListener('click', function (e) {
   document.getElementById('p4state').textContent = 'clicked';

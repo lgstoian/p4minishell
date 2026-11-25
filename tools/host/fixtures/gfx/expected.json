@@ -9,5 +9,13 @@
   "gradient_red_end": "0xF800",
   "gradient_blue_end": "0x001F",
   "atlas_cell_pixels": ["0x1234", "0x5678", "0x9ABC", "0xDEF0"],
-  "keyed_composite_background": "0x1234"
+  "keyed_composite_background": "0x1234",
+  "_comment_game": "Exact literals asserted by the bounded tilemap/particle/layer and one-sampler image cases.",
+  "tile_flip_x_pixel": "0x5678",
+  "tile_rot90_pixel": "0x9ABC",
+  "tile_hidden_pixel": "0x7777",
+  "particle_step_x": "2483",
+  "particle_step_y": "2501",
+  "layer_dirty_origin": "TEST_ASSERT_EQUAL_INT(2, x);",
+  "layer_alpha_128_blend": "0x8410"
 }

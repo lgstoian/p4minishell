@@ -80,7 +80,16 @@ set /a PRICE[1]=40+%mult%*2
 set /a PRICE[2]=120-%mult%*3
 echo [M-ELITE-DOCKED] %sname%
 draw clear
-gosub %APPROOT%/APPLIB.BAT::bar 1 3 double "ELITE 🚀"
+set DOS_THEME=amber
+gosub %APPROOT%/APPLIB.BAT::header "ELITE" "[M-RICH-ELITE] live market prices"
+draw text 3 2 %sname% station
+gosub %APPROOT%/APPLIB.BAT::tile 2 5 46 12 double "MARKET"
+gosub %APPROOT%/APPLIB.BAT::table 4 8 "Good|Price|Hold" "Food|%PRICE[0]%|%HOLD[0]%" "Textiles|%PRICE[1]%|%HOLD[1]%" "Computers|%PRICE[2]%|%HOLD[2]%"
+gosub %APPROOT%/APPLIB.BAT::tile 50 5 29 12 single "SHIP"
+gosub %APPROOT%/APPLIB.BAT::meter 53 8 22 75 "HULL 75%"
+gosub %APPROOT%/APPLIB.BAT::meter 53 11 22 60 "FUEL 60%"
+gosub %APPROOT%/APPLIB.BAT::statusbar 21 "credits=%credits%  dock=%sname%" "b buy  s sell  t travel  q quit"
+echo [M-DOS-ELITE] screen=ELITE-MARKET panels=3 head="ELITE" theme=amber bars=2 table=Y spark=0 status=Y
 draw run 55 2 "[M-RICH-ELITE] market" /fg 14 /bg 0
 draw text 3 2 %sname% station
 draw table 3 %TY% 14 0 "Good|Price|Hold" "Food|%PRICE[0]%|%HOLD[0]%" "Textiles|%PRICE[1]%|%HOLD[1]%" "Computers|%PRICE[2]%|%HOLD[2]%"

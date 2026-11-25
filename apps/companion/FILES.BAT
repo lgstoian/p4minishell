@@ -40,7 +40,14 @@ if "%TUICOLS%"=="" set TUICOLS=80
 if "%TUIROWS%"=="" set TUIROWS=25
 set /a SY=%TUIROWS%-6 > NUL
 draw clear screen
-gosub %APPROOT%/APPLIB.BAT::bar 1 3 single
+set DOS_THEME=ice
+gosub %APPROOT%/APPLIB.BAT::header "FILE TOOLS" "[M-RICH-FILES] map/forK tool index"
+gosub %APPROOT%/APPLIB.BAT::tile 1 5 46 10 double "TOOLBOX"
+draw text 4 8 "Browse / search / trash / clipboard" 15
+gosub %APPROOT%/APPLIB.BAT::tile 49 5 31 10 single "SELECTED FILE"
+gosub %APPROOT%/APPLIB.BAT::pager "PATH" 8 4 FILES.TXT
+gosub %APPROOT%/APPLIB.BAT::statusbar 21 "drive=%APPDRIVE%  tools=ready" "b browse  h hex  n notes  q quit"
+echo [M-DOS-FILES] screen=FILES-TOOLS panels=3 head="FILE TOOLS" theme=ice bars=0 table=N spark=0 status=Y
 draw text 35 2 "FILE TOOLS ★" 14
 gosub %APPROOT%/APPLIB.BAT::panel 4 12 single "Tools"
 draw text 5 6 "Browse the app drive with the full TUI file browser"

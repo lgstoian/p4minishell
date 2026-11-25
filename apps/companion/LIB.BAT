@@ -22,8 +22,11 @@ rem 80-column positions: the grid keeps 80 columns on every supported panel.
 :tui_banner
 if "%TUICOLS%"=="" set TUICOLS=80
 draw clear screen
-draw box 1 1 %TUICOLS% 3 single
-draw text 2 2 "P4 COMPANION - Pure-batch helper for P4MiniShell" 14
+set DOS_THEME=mono
+gosub %APPROOT%/APPLIB.BAT::header "COMPANION LIB" "[M-RICH-LIB-COMPANION] shared routines"
+gosub %APPROOT%/APPLIB.BAT::tile 2 5 76 12 double "ROUTINE INDEX"
+draw text 5 8 "banner / tui_banner / prompt / list helpers" 7
+echo [M-DOS-LIB-COMPANION] screen=LIB-COMPANION panels=2 head="COMPANION LIB" theme=ice bars=0 table=N spark=0 status=Y
 goto :eof
 
 rem ---- tui header with title ------------------------------------------

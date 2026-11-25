@@ -1,0 +1,60 @@
+# webapp-baseline-v1 fixture=dashboard.html
+webapp.image kind=canvas src=chart state=resized native=64x8 fit=60x3 alt=-
+webapp.render.begin fixture=dashboard.html cols=80 rows=25
+tui.dump cols=80 from=1 to=25
+001|
+001@1-80:16
+002|┌─[P4.NET/DASHBOARD.80COL]─────────────────────────────────────────────────────┐
+002@1-80:14
+003|├─Address:http://p4.local/dashboard.html───────────────────────────────────────┤
+003@1-80:14
+004|│ LIVE DASHBOARD                              24-hour view / 5 nodes          │
+004@1-79:14 80-80:16
+005|
+005@1-80:16
+006|┌UPTIME 99.7%───────────────┐           ┌LOAD 0.42──────────────────┐
+006@1-29:11 30-40:16 41-69:11 70-80:16
+007|│ ┌─  TRAFFIC  ─────────────────────────────────────────────────────────────┐ │
+007@1-79:14 80-80:16
+008|+------------------------------------------------------------+
+008@1-62:7 63-80:16
+009||==============================XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX|
+009@1-1:7 2-31:12 32-61:11 62-62:7 63-80:16
+010||==============================XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX|
+010@1-1:7 2-31:12 32-61:11 62-62:7 63-80:16
+011||==============================XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX|
+011@1-1:7 2-31:12 32-61:11 62-62:7 63-80:16
+012|+------------------------------------------------------------+
+012@1-62:7 63-80:16
+013|
+013@1-80:16
+014|│ └───────────────────────────────────────────────────────────────────────┘ │
+014@1-77:14 78-80:16
+015|
+015@1-80:16
+016|NODE │ STATE │ MS
+016@1-17:7 18-80:16
+017|---------------------
+017@1-21:7 22-80:16
+018|alpha │ up │ 12
+018@1-17:7 18-80:16
+019|beta │ up │ 18
+019@1-17:7 18-80:16
+020|gamma │ warn │ 97
+020@1-17:7 18-80:16
+021|
+021@1-80:16
+022|│ TRAFFIC / LAST 24 HOURS              74% PEAK / 61% LOW                      │
+022@1-80:14
+023|├─READY | panels + table + chart | F1 help─────────────────────────────────────┤
+023@1-80:14
+024|└──────────────────────────────────────────────────────────────────────────────┘
+024@1-80:14
+025|
+025@1-80:16
+tui.dump.end
+webapp.meta semantic=4 controls=0 grids=1 canvases=1
+webapp.events handlers=0
+webapp.entity &amp;=0026/5 &reg=00AE/4 &#x41;=0041/6 &#1114112;=FFFD/10 &#x80;=20AC/6 &hellip;=2026/8
+webapp.canvas id=chart w=64 h=8 pixel0=ff5555ff pixel1=55ffffff grad0=ff0000ff grad1=0000ffff round_corner=00 round_centre=ff shadow=ff0000ff
+webapp.render.end fixture=dashboard.html rows=25 runs=25

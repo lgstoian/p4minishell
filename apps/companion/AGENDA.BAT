@@ -9,6 +9,7 @@ rem  (see command.md for the exact alarm add syntax).
 rem  Markers: [M-AGENDA] / [M-AGENDA-DONE].
 rem =====================================================================
 echo [M-AGENDA] 
+echo [M-DOS-AGENDA] screen=AGENDA-HEADLESS panels=0 head="NONE" theme=mono bars=0 table=N spark=0 status=N
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 title "Agenda"
 cal today

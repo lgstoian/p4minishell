@@ -15,6 +15,7 @@ rem =====================================================================
 setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-UITEST]  touch automation demo
+echo [M-DOS-UITEST] screen=UITEST-HEADLESS panels=0 head="NONE" theme=mono bars=0 table=N spark=0 status=N
 title "UI Test"
 ui state
 ui targets /v:UICOUNT

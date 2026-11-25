@@ -1,20 +1,28 @@
 <!DOCTYPE html>
+<!-- SPDX-FileCopyrightText: 2026 Stoian Alexandru -->
+<!-- SPDX-License-Identifier: MIT -->
+<!-- DOS/CGA presentation of the offline documentation page. -->
 <html>
 <head>
-<title>P4MiniShell // Documentation</title>
+<title>P4MINISHELL // DOCS</title>
 <style>
-body { background-color: #001830; color: #c0c0c0; }
+body { background: #000000; color: #aaaaaa; font-family: monospace; }
 h1 { color: #00ffff; text-align: center; font-weight: bold; }
 h2 { color: #ffff55; font-weight: bold; }
-p { color: #c0c0c0; }
+p { color: #aaaaaa; }
 a { color: #55ffff; text-decoration: underline; }
-li { color: #c0c0c0; }
+li { color: #aaaaaa; }
 footer { color: #808080; }
 </style>
 </head>
 <body>
+<pre>+==================================================================+
+| P4MINISHELL // REFERENCE                [F1] BACK  [Q] QUIT       |
++==================================================================+</pre>
 <h1>DOCUMENTATION</h1>
-<p>The browser is one verb: browser &lt;url&gt;.</p>
+<pre>+--- THE BROWSER VERB ---------------------------------------------+
+| One verb: browser &lt;url&gt;                                          |
++------------------------------------------------------------------+</pre>
 <h2>Navigation</h2>
 <ul>
 <li>browser back / browser forward keep a navigation history</li>
@@ -22,10 +30,12 @@ footer { color: #808080; }
 <li>browser js ID dispatches an element's click handler</li>
 <li>tui dump reads the rendered page back cell by cell</li>
 </ul>
-<h2>Where the page came from</h2>
+<pre>+--- WHERE THIS PAGE LIVES ----------------------------------------+</pre>
 <p>This file lives on the device at sd:/WEB/PAGE2.HTML and is served by the</p>
 <p>board's own httpd, fetched over the local network or loopback.</p>
-<a href="sd:/WEB/INDEX.HTML">Back to the dashboard</a>
-<footer>P4MiniShell - a self-contained computer.</footer>
+<p><a href="sd:/WEB/INDEX.HTML">[F1] Back to the system monitor</a></p>
+<footer>+==================================================================+
+| P4MiniShell - a self-contained computer.                           |
++==================================================================+</footer>
 </body>
 </html>

@@ -1,25 +1,35 @@
 <!DOCTYPE html>
+<!-- SPDX-FileCopyrightText: 2026 Stoian Alexandru -->
+<!-- SPDX-License-Identifier: MIT -->
+<!-- DOS/CGA presentation of the offline browser showcase. Same DOM, CSS,
+     image and JS-event surfaces; no feature removed, no external assets. -->
 <html>
 <head>
-<title>P4MiniShell // Device Dashboard</title>
+<title>P4MINISHELL // SYSTEM MONITOR</title>
 <style>
-body { background-color: #001830; color: #c0c0c0; text-align: center; }
+body { background: #000000; color: #aaaaaa; font-family: monospace; }
 h1 { color: #00ffff; text-align: center; font-weight: bold; }
 h2 { color: #ffff55; font-weight: bold; }
-p { color: #c0c0c0; }
+p { color: #aaaaaa; }
 a { color: #55ffff; text-decoration: underline; }
 #status { color: #55ff55; font-weight: bold; }
-table { color: #ffffff; }
-th { color: #00ffff; font-weight: bold; background-color: #003050; }
-td { color: #c0c0c0; }
+table { color: #ffffff; border: 1px solid #aaaaaa; }
+th { color: #00ffff; font-weight: bold; background: #000080; }
+td { color: #aaaaaa; }
 .hot { color: #ff5555; font-weight: bold; }
-pre { color: #ffff55; background-color: #002040; }
-button { color: #ffff55; font-weight: bold; }
+pre { color: #ffff55; background: #000000; }
+button { color: #ffff55; font-weight: bold; background: #000080; border: 1px solid #ffff55; }
 footer { color: #808080; }
 </style>
 </head>
 <body>
-<h1>P4MINISHELL // DEVICE DASHBOARD</h1>
+<pre>+==================================================================+
+| P4MINISHELL // SYSTEM MONITOR          [1] BOARD  [2] DOCS  [Q]  |
++==================================================================+</pre>
+<h1>&#9654; DEVICE DASHBOARD</h1>
+<pre>+--- SYSTEM TABLE -----------------------------------------------+
+| SUBSYSTEM   STATE      DETAIL                                    |
++------------------------------------------------------------------+</pre>
 <p id="status">JS booting...</p>
 <table>
 <tr><th>SUBSYSTEM</th><th>STATE</th><th>DETAIL</th></tr>
@@ -28,9 +38,13 @@ footer { color: #808080; }
 <tr><td>STORAGE</td><td>microSD</td><td>15.0 GiB FAT</td></tr>
 <tr><td>DISPLAY</td><td>MIPI-DSI</td><td>1024 x 600</td></tr>
 </table>
+<pre>+--- LOGO / CELL PREVIEW ------------------------------------------+</pre>
 <img src="sd:/WEB/LOGO.BMP" alt="P4 logo">
-<p><a href="sd:/WEB/PAGE2.HTML">Docs</a>&#32;|&#32;<a href="sd:/WEB/PAGE2.HTML">Home</a>&#32;|&#32;<button id="go" onclick="document.getElementById('status').textContent = 'JS EVENT OK: button click handled'; document.getElementById('status').style = 'color:#ff5555;font-weight:bold';">RUN DEMO</button></p>
-<footer>sd:/WEB/INDEX.HTML - no cloud required.</footer>
+<pre>+--- NAV / ACTIONS ------------------------------------------------+</pre>
+<p><a href="sd:/WEB/PAGE2.HTML">[F1] Docs</a>&#32;|&#32;<a href="sd:/WEB/PAGE2.HTML">[F2] Home</a>&#32;|&#32;<button id="go" onclick="document.getElementById('status').textContent = 'JS EVENT OK: button click handled'; document.getElementById('status').style = 'color:#ff5555;font-weight:bold';">[ENTER] RUN DEMO</button></p>
+<footer>+==================================================================+
+| sd:/WEB/INDEX.HTML - no cloud required.       [ESC] back          |
++==================================================================+</footer>
 <script>
 document.getElementById('status').textContent = 'JS online: DOM + CSS + image + events';
 </script>

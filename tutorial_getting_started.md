@@ -147,8 +147,9 @@ launch TCMD                   (translucent-by-default demo: APPINFO alpha=96%)
 focus/layout/scroll, modal `mpick`/`mprog`/`mformx`/`mstack`, and `webapp
 event`/`tick`). Every updated reference app prints an `[M-RICH-*]` marker block;
 the pre-existing `[M-*]` markers are unchanged. Without a board you can prove
-all 33 enriched apps with `python tools/host_apps_gate.py --check` (363 host
-assertions, 40 hardware surfaces honestly SKIP). The marker lines change app
+all 34 apps (including the flagship `SHOWCASE`) with
+`python tools/host_apps_gate.py --check` (679 host assertions, 45 hardware
+surfaces honestly SKIP). The marker lines change app
 transcripts, so `tools/appdiff/baseline/*.transcript.txt` awaits a board
 rebaseline. See `readme.md` for the shipped HTML examples and screenshot proofs.
 

@@ -133,6 +133,22 @@ no suite skip (bugs.md F23, fixed in v1.2.1).
 Three rules keep the visual surfaces consistent; each has exactly one
 implementation.
 
+**The visual direction they serve (in progress).** Screens target a modern take
+on retro MS-DOS: an 80x25 CP437 cell grid, box-drawn panels, the DOS/CGA
+palette, a chunky bitmap cell font, status bars and keyboard menus. The goal is
+information density and smooth keyboard/touch interaction, not web-style cards
+or gradients. This is a discipline on top of the shipped engines — the one cell
+renderer/sampler, one CSS colour parser/DOS palette, one cell font and one
+input/event path — with no second UI toolkit. The four functional HTML fixtures
+(`tools/host/fixtures/webapp/{portal,dashboard,article,form}.html`) are rendered
+through that same DOM/CSS/JS engine into `screenshots/web/{portal,dashboard,
+article,form}.png`, with byte-identical copies in `docs/assets/web/`; the
+feature and form detail proofs (`docs/assets/web-features.png`,
+`docs/assets/webapp-forms.png`) use the same DOS presentation. All are 1024x600
+host proofs with a `HOST PROOF - NOT A DEVICE CAPTURE` footer, checked by
+`tools/visual_proof_gate.py --check` (red canaries via `--self-test`) — a
+board-free pre-gate, never hardware sign-off (`harness.md` §0/§2.2).
+
 **One colour parser.** `components/markdown/css_color.c` parses every colour
 string the firmware understands (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`,
 `rgb()`/`rgba()` with numbers or percentages, `transparent`, basic named

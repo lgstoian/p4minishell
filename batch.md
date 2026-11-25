@@ -12,12 +12,13 @@
   (`P4_CONFIG_BATCH_FILE_MAX_BYTES`); larger files stream from SD with
   identical semantics.
 
-**Marker contract (v1.6).** All 33 updated reference `.bat` apps emit an
-additive `[M-RICH-*]` block that exercises `str /rev|/count|/pad`, `map
+**Marker contract (v1.6 + DOS redesign).** The 33 updated reference `.bat`
+apps and the flagship showcase app emit an additive `[M-RICH-*]` block that exercises `str /rev|/count|/pad`, `map
 /values|/incr`, `for /K`, `func`/`return <expr>`/`%RESULT%`, `trap /on` and the
 new surface verbs. These markers are **additive**: every pre-existing `[M-*]`
 marker is preserved, so older suite assertions still match. The host proof is
-`python tools/host_apps_gate.py --check` (33/33 apps, 363 host assertions);
+`python tools/host_apps_gate.py --check` (34 apps incl. the flagship showcase,
+679 host assertions, 45 honest hardware SKIPs);
 hardware-only surfaces are honestly SKIPped. The new marker lines change app
 transcripts, so the `tools/appdiff/baseline/*.transcript.txt` goldens await a
 board rebaseline.
@@ -236,6 +237,13 @@ The reference app `apps/webapp/WEBAPP.BAT` (`WEBAPP.APPINFO`, deployed by
 dumps rows 1-8 with `/a`, prints `webapp css`, and emits `[M-WEBAPP]` /
 `[M-WEBAPP-DONE]` / `[M-WEBAPP-FAIL]` markers. A native payload can be added
 later behind the same `.bat` front door (the hybrid pattern in §17).
+
+The functional showcase fixtures (`portal.html`, `dashboard.html`,
+`article.html`, `form.html`) are rendered through this same facade into DOS-style
+proof screenshots — 80x25 CP437 grid, box-drawn panels, CGA palette, chunky
+bitmap font, status bars and keyboard menus. Batch apps are expected to follow
+that visual direction with distinct boxed screens; the proofs are host-generated
+and checked by `tools/visual_proof_gate.py --check` (board-free pre-gate only).
 
 ## 6. Arrays (indexed variables)
 

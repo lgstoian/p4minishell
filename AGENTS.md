@@ -17,6 +17,7 @@ in P4MiniShell. Read it, then follow the pointers. It is the companion to
 | Find a module and what governs it | [`BREADCRUMBS.md`](BREADCRUMBS.md) + `breadcrumbs.json` |
 | Change a command | [`command.md`](command.md) |
 | Change the batch language | [`batch.md`](batch.md) |
+| Change the DOS visual direction (CP437 grid, box panels, palette, bitmap font, status bars) | [`documentation.md`](documentation.md) §"Rendering" + [`readme.md`](readme.md) "HTML examples and screenshots" |
 | Change emoji, colour, alpha or a TUI/HTML surface | [`documentation.md`](documentation.md) §"Rendering: colour, alpha and emoji" |
 | Add/change a native app | [`ABI.md`](ABI.md), [`SDK.md`](SDK.md), [`docs/native_packaging.md`](docs/native_packaging.md) |
 | Touch hardware (pins, buses, display, audio, power) | [`schematics.md`](schematics.md) first |
@@ -96,9 +97,14 @@ committing test changes; `release.md` gates on it.
 
 For v1.6.0, the hardware-free pre-gate set also includes the real-code host
 gates — `tools/host_batch_run.py --check`, `tools/host_webapp_gate.py --check`,
+`tools/host_browser_gate.py --check` (real renderer, 5 fixtures),
 `tools/host_tui_gate.py --check`, `tools/host_modal_gate.py --check`,
 `tools/gfx_toolkit_test.py --host` and `tools/host_apps_gate.py --check`
-(33 enriched apps, 363 host assertions, 40 honest hardware SKIPs, 7 canaries).
+(34 apps including the flagship showcase, 679 host assertions, 45 honest
+hardware SKIPs, 7 app-gate canaries).
+The visual proof gates — `tools/make_web_screenshots.py --check` and
+`tools/visual_proof_gate.py --check` / `--self-test` — check the DOS-presentation
+proof PNGs (box borders, palette, ink bands, distinct signatures, red canaries).
 They compile or drive shipped code, never a fake backend, and a pass is never
 hardware sign-off (`harness.md` §0/§2.2). The v1.6 `[M-RICH-*]` transcript lines
 change app output, so `tools/appdiff/baseline/*.transcript.txt` must be
@@ -124,4 +130,7 @@ python tools/harness/verify.py
 python3 tools/host_gen_runner.py --check
 python3 tools/host_unit_run.py --static
 python3 tools/host_unit_run.py --build
+python tools/make_web_screenshots.py --check
+python tools/visual_proof_gate.py --check
+python tools/visual_proof_gate.py --self-test
 ```

@@ -32,6 +32,8 @@ screenshots/*
 # not local hardware scratch (every file carries a HOST PROOF caption).
 !screenshots/web/
 !screenshots/web/*.png
+!screenshots/apps/
+!screenshots/apps/*.png
 spikes/*
 !spikes/.gitkeep
 assets_out/

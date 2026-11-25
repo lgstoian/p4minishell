@@ -19,6 +19,7 @@ rem =====================================================================
 setlocal
 if "%P4_APP_FEATURES%"=="1" gosub %APPROOT%/APPLIB.BAT::probe
 echo [M-WEB] 
+echo [M-DOS-WEB] screen=WEB-SITE panels=2 head="P4 MINISHELL WEB" theme=amber bars=0 table=Y spark=0 status=Y
 title "Browser"
 
 if not exist %APPDRIVE%/WEB/INDEX.HTML goto :nofile

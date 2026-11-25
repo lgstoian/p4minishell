@@ -52,6 +52,7 @@ typedef struct {
     int len;
     int y0;
     uint8_t color;
+    uint8_t alpha;
 } bg_run_t;
 
 typedef struct {
@@ -81,6 +82,22 @@ static size_t utf8_seq_len(const char *p)
 }
 
 /** Decode the same 1..4 byte sequence utf8_seq_len() measured. */
+/** Display width of one whitespace-delimited word in CELLS, not bytes.
+ *  A CP437 box run uses three UTF-8 bytes per glyph; byte-based wrapping
+ *  would fold an 80-cell frame after ~26 cells and print codepoint garbage
+ *  on the next row. Only the wrap decision changes - emit_text still walks
+ *  one codepoint at a time and never duplicates a decoder. */
+static int utf8_word_cells(const char *p)
+{
+    int cells = 0;
+
+    while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '\n') {
+        p += utf8_seq_len(p);
+        cells++;
+    }
+    return cells;
+}
+
 static uint32_t utf8_codepoint(const char *p, size_t n)
 {
     uint32_t cp;
@@ -154,7 +171,108 @@ static const char *dom_presentation(uint32_t cp)
     for (size_t i = 0; i < sizeof(STAND_INS) / sizeof(STAND_INS[0]); i++) {
         if (STAND_INS[i].cp == cp) return STAND_INS[i].text;
     }
+    /* Anything else outside the shipped font's cmap would reach the cell sink
+     * as raw UTF-8 bytes (a tofu box or codepoint garbage on the device). The
+     * TUI font carries ASCII 0x20..0x7F, box drawing 0x2500..0x257F and symbols
+     * 0x2600..0x26FF (see tools/gen_tui_font.py RANGES); those pass through.
+     * CP437 degree (0x00B0) is NOT in those ranges, so it stays "deg" above.
+     * This is presentation only - the DOM still holds the real codepoint. */
+    if (cp >= 0x80 && !((cp >= 0x2500 && cp <= 0x257F) ||
+                        (cp >= 0x2600 && cp <= 0x26FF))) {
+        return "?";
+    }
     return NULL;
+}
+
+bool dom_image_sample_rgb565(const uint16_t *src, int src_w, int src_h,
+                             uint8_t *dst, int dst_w, int dst_h)
+{
+    if (src == NULL || dst == NULL || src_w < 1 || src_h < 1 ||
+        dst_w < 1 || dst_h < 1) {
+        return false;
+    }
+    for (int cy = 0; cy < dst_h; cy++) {
+        int sy = (int)((int64_t)cy * src_h / dst_h);
+
+        if (sy >= src_h) sy = src_h - 1;
+        for (int cx = 0; cx < dst_w; cx++) {
+            int sx = (int)((int64_t)cx * src_w / dst_w);
+            uint16_t px;
+            uint32_t rgb;
+            int r, g, b, lum, level;
+
+            if (sx >= src_w) sx = src_w - 1;
+            px = src[(size_t)sy * (size_t)src_w + (size_t)sx];
+            /* Same RGB565 unpacking, same nearest-neighbour rule and the same
+             * ansi_image_glyph / ansi_cga_nearest mapping as the live TUI
+             * sampler in tui_frame.h. This is its pure DOM equivalent, not a
+             * second ramp or palette. */
+            r = ((px >> 11) & 0x1F) << 3;
+            g = ((px >> 5) & 0x3F) << 2;
+            b = (px & 0x1F) << 3;
+            rgb = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+            lum = (r * 30 + g * 59 + b * 11) / 100;
+            level = lum * ANSI_IMAGE_RAMP_LAST / 255;
+            if (level < 0) level = 0;
+            if (level > ANSI_IMAGE_RAMP_LAST) level = ANSI_IMAGE_RAMP_LAST;
+            dst[(size_t)cy * (size_t)dst_w + (size_t)cx] =
+                (uint8_t)((ansi_cga_nearest(rgb) << 4) | level);
+        }
+    }
+    return true;
+}
+
+/** Sample one cell of an already-packed image grid. This is the cell-level
+ *  half of the same sampler: the RGB565 -> packed step above runs once at
+ *  load time, and layout only picks cells from that grid. */
+static uint8_t dom_image_cell(const dom_image_t *img, int cx, int cy,
+                              int dst_w, int dst_h)
+{
+    int sx = (int)((int64_t)cx * img->width / dst_w);
+    int sy = (int)((int64_t)cy * img->height / dst_h);
+
+    if (sx >= img->width) sx = img->width - 1;
+    if (sy >= img->height) sy = img->height - 1;
+    if (sx < 0) sx = 0;
+    if (sy < 0) sy = 0;
+    return img->pixels[(size_t)sy * (size_t)img->width + (size_t)sx];
+}
+
+/** CSS background-image repeats from the origin (the browser's floor(x/size)
+ *  modulo rule for a positive origin), so a backdrop tile wraps instead of
+ *  stretching. Same packed cell grid, same one sampler. */
+static uint8_t dom_image_cell_tiled(const dom_image_t *img, int cx, int cy)
+{
+    int sx = cx % img->width;
+    int sy = cy % img->height;
+
+    if (sx < 0) sx += img->width;
+    if (sy < 0) sy += img->height;
+    return img->pixels[(size_t)sy * (size_t)img->width + (size_t)sx];
+}
+
+/** Report one image outcome through the optional sink, with a safe default
+ *  for a missing native size (a cache hit stores only the packed cells). */
+static void dom_report_image(const render_ctx_t *c, const char *kind,
+                             const char *src, dom_image_state_t state,
+                             const dom_image_t *img, int fit_w, int fit_h,
+                             const char *alt)
+{
+    dom_image_report_t report;
+
+    if (c->ops->report_image == NULL) return;
+    memset(&report, 0, sizeof(report));
+    report.kind = kind;
+    report.src = (src != NULL && src[0] != '\0') ? src : "-";
+    report.state = state;
+    /* The caller's sink knows the pre-fit native size (it decoded the image);
+     * here the best available answer is the packed grid it handed us. */
+    report.native_w = img != NULL ? img->width : 0;
+    report.native_h = img != NULL ? img->height : 0;
+    report.fit_w = fit_w;
+    report.fit_h = fit_h;
+    report.alt = (alt != NULL && alt[0] != '\0') ? alt : "-";
+    c->ops->report_image(c->ops->ctx, &report);
 }
 
 static bool is_skip_tag(const char *tag)
@@ -314,7 +432,8 @@ static void emit_text(render_ctx_t *c, const char *text, const style_t *st)
         {
             const char *start = p;
             size_t bytes;
-            if (c->col > 1 && c->col + (int)strcspn(p, " \t\n") > c->ops->cols) {
+            if (c->col > 1 &&
+                c->col + utf8_word_cells(p) - 1 > c->ops->cols) {
                 newline(c);
             }
             while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '\n') p++;
@@ -463,24 +582,40 @@ static void render_flat_text(render_ctx_t *c, dom_node_t *node, style_t st,
                               int budget);
 static void render_children(render_ctx_t *c, dom_node_t *node, style_t st, int indent);
 
+/** Fit a packed image to the live page budget. TUI cells are ~2:1, so the
+ *  cell height is img_h/(img_w*2); a tall image is then narrowed to keep that
+ *  ratio. Shared by the drawing path and the outcome report. */
+static void dom_image_fit(const dom_image_t *img, int avail_w, int avail_h,
+                          int max_w, int *out_w, int *out_h)
+{
+    if (max_w > 0 && avail_w > max_w) avail_w = max_w;
+    if (avail_w < 4) avail_w = 4;
+    if (avail_h < 2) avail_h = 2;
+    *out_w = avail_w;
+    *out_h = (avail_w * img->height) / (img->width * 2);
+    if (*out_h < 2) *out_h = 2;
+    if (*out_h > avail_h) {
+        *out_h = avail_h;
+        *out_w = (avail_h * img->width * 2) / img->height;
+        if (*out_w > avail_w) *out_w = avail_w;
+        if (*out_w < 4) *out_w = 4;
+    }
+}
+
 static bool render_packed_image(render_ctx_t *c, const style_t *st,
                                const dom_image_t *img, int max_cell_w)
 {
-    int cell_w = c->ops->cols - c->col - 2;
+    int avail_w = c->ops->cols - c->col - 2;
+    int avail_h = c->ops->rows - c->row - 2;
+    int cell_w;
     int cell_h;
     int x, y;
     int saved_indent = c->indent;
 
-    if (max_cell_w > 0 && cell_w > max_cell_w) {
-        cell_w = max_cell_w;
-    }
-    if (cell_w < 4) cell_w = 4;
-    cell_h = (cell_w * img->height) / (img->width * 2);
-    if (cell_h < 2) cell_h = 2;
-    if (cell_h > 20) cell_h = 20;
-    if (c->row + cell_h + 2 > c->ops->rows) {
-        return false;
-    }
+    /* Fit to the LIVE page budget rather than dropping an oversized image:
+     * a large photo is scaled down, never silently replaced by alt text. */
+    if (avail_h < 2) return false;   /* no rows left at all: honest fallback */
+    dom_image_fit(img, avail_w, avail_h, max_cell_w, &cell_w, &cell_h);
     /* A centered image shifts the whole box (border included) so it sits in
      * the page's content column instead of hugging the left edge. The indent
      * makes newline() restart each row at the box's left cell. */
@@ -498,20 +633,30 @@ static bool render_packed_image(render_ctx_t *c, const style_t *st,
     for (y = 0; y < cell_h && !c->done; y++) {
         emit_text(c, "|", st);
         for (x = 0; x < cell_w; x++) {
-            int sx = (x * img->width) / cell_w;
-            int sy = (y * img->height) / cell_h;
-            uint8_t packed = img->pixels[sy * img->width + sx];
+            uint8_t packed = dom_image_cell(img, x, y, cell_w, cell_h);
             style_t cell = *st;
+            uint8_t fg = (uint8_t)(packed >> 4);
+            /* CSS opacity on an image box composites its sampled DOS colour
+             * over the page background via the ONE colour blend helper. */
+            if (st->opacity < 255) {
+                css_rgba_t over = css_color_from_dos((uint8_t)(c->ops->base_bg & 15));
+                css_rgba_t blended = css_color_blend(css_color_from_dos(fg),
+                                                     over, st->opacity);
+
+                fg = css_color_to_dos(&blended);
+            }
             /* The TUI label renders only the foreground colour and LVGL
              * treats a literal '#' as the recolor delimiter, so the ramp
              * MUST NOT contain '#' (see ansi_image_glyph). */
-            char glyph[2];
+            {
+                char glyph[2];
 
-            glyph[0] = ansi_image_glyph(packed & 0x0F);
-            glyph[1] = '\0';
-            cell.fg = (uint8_t)(packed >> 4);
-            cell.bg = 16;
-            emit_text(c, glyph, &cell);
+                glyph[0] = ansi_image_glyph(packed & 0x0F);
+                glyph[1] = '\0';
+                cell.fg = fg;
+                cell.bg = 16;
+                emit_text(c, glyph, &cell);
+            }
         }
         emit_text(c, "|", st);
         newline(c);
@@ -542,16 +687,29 @@ static void render_image(render_ctx_t *c, dom_node_t *node, const style_t *st)
         c->ops->load_image != NULL && node->src[0] != '\0' &&
         c->ops->load_image(c->ops->ctx, node->src, &img) &&
         img.pixels != NULL && img.width > 0 && img.height > 0) {
-        bool drawn = render_packed_image(c, st, &img, 32);
+        int fit_w;
+        int fit_h;
+        bool drawn;
 
+        dom_image_fit(&img, c->ops->cols - c->col - 2,
+                      c->ops->rows - c->row - 2, 32, &fit_w, &fit_h);
+        drawn = render_packed_image(c, st, &img, 32);
         free(img.pixels);
         if (drawn) {
+            dom_report_image(c, "img", node->src,
+                             fit_w < img.width || fit_h < img.height
+                                 ? DOM_IMAGE_RESIZED : DOM_IMAGE_OK,
+                             &img, fit_w, fit_h, node->alt);
             return;
         }
     }
     {
         char alt[300];
 
+        /* A decode failure is visible, not a silent gap: the alt text is the
+         * documented fallback and is reported before it is drawn. */
+        dom_report_image(c, "img", node->src, DOM_IMAGE_MISSING, &img,
+                         0, 0, node->alt);
         snprintf(alt, sizeof(alt), "[%s]", node->alt[0] ? node->alt : "image");
         emit_text(c, alt, st);
     }
@@ -568,13 +726,24 @@ static void render_canvas(render_ctx_t *c, dom_node_t *node, const style_t *st)
     if (c->ops->load_canvas != NULL &&
         c->ops->load_canvas(c->ops->ctx, node, &img) &&
         img.pixels != NULL && img.width > 0 && img.height > 0) {
-        bool drawn = render_packed_image(c, st, &img, 60);
+        int fit_w;
+        int fit_h;
+        bool drawn;
 
+        dom_image_fit(&img, c->ops->cols - c->col - 2,
+                      c->ops->rows - c->row - 2, 60, &fit_w, &fit_h);
+        drawn = render_packed_image(c, st, &img, 60);
         free(img.pixels);
         if (drawn) {
+            dom_report_image(c, "canvas", node->id,
+                             fit_w < img.width || fit_h < img.height
+                                 ? DOM_IMAGE_RESIZED : DOM_IMAGE_OK,
+                             &img, fit_w, fit_h, NULL);
             return;
         }
     }
+    dom_report_image(c, "canvas", node->id, DOM_IMAGE_FALLBACK, &img,
+                     0, 0, NULL);
     render_children(c, node, *st, c->indent);
 }
 
@@ -1293,6 +1462,8 @@ void dom_render_tree(dom_tree_t *tree, const dom_render_ops_t *ops)
                  * Detailed photographic backgrounds stop at the documented
                  * pool cap instead of covering the page with thousands of
                  * objects. */
+                uint8_t page_alpha = (uint8_t)(((uint32_t)tree->body->opacity *
+                    (tree->body->bg_alpha > 0 ? tree->body->bg_alpha : 255)) / 255u);
                 size_t slots = (size_t)ops->cols + 1u;
                 bg_run_t *runs =
                     p4heap_alloc_psram(slots * sizeof(bg_run_t) * 2u);
@@ -1306,15 +1477,30 @@ void dom_render_tree(dom_tree_t *tree, const dom_render_ops_t *ops)
                     int cur_n = 0;
 
                     for (int c = 0; c < ops->cols; ) {
-                        uint8_t packed = bg.pixels[(r % bg.height) * bg.width +
-                                                   (c % bg.width)];
+                        uint8_t packed = dom_image_cell_tiled(&bg, c, r);
                         uint8_t color = (uint8_t)(packed >> 4);
+                        uint8_t level = (uint8_t)(packed & 0x0F);
+                        /* The ramp level becomes the backdrop's alpha: dark
+                         * cells let the page colour through, bright cells
+                         * read strongly. One css_color_blend composites it
+                         * over the page before the run is emitted. */
+                        uint8_t alpha = (uint8_t)(((uint32_t)level * page_alpha) /
+                                                  ANSI_IMAGE_RAMP_LAST);
+                        css_rgba_t over = css_color_from_dos(
+                            (uint8_t)(ops->base_bg & 15));
+                        css_rgba_t blended = css_color_blend(
+                            css_color_from_dos(color), over, alpha);
                         int start = c;
 
+                        color = css_color_to_dos(&blended);
                         while (c < ops->cols) {
-                            packed = bg.pixels[(r % bg.height) * bg.width +
-                                               (c % bg.width)];
-                            if ((uint8_t)(packed >> 4) != color) {
+                            uint8_t next = dom_image_cell_tiled(&bg, c, r);
+                            uint8_t next_alpha = (uint8_t)(((uint32_t)(next & 0x0F) *
+                                                            page_alpha) /
+                                                           ANSI_IMAGE_RAMP_LAST);
+
+                            if ((uint8_t)(next >> 4) != (uint8_t)(packed >> 4) ||
+                                next_alpha != alpha) {
                                 break;
                             }
                             c++;
@@ -1323,6 +1509,7 @@ void dom_render_tree(dom_tree_t *tree, const dom_render_ops_t *ops)
                         cur[cur_n].len = c - start;
                         cur[cur_n].y0 = r;
                         cur[cur_n].color = color;
+                        cur[cur_n].alpha = color != 16 ? 255 : 0;
                         cur_n++;
                     }
                     /* Close the runs that did not continue into this row. */
@@ -1330,30 +1517,40 @@ void dom_render_tree(dom_tree_t *tree, const dom_render_ops_t *ops)
                         bool same = i < cur_n &&
                                     cur[i].start == prev[i].start &&
                                     cur[i].len == prev[i].len &&
-                                    cur[i].color == prev[i].color;
+                                    cur[i].color == prev[i].color &&
+                                    cur[i].alpha == prev[i].alpha;
 
                         if (same) {
                             cur[i].y0 = prev[i].y0;
                             continue;
                         }
-                        if (prev[i].color != 16) {
+                        if (prev[i].alpha > 0) {
                             ops->fill_bg(ops->ctx, prev[i].start + 1,
                                          prev[i].y0 + 1, prev[i].len,
-                                         r - prev[i].y0, prev[i].color, 255);
+                                         r - prev[i].y0, prev[i].color,
+                                         prev[i].alpha);
                         }
                     }
                     memcpy(prev, cur, (size_t)cur_n * sizeof(cur[0]));
                     prev_n = cur_n;
                 }
                 for (int i = 0; i < prev_n; i++) {
-                    if (prev[i].color != 16) {
+                    if (prev[i].alpha > 0) {
                         ops->fill_bg(ops->ctx, prev[i].start + 1,
                                      prev[i].y0 + 1, prev[i].len,
-                                     ops->rows - prev[i].y0, prev[i].color, 255);
+                                     ops->rows - prev[i].y0, prev[i].color,
+                                     prev[i].alpha);
                     }
                 }
+                dom_report_image(&ctx, "background", bg_src,
+                                 runs == NULL ? DOM_IMAGE_MISSING
+                                 : DOM_IMAGE_OK,
+                                 &bg, bg.width, bg.height, NULL);
                 p4heap_free(runs);
                 free(bg.pixels);
+            } else {
+                dom_report_image(&ctx, "background", bg_src, DOM_IMAGE_MISSING,
+                                 &bg, 0, 0, NULL);
             }
         }
     }

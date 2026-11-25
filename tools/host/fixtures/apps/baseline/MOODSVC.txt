@@ -1,5 +1,6 @@
 # batch-baseline-v1 fixture=MOODSVC
 [M-RICH-MOODSVC] host language extract
+[M-DOS-MOODSVC] screen=MOODSVC-HEADLESS panels=0 head="NONE" theme=mono bars=0 table=N spark=0 status=N
 W=sampler
 1
 [M-RICH-MOODSVC-K] host=p4

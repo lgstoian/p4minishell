@@ -108,7 +108,13 @@ Copyright protects expression, not ideas, so the architecture above is
 re-expressed in our own code (`components/browser/`, the `components/tui` page
 snapshots) with our own naming, structure and implementation. No file, function
 or table was copied and no licence text is required, because none was
-reproduced. **Across the v1.6 additive expansion (gfx toolkit, TUI frame and
+reproduced. The same applies to the explicit retro-MS-DOS visual direction
+(80x25 CP437 grid, box-drawn panels, DOS/CGA palette, chunky bitmap cell font,
+status bars, keyboard menus) and the DOS-styled web proofs: they are drawn by
+this project's own tools and renderer, with no new third-party artwork or font
+introduced. Ladybird remains a **BSD-2-Clause design credit only** — no C++/Rust
+source was copied — and Lua/MicroPython (MIT) and BMDS (MIT) remain design
+credits only (rows below). **Across the v1.6 additive expansion (gfx toolkit, TUI frame and
 widgets, modal sessions, HTML5/CSS/JS features and the signed native loader),
 no third-party source was copied at all: every new first-party file is
 project-authored MIT.** The only external source carried into the tree is code

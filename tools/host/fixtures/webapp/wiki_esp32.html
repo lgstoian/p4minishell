@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ESP32 - Wikipedia (offline fixture)</title>
+<style>
+body { background-color: #0c0c0c; color: #cccccc; }
+h1 { color: #f9f1a5; font-weight: bold; }
+h2 { color: #f9f1a5; font-weight: bold; }
+h3 { color: #f9f1a5; font-weight: bold; }
+p { color: #cccccc; }
+a { color: #61d6d6; text-decoration: underline; }
+ul { color: #cccccc; }
+th { color: #f9f1a5; font-weight: bold; background-color: #333333; }
+td { color: #cccccc; }
+footer { color: #a0a0a0; }
+</style>
+</head>
+<body>
+<!-- Host proof palette: the source page is light-on-white; the DOS cell grid
+     uses near-white text on a dark backdrop so the same DOM/CSS engine stays
+     legible. Link text, infobox, tables and sections are unchanged. -->
+<!-- Compact host first-screen: the same article content, laid out so the 80x25
+     proof shows the lead, the module image and the start of the infobox. The
+     full article, all sections and every link target remain below. -->
+<p><b>ESP32</b> by <a href="sd:/WIKI/ESP32.HTML#manufacturer">Espressif Systems</a> -
+240 MHz dual-core, Wi-Fi and Bluetooth on one die.</p>
+<p>Guide: <a href="sd:/WIKI/PROGRAMMING.HTML">official ESP-IDF page</a> - modules,
+toolchains and bindings.</p>
+<img src="esp32-module.bmp" alt="ESP-WROOM-32 module">
+<img src="esp32-die-missing.bmp" alt="ESP32 die shot unavailable">
+
+<h1>ESP32</h1>
+
+<p><b>ESP32</b> is a family of low-cost, energy-efficient microcontrollers that
+support both Wi-Fi and Bluetooth. The chips are designed by
+<a href="sd:/WIKI/ESP32.HTML#manufacturer">Espressif Systems</a> and combine a
+Tensilica Xtensa or RISC-V processor with wireless radios, SRAM and peripheral
+controllers on one die.</p>
+
+<table class="infobox">
+<tr><th>ESP32</th><th>Microcontroller</th></tr>
+<tr><th>Manufacturer</th><td>Espressif Systems</td></tr>
+<tr><th>Type</th><td>Microcontroller</td></tr>
+<tr><th>CPU</th><td>Tensilica Xtensa LX6 / LX7, RISC-V</td></tr>
+<tr><th>Memory</th><td>520 KiB SRAM</td></tr>
+<tr><th>Power</th><td>3.3 V DC</td></tr>
+<tr><th>Release date</th><td>6 September 2016</td></tr>
+<tr><th>Predecessor</th><td>ESP8266</td></tr>
+</table>
+
+<p>The ESP32 was announced in September 2016 as the successor to the
+<a href="sd:/WIKI/ESP32.HTML#history">ESP8266</a>. It is manufactured by TSMC
+on a 40 nm process and is typically embedded on device-specific printed
+circuit boards or offered as part of development kits with GPIO headers.</p>
+
+<h2>Features</h2>
+
+<p>The original ESP32 integrates a dual-core Tensilica Xtensa LX6 at up to
+240 MHz, 520 KiB of SRAM, flash and PSRAM interfaces, and an 802.11 b/g/n
+Wi-Fi radio with Bluetooth 4.2 BR/EDR and LE. Later family members add
+Xtensa LX7 cores, <a href="sd:/WIKI/PROGRAMMING.HTML">RISC-V</a> cores, USB
+OTG, more GPIOs and additional peripherals. All variants share the same SDK
+and are largely code-compatible.</p>
+
+<table class="specs">
+<tr><th>Feature</th><th>ESP32</th></tr>
+<tr><td>CPU</td><td>Xtensa LX6</td></tr>
+<tr><td>CPU frequency</td><td>240 MHz</td></tr>
+<tr><td>SRAM</td><td>520 KiB</td></tr>
+<tr><td>Wi-Fi</td><td>802.11 b/g/n</td></tr>
+<tr><td>Bluetooth</td><td>4.2 + BR/EDR, LE</td></tr>
+<tr><td>GPIO pins</td><td>34</td></tr>
+</table>
+
+<h2>QFN packaged chip and module</h2>
+
+<p>ESP32 silicon is housed in quad-flat no-leads (QFN) packages of varying
+sizes. The ESP-WROOM-32 module combines the chip with a crystal oscillator,
+flash memory, filter capacitors and an inverted-F PCB antenna.</p>
+
+<img src="esp32-module.bmp" alt="ESP-WROOM-32 module">
+
+<p>The package exposes 48 connection pads along the sides and one large
+thermal pad on the bottom. Module boards add the antenna, shielding and
+decoupling that a bare chip needs.</p>
+
+<h3>Chips and modules</h3>
+
+<p>Since the original release, a number of variants have been introduced:
+the ESP32-S2, ESP32-S3, ESP32-C2, ESP32-C3, ESP32-C5, ESP32-C6, ESP32-H2 and
+the ESP32-P4. The ESP32-P4 is a high-performance dual-core RISC-V part aimed
+at image and voice processing, while the ESP32-C6 adds Wi-Fi 6 and
+802.15.4 for Thread and Zigbee.</p>
+
+<img src="esp32-die.bmp" alt="ESP32 die shot">
+
+<p>A die shot shows how much of the silicon area is covered by the power
+distribution network on the top metal layers. The radio and digital logic
+share the same package but are laid out as separate blocks.</p>
+
+<h2>Programming</h2>
+
+<p>Start with the <a href="sd:/WIKI/PROGRAMMING.HTML">official ESP-IDF page</a>,
+then pick a language binding or framework.</p>
+
+<p>Programming languages, frameworks and environments used with the ESP32
+include ESP-IDF, the Arduino core, MicroPython and CircuitPython, Espruino,
+Mongoose OS, Rust, Swift, Zig and Forth. Most toolchains talk to the chip over
+USB-UART or the built-in USB Serial/JTAG peripheral.</p>
+
+<ul>
+<li>ESP-IDF - Espressif's official IoT Development Framework</li>
+<li>Arduino-ESP32 - the Arduino core for ESP32, S2, S3 and C3</li>
+<li>MicroPython and CircuitPython - Python 3 for microcontrollers</li>
+<li>Espruino - a JavaScript SDK and firmware</li>
+<li>Rust and Zig - systems languages with growing embedded support</li>
+</ul>
+
+<h2>Reception and use</h2>
+
+<p>Commercial, industrial and academic products use the ESP32 for connected
+sensors, lighting, wearables and audio. Examples include Alibaba's IoT LED
+wristbands, DingTalk's biometric attendance terminal and a long list of
+hobbyist development boards such as the ESP32-DevKitC and NodeMCU-32S.</p>
+
+<p>The chip is popular because it pairs Wi-Fi and Bluetooth with enough RAM
+and flash for a small TCP/IP stack and an application, at a low unit price.
+Its successor families keep the same programming model while adding
+security features, more memory and newer radios.</p>
+
+<img src="esp32-die-missing.bmp" alt="ESP32 die shot unavailable">
+
+<footer>Offline fixture derived from https://en.wikipedia.org/wiki/ESP32.
+Trimmed for the P4MiniShell browser acceptance suite; all URLs are local.</footer>
+
+</body>
+</html>
