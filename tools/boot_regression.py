@@ -48,7 +48,16 @@ BENIGN_WE = re.compile(
     r"|ldo: The voltage value 0 is out of the recommended range"
     r"|sdmmc_io:.*returned 0x107"
     r"|eh_sdio: SDIO aggr: unrecoverable write failure"
-    r"|eh_host_feat_rpc: request: no response uid=1 msg_id=350")
+    r"|eh_host_feat_rpc: request: no response uid=1 msg_id=350"
+    # The reference board has no RTC backup cell on the bench, so every cold
+    # boot reports a stale counter; the firmware applies last-known time and
+    # sntp/date corrects it. The Tab5's hosted SDIO link intentionally starts
+    # at 10 MHz before tuning on a PCB rated for 40 MHz. Both are expected
+    # power-on notes, not the W/E symptoms this gate was written to catch.
+    r"|rtc: RTC counter reset \(no VBAT\?\)"
+    r"|eh_sdio: Reset co-processor using GPIO\["
+    r"|eh_sdio: SDIO clock freq set to \[10000\]KHz"
+    r"|eh_host_port_xport_defaults: SDIO clock freq set to \[10000\]KHz")
 
 
 def capture_boot(ser):

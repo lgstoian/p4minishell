@@ -15,11 +15,20 @@
 
 #include "unity.h"
 #include "audio.h"
+#include "audio_engine.h"
 #include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+
+/*
+ * The engine regressions are static helpers invoked from two already
+ * registered Unity cases: test_main.c is owned by the parent and adding new
+ * test_* symbols there would leave an unregistered suite (green_guard).
+ */
+static void audio_engine_regression_checks(void);
+static void audio_engine_bound_checks(void);
 
 void test_audio_output_parse(void)
 {
@@ -130,6 +139,8 @@ void test_audio_mic_stats(void)
     audio_mic_accumulate(NULL, 4, &sum_sq, &peak);
     audio_mic_accumulate(block, 4, NULL, &peak);
     audio_mic_stats_finish(sum_sq, 4, peak, NULL, NULL);
+
+    audio_engine_regression_checks();
 }
 
 void test_audio_mic_goertzel(void)
@@ -196,4 +207,146 @@ void test_audio_wav_params_ok(void)
     TEST_ASSERT_FALSE(audio_wav_params_ok(1, 1, 8000, 16, 100));    /* rate */
     TEST_ASSERT_FALSE(audio_wav_params_ok(1, 1, 48000, 16, 100));   /* rate */
     TEST_ASSERT_FALSE(audio_wav_params_ok(1, 1, 22050, 16, 0));     /* empty */
+
+    audio_engine_bound_checks();
+}
+
+/* ---- audio engine (pure mixer) regressions ---------------------------- */
+
+static void audio_engine_regression_checks(void)
+{
+    audio_engine_t engine;
+    audio_engine_env_t env;
+    audio_engine_seq_event_t first;
+    audio_engine_seq_event_t second;
+    int16_t out[192];
+    const int16_t music[4] = { 1000, 2000, 3000, 4000 };
+    const int16_t sfx[4] = { 500, 500, 500, 500 };
+    const int16_t loud[1] = { 30000 };
+    const int16_t unit[1] = { 10000 };
+    const int16_t steady[8] = { 5000, 5000, 5000, 5000,
+                                5000, 5000, 5000, 5000 };
+    int16_t whole[16];
+    int16_t chunks[16];
+    int64_t sum_sq = 0;
+    int peak = 0;
+    int i;
+
+    /* Envelope parsing: presets, explicit values and rejects. */
+    TEST_ASSERT_TRUE(audio_engine_env_parse("flat", &env));
+    TEST_ASSERT_EQUAL_UINT32(0, env.attack_ms);
+    TEST_ASSERT_EQUAL_INT(100, env.sustain_pct);
+    TEST_ASSERT_TRUE(audio_engine_env_parse("5,20,40,40", &env));
+    TEST_ASSERT_EQUAL_UINT32(5, env.attack_ms);
+    TEST_ASSERT_EQUAL_UINT32(20, env.decay_ms);
+    TEST_ASSERT_EQUAL_INT(40, env.sustain_pct);
+    TEST_ASSERT_EQUAL_UINT32(40, env.release_ms);
+    TEST_ASSERT_FALSE(audio_engine_env_parse("1,2,3", &env));
+    TEST_ASSERT_FALSE(audio_engine_env_parse("1,2,101,3", &env));
+
+    /* Sample-accurate sequencing: 250 ms at 1 kHz is exactly 250 samples. */
+    TEST_ASSERT_TRUE(audio_engine_seq_parse("440:100@250:80", 1000, &first));
+    TEST_ASSERT_EQUAL_UINT32(250, first.start_sample);
+    TEST_ASSERT_EQUAL_UINT32(100, first.length_samples);
+    TEST_ASSERT_EQUAL_INT(440, first.freq_hz);
+    TEST_ASSERT_EQUAL_INT(80, first.gain_pct);
+    TEST_ASSERT_TRUE(audio_engine_seq_parse("660:50@350", 1000, &second));
+    TEST_ASSERT_EQUAL_UINT32(350, second.start_sample);
+    TEST_ASSERT_TRUE(second.start_sample > first.start_sample);
+    TEST_ASSERT_FALSE(audio_engine_seq_parse("440:100@250:junk", 1000, &first));
+
+    /* Exact two-bus mixing: no hidden gain, stereo duplication. */
+    audio_engine_init(&engine, 1000);
+    TEST_ASSERT_EQUAL_INT(0, audio_engine_add_pcm(&engine, 0, music, 4, 1,
+                                                   100, AUDIO_ENGINE_BUS_MUSIC, NULL));
+    TEST_ASSERT_EQUAL_INT(1, audio_engine_add_pcm(&engine, 0, sfx, 4, 1,
+                                                   100, AUDIO_ENGINE_BUS_SFX, NULL));
+    audio_engine_render(&engine, out, 4, 0);
+    for (i = 0; i < 4; i++) {
+        TEST_ASSERT_EQUAL_INT16((int16_t)(music[i] + sfx[i]), out[2 * i]);
+        TEST_ASSERT_EQUAL_INT16(out[2 * i], out[2 * i + 1]);
+    }
+
+    /* Clipping saturates: an unwrapped sum would read -6536, not +32767. */
+    audio_engine_init(&engine, 1000);
+    TEST_ASSERT_EQUAL_INT(0, audio_engine_add_pcm(&engine, 0, loud, 1, 1,
+                                                   100, AUDIO_ENGINE_BUS_MUSIC, NULL));
+    TEST_ASSERT_EQUAL_INT(1, audio_engine_add_pcm(&engine, 0, loud, 1, 1,
+                                                   100, AUDIO_ENGINE_BUS_SFX, NULL));
+    audio_engine_render(&engine, out, 1, 0);
+    TEST_ASSERT_EQUAL_INT16(32767, out[0]);
+
+    /* ADSR: attack ramp, decay to sustain, release back to silence. */
+    audio_engine_init(&engine, 1000);
+    TEST_ASSERT_TRUE(audio_engine_env_parse("5,20,40,40", &env));
+    TEST_ASSERT_EQUAL_INT(0, audio_engine_add_pcm(&engine, 0, unit, 1, 40,
+                                                   100, AUDIO_ENGINE_BUS_MUSIC, &env));
+    audio_engine_render(&engine, out, 85, 0);
+    TEST_ASSERT_INT_WITHIN(1, 0, out[0]);       /* attack starts at zero */
+    TEST_ASSERT_INT_WITHIN(1, 4000, out[4]);    /* mid-attack (frame 2) */
+    TEST_ASSERT_EQUAL_INT16(10000, out[10]);    /* attack complete (frame 5) */
+    TEST_ASSERT_INT_WITHIN(1, 8500, out[20]);   /* into decay (frame 10) */
+    TEST_ASSERT_INT_WITHIN(1, 4000, out[60]);   /* sustain (frame 30) */
+    TEST_ASSERT_INT_WITHIN(1, 4000, out[80]);   /* release begins (frame 40) */
+    TEST_ASSERT_EQUAL_INT16(0, out[160]);       /* beyond the release tail */
+
+    /* Ducking: SFX attenuates the music bus only inside its window. */
+    audio_engine_init(&engine, 1000);
+    engine.duck_gain_q16 = audio_engine_gain_q16(25);
+    engine.duck_attack_ms = 0;
+    engine.duck_release_ms = 0;
+    TEST_ASSERT_EQUAL_INT(0, audio_engine_add_pcm(&engine, 0, unit, 1, 10,
+                                                   100, AUDIO_ENGINE_BUS_MUSIC, NULL));
+    TEST_ASSERT_EQUAL_INT(1, audio_engine_add_pcm(&engine, 2, unit, 1, 2,
+                                                   100, AUDIO_ENGINE_BUS_SFX, NULL));
+    audio_engine_render(&engine, out, 6, 0);
+    TEST_ASSERT_EQUAL_INT16(10000, out[0]);
+    TEST_ASSERT_EQUAL_INT16(12500, out[4]);  /* 2500 ducked music + 10000 sfx */
+    TEST_ASSERT_EQUAL_INT16(10000, out[8]);
+
+    /* Absolute-cursor chunking equals one-shot offline render. */
+    audio_engine_init(&engine, 1000);
+    TEST_ASSERT_EQUAL_INT(0, audio_engine_add_pcm(&engine, 0, steady, 8, 1,
+                                                   100, AUDIO_ENGINE_BUS_MUSIC, NULL));
+    audio_engine_render(&engine, whole, 8, 0);
+    audio_engine_render(&engine, chunks, 3, 0);
+    audio_engine_render(&engine, chunks + 6, 5, 3);
+    TEST_ASSERT_EQUAL_MEMORY(whole, chunks, 16 * sizeof(int16_t));
+    for (i = 0; i < 8; i++) {
+        TEST_ASSERT_EQUAL_INT16(5000, whole[2 * i]);
+    }
+
+    /* Meter: peak and RMS of a DC-free alternating block. */
+    {
+        const int16_t alternating[8] = { 1000, -1000, 1000, -1000,
+                                         1000, -1000, 1000, -1000 };
+
+        audio_engine_meter_accumulate(alternating, 4, &sum_sq, &peak);
+    }
+    TEST_ASSERT_EQUAL_INT(1000, peak);
+    TEST_ASSERT_EQUAL_INT(1000, audio_engine_meter_finish(sum_sq, 8));
+    TEST_ASSERT_EQUAL_INT(0, audio_engine_meter_finish(0, 0));
+}
+
+static void audio_engine_bound_checks(void)
+{
+    audio_engine_t engine;
+    int index;
+    int i;
+
+    audio_engine_init(&engine, 48000);
+    for (i = 0; i < (int)AUDIO_ENGINE_MAX_CHANNELS; i++) {
+        index = audio_engine_add_tone(&engine, (uint32_t)i * 480u, 480u,
+                                      440, 100, AUDIO_ENGINE_BUS_MUSIC, NULL);
+        TEST_ASSERT_EQUAL_INT(i, index);
+    }
+    TEST_ASSERT_TRUE(audio_engine_full(&engine));
+    TEST_ASSERT_EQUAL_INT(AUDIO_ENGINE_MAX_CHANNELS,
+                          (int)audio_engine_count(&engine));
+    /* The next add is refused: the channel table never grows. */
+    TEST_ASSERT_EQUAL_INT(-1, audio_engine_add_tone(&engine, 0, 480, 440, 100,
+                                                    AUDIO_ENGINE_BUS_MUSIC, NULL));
+    audio_engine_reset(&engine);
+    TEST_ASSERT_EQUAL_UINT32(0, audio_engine_count(&engine));
+    TEST_ASSERT_FALSE(audio_engine_full(&engine));
 }

@@ -86,10 +86,10 @@ def run(dev, ctx):
     links = dev.run("browser links", timeout=30)
     c.expect("page registered its links", "browser sd:/WEB/PAGE2.HTML", links)
     dev.run("browser link 0", timeout=60)
-    dump = dev.run("tui dump 1 4", timeout=30)
+    dump = dev.run("tui dump 1 16", timeout=30)
     c.expect("following a link navigates", "DOCUMENTATION", dump)
     dev.run("browser back", timeout=60)
-    dump = dev.run("tui dump 1 4", timeout=30)
+    dump = dev.run("tui dump 1 16", timeout=30)
     c.expect("browser back returns to the previous page", "DEVICE DASHBOARD", dump)
 
     # `html` is the blocking modal form of the same engine (Esc/q closes).

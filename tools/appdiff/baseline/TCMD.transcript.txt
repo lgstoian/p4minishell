@@ -1,6 +1,13 @@
 launch TCMD
 [M-TCMD]
 title: set to 'Commander'
+[M-RICH-TCMD] language tour
+[M-RICH-TCMD-K] left=/
+[M-RICH-TCMD-K] right=/APPS
+LBL=commander
+N
+[M-RICH-TCMD-F] width=N
+[M-RICH-TCMD-S] panes=/,/APPS m=N pad=commander.....
 LD=/
 RD=/APPS
 LCUR=N
@@ -9,13 +16,27 @@ PA=L
 ST=ready
 LDONE=/
 RDONE=/APPS
-LTOP=-N
 LTOP=N
-RTOP=-N
 RTOP=N
 LAC=N
 RAC=N
 LAC=N
+DOS_THEME=ice
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PBG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PBG=N
+PACC=N
+[M-DOS-TCMD] screen=TCMD-DUALPANE panels=N head="COMMANDER" theme=ice bars=N table=N spark=N status=Y
 [M-TCMD-R]
 key? q
 [M-TCMD-DONE]

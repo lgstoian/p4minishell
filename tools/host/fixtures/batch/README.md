@@ -15,6 +15,7 @@ directory. A missing root is never faked as a mounted card.
 |------|--------|
 | `HELLO.BAT` | `@echo off`, `set NAME=...`, `set /a N=1+2`, `if "%NAME%"=="p4"`, `call :sub`, `return`, `goto :eof`, and the `[M-HOST-BATCH-DONE]` marker |
 | `FEATURES.BAT` | the additive v1.6 surfaces through the same one interpreter: `str /rev|/count|/pad`, `map /set|/values|/incr|/get`, `for /K` (key **and** live value binding), `func NAME`/`return <expr>` publishing `%RESULT%`, `trap /on errorlevel` and `trap /on exit`, plus `[M-HOST-STR]` / `[M-HOST-FORK]` / `[M-HOST-MAP]` / `[M-HOST-FUNC]` / `[M-HOST-TRAP]` / `[M-HOST-EXIT]` markers |
+| `REGISTRY.BAT` | `reg /b set|get|list|del` over the **one** `storage_ini` core with a real read-back (a fake write cannot satisfy the baseline), `lib /b list|info|load` through the one `call <file.bat>::<routine>` engine (`APPS/APPLIB.BAT` + `APPS/LIBS.INI`), and `try`/`finally` scoped error/unwind via the existing trap stack, with the failure ERRORLEVEL preserved |
 
 Both fixtures use only the firmware's own `shell_command_*` implementations in
 `batch.c` / `batch_expr.c` / `batch_env.c` / `batch_str.c` / `batch_map.c` /
@@ -37,9 +38,11 @@ idf.py -B build-wsl build
 Then:
 
 ```bash
-python tools/host_batch_run.py --check          # default fixture: HELLO
+python tools/host_batch_run.py --check          # all fixtures (HELLO, FEATURES, REGISTRY)
+python tools/host_batch_run.py --fixture REGISTRY --check
 python tools/host_batch_run.py --update         # regenerate baseline/*.txt
-python tools/host_batch_run.py --self-test      # red canary for the gate itself
+python tools/host_batch_run.py --self-test      # red canaries incl. fake registry write,
+                                               # duplicate library path, swallowed ERRORLEVEL
 ```
 
 The gate locates the ELF by searching the build directories under the repo

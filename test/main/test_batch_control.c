@@ -57,6 +57,67 @@ static void check_trap_event_helpers(void)
     trap_init();
 }
 
+/**
+ * v1.6 `try`/`finally` pure scope stack. These are the exact helpers the
+ * frame-unwind hook uses; the LIFO order and the errorlevel contract are
+ * checked here so a cleanup can never silently swallow a failure. Folded into
+ * an existing registered suite since test_main.c owns the RUN_TEST list.
+ */
+static void check_try_finally_helpers(void)
+{
+    batch_try_state_t state;
+    char catch_label[64];
+    char finally_label[64];
+    int i;
+
+    batch_try_state_init(&state);
+    TEST_ASSERT_EQUAL_INT(0, batch_try_depth(&state));
+    TEST_ASSERT_FALSE(batch_try_pop(&state, catch_label, sizeof(catch_label),
+                                   finally_label, sizeof(finally_label)));
+    TEST_ASSERT_FALSE(batch_try_set_finally(&state, ":clean"));
+    TEST_ASSERT_FALSE(batch_try_push(&state, "bare"));   /* labels need ':' */
+
+    TEST_ASSERT_TRUE(batch_try_push(&state, ":catch1"));
+    TEST_ASSERT_EQUAL_INT(1, batch_try_depth(&state));
+    TEST_ASSERT_TRUE(batch_try_set_finally(&state, ":clean1"));
+    TEST_ASSERT_TRUE(batch_try_push(&state, ":catch2"));
+    TEST_ASSERT_TRUE(batch_try_set_finally(&state, ":clean2"));
+
+    /* Unwind is LIFO: the innermost cleanup runs first. */
+    TEST_ASSERT_TRUE(batch_try_pop(&state, catch_label, sizeof(catch_label),
+                                  finally_label, sizeof(finally_label)));
+    TEST_ASSERT_EQUAL_STRING(":catch2", catch_label);
+    TEST_ASSERT_EQUAL_STRING(":clean2", finally_label);
+    TEST_ASSERT_EQUAL_INT(1, batch_try_depth(&state));
+    TEST_ASSERT_TRUE(batch_try_pop(&state, catch_label, sizeof(catch_label),
+                                  finally_label, sizeof(finally_label)));
+    TEST_ASSERT_EQUAL_STRING(":catch1", catch_label);
+    TEST_ASSERT_EQUAL_STRING(":clean1", finally_label);
+    TEST_ASSERT_EQUAL_INT(0, batch_try_depth(&state));
+    TEST_ASSERT_FALSE(batch_try_pop(&state, catch_label, sizeof(catch_label),
+                                   finally_label, sizeof(finally_label)));
+
+    /* Capacity is bounded and NULL is safe. */
+    for (i = 0; i < BATCH_TRY_SCOPE_MAX; i++) {
+        TEST_ASSERT_TRUE(batch_try_push(&state, ":scope"));
+    }
+    TEST_ASSERT_FALSE(batch_try_push(&state, ":overflow"));
+    batch_try_state_init(&state);
+    batch_try_state_init(NULL);
+    TEST_ASSERT_FALSE(batch_try_push(NULL, ":x"));
+    TEST_ASSERT_FALSE(batch_try_set_finally(NULL, ":x"));
+    TEST_ASSERT_FALSE(batch_try_pop(NULL, catch_label, sizeof(catch_label),
+                                   finally_label, sizeof(finally_label)));
+    TEST_ASSERT_EQUAL_INT(0, batch_try_depth(NULL));
+
+    /* A zero cleanup code cannot swallow a failure; an explicit non-zero
+     * code is the cleanup's own verdict. */
+    TEST_ASSERT_EQUAL_INT(7, batch_try_final_errorlevel(7, 0));
+    TEST_ASSERT_EQUAL_INT(9, batch_try_final_errorlevel(7, 9));
+    TEST_ASSERT_EQUAL_INT(0, batch_try_final_errorlevel(0, 0));
+    TEST_ASSERT_EQUAL_INT(3, batch_try_final_errorlevel(3, 0));
+}
+
 /* ========================================================================
  * LABEL SCANNING
  * ======================================================================== */
@@ -243,6 +304,7 @@ void test_batch_on_dispatch_selection(void)
     TEST_ASSERT_NULL(batch_on_select(none, (int)index));
 
     check_trap_event_helpers();
+    check_try_finally_helpers();
 }
 
 /* ========================================================================

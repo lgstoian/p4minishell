@@ -1,17 +1,4 @@
-obj
-W
-W
-BT
-U
-S
-!
-M N.NM
-M N.NM
-N%
-N/C
-#cccccc ╔═══════
 Zettelkasten
-obj
 N. New note
 N. List notes
 N. View note
@@ -20,6 +7,5 @@ N. Delete note
 N. Export
 N. Import
 N. Back
-obj
 Cancel
 Text

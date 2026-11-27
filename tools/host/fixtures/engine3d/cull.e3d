@@ -1,0 +1,15 @@
+# Cull proof: face 0 is front-facing, face 1 is the same winding reversed.
+# With backface culling on, exactly face 1 must disappear.
+canvas 64 64
+camera 0 0 -8 0 0 0 0 1 0
+project 90 1 1 1 100
+light 0 0 1 256
+mode solid cull
+mesh pair 12 6
+v -2 -2 0
+v 2 -2 0
+v 0 2 0
+f 0 1 2
+f 0 2 1
+end
+draw pair

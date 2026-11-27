@@ -1,0 +1,104 @@
+<UserControl x:Class="P4SyncGui.Views.FilesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel>
+        <TextBlock Text="Files" Style="{StaticResource PageTitle}" />
+        <TextBlock Text="Diff and dry-run plan, then push or pull exactly one file at a time over bridge-owned SDFX transfer."
+                   Style="{StaticResource SubTitle}" Margin="0,4,0,18" />
+
+        <Grid Margin="0,0,0,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Style="{StaticResource Card}" Grid.Column="0" Margin="0,0,8,0">
+                <StackPanel>
+                    <TextBlock Text="Local" Style="{StaticResource SectionTitle}" />
+                    <DockPanel Margin="0,0,0,10">
+                        <Button Content="Browse…" DockPanel.Dock="Right" Margin="8,0,0,0"
+                                Command="{Binding BrowseLocalCommand}" IsEnabled="{Binding App.IsIdle}"
+                                AutomationProperties.Name="Browse local sync folder" />
+                        <TextBox Text="{Binding LocalFolder, UpdateSourceTrigger=PropertyChanged}"
+                                 AutomationProperties.Name="Local sync folder" />
+                    </DockPanel>
+                    <ListBox ItemsSource="{Binding LocalFiles}" SelectedItem="{Binding SelectedLocal, Mode=TwoWay}"
+                             MinHeight="180" MaxHeight="300" AutomationProperties.Name="Local files">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <DockPanel Margin="4,4">
+                                    <TextBlock Text="{Binding Size, StringFormat='{}{0:N0} B'}" DockPanel.Dock="Right"
+                                               Foreground="{DynamicResource MutedBrush}" Margin="12,0,0,0" />
+                                    <TextBlock Text="{Binding Path}" />
+                                </DockPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <Button Content="Push selected file →" Margin="0,12,0,0" HorizontalAlignment="Right"
+                            Style="{StaticResource PrimaryButton}" Command="{Binding PushCommand}"
+                            IsEnabled="{Binding App.IsIdle}" AutomationProperties.Name="Push the selected local file" />
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource Card}" Grid.Column="1" Margin="8,0,0,0">
+                <StackPanel>
+                    <TextBlock Text="Device" Style="{StaticResource SectionTitle}" />
+                    <DockPanel Margin="0,0,0,10">
+                        <TextBlock Text="Remote folder:" DockPanel.Dock="Left" VerticalAlignment="Center"
+                                   Margin="0,0,8,0" Foreground="{DynamicResource MutedBrush}" />
+                        <TextBox Text="{Binding RemoteFolder, UpdateSourceTrigger=PropertyChanged}"
+                                 AutomationProperties.Name="Remote device folder" />
+                    </DockPanel>
+                    <ListBox ItemsSource="{Binding DeviceFiles}" SelectedItem="{Binding SelectedDeviceFile, Mode=TwoWay}"
+                             MinHeight="180" MaxHeight="300" AutomationProperties.Name="Device files from the dry-run plan">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <DockPanel Margin="4,4">
+                                    <TextBlock Text="{Binding Size, StringFormat='{}{0:N0} B'}" DockPanel.Dock="Right"
+                                               Foreground="{DynamicResource MutedBrush}" Margin="12,0,0,0" />
+                                    <TextBlock Text="{Binding Path}" />
+                                </DockPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <Button Content="← Pull selected file" Margin="0,12,0,0" HorizontalAlignment="Right"
+                            Command="{Binding PullCommand}" IsEnabled="{Binding App.IsIdle}"
+                            AutomationProperties.Name="Pull the selected device file" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <Border Style="{StaticResource Card}">
+            <StackPanel>
+                <DockPanel>
+                    <TextBlock Text="Dry-run report" Style="{StaticResource SectionTitle}" DockPanel.Dock="Left" />
+                    <Button Content="Plan / refresh listing" DockPanel.Dock="Right" HorizontalAlignment="Right"
+                            Command="{Binding PlanCommand}" IsEnabled="{Binding App.IsIdle}"
+                            Style="{StaticResource PrimaryButton}" AutomationProperties.Name="Run a dry-run plan" />
+                </DockPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                    <TextBlock Text="Conflict policy: " Foreground="{DynamicResource MutedBrush}" />
+                    <TextBlock Text="{Binding ConflictPolicy}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                </StackPanel>
+                <TextBlock Text="{Binding PlanSummary}" Style="{StaticResource SubTitle}" Margin="0,0,0,10" />
+                <ListBox ItemsSource="{Binding Steps}" MinHeight="90" MaxHeight="220"
+                         AutomationProperties.Name="Dry-run plan steps">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="4,3">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="90" />
+                                    <ColumnDefinition Width="220" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding Action}" Foreground="{DynamicResource AccentBrush}" Grid.Column="0" />
+                                <TextBlock Text="{Binding Path}" Grid.Column="1" />
+                                <TextBlock Text="{Binding Detail}" Foreground="{DynamicResource MutedBrush}" Grid.Column="2" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

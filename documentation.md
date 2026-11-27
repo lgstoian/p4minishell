@@ -267,6 +267,39 @@ Host-only backends are test-only (`test/host/`, `tools/host/`) and report honest
 "unavailable" verdicts; a host gate pass is never hardware sign-off
 ([`harness.md`](harness.md) §0/§2.2).
 
+## Expanded subsystems (v1.6.0)
+
+Every new facade is a thin batch-callable front door over the ONE component that
+already owns the capability. Nothing below adds a second driver, decoder,
+renderer, raster path, dispatcher or settings core — that would violate ADR-4
+and the Hard Rules in [`ai-context.md`](ai-context.md). Where a pure core needs
+board state it calls an accessor the owner already exports; a subsystem that
+cannot answer reports `unavailable` rather than inventing a value.
+
+| Facade | Source | Delegates to the ONE existing owner |
+|--------|--------|-------------------------------------|
+| `os pm\|drv\|io\|fs\|disk\|net\|mem\|sec\|ver\|pwr [/b]` | `components/command/os_commands.c` | FreeRTOS task list, batch start pool, `board_caps`/GPIO table, USB/SD/serial/input, `storage` capacity, `p4heap`/`heap_caps`, `pkg`/security trust. Read-only; `unavailable` + ERRORLEVEL 1; `/b` machine rows. |
+| Power / sleep | `components/command/power_commands.c`, `config_cmd.c` | The existing power/sleep arming in `power_commands.c`, the header idle tick and `display_set_power_state()`. Stale deepsleep timer disabled, wake-source leakage cleared, `DISPLAY_TIMEOUT` 64-bit-clamped before narrowing; pure `shell_power_clamp_idle_seconds`. |
+| `audio mix\|sfx\|seq\|env\|gain\|meter` | `components/audio/audio_engine.c`, `components/command/audioengine_commands.c` | One codec + one playback task in `components/audio/`; Q16 mixer, ADSR, sequencer, SFX bus and ducking produce deterministic offline PCM. Legacy `beep`/`tone`/`wavplay` still ride the same owner. BMDS ideas re-expressed, no code copied (`licence.md`). |
+| `video play\|status\|stop`, `epub …`, `archive …` | `components/video/**`, `components/epub/**`, `components/archive/**` | ONE `imagefile` decoder and ONE TUI sampler for video frames; pure EPUB nav/TOC core over the existing ZIP/HTML readers; one USTAR/CRC core with machine rows. No second decoder, player or archive format. |
+| `gfx3d …` | `components/gfx3d/**`, `components/command/engine3d_commands.c` | Q16 math (BMDS ideas, no copied code) and every pixel through the ONE `gfx_surface` raster path and the one DOS palette — the same surface the rest of `gfx` uses. |
+| `reg [/b] …` | `components/command/reg_commands.c` | The one `storage_ini.c` `KEY=VALUE` core and its atomic temp+rename write path; `/b` uncoloured rows. |
+| `lib [/b] …` | `components/command/lib_commands.c` | Shared batch/applib routines from `sd:/APPS/LIBS.INI` through the existing `call <file.bat>::<routine>` library-call path — **not** native dynamic linking, no `dlopen`. |
+| `try :catch` / `finally :cleanup` | `components/batch/**` | The one trap scope stack with LIFO unwind and preserved ERRORLEVEL; no second exception dispatcher. |
+
+**Batch / SD-app compatibility contract.** All of the above are ordinary verbs:
+they set an ERRORLEVEL (0 success / 1 unavailable or not found / 2 usage) so
+`if errorlevel`, `&&`/`||` and `trap` work unchanged, and every `/b` form emits
+uncoloured machine rows suitable for `for /f`, pipes and redirect. SD-app
+conventions are unchanged: apps keep their data beside the shim via
+`%APPDRIVE%`/`%APPROOT%`, `launch` reads `APPINFO` from SD or USB, and the
+batch library-call and INI cores stay on the guarded SD session. The facades
+are registered through the same `shell_command_ops_t` /
+`batch_command_ops_t` inversion as every other command family, so the shell and
+batch engines never include the command layer. Their gates compile or drive the
+shipped code and are board-free pre-gates only — hardware sign-off on the two
+boards is still pending (`harness.md` §0/§2.2).
+
 ## Configuration system
 
 All tunable values are centralized in `p4minishell_config.h`, organized by
@@ -1843,6 +1876,16 @@ small and free of private-state access.
   `tools/p4test_run.py`. The destructive reset/format paths drive the EXISTING
   firmware `config factory` and `format` commands; nothing is duplicated on the
   host.
+- **P4Sync host companion.** `tools/p4sync/` (agent CLI + JSON-lines bridge)
+  and the Windows WPF client `apps/p4sync_gui/` are consumers of that one
+  harness: they reuse the same `DeviceSession`, `sdbridge`, `pim_sync` and
+  screenshot path and add no second serial/framing/merge implementation and no
+  firmware verb. The GUI is only a JSON client; credentials stay in the OS.
+  The board-free gate is `tools/p4sync_gate.py --check` (51 checks; 18
+  red canaries with `--self-test`). See
+  [`tools/p4sync/README.md`](tools/p4sync/README.md) and
+  [`apps/p4sync_gui/README.md`](apps/p4sync_gui/README.md); a mock pass is a
+  pre-gate, never hardware sign-off (`harness.md` §0/§2.2).
 - **Autonomous dogfooding.** `tools/dogfood.py` + `tools/p4test/agent.py` run a
   seedable policy that exercises the shell, files, apps, modals and animation
   surfaces, screenshots every action, and journals anomalies (panic, timeout,

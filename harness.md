@@ -26,8 +26,10 @@ The **host unit lane** (§2.2) is an additional pre-gate: it catches logic
 regressions before a board is free, and it must stay green when a change
 touches a source it compiles. It is **never** a substitute for this rule — a
 host pass signs off nothing about hardware. The same applies to all v1.6 host
-gates (batch, webapp, gfx, tui, modal, native payload checker) and the visual
-proof gates (web-screen generator, visual proof gate and its canaries): they
+gates (batch, webapp, gfx, tui, modal, native payload checker, P4Sync bridge,
+and the new `os`/`power`/`audio`/`video`/`engine3d` subsystem gates) and the
+visual proof gates (web-screen generator, visual proof gate and its
+canaries): they
 compile or drive shipped code and the one shared pixel model, never a fake
 backend, and none requires or replaces a board.
 
@@ -100,6 +102,18 @@ python tools/host_apps_gate.py --check     # 34 apps, 679 host assertions, 45 ho
 python tools/make_web_screenshots.py --check  # DOS web proof PNGs (host render)
 python tools/visual_proof_gate.py --check     # palette, box borders, ink bands, signatures
 python tools/visual_proof_gate.py --self-test # red canaries (no board)
+python tools/p4sync_gate.py --check           # P4Sync CLI/bridge: 51 checks, no serial port
+python tools/p4sync_gate.py --self-test       # 18 P4Sync red canaries
+python tools/host_os_gate.py --check          # v1.6: os facade, 14 cases / 144 checks
+python tools/host_os_gate.py --self-test      # os facade red canaries (no board)
+python tools/host_power_gate.py --check       # v1.6: power/sleep, 300 checks, 4 board profiles
+python tools/host_power_gate.py --self-test   # power red canaries (no board)
+python tools/host_audio_gate.py --check       # v1.6: audio engine, 99 checks
+python tools/host_audio_gate.py --self-test   # audio red canaries (no board)
+python tools/host_video_gate.py --check       # v1.6: video/EPUB/archive, 18 assertions
+python tools/host_video_gate.py --self-test   # video red canaries (no board)
+python tools/host_engine3d_gate.py --check    # v1.6: 3D engine, 4 fixtures / 41 assertions
+python tools/host_engine3d_gate.py --self-test # engine3d red canaries (no board)
 # size budget runs only when build/p4minishell.elf exists
 python tools/p4test_run.py --static    # the SAME gate list, no board
 ```
@@ -119,7 +133,10 @@ fixtures (the ESP32 wiki proof plus the four DOS pages): 271 assertions against
 exact baselines captured from that renderer, plus 11 labelled STATIC wiring
 checks; `--self-test` runs 9 red canaries. It proves no device behaviour:
 live HTTPS, the full 2000-row page, real LVGL input and glass taps remain
-DEVICE-ONLY. `host_all_gates.py` now runs 35 gates / 15 canaries.
+DEVICE-ONLY. `host_all_gates.py` now runs **47 gates / 21 canaries** (the new gate ids are
+`os`, `power`, `audio`, `video` and `engine3d` plus their `*_canary` ids,
+alongside `batch`, `browser`, `visual` and `p4sync`/`p4sync_canary`). A pass is
+a board-free pre-gate only, never hardware sign-off (§0).
 Each has a red canary or exact baseline; none opens a serial port.
 
 **Visual proof (board-free, never sign-off).** `tools/visual_proof_gate.py
@@ -271,9 +288,10 @@ python tools/host_batch_run.py --check    # real .bat fixture pre-gate (separate
   root is an honest failure, not a simulated card. `--fixture`, `--check`
   (default), `--update` and `--self-test` (7 canaries) are supported; the ELF is
   discovered under the repo build dirs and POSIX ELFs run through WSL on Windows.
-  Verified: 1 fixture, 7 assertions OK (Unity host lane 345/0/0). This is a
-  pre-gate only — never hardware sign-off; the on-device suites remain
-  authoritative (§0).
+  Verified: now **3 fixtures / 42 assertions** (the added `REGISTRY.BAT`
+  fixture covers `reg`/`lib`/`try`/`finally`) plus 10 red canaries; the Unity
+  host lane is 375/0/0. This is a pre-gate only — never hardware sign-off; the
+  on-device suites remain authoritative (§0).
 - **TUI render pre-gate (v1.6):** `tools/host_tui_gate.py` compiles the **one**
   cell renderer (`components/tui/tui_frame.h`), the one DOS palette and the one
   CSS colour parser with a plain C compiler, drives `tools/host/fixtures/tui/`
@@ -319,6 +337,52 @@ python tools/host_batch_run.py --check    # real .bat fixture pre-gate (separate
   and `docs/assets/proof-index.html`. **The v1.6 `[M-RICH-*]` transcript lines
   change app output, so `tools/appdiff/baseline/*.transcript.txt` goldens must
   be rebaselined on a board before those hardware parity checks can be green.**
+- **P4Sync bridge/CLI pre-gate (board-free, no firmware).** `tools/p4sync/`
+  is a host-only agent CLI plus a JSON-lines bridge that drive the **same**
+  harness (`p4test` sessions, `sdbridge` SDFX framing, `pim_sync`,
+  `p4test.screenshot`); they add no serial implementation, no second framing
+  or merge engine and no firmware change. `python tools/p4sync_gate.py
+  --check` exercises the shipped CLI composition and the bridge as a real
+  subprocess in `--mock` mode (51 checks: handshake/capability refusal,
+  marker and CRC contracts, push/pull/plan/screenshot/full-image, stale
+  manifest recovery), and `--self-test` runs 18 red canaries. Both are wired
+  into `host_all_gates.py` (`p4sync`/`p4sync_canary`) and into the `host-unit`
+  CI job; neither opens a port or needs a board. The Windows WPF GUI in
+  `apps/p4sync_gui/` is only a JSON client of the bridge (9 pages, SDFX
+  push/pull, PNG screenshot preview with SHA-256/size proof, PIM/full-image
+  stale-manifest recovery, credentials in Windows Credential Manager); its
+  `dotnet build` + console tests run in a separate `windows-latest` CI job
+  with no NuGet packages and no board. Contract and commands:
+  [`tools/p4sync/README.md`](tools/p4sync/README.md) and
+  [`apps/p4sync_gui/README.md`](apps/p4sync_gui/README.md). This is a
+  pre-gate only: a mock pass never signs off hardware (§0).
+- **OS facade pre-gate (v1.6, board-free):** `python tools/host_os_gate.py
+  --check` compiles the pure parse/format region of the shipped
+  `components/command/os_commands.c` between the `OS_PURE_IMPL` markers with
+  mock accessor snapshots, and checks 14 cases / 144 assertions over `os
+  pm|drv|io|fs|disk|net|mem|sec|ver|pwr`, the `/b` machine rows and the explicit
+  `unavailable` / ERRORLEVEL 0/1/2 contract. `--self-test` runs 4 red canaries.
+  No serial port; a pass never signs off hardware (§0).
+- **Power/sleep pre-gate (v1.6, board-free):** `python tools/host_power_gate.py
+  --check` drives the shipped `shell_power_clamp_idle_seconds()` and wake-cause
+  helpers across 4 board profiles (300 checks: stale deepsleep timer, wake-source
+  leakage, honest warnings, `DISPLAY_TIMEOUT` 64-bit clamp before narrowing).
+  `--self-test` runs 10 red canaries. No board; never hardware sign-off (§0).
+- **Audio engine pre-gate (v1.6, board-free):** `python tools/host_audio_gate.py
+  --check` verifies the deterministic offline PCM of the one Q16 mixer, ADSR,
+  sequencer, SFX bus and ducking path (99 checks); `--self-test` runs 12 red
+  canaries. It compiles the shipped `components/audio/audio_engine.c`; no codec
+  hardware or serial port is touched, so a pass is never hardware sign-off (§0).
+- **Video/EPUB/archive pre-gate (v1.6, board-free):**
+  `python tools/host_video_gate.py --check` drives the one `imagefile` decoder,
+  the one TUI sampler, the pure EPUB nav/TOC core and the one USTAR/CRC core
+  (18 assertions); `--self-test` runs 10 red canaries. No board; never hardware
+  sign-off (§0).
+- **3D engine pre-gate (v1.6, board-free):**
+  `python tools/host_engine3d_gate.py --check` runs 4 fixtures / 41 assertions
+  over the Q16 math and the one `gfx_surface` raster path; `--self-test` runs
+  10 red canaries. BMDS math ideas are re-expressed, no code copied (see
+  `licence.md`). No panel or serial port; never hardware sign-off (§0).
 - **Extending it:** add the source (or the hardware-free translation unit) to
   `test/host/main/CMakeLists.txt`, add the test file to
   `tools/host_test_manifest.json`, then re-run `tools/host_gen_runner.py` (it
@@ -500,7 +564,9 @@ logic (`tools/README.md` has the full list).
 Wikipedia page, requires a full render (a size-cap degradation is not
 accepted as proof), and stages `screenshots/proof/wikipedia_live.png`,
 `web.png` and `wikipedia_live.txt`. A skipped live leg fails the suite.
-`tools/publish_proof.py` copies the proof into `docs/assets/proof/`.
+`tools/publish_proof.py` copies the proof into `docs/assets/proof/`. The
+host-vs-live distinction and reproduction commands are also collected in
+[`web.md`](web.md).
 
 ### Present-level diagnostics (what the glass shows)
 

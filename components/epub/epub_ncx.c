@@ -14,6 +14,7 @@
 #include "epub.h"
 #include "p4minishell_config.h"
 #include <string.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <esp_log.h>
 #include <expat.h>

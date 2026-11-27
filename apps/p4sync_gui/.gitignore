@@ -1,0 +1,4 @@
+# Local build outputs for the native P4Sync GUI
+bin/
+obj/
+*.user

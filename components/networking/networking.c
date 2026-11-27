@@ -2116,7 +2116,8 @@ static esp_err_t networking_http_request_internal(esp_http_client_method_t metho
                                                   size_t extra_header_count,
                                                   bool accept_not_modified,
                                                   networking_http_result_t *result,
-                                                  bool quiet, const char *tag)
+                                                  bool quiet, const char *tag,
+                                                  size_t max_body)
 {
     esp_http_client_config_t http_config = { 0 };
     esp_http_client_handle_t client = NULL;
@@ -2143,6 +2144,9 @@ static esp_err_t networking_http_request_internal(esp_http_client_method_t metho
     }
     if (url == NULL || url[0] == '\0' || result == NULL || tag == NULL) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (max_body == 0) {
+        max_body = P4_CONFIG_HTTP_MAX_BODY_BYTES;
     }
     if (extra_headers != NULL && extra_header_count == 0) {
         return ESP_ERR_INVALID_ARG;
@@ -2327,11 +2331,11 @@ static esp_err_t networking_http_request_internal(esp_http_client_method_t metho
             snprintf(out->cache_control, sizeof(out->cache_control), "%s", hdr_val);
         }
     }
-    if (out->content_length > P4_CONFIG_HTTP_MAX_BODY_BYTES) {
+    if (out->content_length > max_body) {
         if (!quiet) {
             networking_appendf(SH_ERR "%s:" SH_RST " response of " SH_NUM "%u" SH_RST
                                " bytes exceeds the " SH_NUM "%u" SH_RST " byte limit\n",
-                               tag, (unsigned int)out->content_length, (unsigned int)P4_CONFIG_HTTP_MAX_BODY_BYTES);
+                               tag, (unsigned int)out->content_length, (unsigned int)max_body);
         }
         error = ESP_ERR_INVALID_SIZE;
         goto cleanup;
@@ -2339,7 +2343,7 @@ static esp_err_t networking_http_request_internal(esp_http_client_method_t metho
 
     /* Large response buffer from PSRAM (no internal spill: NULL propagates
      * to the error path below). */
-    out->body = p4heap_alloc_psram(P4_CONFIG_HTTP_MAX_BODY_BYTES);
+    out->body = p4heap_alloc_psram(max_body);
     if (out->body == NULL) {
         if (!quiet) {
             networking_appendf(SH_ERR "%s:" SH_RST " out of memory buffering the response\n", tag);
@@ -2348,8 +2352,8 @@ static esp_err_t networking_http_request_internal(esp_http_client_method_t metho
         goto cleanup;
     }
 
-    while (total_read < P4_CONFIG_HTTP_MAX_BODY_BYTES) {
-        size_t wanted = P4_CONFIG_HTTP_MAX_BODY_BYTES - total_read;
+    while (total_read < max_body) {
+        size_t wanted = max_body - total_read;
 
         if (wanted > HTTP_READ_CHUNK_BYTES) {
             wanted = HTTP_READ_CHUNK_BYTES;
@@ -2371,11 +2375,11 @@ static esp_err_t networking_http_request_internal(esp_http_client_method_t metho
 
     /* If we filled the cap exactly, probe once more to tell a truncated body
      * from a body that ends right at the limit. */
-    if (total_read == P4_CONFIG_HTTP_MAX_BODY_BYTES &&
+    if (total_read == max_body &&
         esp_http_client_read(client, (char *)&probe, 1) > 0) {
         if (!quiet) {
             networking_appendf(SH_ERR "%s:" SH_RST " response exceeds the " SH_NUM "%u" SH_RST " byte limit\n",
-                               tag, (unsigned int)P4_CONFIG_HTTP_MAX_BODY_BYTES);
+                               tag, (unsigned int)max_body);
         }
         error = ESP_ERR_INVALID_SIZE;
         goto cleanup;
@@ -2408,14 +2412,24 @@ esp_err_t networking_http_get(const char *url, networking_http_result_t *result)
 {
     return networking_http_request_internal(HTTP_METHOD_GET, url, NULL, NULL, 0,
                                             NULL, NULL, NULL, NULL, 0, false,
-                                            result, false, "httpget");
+                                            result, false, "httpget",
+                                             P4_CONFIG_HTTP_MAX_BODY_BYTES);
+}
+
+esp_err_t networking_http_get_bounded(const char *url, size_t max_bytes,
+                                      networking_http_result_t *result)
+{
+    return networking_http_request_internal(HTTP_METHOD_GET, url, NULL, NULL, 0,
+                                             NULL, NULL, NULL, NULL, 0, false,
+                                             result, true, "httpget", max_bytes);
 }
 
 static esp_err_t networking_http_get_internal(const char *url, networking_http_result_t *result, bool quiet)
 {
     return networking_http_request_internal(HTTP_METHOD_GET, url, NULL, NULL, 0,
                                             NULL, NULL, NULL, NULL, 0, false,
-                                            result, quiet, "httpget");
+                                            result, quiet, "httpget",
+                                             P4_CONFIG_HTTP_MAX_BODY_BYTES);
 }
 
 /**
@@ -2435,7 +2449,8 @@ esp_err_t networking_http_request(esp_http_client_method_t method, const char *u
                                             req_body, req_len, depth,
                                             auth_user, auth_pass,
                                             NULL, 0, false,
-                                            result, true, "carddav");
+                                            result, true, "carddav",
+                                             P4_CONFIG_HTTP_MAX_BODY_BYTES);
 }
 
 esp_err_t networking_http_get_ex(const char *url,
@@ -2478,7 +2493,8 @@ esp_err_t networking_http_get_ex(const char *url,
             error = networking_http_request_internal(HTTP_METHOD_GET, url, NULL, NULL, 0,
                                                      NULL, auth_user, auth_pass,
                                                      use, use_count, true,
-                                                     result, true, "rss");
+                                                     result, true, "rss",
+                                                      P4_CONFIG_HTTP_MAX_BODY_BYTES);
             if (error == ESP_OK) {
                 return ESP_OK;
             }
@@ -2899,7 +2915,8 @@ esp_err_t networking_http_post_form(const char *url,
                                                      "application/x-www-form-urlencoded",
                                                      (const uint8_t *)body_buf, pos,
                                                      NULL, NULL, NULL, NULL, 0, false,
-                                                     result, false, "httpget");
+                                                     result, false, "httpget",
+                                                      P4_CONFIG_HTTP_MAX_BODY_BYTES);
 
     /* Clear sensitive body from memory. */
     memset(body_buf, 0, body_buf_size);

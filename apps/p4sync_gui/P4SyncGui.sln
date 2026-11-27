@@ -1,0 +1,34 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "P4SyncBridge", "src\P4SyncBridge\P4SyncBridge.csproj", "{1A4C6E80-6D91-4B3E-9B6E-0E5B7A9C1D21}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "P4SyncGui", "src\P4SyncGui\P4SyncGui.csproj", "{2B5D7F91-7A02-4C4F-AC7F-1F6C8BAD2E32}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "P4SyncBridge.Tests", "tests\P4SyncBridge.Tests\P4SyncBridge.Tests.csproj", "{3C6E80A2-8B13-4D50-BD80-2A7D9CBE3F43}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{1A4C6E80-6D91-4B3E-9B6E-0E5B7A9C1D21}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1A4C6E80-6D91-4B3E-9B6E-0E5B7A9C1D21}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1A4C6E80-6D91-4B3E-9B6E-0E5B7A9C1D21}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1A4C6E80-6D91-4B3E-9B6E-0E5B7A9C1D21}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2B5D7F91-7A02-4C4F-AC7F-1F6C8BAD2E32}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2B5D7F91-7A02-4C4F-AC7F-1F6C8BAD2E32}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2B5D7F91-7A02-4C4F-AC7F-1F6C8BAD2E32}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2B5D7F91-7A02-4C4F-AC7F-1F6C8BAD2E32}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3C6E80A2-8B13-4D50-BD80-2A7D9CBE3F43}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3C6E80A2-8B13-4D50-BD80-2A7D9CBE3F43}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3C6E80A2-8B13-4D50-BD80-2A7D9CBE3F43}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3C6E80A2-8B13-4D50-BD80-2A7D9CBE3F43}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

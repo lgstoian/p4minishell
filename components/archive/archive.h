@@ -153,6 +153,29 @@ bool archive_path_safe(const char *path);
 /** True when @p entry fits the USTAR 100+155 name/prefix split. */
 bool archive_entry_fits(const char *entry);
 
+/**
+ * Format one member as a stable machine row:
+ * `type|size|mtime|crcflag|crc|path` (type `d`/`f`, crcflag `crc`/`-`).
+ * `|`, CR and LF in the path are replaced with `/` so one member is always
+ * exactly one parseable line. @return bytes written, or -1 on a short buffer.
+ */
+int archive_format_machine_line(const archive_entry_t *entry, char *out,
+                                size_t out_size);
+
+/** Replace `|`, CR and LF in place (pure; shared by the machine formatter). */
+void archive_machine_sanitize(char *text);
+
+/** True when a member is safe to materialize and under @p max_size. Pure. */
+bool archive_entry_bounds_ok(const archive_entry_t *entry, uint64_t max_size);
+
+/**
+ * Walk a contiguous USTAR archive held in memory through the SAME header
+ * parser as the streaming reader (no second tar implementation). The callback
+ * receives each member before its data; malformed/truncated input fails.
+ */
+esp_err_t archive_ustar_scan_mem(const uint8_t *data, size_t len,
+                                 archive_list_cb_t cb, void *ctx);
+
 /* ---------------------------------------------------------------------
  * ZIP support
  * ---------------------------------------------------------------------

@@ -16,6 +16,7 @@
 
 #include "unity.h"
 #include "modal_surf.h"
+#include "tui_frame.h"
 #include "command.h"
 #include "batch.h"
 #include <stdint.h>
@@ -248,6 +249,39 @@ void test_modal_session_stack_switch_find(void)
     TEST_ASSERT_TRUE(modal_session_stack_switch(&st, "a"));
     TEST_ASSERT_FALSE(modal_session_stack_switch(&st, "missing"));
     TEST_ASSERT_EQUAL_INT(-1, modal_session_stack_find(&st, "missing"));
+
+    /* v1.6 multitasking policy: the SAME pure state the input paths use. */
+    TEST_ASSERT_TRUE(modal_alt_tab(MODAL_KEY_TAB, MODAL_MOD_LEFT_ALT));
+    TEST_ASSERT_TRUE(modal_alt_tab(MODAL_KEY_TAB, MODAL_MOD_RIGHT_ALT));
+    TEST_ASSERT_TRUE(modal_alt_tab(MODAL_KEY_TAB,
+                                   MODAL_MOD_LEFT_ALT | MODAL_MOD_RIGHT_ALT));
+    TEST_ASSERT_FALSE(modal_alt_tab(MODAL_KEY_TAB, 0));
+    TEST_ASSERT_FALSE(modal_alt_tab(MODAL_KEY_TAB, 0x01u)); /* Ctrl+Tab */
+    TEST_ASSERT_FALSE(modal_alt_tab(MODAL_KEY_ENTER, MODAL_MOD_LEFT_ALT));
+
+    /* Forward/backward cycle order and "no lost session" are properties of
+     * the shipped pure stack, not of a host-only re-implementation. */
+    TEST_ASSERT_EQUAL_STRING("b", modal_session_next_name(&st, 1));
+    TEST_ASSERT_EQUAL_STRING("c", modal_session_next_name(&st, 2));
+    TEST_ASSERT_EQUAL_STRING("c", modal_session_next_name(&st, -1));
+    TEST_ASSERT_EQUAL_STRING("b", modal_session_next_name(&st, 4));
+    TEST_ASSERT_EQUAL_INT(-1, modal_session_next_index(NULL, 1));
+    TEST_ASSERT_TRUE(modal_session_stack_switch(&st, modal_session_next_name(&st, 1)));
+    TEST_ASSERT_EQUAL_INT(3, modal_session_stack_depth(&st));
+    TEST_ASSERT_EQUAL_STRING("b", modal_session_stack_name(&st, 0));
+    TEST_ASSERT_EQUAL_STRING("a", modal_session_stack_name(&st, 1));
+    TEST_ASSERT_EQUAL_STRING("c", modal_session_stack_name(&st, 2));
+    TEST_ASSERT_EQUAL_INT(1, modal_session_stack_find(&st, "a"));
+    TEST_ASSERT_EQUAL_INT(0, modal_session_stack_find(&st, "b"));
+    TEST_ASSERT_EQUAL_INT(2, modal_session_stack_find(&st, "c"));
+
+    /* Bottom-left edge swipe predicate: one pure vector test, same function
+     * the single tui_touch_event_cb calls. */
+    TEST_ASSERT_TRUE(tui_edge_swipe_bottom_left(40, 560, 700, 200, 1024, 600));
+    TEST_ASSERT_FALSE(tui_edge_swipe_bottom_left(500, 560, 900, 200, 1024, 600));
+    TEST_ASSERT_FALSE(tui_edge_swipe_bottom_left(40, 100, 700, 200, 1024, 600));
+    TEST_ASSERT_FALSE(tui_edge_swipe_bottom_left(40, 560, 100, 200, 1024, 600));
+    TEST_ASSERT_FALSE(tui_edge_swipe_bottom_left(40, 560, 700, 500, 1024, 600));
 }
 
 void test_modal_session_stack_bounds_and_focus(void)

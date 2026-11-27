@@ -20,6 +20,37 @@ open bugs see [`bugs.md`](bugs.md).
 
 ### Added
 
+- **P4Sync CLI/bridge/GUI integrated into release.** The host-side P4Sync
+  agent CLI (`python tools/p4sync ... [--json]`) and the JSON-lines bridge
+  (`tools/p4sync/bridge.py`) now ship as a first-class release surface: they
+  wrap the **existing** USB harness (`p4test` sessions, SDFX `sdbridge`,
+  `pim_sync`, screenshots), add no serial implementation, second framing
+  engine or firmware change, and expose one shared `data` schema to agents
+  and the GUI. The Windows 11 WPF companion (`apps/p4sync_gui`, nine pages)
+  does SDFX push/pull, screenshot preview with PNG SHA-256/size proof, stale
+  `image.json` recovery and credentials in Windows Credential Manager; it is
+  a JSON client only. CI adds `tools/p4sync_gate.py --check` to the
+  `host-unit` job (51 board-free checks, 18 red canaries) and a separate
+  `windows-latest` job that runs `dotnet build apps/p4sync_gui/P4SyncGui.sln
+  -c Release` and `dotnet run --project
+  apps/p4sync_gui/tests/P4SyncBridge.Tests` with no board and no NuGet
+  packages. Docs/CI cross-links:
+  [`tools/p4sync/README.md`](tools/p4sync/README.md) and
+  [`apps/p4sync_gui/README.md`](apps/p4sync_gui/README.md). A mock pass is a
+  pre-gate, never hardware sign-off (`harness.md` 0/2.2).
+- **Browser documentation and a visible Wikipedia proof in the README.**
+  `readme.md` now features the ESP32 Wikipedia article rendered by our own
+  DOM/CSS engine: a labelled first-25-rows **host proof**
+  (`docs/assets/web/wiki_esp32.png`) beside the **archived live board capture**
+  from the v1.4.4 hardware campaign (`docs/assets/proof/wikipedia_live.png`),
+  with captions that say which is which. The new [`web.md`](web.md) is the
+  complete browser information + tutorial: SD and `http(s)` pages, every
+  `browser` verb and the `html`/`webapp` facades, the `webapp images` outcome
+  vocabulary, the HTML5/CSS/JS/canvas subset, DOS presentation, a
+  source-verified image-format matrix, limits, touch/mouse/keyboard/synthetic-`ui`
+  navigation, and host-vs-live proof reproduction. **No new hardware result
+  is claimed**; the v1.6 live-board recapture remains pending
+  (`harness.md` 0/2.2).
 - **Explicit visual direction: a modern take on retro MS-DOS.** Screens now
   target an 80x25 CP437 cell grid with box-drawn panels, the DOS/CGA palette, a
   chunky bitmap cell font, status bars and keyboard menus. The aim is richer
@@ -77,17 +108,89 @@ open bugs see [`bugs.md`](bugs.md).
   (`gfx particles seed|emit|step|draw|clear`) and alpha layers
   (`gfx layer bind|dirty|present|visible`); BOUNCE and GFXTOOL are now
   interactive demos. All proofs are board-free; no hardware result claimed.
+- **Read-only `os` facade.** `components/command/os_commands.c` adds
+  `os pm|drv|io|fs|disk|net|mem|sec|ver|pwr [/b]`: one batch-facing facade that
+  formats what the existing owners already publish (FreeRTOS, batch pool,
+  board caps, USB/SD/networking devices, storage capacity, heap, trust). It owns
+  no driver, registry, socket or second dispatcher; a subsystem that cannot
+  answer reports `unavailable` explicitly (`ERRORLEVEL` 0 ok / 1 unavailable /
+  2 usage), and `/b` emits uncoloured machine rows. Gate:
+  `tools/host_os_gate.py` (14 cases, 144 checks + 4 red canaries).
+- **Power/sleep fixes.** `components/command/power_commands.c` and
+  `config_cmd.c` disable a stale deepsleep timer, clear wake-source leakage and
+  keep warnings honest; `DISPLAY_TIMEOUT` is 64-bit-clamped before narrowing.
+  The idle-clamp helper `shell_power_clamp_idle_seconds` is pure. Gate:
+  `tools/host_power_gate.py` (300 checks, 4 board profiles, 10 red canaries).
+- **Unified audio engine.** `components/audio/audio_engine.c` gives audio one
+  codec/playback task, a Q16 mixer, ADSR envelopes, a sequencer, an SFX bus and
+  ducking, with deterministic offline PCM. New verbs `audio mix|sfx|seq|env|
+  gain|meter` are additive; the legacy `beep`/`tone`/`wavplay` verbs are
+  preserved. BMDS ideas were re-expressed, no code copied (see `licence.md`).
+  Gate: `tools/host_audio_gate.py` (99 checks, 12 red canaries).
+- **Video, EPUB and archive surfaces.** `components/video/**`, `components/epub/**`
+  and `components/archive/**` add `video play <dir|manifest> [/fps:N] [/loop]
+  [/tui] [/b] | status [/b] | stop` through ONE `imagefile` decoder and ONE TUI
+  sampler, a pure EPUB nav/TOC core with a duplicate-symbol link fix, and a
+  single USTAR/CRC core with machine rows. Config macros `P4_CONFIG_VIDEO_*`
+  were added to `p4minishell_config.h`/`.yaml`. Gate:
+  `tools/host_video_gate.py` (18 assertions, 10 red canaries).
+- **3D engine (`gfx3d`).** `components/gfx3d/**` adds `gfx3d init|close|status|
+  camera|mesh|draw|rotate|translate|scale|light|mode|project|clear|stats|identity`.
+  Q16 math is derived from BMDS `sdk/3d/math.c` (MIT, (c) Jason Howard,
+  `tools/LICENSE-BMDS-MIT.txt`) and the shade-ramp idea from its `light.c`; all
+  pixels go through the ONE `gfx_surface` raster path and one DOS palette. No
+  code was copied. Gate: `tools/host_engine3d_gate.py` (4 fixtures, 41
+  assertions, 10 red canaries).
+- **Firmware P4Sync snapshot.** `components/command/sync_commands.c/.h` add
+  additive `sync.shot_max` and `sync.xfer_chunk` lines plus the pure
+  `sync_query_capabilities()`; the host `protocol.py` already maps
+  `shot_max` → `limit.screenshot`. No new framing or firmware verb.
+- **Registry, shared library and structured errors.**
+  `components/command/reg_commands.c` provides `reg [/b] list|get|set|del` over
+  the ONE `storage_ini` core with atomic writes. `lib_commands.c` provides
+  `lib [/b] list|info|load` for shared batch/applib routines from
+  `sd:/APPS/LIBS.INI` — **not** native dynamic linking. `components/batch/**`
+  adds `try :catch` / `finally :cleanup` on the existing trap scope stack with
+  LIFO unwind and preserved ERRORLEVEL. Gate: `tools/host_batch_run.py` is now
+  3 fixtures / 42 assertions + 10 red canaries.
+- **Multitasking window switcher.** `components/modal/**`, `components/tui/**`
+  and `main/main.c` let physical Alt+Tab and a bottom-left edge-swipe cycle
+  foreground sessions through the existing mstack/shell screen save-restore,
+  with a DOS 80x25 CP437 app-switcher overlay; it is batch-callable through the
+  existing `mstack /switch NAME` and `windows switcher`. Gate:
+  `tools/host_modal_gate.py` (154 checks, 15 red canaries).
+- **P4Sync desktop companion (release integration).** The agent CLI + JSON
+  bridge over the existing USB harness and the nine-page Windows 11 WPF GUI in
+  `apps/p4sync_gui` are covered by the first entry above and by
+  [`tools/p4sync/README.md`](tools/p4sync/README.md); gate
+  `tools/p4sync_gate.py` (51 checks, 18 red canaries) plus a `windows-latest`
+  CI job. No firmware change.
 
 ### Verified (host-only, no hardware)
 
-- `python tools/host_all_gates.py`: **35/35 board-free gates PASS**
-  (15 canaries), including `visual`, `visual_canary` and the new browser
-  gate. `host_browser_gate.py --check`: 5 fixtures / 271 assertions;
+- **v1.6.0 subsystem gates (board-free, never sign-off).**
+  `python tools/host_all_gates.py`: **47/47 gates PASS (21 canaries)** — the
+  new `os` (14 cases / 144 checks + 4 canaries), `power` (300 checks, 4 board
+  profiles, 10 canaries), `audio` (99 checks, 12 canaries), `video` (18
+  assertions, 10 canaries) and `engine3d` (4 fixtures, 41 assertions, 10
+  canaries) gates join `p4sync` (51 checks, 18 canaries), `batch` (3 fixtures /
+  42 assertions + 10 canaries), `modal` (154 checks, 15 canaries) and the
+  browser/visual gates. `python tools/green_guard.py --strict`: **843 tests,
+  0 errors, 0 warnings**; `comment_index.py` and `breadcrumbs.py`: 0 errors.
+  **Hardware sign-off is pending** on COM3/COM6 for v1.6.0; every one of these
+  is a board-free pre-gate, never a board result.
+- `python tools/host_all_gates.py`: **47/47 board-free gates PASS**
+  (21 canaries), including `visual`, `visual_canary`, the browser gate and
+  the new `p4sync`/`p4sync_canary` gates (51 P4Sync checks, 18 canaries).
+  `python tools/p4sync_gate.py --check`: 51 PASS; `--self-test`: 18 PASS.
+  On Windows, `dotnet build apps/p4sync_gui/P4SyncGui.sln -c Release` is
+  0 warnings/0 errors and the console test runner reports 18 PASS.
+  `host_browser_gate.py --check`: 5 fixtures / 271 assertions;
   `--self-test`: 9/9 canaries.
   `python tools/visual_proof_gate.py --check`: 6 proofs, 0 defects;
   `--self-test`: 7/7 canaries. App gate: 34 apps, 679 host assertions PASS,
   45 honest hardware SKIPs. Webapp gate: 8 fixtures, 432 assertions.
-  `green_guard.py --strict`: 809 Unity cases, 0 errors / 0 warnings. None
+  `green_guard.py --strict`: 843 Unity cases, 0 errors / 0 warnings. None
   of these signs off hardware; the on-device suites remain authoritative.
 
 ## [1.6.0] - 2026-11-24

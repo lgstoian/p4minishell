@@ -1,5 +1,51 @@
 launch NOTES
 [M-NOTE]
-title: set to 'Notes'
+title: set to 'Zettelkasten'
+[M-RICH-NOTE] category language tour
+[M-RICH-NOTE-K] N=Fleeting
+[M-RICH-NOTE-K] N=Permanent
+NT=Zettelkasten
+N
+[M-RICH-NOTE-F] len=N
+[M-RICH-NOTE-S] e=N pad=Zettelkasten....
+DOS_THEME=mono
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PSTYLE=single
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PSTYLE=single
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PSTYLE=single
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PSTYLE=single
+draw list: cannot open /sdcard/NOTES.TXT
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PSTYLE=single
+[M-DOS-NOTES] screen=NOTES-ZETTEL panels=N head="ZETTELKASTEN" theme=amber bars=N table=N spark=N status=Y
+[M-NOTE-MENU]
 N
 Unknown command: N

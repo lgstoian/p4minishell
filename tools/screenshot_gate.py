@@ -105,7 +105,16 @@ def write_diff(base, cur, different, path):
 
 
 def capture(port, out_dir, only, boot, settle_ms):
-    with Device(port, boot=boot, settle_ms=settle_ms) as dev:
+    # Device(boot=True) only WAITS for the prompt - it does not reset the
+    # board. Both determinism passes must start from identical firmware state,
+    # so an explicitly requested fresh boot must be a REAL hard reset. Without
+    # this the verification pass inherits the first pass's last modal/TUI
+    # background and a surviving TUI rectangle leaks into shell-idle.
+    with Device(port, boot=False) as dev:
+        if boot:
+            dev.reboot(settle_ms=settle_ms)
+        else:
+            dev.boot(settle_ms=settle_ms)
         return capture_docs.capture_states(dev, out_dir, only=only)
 
 
@@ -133,7 +142,10 @@ def main():
         # A refresh is only trustworthy if the very next capture matches it.
         print("re-capturing to verify determinism ...")
         tmp = tempfile.mkdtemp(prefix="shot-verify-")
-        names = capture(port, tmp, only, False, 0)
+        # Verify against a fresh boot too: without it, the second pass starts
+        # from whatever modal/TUI background the last state left behind and
+        # compares that against a post-boot baseline (a false pixel diff).
+        names = capture(port, tmp, only, True, 4000)
         failed = 0
         for name in names:
             base_path = os.path.join(baseline_dir, name + ".png")

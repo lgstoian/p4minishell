@@ -623,6 +623,19 @@ tools use a webcam to observe the device; prefer them over guessing.
   TUI/HTML and LVGL adapters consuming it), **one** image-to-cell sampler
   (`tui_sample_image`, shared by `draw img` and emoji packs), and **one** HTML
   page engine (the `browser` path; `html` is an entry point, not a renderer).
+  Clarifying pointers for the v1.6 subsystem facades (these restate the rule,
+  they do not add a new one): **one raster path** — `gfx3d` Q16 math feeds the
+  one `gfx_surface` path and one DOS palette, never a second rasterizer;
+  **one decoder** — `video` uses the one `imagefile` decoder and one TUI
+  sampler, never a second player; **one codec** — the audio engine owns the
+  single codec/playback task and mixer, with legacy verbs as front doors;
+  **one ini core** — `reg` uses the one `storage_ini.c` atomic write path;
+  **one batch library-call path** — `lib` resolves routines through
+  `call <file.bat>::<routine>` over `sd:/APPS/LIBS.INI`, not native dynamic
+  linking; **one trap scope stack** — `try`/`finally` reuse the existing trap
+  stack with LIFO unwind and preserved ERRORLEVEL. See
+  [`documentation.md`](documentation.md) §Expanded subsystems and
+  [`architecture.md`](architecture.md) ADR-15..17.
 - **Always fix any issue or bug that is found, even if it is unrelated to the
   current task.** A known failure is never acceptable to leave behind: never
   ignore or suppress it, never mark it "out of scope" and move on. Fix it in
@@ -2240,6 +2253,8 @@ the raster core + 8x8 font are `components/gfx/`
 - Supported: headings, paragraphs, lists, links, images (native BMP/PNG/JPEG
   decoded to a DOS-cell grid), tables, in-page QuickJS (`<script>`, `onload`/
   `onclick`), the `<style>` cascade, and `fetch` from JS.
+- The user-facing browser guide (verbs, image-format matrix, limits, navigation
+  and host-vs-live proof reproduction) is [`web.md`](web.md).
 - Not supported by design (do not paper over with a second engine): CSS layout
   (flexbox/grid), cookies, sessions, tabs.
 - **The network fetch is synchronous on the command worker, and that is

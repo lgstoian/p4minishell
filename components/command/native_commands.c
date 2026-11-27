@@ -39,6 +39,7 @@
 #include "applib.h"
 
 #include "esp_heap_caps.h"
+#include "hal/cache_ll.h"
 #include "mbedtls/sha256.h"
 #include "mbedtls/ecdsa.h"
 #include "mbedtls/ecp.h"
@@ -150,7 +151,14 @@ static int native_ecdsa_verify_p256(const uint8_t digest[NATIVE_PAY_SHA256_BYTES
  * ======================================================================== */
 
 /** A capability request for executable heap, not an MMU mapping. No per-app
- *  address space, relocation or isolation is claimed; failure is explicit. */
+ *  address space, relocation or isolation is claimed; failure is explicit.
+ *
+ *  ESP32-P4 coherency (board-proven): instruction fetch reads the mapped SRAM
+ *  through the I side, which is NOT coherent with the L1/L2 D-cache lines that
+ *  memcpy() just dirtied. Writing back the region on both harts and both cache
+ *  levels, then invalidating both L1 I-caches, is what makes the signed bytes
+ *  executable. Without the D-cache write-back the CPU fetches stale bytes and
+ *  traps "Illegal instruction" with MEPC inside the mapped region. */
 static void *native_map_payload(const uint8_t *payload, size_t size)
 {
     void *code = NULL;
@@ -168,9 +176,11 @@ static void *native_map_payload(const uint8_t *payload, size_t size)
         return NULL;
     }
     memcpy(code, payload, size);
-    /* Make the just-written bytes visible to instruction fetch (GCC emits the
-     * target's icache fence where supported). Hardware execution is still a
-     * board-verification step; this is only the required coherency hook. */
+    cache_ll_l1_writeback_dcache_addr(CACHE_LL_ID_ALL, (uint32_t)(uintptr_t)code,
+                                       (uint32_t)size);
+    cache_ll_l2_writeback_cache_addr(CACHE_LL_ID_ALL, (uint32_t)(uintptr_t)code,
+                                      (uint32_t)size);
+    cache_ll_l1_invalidate_icache_all(CACHE_LL_ID_ALL);
     __builtin___clear_cache((char *)code, (char *)code + size);
     return code;
 }

@@ -29,6 +29,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
+#include "audio_engine.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -212,6 +213,68 @@ const char *audio_output_name(audio_output_mode_t mode);
 bool audio_wav_params_ok(uint16_t audio_format, uint16_t channels,
                          uint32_t sample_rate, uint16_t bits,
                          uint32_t data_size);
+
+/* ------------------------------------------------------------------------
+ * Mixer engine (audio_engine.c), driven through the ONE playback task above.
+ *
+ * These helpers never open a second codec, create a second task or bypass the
+ * output route / amp gate: `audio mix play` submits a request to the same
+ * audio_play_task that serves beep/tone/wavplay. PCM staged by add_pcm lives
+ * in a bounded PSRAM pool (internal fallback) and is released by reset.
+ * ---------------------------------------------------------------------- */
+
+/** Clear the mixer, its sequenced channels and the staged PCM pool. */
+esp_err_t audio_mix_reset(void);
+
+/** Sample rate the mixer renders at (the tone codec rate). */
+uint32_t audio_mix_sample_rate(void);
+
+/** Add a tone channel at an absolute sample offset; returns index or -1. */
+int audio_mix_add_tone(uint32_t start_sample, uint32_t length_samples,
+                       int freq_hz, int gain_pct, audio_engine_bus_t bus,
+                       const audio_engine_env_t *env);
+
+/** Add a decoded sequencer event (sample-accurate start); index or -1. */
+int audio_mix_add_event(const audio_engine_seq_event_t *event,
+                        audio_engine_bus_t bus, const audio_engine_env_t *env);
+
+/**
+ * Stage borrowed mono PCM into the bounded PSRAM pool and add it as a channel.
+ * The engine takes a copy: the caller's buffer may be released immediately.
+ */
+int audio_mix_add_pcm(const int16_t *pcm, uint32_t pcm_frames,
+                      uint32_t start_sample, uint32_t repeat, int gain_pct,
+                      audio_engine_bus_t bus, const audio_engine_env_t *env);
+
+/** Queue mixer playback on the existing task; 0 ms renders the full sequence. */
+bool audio_mix_play(uint32_t duration_ms);
+
+/** Length of the current mix, in milliseconds (release tail included). */
+uint32_t audio_mix_length_ms(void);
+
+/** Active channel count / full predicate. */
+size_t audio_mix_channel_count(void);
+bool audio_mix_full(void);
+
+/** Mixer master gain (distinct from the codec `volume` level), 0..100. */
+void audio_mix_gain_set(int percent);
+int audio_mix_gain_get(void);
+
+/** Music-bus duck gain while the SFX bus is active, 0..100. */
+void audio_mix_duck_set(int percent);
+int audio_mix_duck_get(void);
+
+/** Default ADSR applied to newly added channels. */
+void audio_mix_env_set_default(const audio_engine_env_t *env);
+audio_engine_env_t audio_mix_env_get_default(void);
+
+/** Peak/RMS of the most recent mixer playback chunk pair (16-bit LSB). */
+void audio_mix_meter(int *rms_out, int *peak_out);
+void audio_mix_meter_reset(void);
+
+/** Deterministic offline render hook (used by on-target tests too). */
+void audio_mix_render_offline(int16_t *stereo_out, size_t frames,
+                              uint32_t start_sample);
 
 #ifdef __cplusplus
 }

@@ -9,6 +9,16 @@ with their owners (`tools/pim_sync.py`, `pkg`/`asset` verbs); this client
 only asserts the `sync status` handshake advertises the magics and limits
 those paths depend on, so no second framing reader or merge lives here.
 """
-from .client import P4SyncClient
-
 __all__ = ["P4SyncClient"]
+
+
+def __getattr__(name):
+    """Load the serial-backed client only when it is actually requested.
+
+    ``bridge.py --mock`` must import the pure protocol layer on a machine with
+    no pyserial; eager package import used to pull in the whole harness.
+    """
+    if name == "P4SyncClient":
+        from .client import P4SyncClient
+        return P4SyncClient
+    raise AttributeError("module %r has no attribute %r" % (__name__, name))

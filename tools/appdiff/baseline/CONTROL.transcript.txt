@@ -1,5 +1,6 @@
 launch CONTROL
 [M-CONTROL]
+[M-DOS-CONTROL] screen=CONTROL-HEADLESS panels=N head="NONE" theme=mono bars=N table=N spark=N status=N
 title: set to 'Control Flow Tour'
 CONTROL: start
 n=N
@@ -43,5 +44,16 @@ Wrote: /sdcard/_pNparity_in.txt
 CONTROL: stdin-type ok
 CONTROL: shift-N a-c
 Wrote: /sdcard/_pNparity_eol.txt
+OLDDIR=/sdcard
+/sdcard
 CONTROL: eol-keep ;kept
+/sdcard
+[M-RICH-CONTROL] func+trap+map+forK+str
+[M-RICH-CONTROL-F] result=N
+[M-RICH-CONTROL-K] up=w
+[M-RICH-CONTROL-K] down=s
+CTRL=control
+N
+[M-RICH-CONTROL-S] rev=lortnoc o=N pad=control---
+[M-RICH-CONTROL-T] code=N msg=errorlevel N
 [M-CONTROL-DONE]

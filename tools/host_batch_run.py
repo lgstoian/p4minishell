@@ -18,7 +18,7 @@ A pass says the host interpreter output is stable. It says nothing about a
 board: harness.md still governs hardware sign-off.
 
 Usage:
-    python tools/host_batch_run.py                 # --check, fixture HELLO
+    python tools/host_batch_run.py                 # --check, all committed fixtures
     python tools/host_batch_run.py --fixture HELLO --check
     python tools/host_batch_run.py --update
     python tools/host_batch_run.py --self-test
@@ -52,7 +52,15 @@ DONE_MARKER = "[M-HOST-BATCH-DONE]"
 RUN_TIMEOUT = 60
 MAX_DIFF_LINES = 8
 
-# Lines that must never appear in an honest, fully executed fixture.
+# `--check` with no explicit fixture drives the whole committed suite. The
+# apps gate imports this module but always names its own fixtures, so its
+# behaviour is unchanged.
+DEFAULT_FIXTURES = ("HELLO", "FEATURES", "REGISTRY")
+
+# Lines that must never appear in an honest, fully executed fixture. The three
+# additive entries are the red canaries for the registry / library / control
+# surfaces: a fake registry write, a duplicate library path and a swallowed
+# ERRORLEVEL are all dishonest runs, never something a baseline may bless.
 FORBIDDEN = (
     "batch: unsupported command",
     "batch: command pipeline is not available",
@@ -61,6 +69,9 @@ FORBIDDEN = (
     "The system cannot find",
     "batch file not found",
     "not a directory",
+    "reg: fake write",
+    "lib: duplicate library path",
+    "errorlevel swallowed",
 )
 
 
@@ -272,6 +283,23 @@ def run_gate(fixture: str, root: Path, baseline_dir: Path,
     return 0
 
 
+def run_suite(fixtures: Sequence[str], root: Path, baseline_dir: Path,
+              elf: Optional[Path], update: bool) -> int:
+    """Drive every committed fixture through the one real interpreter."""
+    runner = discover_elf(elf)
+    total = 0
+    for fixture in fixtures:
+        raw = run_elf(runner, root, fixture)
+        note, result = evaluate(raw, fixture, baseline_dir, update)
+        total += result.assertions
+        print("  %s: %s" % (fixture, note))
+        print("  %s: %d transcript line(s), ERRORLEVEL %d, %d assertion(s)" % (
+            fixture, len(result.transcript), result.errorlevel, result.assertions))
+    print("batch gate %s: %d fixture(s), %d assertion(s) -> OK" % (
+        "UPDATE" if update else "CHECK", len(fixtures), total))
+    return 0
+
+
 def self_test() -> int:
     """Red canary: wrong baseline, missing marker, empty run, stale tag."""
     good = "\n".join([
@@ -332,6 +360,22 @@ def self_test() -> int:
         except GateError:
             checks.append(("dishonest line rejected", True))
 
+        # Additive red canaries: a fixture that reports a registry write it
+        # never persisted, a library published twice under the same path, or
+        # an ERRORLEVEL silently swallowed by cleanup must never go green.
+        for label, fake_line in (
+            ("fake registry write rejected", "reg: fake write"),
+            ("duplicate library path rejected",
+             "lib: duplicate library path sd:/APPS/APPLIB.BAT::probe"),
+            ("swallowed errorlevel rejected", "errorlevel swallowed"),
+        ):
+            forged = good.replace("HOST NAME OK", fake_line)
+            try:
+                evaluate(forged, "HELLO", base, update=False)
+                checks.append((label, False))
+            except GateError:
+                checks.append((label, True))
+
         stale = base / "HELLO.txt"
         stale.write_text(stale.read_text(encoding="utf-8").replace(
             "# " + BASELINE_TAG, "# batch-baseline-v0"), encoding="utf-8")
@@ -358,8 +402,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                       help="rewrite the baseline from the current ELF output")
     parser.add_argument("--self-test", action="store_true",
                         help="run the red-canary self-test (no ELF needed)")
-    parser.add_argument("--fixture", default="HELLO",
-                        help="fixture name without extension (default: HELLO)")
+    parser.add_argument("--fixture", default=None,
+                        help="single fixture name without extension (default: check all)")
     parser.add_argument("--root", type=Path, default=FIXTURES,
                         help="directory holding the .bat fixture")
     parser.add_argument("--baseline", type=Path, default=BASELINE,
@@ -371,6 +415,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.self_test:
         return self_test()
     try:
+        if args.fixture is None:
+            return run_suite(DEFAULT_FIXTURES, args.root.resolve(),
+                             args.baseline.resolve(), args.elf, args.update)
         return run_gate(args.fixture, args.root.resolve(), args.baseline.resolve(),
                         args.elf, args.update)
     except GateError as exc:

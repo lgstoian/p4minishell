@@ -1,0 +1,37 @@
+<UserControl x:Class="P4SyncGui.Views.ScreenshotView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel>
+        <TextBlock Text="Screenshot" Style="{StaticResource PageTitle}" />
+        <TextBlock Text="BMPX capture through the bridge, decoded to a PNG preview with save-as. No second capture path."
+                   Style="{StaticResource SubTitle}" Margin="0,4,0,18" />
+
+        <Border Style="{StaticResource Card}">
+            <StackPanel>
+                <DockPanel>
+                    <TextBlock Text="Live screen" Style="{StaticResource SectionTitle}" DockPanel.Dock="Left" />
+                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" HorizontalAlignment="Right">
+                        <Button Content="Capture" Command="{Binding CaptureCommand}" IsEnabled="{Binding App.IsIdle}"
+                                Style="{StaticResource PrimaryButton}" Margin="0,0,8,0"
+                                AutomationProperties.Name="Capture a device screenshot" />
+                        <Button Content="Save as PNG…" Command="{Binding SaveAsCommand}"
+                                AutomationProperties.Name="Save the screenshot as PNG" />
+                    </StackPanel>
+                </DockPanel>
+
+                <Border Background="{DynamicResource CodeBgBrush}" BorderBrush="{DynamicResource BorderBrushKey}"
+                        BorderThickness="1" CornerRadius="8" Padding="12" MinHeight="260" MaxHeight="460">
+                    <Image Source="{Binding Preview}" Stretch="Uniform" HorizontalAlignment="Center"
+                           VerticalAlignment="Center" AutomationProperties.Name="Screenshot preview" />
+                </Border>
+                <TextBlock Text="{Binding Details}" Style="{StaticResource SubTitle}" Margin="0,10,0,0"
+                           AutomationProperties.Name="Screenshot details"
+                           AutomationProperties.HelpText="{Binding Details}" />
+                <TextBlock Text="{Binding Integrity}" Style="{StaticResource SubTitle}" Margin="0,4,0,0"
+                           TextWrapping="Wrap" Foreground="{DynamicResource MutedBrush}"
+                           AutomationProperties.Name="Screenshot checksum verification"
+                           AutomationProperties.HelpText="{Binding Integrity}" />
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

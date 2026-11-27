@@ -268,6 +268,55 @@ bool batch_trap_on_event(int events, const char *label);
  *  pending-goto slot; no second jump path. @return true when it fired. */
 bool batch_trap_fire_event(int event);
 
+/* ------------------------------------------------------------------------
+ * `try` / `finally` — DOS-shaped spelling of the same structured engine.
+ *
+ * `try :handler` opens a scope and installs an ordinary one-shot error
+ * handler (the existing trap engine). `finally :label` attaches a cleanup
+ * label to the innermost open scope. On frame unwind the scopes pop LIFO and
+ * each cleanup runs through the same label-seek path `goto` uses; the
+ * ERRORLEVEL that caused the unwind is preserved because a cleanup is not
+ * allowed to swallow or replace it. No second dispatcher or runtime.
+ * ---------------------------------------------------------------------- */
+
+#define BATCH_TRY_SCOPE_MAX P4_CONFIG_TRAP_DEPTH_MAX
+
+/** Pure, fixed-size scope stack; testable without a batch frame. */
+typedef struct {
+    int depth;
+    char catch_label[BATCH_TRY_SCOPE_MAX][P4_CONFIG_ENV_NAME_BYTES];
+    char finally_label[BATCH_TRY_SCOPE_MAX][P4_CONFIG_ENV_NAME_BYTES];
+    int unwind_errorlevel;  /**< ERRORLEVEL that caused the unwind. */
+    bool unwinding;         /**< True while cleanup labels are draining. */
+} batch_try_state_t;
+
+/** Reset @p state to an empty scope stack. */
+void batch_try_state_init(batch_try_state_t *state);
+
+/** Open a scope. @p catch_label must be a `:label`; returns false when full. */
+bool batch_try_push(batch_try_state_t *state, const char *catch_label);
+
+/** Attach a cleanup label to the innermost scope; false when none is open. */
+bool batch_try_set_finally(batch_try_state_t *state, const char *label);
+
+/** Pop one scope LIFO into the optional outputs; false when empty. */
+bool batch_try_pop(batch_try_state_t *state, char *catch_out, size_t catch_size,
+                   char *finally_out, size_t finally_size);
+
+/** Number of open scopes. */
+int batch_try_depth(const batch_try_state_t *state);
+
+/** Cleanup cannot swallow a failure: a zero cleanup code keeps the unwind
+ *  code; a non-zero code is kept only when the cleanup explicitly sets one.
+ *  Pure. */
+int batch_try_final_errorlevel(int unwind_code, int cleanup_code);
+
+/** The active (foreground/background slot) try scope stack. */
+batch_try_state_t *batch_try_state(void);
+
+void shell_command_try(int argc, char **argv);
+void shell_command_finally(int argc, char **argv);
+
 /* Arm a goto from a non-command engine hook (trap). Uses the one pending-goto
  * slot in the active batch task context; no second control-flow path. */
 void batch_goto_label(const char *label);

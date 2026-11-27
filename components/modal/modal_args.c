@@ -273,3 +273,47 @@ bool modal_session_stack_set_focus(modal_session_stack_t *st, int from_top, int 
     st->slot[st->depth - 1 - from_top].focus = focus;
     return true;
 }
+
+/* -------------------------------------------------------------------------
+ * MULTITASKING SWITCH POLICY
+ * -------------------------------------------------------------------------
+ * Pure on purpose: the host gate compiles this exact TU with mock HID codes
+ * and stack fixtures, so a red result here is evidence about shipped code.
+ * ---------------------------------------------------------------------- */
+
+bool modal_alt_tab(uint8_t key_code, uint8_t modifiers)
+{
+    return key_code == MODAL_KEY_TAB &&
+           (modifiers & (MODAL_MOD_LEFT_ALT | MODAL_MOD_RIGHT_ALT)) != 0;
+}
+
+int modal_session_next_index(const modal_session_stack_t *st, int step)
+{
+    int depth = modal_session_stack_depth(st);
+    uint32_t magnitude;
+    int from_top;
+
+    if (depth <= 0) {
+        return -1;
+    }
+    if (step == 0) {
+        return 0;
+    }
+    /* Unsigned magnitude keeps INT_MIN from overflowing before the modulo. */
+    magnitude = (step > 0) ? (uint32_t)step : (uint32_t)(-(int64_t)step);
+    magnitude = (magnitude - 1u) % (uint32_t)depth;
+    if (step > 0) {
+        /* +1 lifts the oldest slot (bottom of the MRU stack). Each switch
+         * moves it to the top, so repeated presses visit EVERY session and
+         * none is stranded at the bottom - the "no lost session" contract. */
+        return depth - 1 - (int)magnitude;
+    }
+    /* -1 steps back to the most recently backgrounded app (one below top). */
+    from_top = (int)magnitude + 1;
+    return from_top >= depth ? 0 : from_top;
+}
+
+const char *modal_session_next_name(const modal_session_stack_t *st, int step)
+{
+    return modal_session_stack_name(st, modal_session_next_index(st, step));
+}

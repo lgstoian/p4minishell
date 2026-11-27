@@ -22,7 +22,9 @@ index can display them.
 matching `tui dump` transcript, and the same app screenshot published as
 `apps/web.png`. `s21_wikipedia` stages these under `screenshots/proof/` and
 `tools/publish_proof.py` is the only publish path. The live leg is mandatory:
-a gate that skips it is a failure, not a pass.
+a gate that skips it is a failure, not a pass. The
+[browser tutorial](../../web.md) explains the host proof vs live board proof
+distinction and how to reproduce both.
 
 ## App captures
 
@@ -50,6 +52,13 @@ a gate that skips it is a failure, not a pass.
 
 Aim for ~12 shots minimum: shell, files, editor, one modal, TUI, gfx, plot,
 one app, one theme variant, header, and the browser.
+
+`docs/assets/p4sync/` holds the nine P4Sync desktop GUI captures
+(`p4sync-<page>.png`, real WPF window screenshots in `--mock` mode, no board).
+They are reproduced by
+`powershell -ExecutionPolicy Bypass -File tools/p4sync/capture_gui_shots.ps1`
+and indexed in the [P4Sync guide](../../p4sync.md). A mock capture is a host
+demonstration, never hardware sign-off.
 
 `docs/assets/apps/` holds the per-app gallery captures (22 PNGs, 1024x600,
 `<app>.png`). They are produced by

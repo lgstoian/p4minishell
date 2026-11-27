@@ -1,0 +1,82 @@
+<UserControl x:Class="P4SyncGui.Views.PlanView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel>
+        <TextBlock Text="Plan &amp; Report" Style="{StaticResource PageTitle}" />
+        <TextBlock Text="Dry-run first, then inspect the exact bridge payload, progress log and error report. Cancel stops a running request."
+                   Style="{StaticResource SubTitle}" Margin="0,4,0,18" />
+
+        <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+            <StackPanel>
+                <DockPanel Margin="0,0,0,8">
+                    <TextBlock Text="Local folder" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox Text="{Binding LocalFolder, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.Name="Local folder for the plan" />
+                </DockPanel>
+                <DockPanel Margin="0,0,0,12">
+                    <TextBlock Text="Remote folder" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox Text="{Binding RemoteFolder, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.Name="Remote folder for the plan" />
+                </DockPanel>
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="Run dry-run plan" Style="{StaticResource PrimaryButton}"
+                            Command="{Binding RunPlanCommand}" IsEnabled="{Binding App.IsIdle}"
+                            AutomationProperties.Name="Run the dry-run plan" />
+                    <Button Content="Cancel" Margin="8,0,0,0" Command="{Binding CancelCommand}"
+                            IsEnabled="{Binding App.IsBusy}" AutomationProperties.Name="Cancel the running request" />
+                </StackPanel>
+                <DockPanel Margin="0,14,0,0">
+                    <TextBlock Text="Remote file" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox Text="{Binding VerifyRemote, UpdateSourceTrigger=PropertyChanged}" Width="220"
+                             DockPanel.Dock="Left" AutomationProperties.Name="Remote file to verify" />
+                    <TextBlock Text="CRC-32" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="16,0,8,0" />
+                    <TextBox Text="{Binding Crc32Text, UpdateSourceTrigger=PropertyChanged}" Width="120"
+                             DockPanel.Dock="Left" AutomationProperties.Name="Expected CRC-32" />
+                    <Button Content="Verify CRC" DockPanel.Dock="Right" HorizontalAlignment="Right"
+                            Command="{Binding RunVerifyCommand}" IsEnabled="{Binding App.IsIdle}"
+                            AutomationProperties.Name="Verify a remote file CRC-32" />
+                </DockPanel>
+            </StackPanel>
+        </Border>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Border Style="{StaticResource Card}" Grid.Column="0" Margin="0,0,8,0">
+                <StackPanel>
+                    <TextBlock Text="Error report" Style="{StaticResource SectionTitle}" />
+                    <TextBlock Text="{Binding ErrorText}" TextWrapping="Wrap" Foreground="{DynamicResource ErrorBrush}"
+                               MinHeight="40" AutomationProperties.Name="Last bridge error" />
+                    <TextBlock Text="Raw bridge payload (verbatim JSON)" Style="{StaticResource SectionTitle}"
+                               Margin="0,14,0,8" />
+                    <TextBox Text="{Binding RawJson, Mode=OneWay}" Style="{StaticResource CodeBox}" Height="300"
+                             AutomationProperties.Name="Raw JSON payload from the bridge" />
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}" Grid.Column="1" Margin="8,0,0,0">
+                <StackPanel>
+                    <TextBlock Text="Progress &amp; log events" Style="{StaticResource SectionTitle}" />
+                    <ListBox ItemsSource="{Binding App.Logs}" Height="380"
+                             AutomationProperties.Name="Bridge progress and log events">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="62" />
+                                        <ColumnDefinition Width="52" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Time}" Foreground="{DynamicResource MutedBrush}" Grid.Column="0" />
+                                    <TextBlock Text="{Binding Level}" Foreground="{DynamicResource AccentBrush}" Grid.Column="1" />
+                                    <TextBlock Text="{Binding Message}" Grid.Column="2" TextWrapping="Wrap" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </StackPanel>
+</UserControl>

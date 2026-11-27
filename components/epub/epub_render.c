@@ -111,21 +111,28 @@ bool epub_resolve_href(const char *opf_dir, const char *href,
 
     char resolved[EPUB_PATH_MAX];
     const char *src = href;
-    char *dst = resolved;
+    size_t used = 0;
+    int written;
 
-    while (*src) {
-        if (src[0] == '.' && src[1] == '.' && (src[2] == '/' || src[2] == '\0')) {
+    while (*src != '\0') {
+        if (src[0] == '.' && src[1] == '.' &&
+            (src[2] == '/' || src[2] == '\0')) {
             char *last_slash = strrchr(resolved, '/');
-            if (last_slash) *last_slash = '\0';
+
+            if (last_slash != NULL) {
+                *last_slash = '\0';
+            }
             src += (src[2] == '/') ? 3 : 2;
         } else if (src[0] == '.' && (src[1] == '/' || src[1] == '\0')) {
             src += (src[1] == '/') ? 2 : 1;
         } else {
-            *dst++ = *src++;
+            if (used + 1 >= sizeof(resolved)) {
+                return false;   /* path longer than the archive path cap */
+            }
+            resolved[used++] = *src++;
         }
     }
-    *dst = '\0';
-
-    snprintf(out_path, out_size, "%s%s", base, resolved);
-    return true;
+    resolved[used] = '\0';
+    written = snprintf(out_path, out_size, "%s%s", base, resolved);
+    return written >= 0 && (size_t)written < out_size;
 }

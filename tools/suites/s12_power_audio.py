@@ -20,6 +20,8 @@ from p4test.asserts import Checklist
 from p4test.session import PanicError
 
 NAME = "power-audio"
+# harness.md §4: UI/heap state from preceding suites contaminates this area; start from a fresh boot.
+NEEDS_CLEAN_BOOT = True
 TAGS = ["device"]
 OUT_DIR = os.path.join("screenshots", "regression")
 
@@ -194,9 +196,11 @@ def run(dev, ctx):
     # sleep/deepsleep must NOT be executed here (display blank + Wi-Fi teardown);
     # only their documented usage strings are verified.
     out = _run(dev, c, "help sleep", "help sleep", timeout=15)
-    c.expect("sleep usage text", "enter light sleep", out)
+    # Help wording was clarified to name the wake sources; keep asserting the
+    # command exists, its sleep class and that it documents how it wakes.
+    c.expect("sleep usage text", "light sleep (timer + GPIO/touch/keyboard INT wake)", out)
     out = _run(dev, c, "help deepsleep", "help deepsleep", timeout=15)
-    c.expect("deepsleep usage text", "enter ESP deep sleep", out)
+    c.expect("deepsleep usage text", "ESP deep sleep (timer + RTC IO wake only)", out)
 
     # -- timer / stopwatch -----------------------------------------------------
     out = _run(dev, c, "timer start", "timer start p4test", timeout=15)

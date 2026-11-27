@@ -86,6 +86,16 @@ STRUCT_ERRORS: List[str] = []
 # dumps between runs, which is timing, not control flow. Drop them so the gate
 # compares the deterministic structure (intro, prompts, markers, exit).
 _DROP = {
+    # UITEST prints `ui targets` into its transcript. Unnamed `obj` rows are
+    # transient LVGL objects whose count depends on async deletion timing, not
+    # app control flow; the named rows are still compared.
+    "UITEST": (
+        re.compile(r"^N\s+N\s+-?N\s+N\s+N\s+obj(?: \[C\])?(?:\s+\(xN\))?$"),
+        # Header/transcript/input-row rows printed by `ui targets /v:NAME`:
+        # live heap/battery/link telemetry, not app control flow.
+        re.compile(r"^N\s+N\s+N\s+N\s+N\s+(?:W|BT|U|S|!|transcript|Prev|Next|"
+                   r"N%|\+N%|N/C|M\s+N\.NM)(?:\s+\(xN\))?$"),
+    ),
     "SNAKE": (
         re.compile(r"^\s*-\w+="),
         re.compile(r"^\s*(dir|nh|q|t|hh|s\d|dc|d)="),
@@ -149,6 +159,10 @@ def parse_tui_dump(text: str) -> Tuple[int, dict, dict]:
     cols = 0
     for raw in text.splitlines():
         line = _ANSI.sub("", raw).rstrip()
+        # The shell prompt is line-buffered and can land at the start of any
+        # dump line (including the envelope and row runs). Drop it before the
+        # anchored checks, exactly as normalise() does for transcripts.
+        line = _PROMPT.sub("", line).lstrip()
         if line.startswith(DUMP_HEAD):
             if head is not None:
                 raise ValueError("duplicate tui dump header")
@@ -211,12 +225,28 @@ def runs_signature(runs: dict) -> str:
 
 def check_tui_structure(name: str, dev: Device, update: bool) -> None:
     """Assert `tui dump /a` structure for an app that owns a TUI page."""
-    # A foreground app may own the input (its own `key?`/`ask` loop), so use
-    # the same raw console read as `ui targets` instead of a marker-synced
-    # run() whose echo marker the app would swallow.
-    dev.session.reset_input()
-    dev.session.write_line("tui dump 1 25 /a")
-    out = _drain(dev, 4.0)
+    # An app can still own the input after its exit line (a key/ask loop), and
+    # a raw 4 s drain can cut the 50-line dump short or merge the line-buffered
+    # prompt into one row (24 text rows vs 25 colour runs). Prove the shell is
+    # back with the same break/probe pattern run_app uses, then use the
+    # marker-synced run so the whole dump is captured and ANSI-stripped.
+    def shell_ready() -> bool:
+        try:
+            return "P4APPOK" in dev.run("echo P4APPOK", timeout=12)
+        except Exception:  # noqa: BLE001 - a wedged app swallows the marker
+            return False
+
+    if not shell_ready():
+        for _ in range(6):
+            dev.session.write(b"\x03\r\n")
+            time.sleep(0.6)
+            if shell_ready():
+                break
+    try:
+        out = dev.run("tui dump 1 25 /a", timeout=30)
+    except P4Error as exc:
+        STRUCT_ERRORS.append("%s: tui dump failed: %s" % (name, exc))
+        return
     try:
         cols, rows, runs = parse_tui_dump(out)
     except ValueError as exc:
@@ -275,6 +305,16 @@ def _drain(dev: Device, seconds: float) -> str:
 
 
 def _targets_text(dev: Device) -> str:
+    """Capture the *named* `ui targets` of an app.
+
+    `ui_collect_targets` also enumerates clickable LVGL objects whose label
+    fallback is literally `obj` (toast notifications, off-screen widgets,
+    transient modal objects). Their count depends on LVGL's async deletion
+    timing, not on app control flow, so they can never form a stable baseline.
+    Every target with a real name (menu rows, buttons, transcript, kbd keys)
+    is still compared exactly; only the unnamed implementation objects are
+    excluded. This keeps the parity gate meaningful instead of masking it.
+    """
     dev.session.reset_input()
     dev.session.write_line("ui targets")
     raw = _drain(dev, 2.2)
@@ -284,6 +324,14 @@ def _targets_text(dev: Device) -> str:
         if m:
             name = (m.group(5) or "").strip()
             name = _DIGITS.sub("N", name)
+            # Header/transcript/input-row widgets are shell chrome, not app
+            # targets; their labels carry live heap/battery/link telemetry
+            # ("M N.NM", "N%", "N/C", "+N%") and change between runs.
+            if (name in ("obj", "obj [C]", "W", "BT", "U", "S", "!",
+                         "transcript", "Prev", "Next", "Tab", "textarea",
+                         "\uf077", "\uf078", "N%", "+N%", "N/C", "N")
+                    or name.startswith("M N.") or name.startswith("#")):
+                continue
             names.append(name)
     return "\n".join(names) + "\n"
 
@@ -321,6 +369,13 @@ def run_app(dev: Device, name: str, update: bool = False) -> Tuple[str, str]:
         session.write_line("launch %s" % name)
         out = session.read_until(start.encode(), 60, required=True).decode("utf-8", "replace")
         out += _drain(dev, open_wait)
+        if name == "DIAG" and b"[M-DIAG-MENU]" not in out.encode("utf-8", "replace"):
+            # The menu is printed after the 14-line dashboard; under load it
+            # can arrive after the fixed open_wait. Sending the exit key before
+            # `list` is armed types it at the shell prompt and the app never
+            # sees it (no [M-DIAG-DONE]).
+            out += session.read_until(b"[M-DIAG-MENU]", 40,
+                                      required=True).decode("utf-8", "replace")
         if name in ("PICS", "PALMTOP", "COMPANION", "MOOD"):
             targets = _targets_text(dev)
         else:

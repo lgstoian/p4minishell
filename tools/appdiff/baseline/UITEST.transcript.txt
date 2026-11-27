@@ -1,29 +1,24 @@
 launch UITEST
-[M-UITEST]
+[M-UITEST] touch automation demo
+[M-DOS-UITEST] screen=UITEST-HEADLESS panels=N head="NONE" theme=mono bars=N table=N spark=N status=N
 title: set to 'UI Test'
 ui.state: modal=none keyboard=hidden mode=text_lower editor=closed modified=N row=N col=N lines=N readonly=N preview=N wrap=N nav=off path=(unnamed) input= ghost= search= cursor=N,N link=(none)
 ui.targets: N
-N N N N N obj
-N N N N N W   (xN)
-N N N N N BT
-N N N N N U
-N N N N N S
-N N N N N !
-N N N N N M N.NM   (xN)
-N N N N N N%
-N N N N N N/C
-N N N N N obj
-N N -N N N obj [C]
-N N N N N obj
-N N N N N Prev
-N N N N N Next
 N N N N N 
 N N N N N 
 N N N N N Tab
 N N N N N Stop
-N N N N N
+N N N N N textarea
 touch targets: N
 ui.hit: N obj
 hit at N,N: N
 ui.state: modal=none keyboard=hidden mode=text_lower editor=closed modified=N row=N col=N lines=N readonly=N preview=N wrap=N nav=off path=(unnamed) input= ghost= search= cursor=N,N link=(none)
+[M-RICH-UITEST] focus+layout+scroll+route
+focus (none)
+focus.count N
+Usage: tui layout <row|column|grid> <x> <y> <w> <h> <count> [cols] [gap]
+scroll.offset N
+route.label (unresolved)
+frame unbound
+frame.cols/rows N x N
 [M-UITEST-DONE]

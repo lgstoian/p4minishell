@@ -1,6 +1,34 @@
 launch DIAG
-REPORT=DIAG.TXT
+REPORT=sd:/DIAG.TXT
 [M-DIAG]
 title: set to 'PN Diagnostics'
+DOS_THEME=green
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+pipe: at most N stages are supported
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+SPX=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+[M-DOS-DIAG] screen=DIAG-HEALTH panels=N head="PN DIAGNOSTICS" theme=green bars=N table=Y spark=N status=Y
 [M-DIAG-MENU]
 [M-DIAG-DONE]

@@ -1,5 +1,55 @@
 launch COMPANION
 title: set to 'PN Companion'
-goto :eof
+[M-RICH-COMPANION] menu language tour
+[M-RICH-COMPANION-K] system=SYS
+[M-RICH-COMPANION-K] files=FILES
+CW=companion
+[M-RICH-COMPANION-F] value=N
+[M-RICH-COMPANION-S] pad=companion...
+DOS_THEME=amber
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+pipe: at most N stages are supported
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+[M-DOS-COMPANION] screen=COMPANION-HUB panels=N head="PN COMPANION" theme=amber bars=N table=Y spark=N status=Y
 [C-MENU]
 [C-EXIT]

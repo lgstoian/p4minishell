@@ -776,12 +776,12 @@ void test_tui_frame_render_markup(void)
     tui_frame_clear(&frame, 16, 16);
     tui_frame_set(&frame, 1, 1, "H", 7, 16, 0);
     tui_frame_set(&frame, 2, 1, "#", 7, 16, 0);
-    tui_frame_set(&frame, 3, 1, "i", 12, 16, 1);
+    tui_frame_set(&frame, 3, 1, "i", 6, 16, 1);
     TEST_ASSERT_TRUE(tui_frame_render_full(&frame, out, sizeof(out)) > 0);
     /* DOS 7 is CGA 0xAAAAAA; a '#' inside a coloured run must be escaped. */
     TEST_ASSERT_NOT_NULL(strstr(out, "#aaaaaa"));
     TEST_ASSERT_NOT_NULL(strstr(out, "##"));
-    /* Bold on a stock colour renders bright (12 -> 14). */
+    /* Bold on a stock colour renders bright (brown 6 -> yellow 14). */
     TEST_ASSERT_NOT_NULL(strstr(out, "#ffff55"));
 }
 
@@ -857,7 +857,7 @@ void test_tui_scroll_clamp_and_focus_wrap(void)
     TEST_ASSERT_EQUAL_INT(0, tui_scroll_clamp(-5, 10, 100));
     TEST_ASSERT_EQUAL_INT(90, tui_scroll_clamp(999, 10, 100));
     TEST_ASSERT_EQUAL_INT(7, tui_scroll_step(5, 10, 100, 2));
-    TEST_ASSERT_EQUAL_INT(3, tui_scroll_step(5, 10, 8, 99));
+    TEST_ASSERT_EQUAL_INT(3, tui_scroll_step(5, 10, 13, 99));
     TEST_ASSERT_EQUAL_INT(-1, tui_focus_wrap(-1, 0, 1));
     TEST_ASSERT_EQUAL_INT(0, tui_focus_wrap(-1, 3, 1));
     TEST_ASSERT_EQUAL_INT(2, tui_focus_wrap(0, 3, -1));
@@ -901,7 +901,7 @@ void test_tui_widgets_route_uses_modal_and_events(void)
     modal_init(test_exec_label_cb, test_env_get_cb, test_env_set_cb, NULL);
     modal_reset();
     tui_workspace_reset();
-    TEST_ASSERT_TRUE(modal_map_create("ROUTE"));
+    TEST_ASSERT_TRUE(modal_map_create("ROUTE") >= 0);
     TEST_ASSERT_TRUE(modal_bind("ROUTE", "j", "goto_next"));
     /* The modal layer resolves the chord; the workspace records the input. */
     TEST_ASSERT_TRUE(tui_widgets_route_key("j", label, sizeof(label)));

@@ -29,6 +29,7 @@
 #include <strings.h>
 
 #include "esp_codec_dev.h"
+#include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
@@ -52,6 +53,7 @@ static audio_output_mode_t s_output_mode = AUDIO_OUTPUT_AUTO;
 typedef enum {
     AUDIO_PLAY_TONE,
     AUDIO_PLAY_WAV,
+    AUDIO_PLAY_MIX,
 } audio_play_kind_t;
 
 typedef struct {
@@ -69,9 +71,21 @@ static volatile bool s_audio_stop;       /* cut the current playback short */
 static volatile bool s_audio_started;    /* the task opened the codec and streams */
 static audio_request_t s_audio_request;
 
+/* ---- Mixer engine state (one task, one speaker handle, one amp gate) ---- */
+/** PCM staged by `audio mix`: bounded PSRAM bytes, released by audio_mix_reset. */
+#define AUDIO_MIX_PCM_BUDGET_BYTES (128u * 1024u)
+
+static audio_engine_t s_mix;
+static int16_t *s_mix_pcm[AUDIO_ENGINE_MAX_CHANNELS];
+static size_t s_mix_pcm_used;
+static int64_t s_mix_meter_sum_sq;
+static uint64_t s_mix_meter_samples;
+static int s_mix_meter_peak;
+
 static void audio_play_task(void *arg);
 static void audio_task_play_tone(const audio_request_t *req);
 static void audio_task_play_wav(const audio_request_t *req);
+static void audio_task_play_mix(const audio_request_t *req);
 static bool audio_dma_room_for_playback(void);
 static void audio_amp_mute(void);
 static void audio_amp_apply_playback(void);
@@ -451,6 +465,87 @@ static void audio_task_play_wav(const audio_request_t *req)
     esp_codec_dev_close(s_speaker_dev);
 }
 
+/** Render the bounded mixer through the SAME codec task and amp gate as tones. */
+static void audio_task_play_mix(const audio_request_t *req)
+{
+    esp_codec_dev_sample_info_t fs;
+    uint32_t samples_total;
+    uint32_t samples_written = 0;
+    uint32_t chunk_samples = P4_CONFIG_TONE_CHUNK_SAMPLES;
+    int16_t *chunk;
+
+    audio_fill_speaker_info(&fs);
+    if (!audio_dma_room_for_playback() ||
+        audio_ensure_speaker() != ESP_OK ||
+        esp_codec_dev_open(s_speaker_dev, &fs) != ESP_CODEC_DEV_OK) {
+        shell_print_muted("mix: speaker unavailable (DMA/UI pressure)");
+        return;
+    }
+    {
+        esp_err_t fixup = bsp_audio_codec_speaker_post_open(s_speaker_dev);
+
+        if (fixup != ESP_OK && fixup != ESP_ERR_NOT_SUPPORTED) {
+            shell_transcript_appendf_ansi(SH_ERR "mix: speaker fixup failed\n" SH_RST);
+            shell_record_errorf("audio", fixup, "mix speaker fixup failed");
+        }
+    }
+    (void)esp_codec_dev_set_out_mute(s_speaker_dev, false);
+    audio_amp_apply_playback();
+
+    xSemaphoreTake(s_audio_mutex, portMAX_DELAY);
+    samples_total = (req->duration_ms != 0u) ?
+                    (uint32_t)(((uint64_t)req->duration_ms * s_mix.sample_rate) /
+                               1000u) :
+                    audio_engine_length_samples(&s_mix);
+    s_mix_meter_sum_sq = 0;
+    s_mix_meter_samples = 0;
+    s_mix_meter_peak = 0;
+    xSemaphoreGive(s_audio_mutex);
+    if (samples_total == 0u) {
+        audio_amp_mute();
+        esp_codec_dev_close(s_speaker_dev);
+        return;
+    }
+
+    chunk = malloc(chunk_samples * 2u * sizeof(int16_t));
+    if (chunk == NULL) {
+        audio_amp_mute();
+        esp_codec_dev_close(s_speaker_dev);
+        return;
+    }
+    s_audio_started = true;
+
+    while (samples_written < samples_total && !s_audio_stop) {
+        uint32_t n = samples_total - samples_written;
+
+        if (n > chunk_samples) {
+            n = chunk_samples;
+        }
+        /* Absolute cursor: a chunked board render equals the offline render. */
+        xSemaphoreTake(s_audio_mutex, portMAX_DELAY);
+        audio_engine_render(&s_mix, chunk, n, samples_written);
+        audio_engine_meter_accumulate(chunk, n, &s_mix_meter_sum_sq,
+                                      &s_mix_meter_peak);
+        s_mix_meter_samples += (uint64_t)n * 2u;
+        xSemaphoreGive(s_audio_mutex);
+
+        if (esp_codec_dev_write(s_speaker_dev, chunk,
+                                n * 2u * sizeof(int16_t)) != ESP_CODEC_DEV_OK) {
+            shell_transcript_appendf_ansi(SH_ERR "mix: speaker write failed\n" SH_RST);
+            shell_record_errorf("audio", ESP_FAIL, "mix speaker write failed");
+            break;
+        }
+        samples_written += n;
+    }
+
+    free(chunk);
+    audio_amp_mute();
+    esp_codec_dev_close(s_speaker_dev);
+    shell_record_infof("audio", "mix done: %lu/%lu samples",
+                       (unsigned long)samples_written,
+                       (unsigned long)samples_total);
+}
+
 /** Playback task loop. */
 static void audio_play_task(void *arg)
 {
@@ -468,6 +563,8 @@ static void audio_play_task(void *arg)
             audio_task_play_tone(&req);
         } else if (req.kind == AUDIO_PLAY_WAV) {
             audio_task_play_wav(&req);
+        } else if (req.kind == AUDIO_PLAY_MIX) {
+            audio_task_play_mix(&req);
         }
 
         xSemaphoreTake(s_audio_mutex, portMAX_DELAY);
@@ -1119,4 +1216,292 @@ esp_err_t audio_speaker_diag(void)
     shell_transcript_appendf_ansi(SH_LBL "audio.regs.30:" SH_RST " " SH_VAL "%02x %02x" SH_RST "\n",
                                   regs[0x30], regs[0x31]);
     return ESP_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * Mixer engine glue: same request queue, codec handle and amp gate as above.
+ * ---------------------------------------------------------------------- */
+
+static bool s_mix_ready;
+
+/** Ensure the one engine instance and the shared request mutex exist. */
+static SemaphoreHandle_t audio_mix_lock(void)
+{
+    if (audio_ensure_task() != ESP_OK) {
+        return NULL;
+    }
+    if (!s_mix_ready) {
+        audio_engine_init(&s_mix, P4_CONFIG_TONE_SAMPLE_RATE_HZ);
+        s_mix_ready = true;
+    }
+    return s_audio_mutex;
+}
+
+/** Release every staged PCM block (called under the request mutex). */
+static void audio_mix_free_pcm(void)
+{
+    size_t i;
+
+    for (i = 0; i < AUDIO_ENGINE_MAX_CHANNELS; i++) {
+        free(s_mix_pcm[i]);
+        s_mix_pcm[i] = NULL;
+    }
+    s_mix_pcm_used = 0;
+}
+
+esp_err_t audio_mix_reset(void)
+{
+    SemaphoreHandle_t lock = audio_mix_lock();
+
+    if (lock == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    audio_engine_reset(&s_mix);
+    audio_mix_free_pcm();
+    s_mix_meter_sum_sq = 0;
+    s_mix_meter_samples = 0;
+    s_mix_meter_peak = 0;
+    xSemaphoreGive(lock);
+    return ESP_OK;
+}
+
+uint32_t audio_mix_sample_rate(void)
+{
+    return P4_CONFIG_TONE_SAMPLE_RATE_HZ;
+}
+
+int audio_mix_add_tone(uint32_t start_sample, uint32_t length_samples,
+                       int freq_hz, int gain_pct, audio_engine_bus_t bus,
+                       const audio_engine_env_t *env)
+{
+    SemaphoreHandle_t lock = audio_mix_lock();
+    int index;
+
+    if (lock == NULL) {
+        return -1;
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    index = audio_engine_add_tone(&s_mix, start_sample, length_samples,
+                                  freq_hz, gain_pct, bus, env);
+    xSemaphoreGive(lock);
+    return index;
+}
+
+int audio_mix_add_event(const audio_engine_seq_event_t *event,
+                        audio_engine_bus_t bus, const audio_engine_env_t *env)
+{
+    SemaphoreHandle_t lock = audio_mix_lock();
+    int index;
+
+    if (lock == NULL) {
+        return -1;
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    index = audio_engine_add_event(&s_mix, event, bus, env);
+    xSemaphoreGive(lock);
+    return index;
+}
+
+int audio_mix_add_pcm(const int16_t *pcm, uint32_t pcm_frames,
+                      uint32_t start_sample, uint32_t repeat, int gain_pct,
+                      audio_engine_bus_t bus, const audio_engine_env_t *env)
+{
+    SemaphoreHandle_t lock = audio_mix_lock();
+    size_t bytes;
+    int16_t *staged;
+    int index;
+
+    if (lock == NULL || pcm == NULL || pcm_frames == 0u) {
+        return -1;
+    }
+    bytes = (size_t)pcm_frames * sizeof(int16_t);
+    if (bytes > AUDIO_MIX_PCM_BUDGET_BYTES - s_mix_pcm_used) {
+        return -1;
+    }
+    /* PSRAM first (bounded budget above); internal fallback on PSRAM-less
+     * boards. The engine borrows this copy until audio_mix_reset(). */
+    staged = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
+    if (staged == NULL) {
+        staged = heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (staged == NULL) {
+        return -1;
+    }
+    memcpy(staged, pcm, bytes);
+
+    xSemaphoreTake(lock, portMAX_DELAY);
+    index = audio_engine_add_pcm(&s_mix, start_sample, staged, pcm_frames,
+                                 repeat, gain_pct, bus, env);
+    if (index >= 0 && s_mix_pcm[index] == NULL) {
+        s_mix_pcm[index] = staged;
+        s_mix_pcm_used += bytes;
+    } else {
+        free(staged);
+        index = -1;
+    }
+    xSemaphoreGive(lock);
+    return index;
+}
+
+bool audio_mix_play(uint32_t duration_ms)
+{
+    SemaphoreHandle_t lock = audio_mix_lock();
+
+    if (lock == NULL) {
+        return false;
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    if (s_audio_playing) {
+        xSemaphoreGive(lock);
+        return false;
+    }
+    s_audio_request.kind = AUDIO_PLAY_MIX;
+    s_audio_request.freq_hz = 0;
+    s_audio_request.duration_ms = duration_ms;
+    s_audio_request.wav_path[0] = '\0';
+    s_audio_playing = true;
+    s_audio_stop = false;
+    s_audio_started = false;
+    xSemaphoreGive(lock);
+
+    xSemaphoreGive(s_audio_sem);
+    return true;
+}
+
+uint32_t audio_mix_length_ms(void)
+{
+    SemaphoreHandle_t lock = audio_mix_lock();
+    uint32_t samples;
+
+    if (lock == NULL) {
+        return 0u;
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    samples = audio_engine_length_samples(&s_mix);
+    xSemaphoreGive(lock);
+    return (uint32_t)(((uint64_t)samples * 1000u + s_mix.sample_rate - 1u) /
+                      s_mix.sample_rate);
+}
+
+size_t audio_mix_channel_count(void)
+{
+    SemaphoreHandle_t lock = audio_mix_lock();
+    size_t count;
+
+    if (lock == NULL) {
+        return 0u;
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    count = audio_engine_count(&s_mix);
+    xSemaphoreGive(lock);
+    return count;
+}
+
+bool audio_mix_full(void)
+{
+    return audio_mix_channel_count() >= AUDIO_ENGINE_MAX_CHANNELS;
+}
+
+void audio_mix_gain_set(int percent)
+{
+    SemaphoreHandle_t lock = audio_mix_lock();
+
+    if (lock == NULL) {
+        return;
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    s_mix.master_gain_q16 = audio_engine_gain_q16(percent);
+    xSemaphoreGive(lock);
+}
+
+int audio_mix_gain_get(void)
+{
+    if (s_mix.master_gain_q16 <= 0) {
+        return 0;
+    }
+    if (s_mix.master_gain_q16 >= AUDIO_ENGINE_ONE_Q16) {
+        return 100;
+    }
+    return (int)((s_mix.master_gain_q16 * 100 +
+                  AUDIO_ENGINE_ONE_Q16 / 2) / AUDIO_ENGINE_ONE_Q16);
+}
+
+void audio_mix_duck_set(int percent)
+{
+    SemaphoreHandle_t lock = audio_mix_lock();
+
+    if (lock == NULL) {
+        return;
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    s_mix.duck_gain_q16 = audio_engine_gain_q16(percent);
+    xSemaphoreGive(lock);
+}
+
+int audio_mix_duck_get(void)
+{
+    if (s_mix.duck_gain_q16 <= 0) {
+        return 0;
+    }
+    if (s_mix.duck_gain_q16 >= AUDIO_ENGINE_ONE_Q16) {
+        return 100;
+    }
+    return (int)((s_mix.duck_gain_q16 * 100 +
+                  AUDIO_ENGINE_ONE_Q16 / 2) / AUDIO_ENGINE_ONE_Q16);
+}
+
+void audio_mix_env_set_default(const audio_engine_env_t *env)
+{
+    SemaphoreHandle_t lock = audio_mix_lock();
+
+    if (lock == NULL || env == NULL) {
+        return;
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    s_mix.default_env = *env;
+    xSemaphoreGive(lock);
+}
+
+audio_engine_env_t audio_mix_env_get_default(void)
+{
+    return s_mix.default_env;
+}
+
+void audio_mix_meter(int *rms_out, int *peak_out)
+{
+    if (rms_out != NULL) {
+        *rms_out = audio_engine_meter_finish(s_mix_meter_sum_sq,
+                                             s_mix_meter_samples);
+    }
+    if (peak_out != NULL) {
+        *peak_out = s_mix_meter_peak;
+    }
+}
+
+void audio_mix_meter_reset(void)
+{
+    SemaphoreHandle_t lock = audio_mix_lock();
+
+    if (lock == NULL) {
+        return;
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    s_mix_meter_sum_sq = 0;
+    s_mix_meter_samples = 0;
+    s_mix_meter_peak = 0;
+    xSemaphoreGive(lock);
+}
+
+void audio_mix_render_offline(int16_t *stereo_out, size_t frames,
+                              uint32_t start_sample)
+{
+    SemaphoreHandle_t lock = audio_mix_lock();
+
+    if (lock == NULL) {
+        return;
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    audio_engine_render(&s_mix, stereo_out, frames, start_sample);
+    xSemaphoreGive(lock);
 }

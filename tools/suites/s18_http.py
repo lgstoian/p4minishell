@@ -22,6 +22,8 @@ import time
 from p4test import Checklist
 
 NAME = "http"
+# harness.md §4: UI/heap state from preceding suites contaminates this area; start from a fresh boot.
+NEEDS_CLEAN_BOOT = True
 TAGS = ["network", "http"]
 
 IP_RE = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})")

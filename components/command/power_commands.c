@@ -641,6 +641,19 @@ const char *shell_power_wake_cause_string(esp_sleep_wakeup_cause_t cause)
     }
 }
 
+/**
+ * Read-only light-sleep request state for diagnostic facades (`os pwr`).
+ * The flag is owned by `battery sleep <on|off>`; this never changes it.
+ */
+bool shell_power_light_sleep_requested(void)
+{
+#if CONFIG_PM_ENABLE
+    return s_light_sleep_requested;
+#else
+    return false;
+#endif
+}
+
 /** Read and print the battery through the shared ADC path. */
 static bool shell_power_report_battery(const char *label)
 {
@@ -723,16 +736,57 @@ static int s_power_idle_off_secs;         /* 0 = disabled */
 static int64_t s_power_last_activity_us;  /* esp_timer_get_time() */
 static bool s_power_display_off_by_idle;
 
+/**
+ * Pure idle-timeout clamp (unit/gate tested): 0 disables, negative disables,
+ * and anything above the configured maximum is clamped. Clamping before the
+ * narrow int cast also prevents a large value from wrapping to a negative one
+ * (which used to silently turn idle-off off instead of clamping it).
+ */
+int shell_power_clamp_idle_seconds(int64_t seconds)
+{
+    if (seconds <= 0) {
+        return 0;
+    }
+    if (seconds > (int64_t)SHELL_POWER_IDLE_DISPLAY_MAX_SECS) {
+        return SHELL_POWER_IDLE_DISPLAY_MAX_SECS;
+    }
+    return (int)seconds;
+}
+
+/**
+ * Pure remaining-time computation (unit/gate tested). A due deadline returns 1
+ * so the header-refresh policy schedules an immediate tick; the result is
+ * always representable as an int and never exceeds the configured window.
+ */
+int shell_power_idle_remaining_ms(int timeout_secs, int64_t now_us,
+                                  int64_t last_activity_us, bool off_by_idle)
+{
+    int64_t remaining_ms;
+    int clamped_secs = shell_power_clamp_idle_seconds((int64_t)timeout_secs);
+
+    if (off_by_idle || clamped_secs <= 0) {
+        return 0;
+    }
+    /* A backwards clock must not park the idle tick forever. */
+    if (now_us < last_activity_us) {
+        return 1;
+    }
+    remaining_ms = (int64_t)clamped_secs * 1000 - (now_us - last_activity_us) / 1000;
+    if (remaining_ms <= 0) {
+        return 1;
+    }
+    if (remaining_ms > (int64_t)SHELL_POWER_IDLE_DISPLAY_MAX_SECS * 1000) {
+        remaining_ms = (int64_t)SHELL_POWER_IDLE_DISPLAY_MAX_SECS * 1000;
+    }
+    return (int)remaining_ms;
+}
+
 void shell_power_set_idle_timeout(int seconds)
 {
-    if (seconds < 0) {
-        seconds = 0;
-    }
-    if (seconds > SHELL_POWER_IDLE_DISPLAY_MAX_SECS) {
-        seconds = SHELL_POWER_IDLE_DISPLAY_MAX_SECS;
-    }
+    int clamped = shell_power_clamp_idle_seconds((int64_t)seconds);
+
     portENTER_CRITICAL(&s_power_idle_lock);
-    s_power_idle_off_secs = seconds;
+    s_power_idle_off_secs = clamped;
     portEXIT_CRITICAL(&s_power_idle_lock);
 }
 
@@ -750,34 +804,17 @@ int shell_power_ms_until_idle_off(void)
 {
     int seconds;
     int64_t last_us;
-    int64_t elapsed_ms;
-    int64_t remaining_ms;
+    int64_t now_us;
+    bool off_by_idle;
 
     portENTER_CRITICAL(&s_power_idle_lock);
     seconds = s_power_idle_off_secs;
     last_us = s_power_last_activity_us;
-    if (s_power_display_off_by_idle) {
-        seconds = 0;
-    }
+    now_us = esp_timer_get_time();
+    off_by_idle = s_power_display_off_by_idle;
     portEXIT_CRITICAL(&s_power_idle_lock);
 
-    if (seconds <= 0) {
-        return 0;
-    }
-
-    elapsed_ms = (esp_timer_get_time() - last_us) / 1000;
-    remaining_ms = (int64_t)seconds * 1000 - elapsed_ms;
-    if (remaining_ms <= 0) {
-        /* Deadline already passed: return a tiny value so the caller polls
-         * promptly and runs the idle tick that switches the display off. */
-        return 1;
-    }
-    /* Clamp to the maximum configurable window so the return value (int) is
-     * always representable. */
-    if (remaining_ms > (int64_t)SHELL_POWER_IDLE_DISPLAY_MAX_SECS * 1000) {
-        remaining_ms = (int64_t)SHELL_POWER_IDLE_DISPLAY_MAX_SECS * 1000;
-    }
-    return (int)remaining_ms;
+    return shell_power_idle_remaining_ms(seconds, now_us, last_us, off_by_idle);
 }
 
 void shell_power_notify_activity(void)
@@ -844,6 +881,8 @@ void shell_power_idle_tick(void)
 static int s_wake_pins[4];
 static int s_wake_pin_count;
 
+static void shell_power_disable_light_wake(void);
+
 /**
  * True when @p gpio can wake deep sleep: only RTC IOs can (the ESP32-P4 RTC
  * domain covers GPIO0..GPIO15, expressed by SOC_GPIO_DEEP_SLEEP_WAKE_VALID_GPIO_MASK).
@@ -870,8 +909,17 @@ bool shell_power_deep_wake_gpio_eligible(int gpio)
  */
 static bool shell_power_arm_light_pin(int gpio, int level, bool configure)
 {
+    int i;
+
     if (gpio < 0) {
         return false;
+    }
+    /* Never arm the same line twice: a user GPIO that is also the panel INT
+     * would otherwise be re-armed at a different level. */
+    for (i = 0; i < s_wake_pin_count; i++) {
+        if (s_wake_pins[i] == gpio) {
+            return true;
+        }
     }
     if (configure) {
         gpio_config_t wake_io;
@@ -902,7 +950,10 @@ static bool shell_power_arm_light_pin(int gpio, int level, bool configure)
  */
 static void shell_power_arm_light_wake(void)
 {
-    s_wake_pin_count = 0;
+    /* Clear any source left armed by an interrupted earlier sleep before
+     * assembling this cycle's set; otherwise a stale level can wake the chip
+     * immediately or keep a pin enabled after this sleep. */
+    shell_power_disable_light_wake();
 
     if (SHELL_POWER_WAKE_GPIO != GPIO_NUM_NC) {
         int wake_gpio = (int)SHELL_POWER_WAKE_GPIO;
@@ -925,6 +976,8 @@ static void shell_power_arm_light_wake(void)
             if (shell_power_arm_light_pin(touch_gpio, 0, false)) {
                 shell_transcript_appendf_ansi(SH_LBL "sleep:" SH_RST " touch wake armed (INT " SH_NUM "GPIO%d" SH_RST ")\n",
                                               touch_gpio);
+            } else {
+                shell_print_warning("sleep: failed to enable touch wake on GPIO%d", touch_gpio);
             }
         } else {
             shell_transcript_appendf_ansi(SH_MUTE "sleep: touch wake unavailable (no touch interrupt on this panel revision)\n");
@@ -939,6 +992,8 @@ static void shell_power_arm_light_wake(void)
         if (shell_power_arm_light_pin(kbd_gpio, 0, true)) {
             shell_transcript_appendf_ansi(SH_LBL "sleep:" SH_RST " keyboard wake armed (" SH_NUM "GPIO%d" SH_RST ")\n",
                                           kbd_gpio);
+        } else {
+            shell_print_warning("sleep: failed to enable keyboard wake on GPIO%d", kbd_gpio);
         }
     }
 #endif
@@ -954,17 +1009,17 @@ static void shell_power_arm_light_wake(void)
  * Arm the user GPIO for deep-sleep wake when it is an RTC IO; report honestly
  * when it is not (the ESP32-P4 RTC domain is GPIO0..GPIO15).
  */
-static void shell_power_arm_deep_wake(void)
+static bool shell_power_arm_deep_wake(void)
 {
     int wake_gpio = (int)SHELL_POWER_WAKE_GPIO;
 
     if (wake_gpio < 0) {
-        return;
+        return false;
     }
     if (!shell_power_deep_wake_gpio_eligible(wake_gpio)) {
         shell_transcript_appendf_ansi(SH_WARN "deepsleep: GPIO%d is not an RTC IO; cannot wake deep sleep - timer only" SH_RST "\n",
                                       wake_gpio);
-        return;
+        return false;
     }
     if (esp_deep_sleep_enable_gpio_wakeup(
             1ULL << wake_gpio,
@@ -972,9 +1027,10 @@ static void shell_power_arm_deep_wake(void)
         shell_transcript_appendf_ansi(SH_LBL "deepsleep:" SH_RST " GPIO wake on " SH_NUM "GPIO%d" SH_RST
                                       " (" SH_VAL "%s" SH_RST ")\n",
                                       wake_gpio, SHELL_POWER_WAKE_LEVEL ? "high" : "low");
-    } else {
-        shell_print_warning("deepsleep: failed to enable GPIO wake on GPIO%d", wake_gpio);
+        return true;
     }
+    shell_print_warning("deepsleep: failed to enable GPIO wake on GPIO%d", wake_gpio);
+    return false;
 }
 
 /** Print the available light/deep-sleep wake sources for `power status`. */
@@ -1119,6 +1175,10 @@ static void shell_power_disable_light_wake(void)
         (void)gpio_wakeup_disable((gpio_num_t)s_wake_pins[i]);
     }
     s_wake_pin_count = 0;
+    /* gpio_wakeup_disable() removes the per-pin configuration; the global
+     * GPIO wakeup source must also be cleared, or a stale source survives the
+     * next sleep. Pin configuration is deliberately left to its owner. */
+    (void)esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
 }
 
 void shell_command_sleep(int argc, char **argv)
@@ -1150,6 +1210,9 @@ void shell_command_sleep(int argc, char **argv)
      * / keyboard interrupts when the fitted hardware wires them), reporting
      * what is and is not available honestly. */
     shell_power_arm_light_wake();
+    if (seconds == 0 && s_wake_pin_count == 0) {
+        shell_transcript_appendf_ansi(SH_WARN "sleep: no wake source armed - only an external reset will recover" SH_RST "\n");
+    }
 
 #if SHELL_POWER_LIGHT_SLEEP_SHUTDOWN_WIFI
     /* Remember the runtime/connection intent so the wake path can bring the
@@ -1170,6 +1233,9 @@ void shell_command_sleep(int argc, char **argv)
 
     error = esp_light_sleep_start();
     shell_power_disable_light_wake();
+    /* The timer source is one-shot, but clear it explicitly so a failed or
+     * cancelled sleep cannot leave a stale timer armed for the next cycle. */
+    (void)esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
     if (error != ESP_OK) {
         shell_transcript_appendf_ansi(SH_ERR "sleep: light sleep failed" SH_RST " (" SH_WARN "%s" SH_RST ")\n",
                                  esp_err_to_name(error));
@@ -1196,6 +1262,7 @@ void shell_command_sleep(int argc, char **argv)
 void shell_command_deepsleep(int argc, char **argv)
 {
     uint32_t seconds;
+    bool gpio_wake_armed;
 
     if (!shell_power_parse_seconds(argc, argv, &seconds)) {
         shell_print_usage("Usage: deepsleep [seconds]");
@@ -1207,6 +1274,9 @@ void shell_command_deepsleep(int argc, char **argv)
 
     shell_transcript_appendf_ansi(SH_WARN "deepsleep: RAM state (env, aliases, cwd, variables) is lost on wake" SH_RST "\n");
     if (seconds == 0) {
+        /* A previous `sleep`/`deepsleep` may have left a timer armed. Clear it
+         * so "no timer set" is true, not just a printed claim. */
+        esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
         shell_transcript_appendf_ansi(SH_WARN "deepsleep: no timer set; wake requires an external wake source" SH_RST "\n");
     } else {
         esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
@@ -1217,7 +1287,10 @@ void shell_command_deepsleep(int argc, char **argv)
     /* Deep sleep can only be woken by an RTC IO or the timer (the touch and
      * keyboard interrupts are outside the RTC domain), so arm the user GPIO
      * when it is eligible and say so honestly when it is not. */
-    shell_power_arm_deep_wake();
+    gpio_wake_armed = shell_power_arm_deep_wake();
+    if (seconds == 0 && !gpio_wake_armed) {
+        shell_transcript_appendf_ansi(SH_WARN "deepsleep: no wake source armed - power-cycle required to recover" SH_RST "\n");
+    }
 
     shell_power_shutdown_wifi();
     display_set_power_state(DISPLAY_POWER_OFF);

@@ -306,7 +306,11 @@ and dispatches the same button event through the `webapp` facade (`event` +
 
 The article proof `docs/assets/web/wiki_esp32.png` shows the same renderer on
 the saved ESP32 Wikipedia fixture (first 25 rows only — not a live HTTPS capture
-or the full 2000-row device page).
+or the full 2000-row device page). The archived live-board capture
+`docs/assets/proof/wikipedia_live.png` shows the real HTTPS article from the
+v1.4.4 campaign; neither image is a new v1.6.0 hardware result. See
+[`web.md`](../web.md) for the browser tutorial, image-support matrix and proof
+reproduction.
 
 ## Webapp Demo
 

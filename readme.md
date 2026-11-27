@@ -29,6 +29,19 @@ device - the live Wikipedia article is fetched and rendered whole. The showcase 
 
 ![The P4MiniShell browser rendering the device dashboard from sd:/WEB/INDEX.HTML](docs/assets/browser-website.png)
 
+### Wikipedia in our browser
+
+Two evidence-backed views of the same DOM/CSS engine: a deterministic **host
+proof** of the saved ESP32 article fixture, and an **archived live board
+capture** of the real HTTPS article from the v1.4.4 hardware campaign. The
+host image is **not a device capture**; the live image is **not a new v1.6.0
+hardware result** — board recapture for this cycle is still pending. Full
+tutorial: [`web.md`](web.md).
+
+| Host proof (first 25 rows, `wiki_esp32.html`) | Live board proof (archived v1.4.4, real HTTPS) |
+|---|---|
+| ![ESP32 Wikipedia article, first 25 rows, as a labelled DOS host proof](docs/assets/web/wiki_esp32.png) | ![Live on-device Wikipedia render from the v1.4.4 campaign](docs/assets/proof/wikipedia_live.png) |
+
 **Visual direction.** P4MiniShell deliberately looks like a modern take on
 retro MS-DOS: an 80x25 CP437 cell grid, box-drawn panels, the DOS/CGA palette,
 a chunky bitmap cell font, status bars and keyboard menus. The point is richer
@@ -84,7 +97,8 @@ and both image outcomes (a resized BMP and visible alt text for the missing
 one). It is a **first-25-rows host proof**, not a live HTTPS capture and not the
 full 2000-row page the device can hold in PSRAM; on a board, `browser`/`html`
 fetches and renders the real article whole, and tap links/PageUp/PageDown are
-device behaviour.
+device behaviour. The companion [`web.md`](web.md) documents the browser
+verbs, image support and how to reproduce both the host and the live proof.
 
 ![ESP32 Wikipedia article, first 25 rows, as a labelled DOS host proof](docs/assets/web/wiki_esp32.png)
 
@@ -189,6 +203,13 @@ host gates are wired into CI for this candidate. See
 
 **New in v1.6.0 (all additive):**
 
+- **OS subsystems & platform services.** A read-only `os` facade, power/sleep
+  fixes, a unified audio engine, video/EPUB/archive, 3D (`gfx3d`), registry/shared
+  library/structured-error (`reg`/`lib`/`try`/`finally`) and a multitasking window
+  switcher — all batch-callable facades over the ONE existing owner of each
+  capability, with board-free host gates. See the
+  [OS subsystems & platform services](#os-subsystems--platform-services) table
+  below and [`documentation.md`](documentation.md) / [`SDK.md`](SDK.md).
 - **One signed native payload path.** `native info|status|verify <APP>` inspects
   a `NATIVE/<APP>.P4X` envelope; `natrun <APP> [args]` is the single `.bat`-facing
   launch app. No unsigned code executes, no MMU isolation is claimed, and the
@@ -579,6 +600,25 @@ lane is a **pre-gate only**: hardware sign-off still comes from
   message publish/subscribe (`applib_msg.h` over the event service),
   and the native-app ABI (`app_register`).
 
+### P4Sync desktop companion (host only)
+
+P4Sync is a host-side companion, not firmware: `tools/p4sync` provides an
+agent-friendly CLI and a JSON-lines bridge that reuse the **existing** USB
+harness (`p4test` sessions, SDFX `sdbridge`, `pim_sync`, screenshots). No new
+serial code, framing engine or firmware verb is added. The Windows 11 WPF GUI
+in `apps/p4sync_gui` is a JSON client of that bridge with nine pages (devices,
+dashboard, files, screenshot, PIM, apps, shell, plan, settings), SDFX
+push/pull, a screenshot preview verified by PNG SHA-256/size, stale
+`image.json` recovery and credentials in Windows Credential Manager. Run the
+board-free gate with `python tools/p4sync_gate.py --check` (51 checks;
+`--self-test` runs 18 red canaries); `--mock` needs no board and no pyserial.
+The dedicated guide with capabilities, CLI examples and **screenshots of all
+nine GUI pages** is [`p4sync.md`](p4sync.md). The downloadable Windows binary
+is built by `python tools/make_release.py p4sync`. Lower-level details are in
+[`tools/p4sync/README.md`](tools/p4sync/README.md) and
+[`apps/p4sync_gui/README.md`](apps/p4sync_gui/README.md). A mock pass is a
+pre-gate, never hardware sign-off (`harness.md` §0/§2.2).
+
 ### Display, TUI, and graphics
 
 - **`draw`** TUI verbs (box/line/fill/text/bar/table/list/window/cursor/hold/
@@ -634,6 +674,33 @@ A responsive status header shows Wi-Fi, battery, Bluetooth, USB, SD, memory,
 CPU, and the clock, with a notification queue and adaptive refresh; the Wi-Fi
 indicator color follows the connection/signal state (and stays green when
 associated even if the hosted path cannot report an RSSI).
+
+### OS subsystems & platform services
+
+v1.6.0 adds a set of **batch-callable facades over the one existing owner** of
+each capability. None introduces a second driver, decoder, renderer, dispatcher
+or settings core; each reports `unavailable` honestly and sets an ERRORLEVEL
+(0 success / 1 unavailable or not found / 2 usage), and every `/b` form emits
+uncoloured, machine-parsable rows for pipes and scripts.
+
+| Area | Verbs | One owner / contract |
+|------|-------|----------------------|
+| OS facade | `os pm\|drv\|io\|fs\|disk\|net\|mem\|sec\|ver\|pwr [/b]` | Read-only over the subsystem accessors that already exist; `/b` machine rows; explicit `unavailable`; ERRORLEVEL 0/1/2. |
+| Power & sleep | `power …`, `sleep`, `deepsleep`, `shutdown` | Stale deepsleep timer disabled, wake-source leakage cleared, honest warnings; `DISPLAY_TIMEOUT` 64-bit-clamped before narrowing; pure `shell_power_clamp_idle_seconds`. |
+| Audio engine | `audio mix\|sfx\|seq\|env\|gain\|meter` | One codec/playback task with a Q16 mixer, ADSR, sequencer, SFX bus and ducking; legacy `beep`/`tone`/`wavplay` verbs preserved. |
+| Video | `video play <dir\|manifest> [/fps:N] [/loop] [/tui] [/b]`, `video status [/b]`, `video stop` | One `imagefile` decoder and one TUI sampler; no second decoder or player. |
+| EPUB / archive | `epub …`, `archive …` | Pure EPUB nav/TOC core (duplicate-symbol link fix) and one USTAR/CRC core with machine rows. |
+| 3D | `gfx3d init\|close\|status\|camera\|mesh\|draw\|rotate\|translate\|scale\|light\|mode\|project\|clear\|stats\|identity` | Q16 math (BMDS ideas re-expressed, no code copied) and all pixels through the one `gfx_surface` raster path and one DOS palette. |
+| Registry | `reg [/b] list\|get\|set\|del` | Over the one `storage_ini` core with atomic writes. |
+| Shared library | `lib [/b] list\|info\|load` | Shared batch/applib routines from `sd:/APPS/LIBS.INI` — **not** native dynamic linking. |
+| Structured errors | `try :catch`, `finally :cleanup` | The existing trap scope stack, LIFO unwind and preserved ERRORLEVEL. |
+| Window switcher | `mstack /switch NAME`, `windows switcher` | Physical Alt+Tab and a bottom-left edge-swipe cycle foreground sessions through the existing shell screen save/restore, in a DOS 80x25 CP437 overlay. |
+
+All of it is batch-callable; see [`documentation.md`](documentation.md)
+("Expanded subsystems") for the one-owner mapping and the batch/SD-app
+compatibility contract, and [`SDK.md`](SDK.md) for the verb and ERRORLEVEL
+conventions. These surfaces are board-free host-gated pre-gates only — hardware
+sign-off on COM3/COM6 is still pending (`harness.md` §0/§2.2).
 
 ---
 
@@ -714,6 +781,7 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
 | File | Purpose |
 |------|---------|
 | [readme.md](readme.md) | This overview and quick start |
+| [web.md](web.md) | Browser tutorial: pages from SD/http(s), verbs, image formats, limits, navigation, proof reproduction |
 | [tutorial_getting_started.md](tutorial_getting_started.md) | Guided first run |
 | [tutorial_batch.md](tutorial_batch.md) | Write and package a batch app |
 | [tutorial_native.md](tutorial_native.md) | Write a native `applib` app |
@@ -736,6 +804,9 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
 | [test/README.md](test/README.md) | Unit-test layout and how to run them |
 | [harness.md](harness.md) | Full testing harness guide (unit, suites, drivers, diagnostics) |
 | [tools/README.md](tools/README.md) | Host-side drivers and hardware tests |
+| [p4sync.md](p4sync.md) | P4Sync user guide: capabilities, CLI/bridge usage, Windows 11 GUI with screenshots of all nine pages |
+| [tools/p4sync/README.md](tools/p4sync/README.md) | P4Sync agent CLI + JSON bridge over the existing USB harness (commands, contract, board-free gate) |
+| [apps/p4sync_gui/README.md](apps/p4sync_gui/README.md) | Windows 11 / WPF desktop companion: pages, mock mode, credentials, build/tests |
 | [PORTING.md](PORTING.md) | Board profiles (`boards/`) and bring-up checklist |
 | [schematics.md](schematics.md) | Per-board hardware reference: pinouts, buses, power tree, expander maps |
 | [docs/apps.md](docs/apps.md) | Reference app gallery: each app's distinct DOS screen and proof origin |
@@ -777,11 +848,16 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
   fixtures), `python tools/host_tui_gate.py --check`,
   `python tools/host_modal_gate.py --check`, `python tools/gfx_toolkit_test.py
   --host`, `python tools/host_apps_gate.py --check` (34 apps incl. the flagship),
+  `python tools/p4sync_gate.py --check` / `--self-test` (51 checks, 18 canaries;
+  the Windows GUI build/tests run on a `windows-latest` job),
+  the new v1.6.0 subsystem gates `python tools/host_os_gate.py --check`,
+  `host_power_gate.py --check`, `host_audio_gate.py --check`,
+  `host_video_gate.py --check` and `host_engine3d_gate.py --check`,
   plus the false-green/identity gates (`green_guard.py --strict`,
   `gallery_audit.py`, `gallery_audit_selftest.py`) and the visual proof gates
   (`python tools/make_web_screenshots.py --check`,
   `python tools/visual_proof_gate.py --check` / `--self-test`).
-  `python tools/host_all_gates.py` runs 35 gates / 15 canaries; a pass is never
+  `python tools/host_all_gates.py` runs 47 gates / 21 canaries; a pass is never
   hardware sign-off (`harness.md` §0/§2.2); the app transcript goldens await a
   board rebaseline.
 

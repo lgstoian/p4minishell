@@ -352,6 +352,23 @@ void tui_page_render(void);
 bool tui_selection_copy(void);
 void tui_selection_clear(void);
 
+/* ==== Multitasking app switching (one input seam, one frame renderer) ====
+ * The TUI never owns sessions. main registers the one switch helper (the
+ * mstack cycle) and modal registers the one view (these functions), so the
+ * edge-swipe gesture reuses the same policy as keyboard Alt+Tab. */
+
+/** Register the app-switch handler called by the bottom-left edge swipe.
+ *  @p handler receives the cycle step (+1 forward, -1 back); NULL disables. */
+/** Register the app-switch handler invoked by the bottom-left edge swipe.
+ *  The handler is the existing modal session-cycle primitive; it returns
+ *  whether a switch actually happened (the TUI ignores the result). */
+void tui_set_app_switch_handler(bool (*handler)(int step));
+
+/** Draw the 80x25 CP437 app switcher through the ONE tui frame renderer and
+ *  schedule its one-shot hide. @p names are in from-top order; @p focus is
+ *  the from-top index of the highlighted session. */
+void tui_app_switcher_render(const char *const *names, int count, int focus);
+
 /** Blit an image into the browser PAGE buffer as cell-ramp glyphs (1-based
  *  cells). Shares the sampler with tui_draw_image(); used for emoji pack
  *  glyphs so a page shows colour emoji on the next tui_page_render(). */

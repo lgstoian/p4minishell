@@ -215,22 +215,41 @@ def push_local(dev: DeviceSession, local: str, remote: Optional[str] = None,
 
 
 def pull_file(dev: DeviceSession, remote: str, timeout: float = 120.0) -> bytes:
-    """Download ``remote`` via the ``send`` (SDFX) framing."""
-    dev.reset_input()
-    dev.write(("send %s\r\n" % remote).encode())
-    prelude = dev.read_until(b"SDFX", timeout)
-    if b"SDFX" not in prelude:
-        raise P4Error("send %s: no SDFX frame (%r)" % (remote, prelude[-160:]))
-    size = struct.unpack("<I", dev.read_exact(4, 15.0))[0]
-    payload = dev.read_exact(size, timeout)
-    # The device re-enables its console reader only AFTER emitting TX DONE
-    # (components/command/serial_commands.c). Returning as soon as the payload
-    # is read lets the next command arrive while that reader is still
-    # suspended - the intermittent `del /f ... : marker not seen` hangs after a
-    # screenshot in the full sweep. The framed transfer is not complete until
-    # the marker is consumed.
-    tail = dev.read_until(TX_DONE, 15.0)
-    if TX_DONE not in tail:
-        raise P4Error("send %s: no TX DONE after %d bytes (%r)"
-                      % (remote, size, tail[-120:]))
-    return payload
+    """Download ``remote`` via the ``send`` (SDFX) framing.
+
+    A busy command worker (e.g. a Wi-Fi reconnect backoff) can delay `send`
+    past the host timeout. If we simply give up, the delayed command still runs
+    and suspends the console reader, so every following command is swallowed.
+    Resync with a break and retry once before declaring the transfer failed.
+    """
+    last_error = ""
+    for attempt in range(2):
+        dev.reset_input()
+        dev.write(("send %s\r\n" % remote).encode())
+        prelude = dev.read_until(b"SDFX", timeout)
+        if b"SDFX" not in prelude:
+            last_error = "send %s: no SDFX frame (%r)" % (remote, prelude[-160:])
+            if attempt == 0:
+                dev.write(b"\x03\r\n")
+                dev.read_for(1.0)
+                continue
+            raise P4Error(last_error)
+        size = struct.unpack("<I", dev.read_exact(4, 15.0))[0]
+        payload = dev.read_exact(size, timeout)
+        # The device re-enables its console reader only AFTER emitting TX DONE
+        # (components/command/serial_commands.c). Returning as soon as the
+        # payload is read lets the next command arrive while that reader is
+        # still suspended - the intermittent `del /f ... : marker not seen`
+        # hangs after a screenshot in the full sweep. The framed transfer is
+        # not complete until the marker is consumed.
+        tail = dev.read_until(TX_DONE, 15.0)
+        if TX_DONE not in tail:
+            last_error = ("send %s: no TX DONE after %d bytes (%r)"
+                          % (remote, size, tail[-120:]))
+            if attempt == 0:
+                dev.write(b"\x03\r\n")
+                dev.read_for(1.0)
+                continue
+            raise P4Error(last_error)
+        return payload
+    raise P4Error(last_error or "send %s: transfer failed" % remote)

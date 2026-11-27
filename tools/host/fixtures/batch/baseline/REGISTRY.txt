@@ -1,0 +1,21 @@
+# batch-baseline-v1 fixture=REGISTRY
+[M-REG-SET] 0
+p4
+[M-REG-GET] 0
+HOST=p4
+PORT=80
+[M-REG-LIST] 0
+HOST=p4
+[M-REG-DEL] 0
+UTIL=sd:/APPS/APPLIB.BAT::probe
+[M-LIB-LIST] 0
+UTIL=sd:/APPS/APPLIB.BAT::probe
+[M-LIB-INFO] 0
+[M-LIB-PROBE] ok
+exit: leaving this batch file (errorlevel 0)
+[M-LIB-CALL] 0
+[M-TRY-CATCH] 7
+exit: leaving this batch file (errorlevel 7)
+[M-TRY-FINALLY] done
+[M-HOST-BATCH-DONE]
+ERRORLEVEL 7

@@ -40,6 +40,11 @@
 #define BROWSER_BOOK_TEXT_BYTES \
     ((size_t)P4_CONFIG_BROWSER_BOOKMARK_MAX * (BROWSER_NAME_LEN + BROWSER_URL_LEN + 2) + 1)
 
+/* Batch-injectable page keys call the SAME handler as USB HID; there is no
+ * second key engine or scroll state. Defined with the html surface below. */
+static bool html_surface_key(void *ctx_ptr, uint8_t key_code, uint8_t modifiers,
+                             char ascii);
+
 /* Bulk tables live in PSRAM, allocated on first use, NOT in .bss: internal
  * SRAM is the scarce boot resource (see ai-context.md). */
 static char (*s_history)[BROWSER_URL_LEN] = NULL;
@@ -512,7 +517,8 @@ static bool browser_load_image(void *ctx, const char *src, dom_image_t *out)
     if (strncmp(target, "http://", 7) == 0 || strncmp(target, "https://", 8) == 0) {
         networking_http_result_t result;
         memset(&result, 0, sizeof(result));
-        if (networking_http_get(target, &result) != ESP_OK) return false;
+        if (networking_http_get_bounded(target, P4_CONFIG_BROWSER_IMAGE_MAX_BYTES,
+                                       &result) != ESP_OK) return false;
         data = result.body;
         len = result.body_size;
         /* The documented browser image budget: the transport allows 512 KB for
@@ -614,8 +620,27 @@ static bool browser_link_command(const char *command, char *out, size_t size)
         strncasecmp(href, "mailto:", 7) == 0) {
         return false;
     }
-    if (strstr(href, "://") != NULL || strncmp(href, "sd:", 3) == 0 ||
-        strncasecmp(href, "usb", 3) == 0 || href[0] == '/') {
+    if (href[0] == '/' && href[1] == '/') {
+        /* Protocol-relative link from an https page: same rule as images. */
+        snprintf(target, sizeof(target), "https:%s", href);
+    } else if (href[0] == '/' &&
+               (strncmp(s_page_base, "https://", 8) == 0 ||
+                strncmp(s_page_base, "http://", 7) == 0)) {
+        /* Root-relative link ("browser links" emits many of these on
+         * Wikipedia). Resolve against the page's scheme+authority; treating it
+         * as a local SD path made every in-article link fail to open. */
+        const char *sep = strstr(s_page_base, "://");
+        const char *host = sep != NULL ? sep + 3 : s_page_base;
+        const char *end = strchr(host, '/');
+
+        if (end != NULL) {
+            snprintf(target, sizeof(target), "%.*s%s",
+                     (int)(end - s_page_base), s_page_base, href);
+        } else {
+            snprintf(target, sizeof(target), "%s%s", s_page_base, href);
+        }
+    } else if (strstr(href, "://") != NULL || strncmp(href, "sd:", 3) == 0 ||
+               strncasecmp(href, "usb", 3) == 0 || href[0] == '/') {
         snprintf(target, sizeof(target), "%s", href);
     } else {
         const char *base = s_page_base;
@@ -822,6 +847,56 @@ static void browser_page_present(void)
     tui_flush();
 }
 
+/* Warm the decoded-image cache in a bounded FLAT walk. Wikipedia puts its
+ * infobox and figure images 10+ levels deep in tables; fetching them from the
+ * recursive renderer either hit the old depth cap (alt text instead of a
+ * picture) or ran TLS on the command worker's 28 KB stack. Here the fetch is a
+ * loop with a heap stack, so render_image only ever sees cache hits. */
+#define BROWSER_PREFETCH_MAX 32
+#define BROWSER_PREFETCH_STACK 512
+
+static void browser_prefetch_images(void *ctx, const dom_tree_t *tree)
+{
+    dom_node_t **stack;
+    int top = 0;
+    int fetched = 0;
+
+    if (tree == NULL || tree->body == NULL) return;
+    stack = p4heap_calloc_any(BROWSER_PREFETCH_STACK, sizeof(*stack));
+    if (stack == NULL) return;
+    stack[top++] = tree->body;
+    while (top > 0 && fetched < BROWSER_PREFETCH_MAX) {
+        dom_node_t *node = stack[--top];
+        dom_node_t *child;
+
+        if (node == NULL) continue;
+        if (node->src[0] != '\0' && shell_text_equals_ignore_case(node->tag, "img")) {
+            dom_image_t img;
+
+            memset(&img, 0, sizeof(img));
+            if (browser_load_image(ctx, node->src, &img)) {
+                free(img.pixels);
+            }
+            fetched++;
+        }
+        if (node->bg_src[0] != '\0') {
+            dom_image_t img;
+
+            memset(&img, 0, sizeof(img));
+            if (browser_load_image(ctx, node->bg_src, &img)) {
+                free(img.pixels);
+            }
+            fetched++;
+        }
+        for (child = node->first_child;
+             child != NULL && top < BROWSER_PREFETCH_STACK;
+             child = child->next_sibling) {
+            stack[top++] = child;
+        }
+    }
+    p4heap_free(stack);
+}
+
 static void browser_page_render(void)
 {
     dom_render_ops_t ops;
@@ -839,6 +914,7 @@ static void browser_page_render(void)
     ops.put_cell = browser_put_cell;
     ops.put_link = browser_put_link;
     ops.load_image = browser_load_image;
+    ops.prefetch_images = browser_prefetch_images;
     ops.load_canvas = browser_load_canvas;
     ops.fill_bg = browser_fill_bg;
     ops.put_emoji = browser_put_emoji;
@@ -1188,6 +1264,32 @@ int browser_tick_timers(void)
 }
 
 int shell_command_browser(int argc, char **argv) {
+    /* Batch-callable PageUp/PageDown: the verb feeds the exact HID keycode the
+     * html surface already handles (MODAL_KEY_PAGE_UP / ..._DOWN), so a script
+     * can verify the same scroll path a real keyboard drives. */
+    if (argc == 3 && shell_text_equals_ignore_case(argv[1], "key")) {
+        uint8_t code;
+        int before;
+        bool handled;
+
+        if (shell_text_equals_ignore_case(argv[2], "pageup")) {
+            code = (uint8_t)MODAL_KEY_PAGE_UP;
+        } else if (shell_text_equals_ignore_case(argv[2], "pagedown")) {
+            code = (uint8_t)MODAL_KEY_PAGE_DOWN;
+        } else {
+            shell_print_usage("Usage: browser key pageup|pagedown");
+            batch_set_errorlevel(2);
+            return 2;
+        }
+        before = tui_viewport_get_offset();
+        handled = html_surface_key(NULL, code, 0u, '\0');
+        shell_transcript_appendf(
+            "browser key: %s handled=%d offset %d -> %d page_rows=%d\n",
+            argv[2], handled ? 1 : 0, before, tui_viewport_get_offset(),
+            tui_viewport_get_page_rows());
+        batch_set_errorlevel(handled ? 0 : 1);
+        return handled ? 0 : 1;
+    }
     if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "links")) {
         int rc = browser_list_links();
         batch_set_errorlevel((uint8_t)rc);
@@ -1201,7 +1303,7 @@ int shell_command_browser(int argc, char **argv) {
 
     browser_cache_init();
     if (argc < 2) {
-        shell_print_usage("browser <url|file> | browser back | browser forward | browser swipe <back|forward> | browser links | browser link <n> | browser js <id> | browser css | browser bookmark [add|del|list]");
+        shell_print_usage("browser <url|file> | browser back | browser forward | browser swipe <back|forward> | browser key <pageup|pagedown> | browser links | browser link <n> | browser js <id> | browser css | browser bookmark [add|del|list]");
         return 2;
     }
     if (strcmp(argv[1], "css") == 0) {

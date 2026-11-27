@@ -37,7 +37,12 @@ components, batch engine, command verbs, editor, TUI/GFX layers, the built-in
 retro emoji map and its LVGL adapter, host tools, unit tests, board metadata,
 and this documentation. You are free to use, modify, and redistribute them,
 including commercially, as long as the copyright notice and permission notice
-are preserved.
+are preserved. This includes the P4Sync host CLI/bridge (`tools/p4sync/`) and
+the WPF GUI (`apps/p4sync_gui/`): both are project-authored MIT code. They add
+**no third-party runtime** — the bridge uses the Python standard library plus
+the existing pyserial-backed harness, and the GUI uses only the .NET BCL and
+the Windows platform SDK (WPF ships with the SDK; no NuGet packages). No new
+attribution entry is required for them.
 
 ### Emoji packs
 
@@ -130,7 +135,7 @@ runtimes here) and to BMDS:
 |---------------|---------------------|----------------|
 | Lua scripting for handheld apps | MIT, © Lua.org / PUC-Rio | Design credit only: a tiny embeddable scripting surface with explicit host-owned state. No Lua source, interpreter, or binding is shipped; no code copied |
 | MicroPython scripting for handheld apps | MIT, © Damien P. George | Design credit only: exposing hardware-adjacent facilities to script-style apps. No MicroPython source, VM, or port is shipped; no code copied |
-| [BMDS](https://github.com/jthwho/bmds) | MIT, © 2026 Jason Howard — upstream `LICENSE` present in the repo | Design credit only: small-device multitasking / app-switching patterns behind the opt-in `.bat`-launched native payload. No source copied; the exact upstream licence text ships at [`tools/LICENSE-BMDS-MIT.txt`](tools/LICENSE-BMDS-MIT.txt) |
+| [BMDS](https://github.com/jthwho/bmds) | MIT, © 2026 Jason Howard — upstream `LICENSE` verified (`ef05be9f`); pinned notice + text ship at [`tools/LICENSE-BMDS-MIT.txt`](tools/LICENSE-BMDS-MIT.txt) | App-switching/multitasking patterns behind the opt-in `.bat`-launched native payload are **design credit only** (no source copied). **Code reuse under MIT:** `components/gfx3d/gfx3d_math.c` is derived from upstream `sdk/3d/math.c` (column-major 4×4 math, re-expressed in Q16.16; upstream header and `@copyright Jason Howard. All rights reserved.` retained in the file); the DOS shade-ramp in `components/gfx3d/gfx3d_core.c` follows the `sdk/3d/light.c` shade-table **idea only**. No BMDS raster, canvas, mesh, model, GUI, firmware C++ or vendored codec source is used — all pixels still go through the one `gfx_surface` path and one DOS palette. |
 | [Ladybird](https://github.com/LadybirdBrowser/ladybird) | **BSD-2-Clause** (not MIT), © 2018-present the Ladybird developers — upstream `LICENSE` verified in the tree | Design credit only: bounded/incremental DOM tokenizing with error recovery, longest-match entity decoding, right-to-left selector matching with rightmost-key bucketing, packed cascade specificity and generation-based style invalidation, arena layout nodes, display-list recording with a structural epoch, bounded PSRAM image budgets, and microtask checkpoints on the one timer pump. This is a C firmware with no MMU or Rust toolchain; no C++/Rust source, table or file was copied, so no upstream licence text is required. Cross-check: [`docs/CRAFT_AUDIT_v143.md`](docs/CRAFT_AUDIT_v143.md) |
 
 Compared with the two browser projects, the implementation deliberately

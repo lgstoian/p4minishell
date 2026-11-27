@@ -18,6 +18,9 @@
 #include "keyboard.h"
 #include "windows.h"
 #include "editor_view.h"
+#include "modal.h"
+#include "modal_surf.h"
+#include "tui.h"
 #include "config_cmd.h"
 #include "p4minishell_config.h"
 #include "esp_lvgl_port.h"
@@ -209,6 +212,26 @@ bool shell_command_keyboard(int argc, char **argv)
 
 bool shell_command_windows(int argc, char **argv)
 {
+    /* `windows switcher` is a batch-callable view of the SAME mstack the
+     * Alt+Tab / swipe inputs cycle (no new verb, no command.c dispatch arm).
+     * `mstack /switch NAME` remains the existing batch switch action. */
+    if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "switcher")) {
+        const char *names[MODAL_SESSION_MAX];
+        int depth = modal_session_depth();
+        int i;
+
+        if (depth > MODAL_SESSION_MAX) {
+            depth = MODAL_SESSION_MAX;
+        }
+        for (i = 0; i < depth; i++) {
+            names[i] = modal_session_name_at(i);
+        }
+        tui_app_switcher_render(names, depth, 0);
+        shell_transcript_appendf_ansi(SH_OK "app switcher shown" SH_RST
+                                      " (sessions=%d, mstack /switch NAME to activate)\n",
+                                      depth);
+        return true;
+    }
     if (argc >= 2 && shell_text_equals_ignore_case(argv[1], "info")) {
         lv_coord_t dw = windows_get_display_width();
         lv_coord_t dh = windows_get_display_height();
@@ -222,7 +245,7 @@ bool shell_command_windows(int argc, char **argv)
         }
         return true;
     }
-    shell_transcript_appendf_ansi(SH_WARN "Usage: windows <info>" SH_RST "\n");
+    shell_transcript_appendf_ansi(SH_WARN "Usage: windows <info|switcher>" SH_RST "\n");
     return true;
 }
 

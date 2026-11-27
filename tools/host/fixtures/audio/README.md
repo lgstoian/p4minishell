@@ -1,0 +1,27 @@
+# Audio engine host fixtures
+
+`scenarios.json` holds literal expectations for the pure mixer in
+`components/audio/audio_engine.c`:
+
+- `parsers` - ADSR preset/numeric parsing and sample-accurate `freq:dur@start[:gain]`
+  decoding (`@` offsets are converted with the fixture's 1 kHz rate, so
+  250 ms is exactly sample 250).
+- `mixes` - bounded-channel PCM renders: two-bus summing, master gain,
+  saturating clipping, SFX ducking and ADSR probes. Each `expect_left` entry
+  is a literal stereo sample; `expect` in a `probes` entry is the sample at
+  that absolute frame.
+- `sequence` - decoded event order (start/length/freq/gain) and engine length,
+  plus a silent-prefix / active-window render check.
+- `bounded` - the ninth add must be refused by the eight-channel table.
+- `meter` - peak/RMS of a DC-free alternating block.
+- `offline` - one-shot render versus two chunked renders driven by an absolute
+  sample cursor; they must be bit-identical.
+
+`baseline/*.hex` are little-endian int16 PCM dumps, one hex line per case. The
+gate writes real PCM from the C harness to a temporary file and compares it
+byte-for-byte with these baselines. Nothing here re-implements the mixer in
+Python: the gate only transcribes fixture numbers into a generated C harness
+that calls the shipped translation unit.
+
+A pass is a hardware-free pre-gate only (`harness.md` §0). It proves the
+mixer/sequencer math, not speaker audibility or codec behaviour.

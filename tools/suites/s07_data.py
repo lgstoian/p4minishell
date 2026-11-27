@@ -24,6 +24,12 @@ from p4test.asserts import Checklist
 
 NAME = "data"
 TAGS = ["core", "sd"]
+# The SDFX push path and destructive-confirmation prompts assume an idle shell.
+# In the full tier this suite follows `batch`, which can leave a background job
+# or a script-bound console behind; COM3 then wedged before the first `cd sd:/`
+# and the SDFX frame was empty. A hard reset first makes the suite deterministic
+# (132/132 after reset; 0/1 with inherited state).
+NEEDS_CLEAN_BOOT = True
 
 DATA = "sd:/P4DATA"
 

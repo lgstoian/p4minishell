@@ -1,0 +1,60 @@
+<UserControl x:Class="P4SyncGui.Views.AppsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel>
+        <TextBlock Text="Apps &amp; Packages" Style="{StaticResource PageTitle}" />
+        <TextBlock Text="Package verbs are shelled out by the bridge; the GUI never sends device commands itself."
+                   Style="{StaticResource SubTitle}" Margin="0,4,0,18" />
+
+        <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                    <TextBlock Text="Verb" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <ComboBox ItemsSource="{Binding Verbs}" SelectedItem="{Binding SelectedVerb}" Width="140"
+                              AutomationProperties.Name="Package verb" />
+                    <TextBlock Text="Package" VerticalAlignment="Center" Margin="20,0,8,0" />
+                    <TextBox Text="{Binding PackageName, UpdateSourceTrigger=PropertyChanged}" Width="220"
+                             AutomationProperties.Name="Package name" />
+                    <Button Content="Run verb" Style="{StaticResource PrimaryButton}" Margin="12,0,0,0"
+                            Command="{Binding RunCommand}" IsEnabled="{Binding App.IsIdle}"
+                            AutomationProperties.Name="Run the package verb" />
+                </StackPanel>
+                <TextBlock Text="{Binding CommandText}" Foreground="{DynamicResource AccentBrush}"
+                           FontFamily="Consolas" Margin="0,0,0,6" />
+                <ListBox ItemsSource="{Binding Rows}" MinHeight="100" MaxHeight="200"
+                         AutomationProperties.Name="Package rows" />
+            </StackPanel>
+        </Border>
+
+        <Grid Margin="0,0,0,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Border Style="{StaticResource Card}" Grid.Column="0" Margin="0,0,8,0">
+                <StackPanel>
+                    <TextBlock Text="Command output" Style="{StaticResource SectionTitle}" />
+                    <TextBox Text="{Binding Output, Mode=OneWay}" Style="{StaticResource CodeBox}"
+                             Height="200" AutomationProperties.Name="Package command output" />
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}" Grid.Column="1" Margin="8,0,0,0">
+                <StackPanel>
+                    <TextBlock Text="Verify a remote file CRC-32" Style="{StaticResource SectionTitle}" />
+                    <DockPanel Margin="0,0,0,8">
+                        <TextBlock Text="Remote" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <TextBox Text="{Binding CrcTarget, UpdateSourceTrigger=PropertyChanged}"
+                                 AutomationProperties.Name="Remote file to verify" />
+                    </DockPanel>
+                    <DockPanel Margin="0,0,0,10">
+                        <TextBlock Text="CRC-32" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <TextBox Text="{Binding Crc32Text, UpdateSourceTrigger=PropertyChanged}"
+                                 AutomationProperties.Name="Expected CRC-32" />
+                    </DockPanel>
+                    <Button Content="Verify CRC" HorizontalAlignment="Right" Command="{Binding VerifyCrcCommand}"
+                            IsEnabled="{Binding App.IsIdle}" AutomationProperties.Name="Verify remote file CRC-32" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </StackPanel>
+</UserControl>

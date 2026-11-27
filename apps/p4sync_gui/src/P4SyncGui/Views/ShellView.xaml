@@ -1,0 +1,74 @@
+<UserControl x:Class="P4SyncGui.Views.ShellView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel>
+        <TextBlock Text="Shell" Style="{StaticResource PageTitle}" />
+        <TextBlock Text="Full shell access through the bridge `shell` command. The GUI never opens a serial port."
+                   Style="{StaticResource SubTitle}" Margin="0,4,0,18" />
+
+        <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+            <StackPanel>
+                <TextBlock Text="Command" Style="{StaticResource SectionTitle}" />
+                <TextBox x:Name="CommandBox" Text="{Binding Command, UpdateSourceTrigger=PropertyChanged}"
+                         KeyDown="CommandBox_KeyDown" FontFamily="Consolas"
+                         AutomationProperties.Name="Device shell command (Up/Down for history)" />
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                    <TextBlock Text="Timeout (s)" VerticalAlignment="Center" Margin="0,0,6,0" />
+                    <TextBox Text="{Binding TimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" Width="60"
+                             AutomationProperties.Name="Command timeout in seconds" />
+                    <TextBlock Text="Settle (ms)" VerticalAlignment="Center" Margin="16,0,6,0" />
+                    <TextBox Text="{Binding SettleMs, UpdateSourceTrigger=PropertyChanged}" Width="70"
+                             AutomationProperties.Name="Marker settle time in milliseconds" />
+                    <CheckBox Content="Plain (no errorlevel probe)" IsChecked="{Binding PlainMode}" Margin="16,0,0,0"
+                              AutomationProperties.Name="Run without the errorlevel probe" />
+                    <CheckBox Content="Strip ANSI" IsChecked="{Binding StripAnsi}" Margin="16,0,0,0"
+                              AutomationProperties.Name="Strip leftover ANSI escapes from output" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                    <Button Content="Run command" Style="{StaticResource PrimaryButton}"
+                            Command="{Binding RunCommand}" IsEnabled="{Binding CanRun}"
+                            AutomationProperties.Name="Run the shell command" />
+                    <Button Content="Clear output" Margin="8,0,0,0" Command="{Binding ClearCommand}"
+                            AutomationProperties.Name="Clear the shell output" />
+                    <TextBlock Text="Up / Down in the command box recalls history." Style="{StaticResource SubTitle}"
+                               Margin="14,0,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Style="{StaticResource Card}" Margin="0,0,0,16"
+                Background="{DynamicResource SurfaceBrush}">
+            <StackPanel>
+                <TextBlock Text="Destructive command warning" Style="{StaticResource SectionTitle}" />
+                <TextBlock Text="Commands such as reboot, format, erase, flash, install, remove or update can change or erase device storage. Check the exact command before running it."
+                           TextWrapping="Wrap" Foreground="{DynamicResource WarnBrush}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsDestructive}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <CheckBox Content="I understand this command may be destructive" Margin="0,8,0,0"
+                          IsChecked="{Binding Acknowledged}"
+                          AutomationProperties.Name="Acknowledge destructive command risk" />
+            </StackPanel>
+        </Border>
+
+        <Border Style="{StaticResource Card}">
+            <StackPanel>
+                <DockPanel>
+                    <TextBlock Text="Output" Style="{StaticResource SectionTitle}" DockPanel.Dock="Left" />
+                    <TextBlock Text="{Binding ErrorLevel}" DockPanel.Dock="Right" HorizontalAlignment="Right"
+                               Foreground="{DynamicResource MutedBrush}" />
+                </DockPanel>
+                <TextBox Text="{Binding Output, Mode=OneWay}" Style="{StaticResource CodeBox}" Height="280"
+                         AutomationProperties.Name="Shell command output" />
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

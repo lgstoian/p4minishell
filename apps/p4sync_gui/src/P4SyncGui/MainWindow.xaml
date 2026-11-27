@@ -1,0 +1,143 @@
+<Window x:Class="P4SyncGui.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="P4Sync — P4MiniShell companion"
+        Height="760" Width="1180" MinWidth="940" MinHeight="620"
+        Background="{DynamicResource AppBg}"
+        Foreground="{DynamicResource TextBrush}"
+        FontFamily="Segoe UI Variable Text, Segoe UI">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="212" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Navigation rail -->
+        <Border Grid.Column="0" Background="{DynamicResource NavBg}"
+                BorderBrush="{DynamicResource BorderBrushKey}" BorderThickness="0,0,1,0">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Margin="20,22,16,16">
+                    <TextBlock Text="P4Sync" FontSize="21" FontWeight="SemiBold" />
+                    <TextBlock Text="P4MiniShell companion" Style="{StaticResource SubTitle}" Margin="0,2,0,0" />
+                </StackPanel>
+
+                <ListBox ItemsSource="{Binding Pages}" SelectedItem="{Binding SelectedNav}"
+                         Margin="10,0,10,12" AutomationProperties.Name="P4Sync pages"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal" Margin="4,2">
+                                <TextBlock Text="{Binding Glyph}" Width="26" FontSize="15"
+                                           Foreground="{DynamicResource AccentBrush}"
+                                           VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Title}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="Foreground" Value="{DynamicResource MutedBrush}" />
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <Border x:Name="Bd" Background="Transparent" CornerRadius="8" Padding="12,9">
+                                            <ContentPresenter />
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsSelected" Value="True">
+                                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SelectionBrush}" />
+                                                <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                                            </Trigger>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceAltBrush}" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                </ListBox>
+
+                <TextBlock DockPanel.Dock="Bottom" Text="Bridge-owned serial · one file at a time"
+                           Style="{StaticResource SubTitle}" Margin="18,0,14,18" />
+            </DockPanel>
+        </Border>
+
+        <!-- Main area -->
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0" Padding="24,18,24,12"
+                    BorderBrush="{DynamicResource BorderBrushKey}" BorderThickness="0,0,0,1">
+                <StackPanel>
+                    <DockPanel>
+                        <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                            <Border CornerRadius="14" Padding="12,5" Margin="0,0,8,0"
+                                    Background="{DynamicResource SurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource BorderBrushKey}" BorderThickness="1">
+                                <TextBlock Text="{Binding DeviceLabel}" FontSize="12" />
+                            </Border>
+                            <Border CornerRadius="14" Padding="12,5"
+                                    Background="{DynamicResource SurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource BorderBrushKey}" BorderThickness="1">
+                                <TextBlock Text="{Binding App.ConnectionLabel}" FontSize="12"
+                                           Foreground="{DynamicResource AccentBrush}" />
+                            </Border>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" HorizontalAlignment="Right">
+                            <Button Content="Refresh status" Margin="0,0,8,0"
+                                    Command="{Binding RefreshStatusCommand}"
+                                    IsEnabled="{Binding App.IsIdle}" AutomationProperties.Name="Refresh sync status" />
+                            <Button Content="{Binding ThemeLabel}" Command="{Binding ToggleThemeCommand}"
+                                    AutomationProperties.Name="Toggle light or dark theme" />
+                        </StackPanel>
+                    </DockPanel>
+                    <TextBlock Text="{Binding MismatchBanner}" Margin="0,10,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource ErrorBrush}" FontWeight="SemiBold">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding MismatchBanner}" Value="">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0">
+                <ContentControl Content="{Binding Current}" Margin="24,20,24,24" />
+            </ScrollViewer>
+
+            <Border Grid.Row="2" Padding="24,10,24,14"
+                    BorderBrush="{DynamicResource BorderBrushKey}" BorderThickness="0,1,0,0"
+                    Background="{DynamicResource SurfaceBrush}">
+                <StackPanel>
+                    <DockPanel>
+                        <TextBlock Text="{Binding App.ProgressMessage}" DockPanel.Dock="Left"
+                                   Foreground="{DynamicResource MutedBrush}" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,12,0" />
+                        <Button Content="Cancel" DockPanel.Dock="Right" Command="{Binding CancelCommand}"
+                                IsEnabled="{Binding App.IsBusy}" Padding="12,4"
+                                AutomationProperties.Name="Cancel the running bridge request" />
+                    </DockPanel>
+                    <ProgressBar Height="5" Margin="0,7,0,0" Minimum="0" Maximum="100"
+                                 Value="{Binding App.ProgressPct, Mode=OneWay}"
+                                 Foreground="{DynamicResource AccentBrush}"
+                                 Background="{DynamicResource SurfaceAltBrush}"
+                                 AutomationProperties.Name="Bridge operation progress" />
+                    <TextBlock Text="{Binding App.LastError}" Margin="0,7,0,0" FontSize="11"
+                               Foreground="{DynamicResource ErrorBrush}" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

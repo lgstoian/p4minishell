@@ -256,9 +256,14 @@ void test_dom_render_main_focus(void)
         "<html><body><nav>NAV-CHROME</nav>"
         "<main><h1>Article Title</h1><p>Article body.</p></main>"
         "</body></html>");
-    char ansi[2048] = { 0 };
-    char plain[2048];
+    static char ansi[2048];
+    static char plain[2048];
     ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0, 0 };
+
+    /* The on-target suite runs on the 32 KB main task. Keep the render sink
+     * buffers out of that stack: the recursive DOM parse for a nested page
+     * needs the headroom, and a stack canary overflow aborts the whole run. */
+    memset(ansi, 0, sizeof(ansi));
     dom_render_ops_t ops = {
         .put_ansi = sink_append_ansi,
         .ctx = &sink,
@@ -327,9 +332,14 @@ void test_dom_render_depth_cap_keeps_text(void)
 {
     char html[4096];
     size_t used = 0;
-    char ansi[2048] = { 0 };
-    char plain[2048];
+    static char ansi[2048];
+    static char plain[2048];
     ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0, 0 };
+
+    /* The on-target suite runs on the 32 KB main task. Keep the render sink
+     * buffers out of that stack: the recursive DOM parse for a nested page
+     * needs the headroom, and a stack canary overflow aborts the whole run. */
+    memset(ansi, 0, sizeof(ansi));
     dom_render_ops_t ops = {
         .put_ansi = sink_append_ansi,
         .ctx = &sink,
@@ -605,7 +615,7 @@ void test_dom_render_text_alpha_composited(void)
     {
         /* An empty ruleset still runs the inline-style pass (that is how the
          * browser computes styles; inline declarations are applied there). */
-        css_ruleset_t no_rules = { 0 };
+        static css_ruleset_t no_rules = { 0 };
 
         css_compute_styles(tree, &no_rules);
     }
@@ -718,7 +728,10 @@ void test_dom_raw_text_script_style(void)
 /** A CSS comment before a rule must not become part of its selector. */
 void test_css_comments_are_skipped(void)
 {
-    css_ruleset_t rules;
+    /* A ruleset is ~28 KB (64 rules with bounded text fields). Keep it out of
+     * the 32 KB main-task stack: the on-target suite runs every case on that
+     * task and a nested DOM parse needs the remaining headroom. */
+    static css_ruleset_t rules;
 
     memset(&rules, 0, sizeof(rules));
     css_parse_block("/* page colours */ body { background-color: #00aaaa; }"
@@ -741,9 +754,14 @@ void test_dom_html5_form_controls(void)
         "<select><option>One</option><option selected>Two</option></select>"
         "<button id=\"go\">Go</button></form></body></html>");
     dom_node_t *node;
-    char ansi[2048] = { 0 };
-    char plain[2048];
+    static char ansi[2048];
+    static char plain[2048];
     ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0, 0 };
+
+    /* The on-target suite runs on the 32 KB main task. Keep the render sink
+     * buffers out of that stack: the recursive DOM parse for a nested page
+     * needs the headroom, and a stack canary overflow aborts the whole run. */
+    memset(ansi, 0, sizeof(ansi));
     dom_render_ops_t ops = {
         .put_ansi = sink_append_ansi,
         .ctx = &sink,
@@ -780,9 +798,14 @@ void test_dom_html5_semantic_and_grid(void)
         "<div>A</div><div>B</div></section>"
         "<details><summary>S</summary><p>D</p></details></main></body></html>");
     dom_node_t *grid;
-    char ansi[2048] = { 0 };
-    char plain[2048];
+    static char ansi[2048];
+    static char plain[2048];
     ansi_sink_t sink = { ansi, sizeof(ansi), 0, 0, 0 };
+
+    /* The on-target suite runs on the 32 KB main task. Keep the render sink
+     * buffers out of that stack: the recursive DOM parse for a nested page
+     * needs the headroom, and a stack canary overflow aborts the whole run. */
+    memset(ansi, 0, sizeof(ansi));
     dom_render_ops_t ops = {
         .put_ansi = sink_append_ansi,
         .ctx = &sink,
@@ -793,7 +816,7 @@ void test_dom_html5_semantic_and_grid(void)
 
     TEST_ASSERT_NOT_NULL(tree);
     {
-        css_ruleset_t no_rules = { 0 };
+        static css_ruleset_t no_rules = { 0 };
 
         css_compute_styles(tree, &no_rules);   /* applies inline declarations */
     }
@@ -815,7 +838,7 @@ void test_dom_html5_semantic_and_grid(void)
         dom_tree_t *ct = dom_parse(
             "<html><body><div id='g2' class='grid'>x</div></body></html>");
         dom_node_t *g2 = dom_find_by_id(ct, "g2");
-        css_ruleset_t rules2;
+        static css_ruleset_t rules2;
         uint32_t before;
 
         TEST_ASSERT_NOT_NULL(ct);
@@ -839,7 +862,7 @@ void test_dom_html5_semantic_and_grid(void)
  *  CSS parser and the ONE DOS palette. */
 void test_css_visual_subset(void)
 {
-    css_ruleset_t rules;
+    static css_ruleset_t rules;
     dom_tree_t *tree;
     dom_node_t *card;
     css_rgba_t red;
@@ -881,7 +904,7 @@ void test_css_visual_subset(void)
 /** Child/sibling/attribute/pseudo selectors share the existing ruleset. */
 void test_css_extended_selectors(void)
 {
-    css_ruleset_t rules;
+    static css_ruleset_t rules;
     dom_tree_t *tree;
     dom_node_t *first;
     dom_node_t *second;
@@ -919,7 +942,7 @@ void test_css_extended_selectors(void)
     /* The packed (id,class,type) triple, !important and source order all go
      * through the ONE css_rule_compare() used by css_apply(). */
     {
-        css_ruleset_t cascade;
+        static css_ruleset_t cascade;
         dom_tree_t *ct;
         css_rgba_t yellow;
         css_rgba_t red;

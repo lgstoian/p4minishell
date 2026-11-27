@@ -181,6 +181,31 @@ bool modal_session_resume(void);
 /** Bring a named session to the top; restores its screen + alpha pair. */
 bool modal_session_switch(const char *name);
 
+/**
+ * @brief Cycle the foreground app session by @p step (+1 forward, -1 back).
+ *
+ * The single session-switch helper shared by Alt+Tab (modal input hook) and
+ * the TUI bottom-left edge swipe. It saves the outgoing screen/alpha through
+ * shell_screen_save(), rotates the EXISTING mstack with
+ * modal_session_stack_switch(), keeps the parallel screen/context arrays in
+ * step, then restores the incoming screen. No task, scheduler or input path
+ * is created. Returns false when the stack is empty or the switch fails.
+ */
+bool modal_session_cycle(int step);
+
+/** Frame name at @p from_top (0 = top) for the app switcher view. */
+const char *modal_session_name_at(int from_top);
+
+/**
+ * @brief Install the one app-switcher view callback (NULL clears it).
+ *
+ * main registers the TUI renderer once at boot. Each successful cycle calls
+ * it with the stack in from-top order, so the overlay is drawn by the ONE tui
+ * frame renderer. No modal -> tui build dependency is introduced.
+ */
+void modal_set_app_switcher_view(void (*view)(const char *const *names,
+                                              int count, int focus));
+
 int  modal_session_depth(void);
 const char *modal_session_top_name(void);
 int  modal_session_find(const char *name);

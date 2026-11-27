@@ -4,8 +4,10 @@
 # errors and zero warnings. Add a board by adding its profile under boards/
 # (see PORTING.md): the matrix below discovers it automatically, so no
 # workflow edit is needed. The `host-unit` job runs the hardware-free Unity
-# subset plus the v1.6 host surface/app gates (harness.md §2.2); a host pass is
-# never hardware sign-off. Hardware suites
+# subset, the v1.6 host surface/app gates and the P4Sync bridge gate
+# (harness.md §2.2); a host pass is never hardware sign-off. The separate
+# `p4sync-gui` job builds/tests the Windows WPF GUI without a board or a NuGet
+# restore assumption. Hardware suites
 # (tools/p4test_run.py, tools/regression.py, tools/capture_docs.py) stay
 # local (see readme.md).
 name: build
@@ -100,6 +102,29 @@ jobs:
           python3 tools/host_modal_gate.py --check
           python3 tools/gfx_toolkit_test.py --host
           python3 tools/host_apps_gate.py --check
+      - name: P4Sync bridge/CLI pre-gate (no board, no firmware)
+        run: |
+          . $IDF_PATH/export.sh
+          # P4Sync wraps the existing USB harness; --mock opens no serial
+          # port and needs no board or firmware build. 51 checks + 18 canaries.
+          python3 tools/p4sync_gate.py --check
+          python3 tools/p4sync_gate.py --self-test
+
+  # Host-only desktop companion: the WPF GUI talks JSON lines to the P4Sync
+  # bridge and never opens a port itself. No NuGet PackageReference (BCL + the
+  # WPF targeting pack from the .NET SDK), so no restore step/cache is assumed.
+  p4sync-gui:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build P4Sync GUI (Release)
+        run: dotnet build apps/p4sync_gui/P4SyncGui.sln -c Release
+      - name: P4Sync bridge console tests (no board)
+        run: dotnet run --project apps/p4sync_gui/tests/P4SyncBridge.Tests
 
   lint:
     runs-on: ubuntu-latest

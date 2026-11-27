@@ -648,6 +648,36 @@ windows:
     type: int
     description: "Width of the transcript scroll buttons (input-row Up/Dn) in pixels"
     range: "40..120"
+  video_max_frames:
+    value: 256
+    type: int
+    description: "Maximum frames in one video playback manifest (P4_CONFIG_VIDEO_MAX_FRAMES)"
+    range: "1..4096"
+  video_frame_budget:
+    value: 4096
+    type: int
+    description: "Per-frame decoded byte budget for video playback (P4_CONFIG_VIDEO_FRAME_BUDGET)"
+    range: "512..65536"
+  video_gfx_max_w:
+    value: 320
+    type: int
+    description: "Video gfx canvas width cap (P4_CONFIG_VIDEO_GFX_MAX_W)"
+    range: "64..320"
+  video_gfx_max_h:
+    value: 240
+    type: int
+    description: "Video gfx canvas height cap (P4_CONFIG_VIDEO_GFX_MAX_H)"
+    range: "64..240"
+  video_tui_cols:
+    value: 78
+    type: int
+    description: "Video /tui cell width inside the 80-column frame (P4_CONFIG_VIDEO_TUI_COLS)"
+    range: "40..80"
+  video_tui_rows:
+    value: 22
+    type: int
+    description: "Video /tui cell height inside the 25-row frame (P4_CONFIG_VIDEO_TUI_ROWS)"
+    range: "10..25"
   keyboard_height_pct:
     value: 35
     type: int

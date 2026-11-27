@@ -4926,6 +4926,12 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* Additive engine subverbs first; legacy audio verbs fall through. */
+    if (shell_text_equals_ignore_case(argv[0], "audio") &&
+        shell_command_audio_engine(argc, argv)) {
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "audio")) {
         shell_command_audio(argc, argv);
         return true;
@@ -5116,6 +5122,16 @@ bool shell_execute_command_core(char *command)
      * Sets ERRORLEVEL 0 (ok) / 1 (state/failure) / 2 (usage). */
     if (shell_text_equals_ignore_case(argv[0], "epub")) {
         batch_set_errorlevel(shell_command_epub(argc, argv));
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "video")) {
+        batch_set_errorlevel(shell_command_video(argc, argv));
+        return true;
+    }
+
+    if (shell_text_equals_ignore_case(argv[0], "gfx3d")) {
+        shell_command_engine3d(argc, argv);
         return true;
     }
 
@@ -5684,6 +5700,26 @@ bool shell_execute_command_core(char *command)
         return true;
     }
 
+    /* Scoped error handling on the existing trap scope stack. */
+    if (shell_text_equals_ignore_case(argv[0], "try")) {
+        shell_command_try(argc, argv);
+        return true;
+    }
+    if (shell_text_equals_ignore_case(argv[0], "finally")) {
+        shell_command_finally(argc, argv);
+        return true;
+    }
+
+    /* Registry facade (storage_ini) and shared batch/applib library. */
+    if (shell_text_equals_ignore_case(argv[0], "reg")) {
+        batch_set_errorlevel(shell_command_reg(argc, argv));
+        return true;
+    }
+    if (shell_text_equals_ignore_case(argv[0], "lib")) {
+        batch_set_errorlevel(shell_command_lib(argc, argv));
+        return true;
+    }
+
     if (shell_text_equals_ignore_case(argv[0], "break")) {
         shell_command_break(argc, argv);
         return true;
@@ -5927,6 +5963,13 @@ bool shell_execute_command_core(char *command)
 
     if (shell_text_equals_ignore_case(argv[0], "webapp")) {
         batch_set_errorlevel(shell_command_webapp(argc, argv));
+        return true;
+    }
+
+    /* `os` is a read-only facade over the existing subsystem accessors; it
+     * adds no second dispatcher and routes through the one shell pipeline. */
+    if (shell_text_equals_ignore_case(argv[0], "os")) {
+        batch_set_errorlevel(shell_command_os(argc, argv));
         return true;
     }
 

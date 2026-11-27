@@ -1,1461 +1,241 @@
 launch BOUNCE
 [M-BOUNCE]
+[M-DOS-BOUNCE] screen=BOUNCE-HEADLESS panels=N head="NONE" theme=mono bars=N table=N spark=N status=N
 title: set to 'Bounce'
 gfx: canvas NxN (N KB PSRAM)
 gfx: slot N loaded NxN (N KB PSRAM)
-x=N
-y=N
-dx=N
-dy=N
-n=N
+gfx: particle seed N
+[M-RICH-BOUNCE] smooth gfx + language tour
+gfx blitmany: needs N..N cell X Y triples
+[M-RICH-BOUNCE-F] speed=N
 gfx stats: reset
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-dx=-N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-dy=-N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-dx=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-dy=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-dx=-N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-dy=-N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-n=N
-x=N
-y=N
-bx=N
-by=N
-[M-BOUNCE-FRAME] N
-screenshot: captured NxN RGBN (N bytes)
-screenshot: saved /sdcard/BOUNCE.BMP (N bytes)
+[M-BOUNCE-UI] state=start score=N lives=N level=N
+[M-BOUNCE-KEY] key=s state=start
+[M-BOUNCE-UI] state=play score=N lives=N level=N
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+gfx: particles emitted N (live N)
+[M-BOUNCE-HIT] kind=wall score=N lives=N
+[M-BOUNCE-LIFE] lives=N
+[M-BOUNCE-FRAME] N
+gfx: particles live N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+gfx: particles live N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+gfx: particles emitted N (live N)
+[M-BOUNCE-HIT] kind=wall score=N lives=N
+[M-BOUNCE-LIFE] lives=N
+[M-BOUNCE-FRAME] N
+gfx: particles live N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+gfx: particles live N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+[M-BOUNCE-FRAME] N
+[M-BOUNCE-KEY] key=n state=play
+gfx: particles emitted N (live N)
+[M-BOUNCE-HIT] kind=wall score=N lives=N
+[M-BOUNCE-LIFE] lives=N
+[M-BOUNCE-OVER] score=N level=N
+[M-BOUNCE-UI] state=over score=N lives=N level=N
+[M-BOUNCE-KEY] key=q state=over
+[M-BOUNCE-UI] state=quit score=N lives=N level=N
 gfx stats: frames=N min_us=N avg_us=N max_us=N jitter_us=N dropped=N fpsN=N target_fps=N
 [M-BOUNCE-DONE]

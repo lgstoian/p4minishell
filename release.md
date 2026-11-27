@@ -14,6 +14,7 @@ in their owning docs and are linked, not repeated:
 | Hardware bring-up per board | [`PORTING.md`](PORTING.md), [`schematics.md`](schematics.md) |
 | Command syntax | [`command.md`](command.md) |
 | Change/verification workflow | [`ai-context.md`](ai-context.md) |
+| P4Sync host CLI/bridge + Windows GUI | [`tools/p4sync/README.md`](tools/p4sync/README.md), [`apps/p4sync_gui/README.md`](apps/p4sync_gui/README.md) |
 | Open defects | [`bugs.md`](bugs.md) |
 
 Current target version: **v1.6.0** (`P4_CONFIG_VERSION_*` in
@@ -84,12 +85,29 @@ last campaign:
    python tools/make_web_screenshots.py --check  # DOS web proof PNGs
    python tools/visual_proof_gate.py --check     # palette/box borders/ink/signatures
    python tools/visual_proof_gate.py --self-test # red canaries
+   python tools/p4sync_gate.py --check           # P4Sync CLI/bridge: 51 checks, no board
+   python tools/p4sync_gate.py --self-test       # 18 P4Sync red canaries
+   python tools/host_os_gate.py --check          # os facade: 14 cases / 144 checks, +4 canaries
+   python tools/host_power_gate.py --check       # power/sleep: 300 checks, 4 profiles, +10 canaries
+   python tools/host_audio_gate.py --check       # audio engine: 99 checks, +12 canaries
+   python tools/host_video_gate.py --check       # video/EPUB/archive: 18 assertions, +10 canaries
+   python tools/host_engine3d_gate.py --check    # 3D engine: 4 fixtures / 41 assertions, +10 canaries
+   python tools/host_all_gates.py                # 47 gates / 21 canaries, board-free
    ```
 
    These v1.6 host gates and the visual proof gates compile or drive shipped
    code and the one shared pixel model, and open no serial port; a pass is a
    pre-gate only, never hardware sign-off (`harness.md` §0/§2.2). The proof PNGs
-   are labelled host proofs, not device captures.
+   are labelled host proofs, not device captures. P4Sync wraps the **existing**
+   USB harness (an agent CLI + JSON-lines bridge; the WPF GUI is only a JSON
+   client) and adds no firmware and no second serial/framing engine. On Windows
+   its GUI build and console tests are also pre-flight, with the same commands
+   as the `windows-latest` CI job (no board, no NuGet packages):
+
+   ```
+   dotnet build apps/p4sync_gui/P4SyncGui.sln -c Release
+   dotnet run --project apps/p4sync_gui/tests/P4SyncBridge.Tests
+   ```
 3. **Version freeze** — update, in one change:
    - `p4minishell_config.h` `P4_CONFIG_VERSION_{MAJOR,MINOR,PATCH}` (+ the
      string macro) and `p4minishell_config.yaml` `config_version`;
@@ -141,8 +159,9 @@ a raw serial port.
 |---|------|---------|----------------|
 | 0 | Static gates | `python tools/p4test_run.py --static` | green guard + comment index + breadcrumbs all OK |
 | 0b | Host unit lane (pre-gate) | `python3 tools/host_gen_runner.py --check && python3 tools/host_unit_run.py --static && python3 tools/host_unit_run.py --build` | up to date, manifest OK, 0 failures. Needs Linux/WSL2; **never** a substitute for step 2 |
-| 0c | v1.6 host gates + app/browser/visual pre-gates | `python tools/host_batch_run.py --check`, `host_webapp_gate.py --check`, `host_browser_gate.py --check`, `host_tui_gate.py --check`, `host_modal_gate.py --check`, `gfx_toolkit_test.py --host`, `host_apps_gate.py --check`, `host_all_gates.py` (incl. `browser`/`browser_canary`, `visual`/`visual_canary`) | 34 apps (incl. flagship), 679 host assertions PASS, 45 honest SKIPs; `host_all_gates.py` 35/35 gates (15 canaries); webapp gate 8 fixtures / 432 assertions, browser gate 5 fixtures / 271 assertions; no serial port, no hardware sign-off |
+| 0c | v1.6 host gates + app/browser/visual pre-gates | `python tools/host_batch_run.py --check`, `host_webapp_gate.py --check`, `host_browser_gate.py --check`, `host_tui_gate.py --check`, `host_modal_gate.py --check`, `gfx_toolkit_test.py --host`, `host_apps_gate.py --check`, `host_all_gates.py` (incl. `browser`/`browser_canary`, `visual`/`visual_canary`) | 34 apps (incl. flagship), 679 host assertions PASS, 45 honest SKIPs; `host_all_gates.py` 47/47 gates (21 canaries, incl. `p4sync`, `os`, `power`, `audio`, `video`, `engine3d` and their canaries); webapp gate 8 fixtures / 432 assertions, browser gate 5 fixtures / 271 assertions; no serial port, no hardware sign-off |
 | 0d | Visual proof gates (pre-gate) | `python tools/make_web_screenshots.py --check`, `python tools/visual_proof_gate.py --check`, `python tools/visual_proof_gate.py --self-test` | DOS palette, CP437 box borders, ink bands, distinct screen signatures, red canaries all pass; host proofs only, no device capture or hardware sign-off |
+| 0e | P4Sync CLI/bridge + GUI (pre-gate) | `python tools/p4sync_gate.py --check`, `python tools/p4sync_gate.py --self-test`; on Windows `dotnet build apps/p4sync_gui/P4SyncGui.sln -c Release` and `dotnet run --project apps/p4sync_gui/tests/P4SyncBridge.Tests` | 51 bridge/CLI checks + 18 red canaries; GUI build 0 warnings/0 errors, 18 console assertions; no serial port, no board, no firmware change |
 | 1 | Static checks | `python -m compileall tools apps` | no errors |
 | 2 | On-target unit tests | `python tools/unit_run.py COM3 COM6` | `=== All tests completed ===`, 0 failures on both; **refresh `test/README.md` count** |
 | 3 | Hardware suites | `python tools/p4test_run.py --boards COM3,COM6 --tier full --fail-fast --retry 1` | merged PASS table (both boards) + no board differential |
@@ -173,10 +192,19 @@ python tools/make_release.py bins --board m5stack_tab5 --build-dir build-tab5 --
 # Per-board ESP32-C6 co-processor app images (staged from the C6 build dirs)
 python tools/make_release.py c6
 
-# Source zip (tracked files, refetchable managed_components/ omitted) + SHA256SUMS
+# Source zip (tracked files, refetchable managed_components/ omitted)
 python tools/make_release.py srczip
+
+# Standalone Windows x64 P4Sync binary + Python bridge/harness bundle
+# (self-contained .NET publish; no .NET runtime needed on the target PC)
+python tools/make_release.py p4sync
+
+# SHA256SUMS over everything in release/, including the P4Sync zip
 python tools/make_release.py manifest
 ```
+
+`python tools/make_release.py all` runs bins + c6 + srczip + p4sync + manifest
+in one step; pass `--skip-p4sync` on a host without the .NET 10 SDK.
 
 Artifacts produced under `release/`:
 
@@ -186,7 +214,43 @@ Artifacts produced under `release/`:
 | `p4minishell-tests-<board>.bin` | unit-test app image (when `--test-bin` given) | build + `bins --test-bin` |
 | `esp32c6_hosted_slave-<board>.bin` | ESP32-C6 co-processor app image (per board) | `make_release.py c6` |
 | `p4minishell-src.zip` | committed source tree minus `managed_components/`, plus `RESTORE.md` (`git archive`) | `make_release.py srczip` |
-| `SHA256SUMS` | checksums of the above | `make_release.py manifest` |
+| `p4sync-windows-x64-v1.6.0.zip` | standalone Windows 11 desktop companion: self-contained WPF GUI binary (`P4SyncGui.exe`), full agent CLI + JSON bridge, the harness modules it imports, launcher, guide and licence | `make_release.py p4sync` |
+| `SHA256SUMS` | checksums of the above, including the P4Sync zip | `make_release.py manifest` |
+
+The source zip is the committed tree: the P4Sync host CLI/bridge
+(`tools/p4sync/**`) and the Windows GUI source (`apps/p4sync_gui/**`) ship in
+it. `tools/make_release.py srczip` explicitly excludes the GUI's `bin/`,
+`obj/` and `build/` MSBuild outputs and verifies the GUI project files are
+present, so a release cannot silently omit the GUI or publish build artefacts.
+
+The P4Sync zip is the **runnable binary artifact** for the GitHub release. It
+is published self-contained (no .NET install on the target PC) and bundles the
+Python CLI/bridge plus the exact harness modules it imports lazily
+(`p4test`, `pim_sync`, `board_ports`, `shell_session`) so the GUI works without
+a source checkout. End users need only Windows 11 x64, Python 3 with
+`pyserial`, and a board on the matching firmware; `run-p4sync.cmd` starts the
+app with `PYTHONPATH` set. The packer verifies required entries and refuses to
+bundle `wifi_local.json`, private keys, `__pycache__` or MSBuild `bin/`/`obj/`
+outputs. Usage and screenshots are in [`p4sync.md`](p4sync.md).
+
+**Publish the binary to the GitHub release** after tagging (gh CLI, from the
+repository root; the tag must already be pushed):
+
+```powershell
+gh release create v1.6.0 --title "v1.6.0" --notes-file RELEASE_NOTES_v1.6.0.md `
+  release/p4minishell-jc1060p470c.bin `
+  release/p4minishell-m5stack_tab5.bin `
+  release/esp32c6_hosted_slave-*.bin `
+  release/p4minishell-src.zip `
+  release/p4sync-windows-x64-v1.6.0.zip `
+  release/SHA256SUMS
+
+# If the release already exists, add/replace only the P4Sync binary:
+gh release upload v1.6.0 release/p4sync-windows-x64-v1.6.0.zip --clobber
+```
+
+Never publish the raw `P4SyncGui.exe` on its own: the GUI is a bridge client
+and needs the bundled Python side to talk to a board. The zip is the artifact.
 
 Flash the merged image with a single `esptool write_flash 0x0` (or `idf.py
 flash`). The C6 co-processor firmware is flashed separately: push the matching
@@ -267,8 +331,15 @@ the archive tool, not a golden image.
   fetches (`boards/m5stack_tab5/board_bsp/` under Apache-2.0,
   `assets/fonts/` DejaVu/OFL are committed in the zip). Keep `icon/icon.png` (70 MB master)
   out of any bundle — only the derivatives are committed.
+- **P4Sync adds no third-party runtime** — the host CLI/bridge uses Python's
+  standard library plus the existing pyserial-backed harness, and the WPF GUI
+  uses only the BCL and the Windows platform SDK (no NuGet packages). The
+  attribution in [`licence.md`](licence.md) is unchanged; WPF/.NET are platform
+  SDKs, not vendored third-party code.
 - **No secrets** — no keys, tokens, Wi-Fi credentials, or `.priv.pem` files in
-  the tree or the zip. `pkg` signing keys stay with the distributor.
+  the tree or the zip. P4Sync GUI credentials stay in Windows Credential
+  Manager (DPAPI fallback under `%APPDATA%`), never in the tree or the zip.
+  `pkg` signing keys stay with the distributor.
 - **SPDX headers** on every source file; run the AI-comment sweep again after the
   final doc pass.
 
@@ -304,14 +375,28 @@ Release is ready when **all** boxes below are true:
       section updated; `bugs.md` header current.
 - [ ] Zero build warnings on both boards (firmware + `test/`).
 - [ ] Unit suite green on both boards; `test/README.md` count refreshed.
-- [ ] v1.6 host gates + browser/visual pre-gates green (batch/webapp/browser/
-      tui/modal/gfx/apps, 34 apps incl. the flagship, 35/35 gates, 15 canaries) and
-      `tools/appdiff/baseline/*.transcript.txt` rebaselined on a board for the
-      new `[M-RICH-*]` lines.
+- [ ] v1.6 host gates green: `host_all_gates.py` **47/47 gates, 21 canaries**
+      (batch/webapp/browser/tui/modal/gfx/apps/p4sync **plus** `os`, `power`,
+      `audio`, `video`, `engine3d` and their canaries; 34 apps incl. the
+      flagship; GUI build + 18 console assertions on Windows).
+      `green_guard.py --strict` **843 tests, 0 errors, 0 warnings**;
+      `comment_index.py` / `breadcrumbs.py` 0 errors. All are board-free
+      pre-gates, not hardware sign-off.
+- [ ] **Hardware sign-off still pending (v1.6.0):** on-board Unity suite green
+      on COM3/COM6 including the **13 new cases** (`test_os_facade.c`,
+      `test_video.c`, `test_engine3d.c` and the audio/power cases); the
+      **BOUNCE performance/artifacts fix** verified on the panel (no dropped
+      frames / tear); **live Wikipedia images** fetched and rendered whole
+      with `P4_WIFI_LIVE=1` in `s21_wikipedia`; the **gallery recaptured** on
+      both boards with DOS identities (`s25_apps_gallery` +
+      `gallery_audit.py`); the **native bench payload** launched on-device;
+      and `tools/appdiff/baseline/*.transcript.txt` **rebaselined on a board**
+      for the new `[M-RICH-*]` lines. None of these is claimed by a host gate.
 - [ ] Board-free visual proof gates green (`make_web_screenshots.py --check`,
       `visual_proof_gate.py --check` / `--self-test`); web proofs are labelled
       host-generated and `docs/apps.md` captions match the DOS screens. No
-      device capture is claimed for them.
+      device capture is claimed for them. [`web.md`](web.md) records the
+      browser proof origins and the host-vs-live reproduction path.
 - [ ] Documentation screenshots refreshed and pixel-checked
       (`python tools/screenshot_gate.py --update`, then
       `python tools/screenshot_gate.py`; the browser dashboard shot comes from
@@ -321,10 +406,13 @@ Release is ready when **all** boxes below are true:
       sweeps on both boards plus the dogfood soak are recorded in
       [`bugs.md`](bugs.md)) and the genuinely deferred-hardware features are
       verified or labelled experimental.
-- [ ] `make_release.py bins/c6/srczip/manifest` produced `release/` artifacts
-      (including the per-board `esp32c6_hosted_slave-<board>.bin`) and
-      `SHA256SUMS` verifies.
+- [ ] `make_release.py bins/c6/srczip/p4sync/manifest` produced `release/`
+      artifacts (including the per-board `esp32c6_hosted_slave-<board>.bin`
+      and the standalone `p4sync-windows-x64-v1.6.0.zip`) and `SHA256SUMS`
+      verifies.
 - [ ] SD content confirmed on a provisioned card (`make_release.py push`).
 - [ ] Legal/hygiene checklist complete; source zip clean.
 - [ ] Docs gate complete.
-- [ ] Tag the release commit and publish the artifacts + `SHA256SUMS`.
+- [ ] Tag the release commit, publish the artifacts + `SHA256SUMS`, and upload
+      `p4sync-windows-x64-v1.6.0.zip` to the GitHub release (`gh release
+      upload v1.6.0 ... --clobber`).

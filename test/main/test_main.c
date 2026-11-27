@@ -33,6 +33,28 @@ extern void test_breadcrumb_format_empty(void);
 extern void test_breadcrumb_format_truncates(void);
 extern void test_breadcrumb_format_null_out(void);
 
+extern void test_os_parse_area_and_bare(void);
+extern void test_os_parse_case_insensitive(void);
+extern void test_os_parse_ver_no_mode(void);
+extern void test_os_parse_pwr_status(void);
+extern void test_os_pwr_rejects_list_and_free(void);
+extern void test_os_parse_rejects_unknown_area(void);
+extern void test_os_parse_rejects_bad_mode(void);
+extern void test_os_parse_rejects_duplicate_mode(void);
+extern void test_os_parse_rejects_missing_argv(void);
+extern void test_os_mode_allows_matrix(void);
+extern void test_os_area_names(void);
+extern void test_os_status_names(void);
+extern void test_os_format_field_basic(void);
+extern void test_os_format_field_unavailable(void);
+extern void test_os_format_field_null_value(void);
+extern void test_os_format_field_sanitizes(void);
+extern void test_os_format_field_truncation_is_explicit(void);
+extern void test_os_format_field_bad_args(void);
+extern void test_os_format_status_ok(void);
+extern void test_os_format_status_unavailable(void);
+extern void test_os_format_status_invalid_area(void);
+
 extern void test_mcp_build_request_basic(void);
 extern void test_mcp_build_request_no_params(void);
 extern void test_mcp_build_request_truncates(void);
@@ -813,6 +835,19 @@ extern void test_archive_header_dir_and_split(void);
 extern void test_archive_header_rejects(void);
 extern void test_archive_entry_fits(void);
 extern void test_archive_path_safe(void);
+extern void test_video_fps_parse_and_interval(void);
+extern void test_video_options_parse_flags(void);
+extern void test_video_frame_order_and_dedup(void);
+extern void test_video_manifest_and_cursor(void);
+extern void test_video_epub_toc_spine_edges(void);
+extern void test_video_archive_machine_row_bounds(void);
+extern void test_engine3d_math_basics(void);
+extern void test_engine3d_inverse_affine(void);
+extern void test_engine3d_init_and_shade_ramp(void);
+extern void test_engine3d_mesh_bounds(void);
+extern void test_engine3d_backface_cull(void);
+extern void test_engine3d_depth_order(void);
+extern void test_engine3d_wire_and_clip(void);
 
 void app_main(void)
 {
@@ -848,6 +883,31 @@ void app_main(void)
     RUN_TEST(test_breadcrumb_format_empty);
     RUN_TEST(test_breadcrumb_format_truncates);
     RUN_TEST(test_breadcrumb_format_null_out);
+    UNITY_END();
+
+    /* `os` facade pure parse/format contract (same core as the host gate) */
+    UNITY_BEGIN();
+    RUN_TEST(test_os_parse_area_and_bare);
+    RUN_TEST(test_os_parse_case_insensitive);
+    RUN_TEST(test_os_parse_ver_no_mode);
+    RUN_TEST(test_os_parse_pwr_status);
+    RUN_TEST(test_os_pwr_rejects_list_and_free);
+    RUN_TEST(test_os_parse_rejects_unknown_area);
+    RUN_TEST(test_os_parse_rejects_bad_mode);
+    RUN_TEST(test_os_parse_rejects_duplicate_mode);
+    RUN_TEST(test_os_parse_rejects_missing_argv);
+    RUN_TEST(test_os_mode_allows_matrix);
+    RUN_TEST(test_os_area_names);
+    RUN_TEST(test_os_status_names);
+    RUN_TEST(test_os_format_field_basic);
+    RUN_TEST(test_os_format_field_unavailable);
+    RUN_TEST(test_os_format_field_null_value);
+    RUN_TEST(test_os_format_field_sanitizes);
+    RUN_TEST(test_os_format_field_truncation_is_explicit);
+    RUN_TEST(test_os_format_field_bad_args);
+    RUN_TEST(test_os_format_status_ok);
+    RUN_TEST(test_os_format_status_unavailable);
+    RUN_TEST(test_os_format_status_invalid_area);
     UNITY_END();
 
     /* MCP JSON-RPC request builder + client defaults */
@@ -1809,6 +1869,23 @@ void app_main(void)
     RUN_TEST(test_archive_header_rejects);
     RUN_TEST(test_archive_entry_fits);
     RUN_TEST(test_archive_path_safe);
+
+    /* Pure video / EPUB-nav / archive-machine cores (components/video). */
+    UNITY_BEGIN();
+    RUN_TEST(test_video_fps_parse_and_interval);
+    RUN_TEST(test_video_options_parse_flags);
+    RUN_TEST(test_video_frame_order_and_dedup);
+    RUN_TEST(test_video_manifest_and_cursor);
+    RUN_TEST(test_video_epub_toc_spine_edges);
+    RUN_TEST(test_video_archive_machine_row_bounds);
+    RUN_TEST(test_engine3d_math_basics);
+    RUN_TEST(test_engine3d_inverse_affine);
+    RUN_TEST(test_engine3d_init_and_shade_ramp);
+    RUN_TEST(test_engine3d_mesh_bounds);
+    RUN_TEST(test_engine3d_backface_cull);
+    RUN_TEST(test_engine3d_depth_order);
+    RUN_TEST(test_engine3d_wire_and_clip);
+    UNITY_END();
 
     /* chat/epub/cas suites use Unity's self-registering TEST_CASE(...) form,
      * so they are discovered automatically and must NOT be RUN_TEST'd. */

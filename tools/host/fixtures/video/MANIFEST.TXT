@@ -1,0 +1,5 @@
+# ordered frame list
+frame_000.bmp
+frame_001.bmp
+frame_002.bmp
+NOT_AN_IMAGE.TXT

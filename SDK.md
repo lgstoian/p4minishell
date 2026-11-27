@@ -391,6 +391,37 @@ give each app a distinct screen identity. Web pages rendered through `webapp`/
 `html` land in the same grid, so keep their captions and proofs labelled as
 host-generated (`tools/visual_proof_gate.py --check`, board-free pre-gate only).
 
+## Batch-callable subsystem verbs (v1.6, additive)
+
+These are ordinary verbs registered through the one dispatcher — never a second
+command loop. Each is a thin front door over a component that already owns the
+capability; see [`documentation.md`](documentation.md) §Expanded subsystems.
+
+| Verb family | Owning source | Notes |
+|-------------|---------------|-------|
+| `os pm\|drv\|io\|fs\|disk\|net\|mem\|sec\|ver\|pwr [/b]` | `components/command/os_commands.c` | Read-only facade over existing accessors. `/b` emits uncoloured machine rows; `unavailable` is explicit, never invented. |
+| `power …`, `sleep`, `deepsleep`, `shutdown` | `components/command/power_commands.c`, `config_cmd.c` | One wake-arming path; pure `shell_power_clamp_idle_seconds`; `DISPLAY_TIMEOUT` 64-bit-clamped before narrowing. |
+| `audio mix\|sfx\|seq\|env\|gain\|meter` | `components/command/audioengine_commands.c` → `components/audio/audio_engine.c` | One codec/playback task, Q16 mixer, ADSR, sequencer, SFX bus, ducking; legacy `beep`/`tone`/`wavplay` preserved. |
+| `video play <dir\|manifest> [/fps:N] [/loop] [/tui] [/b] \| status [/b] \| stop` | `components/command/video_commands.c` → `components/video/**` | One `imagefile` decoder and one TUI sampler; `/b` machine rows. |
+| `gfx3d init\|close\|status\|camera\|mesh\|draw\|rotate\|translate\|scale\|light\|mode\|project\|clear\|stats\|identity` | `components/command/engine3d_commands.c` → `components/gfx3d/**` | Q16 math, all pixels through the one `gfx_surface` path and one DOS palette. |
+| `epub …`, `archive …` | `components/command/*_commands.c` → `components/epub/**`, `components/archive/**` | Pure EPUB nav/TOC core; one USTAR/CRC core with machine rows. |
+| `reg [/b] list\|get\|set\|del` | `components/command/reg_commands.c` | One `storage_ini.c` core, atomic writes; `/b` uncoloured machine rows. |
+| `lib [/b] list\|info\|load` | `components/command/lib_commands.c` | Shared batch/applib routines from `sd:/APPS/LIBS.INI` through `call <file.bat>::<routine>` — **not** native dynamic linking; `/b` machine rows. |
+| `try :catch`, `finally :cleanup` | `components/batch/**` | Existing trap scope stack, LIFO unwind, preserved ERRORLEVEL. |
+
+**ERRORLEVEL conventions.** Every family above calls `batch_set_errorlevel()`:
+`0` = success, `1` = unavailable / not found / operational failure, `2` = usage
+or bad argument (the same DOS-style scale the file and text tools use). The `os`
+facade uses `0` ok / `1` unavailable / `2` usage; `reg` and `lib` use `0`/`1`/`2`.
+A subsystem that cannot answer reports `unavailable` explicitly rather than a
+success-looking empty value, so `if errorlevel`, `&&`/`||` and `trap` behave
+predictably. `try`/`finally` unwind the trap scopes LIFO and preserve the
+ERRORLEVEL of the protected block unless the cleanup deliberately changes it.
+Every `/b` form is machine output: uncoloured, one record per line, safe for
+`for /f`, pipes and `>`/`>>` redirects — never decorate it with `SH_*` colours.
+These surfaces are board-free host-gated; a pass is a pre-gate only
+(`harness.md` §0/§2.2), not hardware sign-off.
+
 ## Writerdeck surfaces (v1.2.0)
 
 The writing features are additive surfaces on the existing editor, markdown,
@@ -566,7 +597,11 @@ work the integrator has to perform.
    | Filesystem / SD | `components/storage/storage_nav.c` / `storage_files.c` | declare in `storage_commands.h` |
    | Batch language | `components/batch/batch.c` (+ `components/batch/batch_expr.c` for `set /a`, `components/batch/calc.c` for `calc`) | declare in `batch.h` / `calc.h` |
    | Storage verbs | `components/storage/storage_nav.c` / `storage_files.c` / `storage_disk.c` / `storage_text.c` / `storage_fam.c` | declare in `storage_commands.h` |
-   | Audio verbs | `components/command/audio_commands.c` | declare in `command.h` |
+   | Audio verbs (legacy) | `components/command/audio_commands.c` | declare in `command.h` |
+   | Audio engine verbs | `components/command/audioengine_commands.c` → `components/audio/audio_engine.c` | declare in `command.h` |
+   | OS diagnostics facade | `components/command/os_commands.c` | declare in `command.h` (pure region between `OS_PURE_DECL` markers) |
+   | Registry / shared library | `components/command/reg_commands.c`, `lib_commands.c` | declare in `command.h` |
+   | Video / 3D | `components/command/video_commands.c`, `engine3d_commands.c` | declare in `command.h` |
    | TUI / modal verbs | `components/command/tui_commands.c` | declare in `command.h` |
    | Declarative screens | `components/command/screen_commands.c` (`screen run|info`, INI reader + argv synthesis into the existing verbs) | declare in `command.h` |
    | Peripheral toolkit | `components/command/periph_commands.c` | declare in `command.h` |
@@ -1296,6 +1331,30 @@ bool shell_execute_command_core(char *command)
 - `usb` follows the same shell-oriented rule: MSC mount or listing and HID enable or disable state stay transcript-visible instead of introducing a separate structured shell protocol.
 - OTA failures may include ESP-IDF names such as `ESP_ERR_INVALID_ARG`, `ESP_ERR_INVALID_STATE`, `ESP_ERR_INVALID_SIZE`, `ESP_ERR_NOT_FOUND`, `ESP_ERR_NOT_SUPPORTED`, `ESP_ERR_NO_MEM`, and `ESP_FAIL`.
 - Caller code should not rewrite module-owned shell messages if behavior compatibility matters.
+
+## Host-side integration (P4Sync)
+
+External desktop/agent clients do **not** extend the firmware: they consume the
+existing USB harness from the host. `tools/p4sync/` exposes the same operations
+as an agent-friendly CLI and a JSON-lines bridge (`one request per stdin line`,
+`one JSON response or event per stdout line`), reusing `DeviceSession`,
+`sdbridge` (SDFX), `pim_sync` (PIMX) and screenshot capture. Do not add a second
+serial implementation, framing engine, device-side index or new firmware verb
+to serve a host tool — add a verb to `command` only when the firmware itself
+needs it, and expose it through the bridge's shared `data` schema.
+
+- The Windows 11 WPF client in `apps/p4sync_gui/` is a pure JSON client (BCL +
+  platform SDK, no NuGet packages); it never opens a port or parses a device
+  frame. Credentials belong to the OS (Windows Credential Manager), not the repo.
+- Protocol compatibility is a hard refusal on an unmatched `sync.proto` tag or
+  missing capability; `limit.screenshot` is optional but strictly parsed when
+  advertised. Transport and merge rules stay in the shared harness.
+- Board-free verification: `python tools/p4sync_gate.py --check` (51 checks),
+  `--self-test` (18 red canaries), plus `dotnet build apps/p4sync_gui/P4SyncGui.sln
+  -c Release` and `dotnet run --project apps/p4sync_gui/tests/P4SyncBridge.Tests`
+  on Windows. These are CI pre-gates, not hardware sign-off (`harness.md` §0/§2.2).
+- Full contract: [`tools/p4sync/README.md`](tools/p4sync/README.md) and
+  [`apps/p4sync_gui/README.md`](apps/p4sync_gui/README.md).
 
 ## Compatibility rules
 - Keep the ESP-Hosted dependency aligned with the current project baseline in `main/idf_component.yml`, and keep `test/main/idf_component.yml` pinned to the same versions.

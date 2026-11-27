@@ -1,7 +1,10 @@
 launch GFXTOOL
 [M-GFXTOOL]
+[M-DOS-GFXTOOL] screen=GFXTOOL-HEADLESS panels=N head="NONE" theme=mono bars=N table=N spark=N status=N
 title: set to 'GFX Tool'
 gfx: canvas NxN (N KB PSRAM)
+[M-RICH-GFXTOOL] smooth toolkit tour
+[M-RICH-GFXTOOL-F] area=N
 gfx: filled N pixel(s)
 gfx: slot N loaded NxN (N KB PSRAM)
 sx=N
@@ -19,6 +22,27 @@ so=N
 sx=N
 sy=N
 [M-GFXTOOL-BLIT]
+[M-RICH-GFXTOOL-ATLAS] sheet+composite stamped
+gfx tile create: bad grid or out of memory (max NxN cells of NxN)
+gfx tile set: bad/empty map 'N' (gfx tile create first)
+gfx tile draw: bad/empty map 'N'
+gfx: layer N 'BADGE' NxN alpha=N z=N
+[M-RICH-GFXTOOL-TILELAYER] tile map + alpha layer stamped
 [M-GFXTOOL-IMG]
+PRIM=line
+PARAM=N
+VIEW=after
+STEPS=N
+[M-GFXTOOL-UI] state=menu prim=line param=N view=after
+STEPS=N
+VPRIM=line
+VP=N
+EY=N
+CX=N
+CY=N
+gfx tile draw: bad/empty map 'N'
+Tool q (timed out)
+UI=done
+[M-GFXTOOL-UI] state=done prim=line param=N view=after
 gfx: saved /sdcard/GFXTOOL.BMP (N bytes)
 [M-GFXTOOL-DONE]

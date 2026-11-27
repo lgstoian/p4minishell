@@ -669,13 +669,10 @@ static bool render_packed_image(render_ctx_t *c, const style_t *st,
     return true;
 }
 
-/** Deepest block nesting at which an image is still fetched.
- *
- * The fetch runs the network stack (TLS, several KB) inside the render
- * recursion; a deeply nested table page (a news discussion) used to overflow
- * the command worker's verified 28 KB stack right here. Spacer images live
- * deep inside tables, so beyond this depth the alt text is shown instead -
- * article figures sit near the top and still load. */
+/** Deepest block nesting at which an image may be fetched INLINE, when the
+ * caller has no flat prefetch pass. The browser supplies prefetch_images and
+ * warms its decoded cache before layout, so its deep infobox/figure images do
+ * not pay a TLS fetch on the worker's 28 KB stack during recursion. */
 #define DOM_RENDER_IMAGE_FETCH_DEPTH 8
 
 static void render_image(render_ctx_t *c, dom_node_t *node, const style_t *st)
@@ -683,7 +680,8 @@ static void render_image(render_ctx_t *c, dom_node_t *node, const style_t *st)
     dom_image_t img;
 
     memset(&img, 0, sizeof(img));
-    if (c->depth <= DOM_RENDER_IMAGE_FETCH_DEPTH &&
+    if ((c->ops->prefetch_images != NULL ||
+         c->depth <= DOM_RENDER_IMAGE_FETCH_DEPTH) &&
         c->ops->load_image != NULL && node->src[0] != '\0' &&
         c->ops->load_image(c->ops->ctx, node->src, &img) &&
         img.pixels != NULL && img.width > 0 && img.height > 0) {
@@ -1431,6 +1429,14 @@ void dom_render_tree(dom_tree_t *tree, const dom_render_ops_t *ops)
             root = main_node;
         }
     }
+    /* Warm image caches FLAT, before the recursive layout walk. Wikipedia's
+     * infobox and figure images sit 10+ levels deep in tables; the old renderer
+     * either skipped them (depth cap) or ran a TLS fetch on the command worker's
+     * 28 KB stack right there. The browser's pre-pass resolves and decodes them
+     * in a bounded loop, so render_image below only takes cache hits. */
+    if (ops->prefetch_images != NULL) {
+        ops->prefetch_images(ops->ctx, tree);
+    }
     /* Paint the page background from the body's CSS background-color. The
      * cells the layout writes later keep their own colors. */
     if (ops->tui && ops->put_cell != NULL && tree->body->bg != 16) {
@@ -1478,38 +1484,25 @@ void dom_render_tree(dom_tree_t *tree, const dom_render_ops_t *ops)
 
                     for (int c = 0; c < ops->cols; ) {
                         uint8_t packed = dom_image_cell_tiled(&bg, c, r);
+                        /* A backdrop rectangle must keep the decoded DOS hue.
+                         * The low nibble is the inline glyph ramp's luminance;
+                         * re-quantising a ramp-attenuated blend (as RC2 did)
+                         * turned a solid #ff5555 tile into DOS grey 8, because
+                         * nearest-CGA prefers grey to a dark red. The ramp
+                         * shades glyphs, not the page backdrop: only explicit
+                         * CSS opacity attenuates the fill. */
                         uint8_t color = (uint8_t)(packed >> 4);
-                        uint8_t level = (uint8_t)(packed & 0x0F);
-                        /* The ramp level becomes the backdrop's alpha: dark
-                         * cells let the page colour through, bright cells
-                         * read strongly. One css_color_blend composites it
-                         * over the page before the run is emitted. */
-                        uint8_t alpha = (uint8_t)(((uint32_t)level * page_alpha) /
-                                                  ANSI_IMAGE_RAMP_LAST);
-                        css_rgba_t over = css_color_from_dos(
-                            (uint8_t)(ops->base_bg & 15));
-                        css_rgba_t blended = css_color_blend(
-                            css_color_from_dos(color), over, alpha);
                         int start = c;
 
-                        color = css_color_to_dos(&blended);
-                        while (c < ops->cols) {
-                            uint8_t next = dom_image_cell_tiled(&bg, c, r);
-                            uint8_t next_alpha = (uint8_t)(((uint32_t)(next & 0x0F) *
-                                                            page_alpha) /
-                                                           ANSI_IMAGE_RAMP_LAST);
-
-                            if ((uint8_t)(next >> 4) != (uint8_t)(packed >> 4) ||
-                                next_alpha != alpha) {
-                                break;
-                            }
+                        while (c < ops->cols &&
+                               (uint8_t)(dom_image_cell_tiled(&bg, c, r) >> 4) == color) {
                             c++;
                         }
                         cur[cur_n].start = start;
                         cur[cur_n].len = c - start;
                         cur[cur_n].y0 = r;
                         cur[cur_n].color = color;
-                        cur[cur_n].alpha = color != 16 ? 255 : 0;
+                        cur[cur_n].alpha = color != 16 ? page_alpha : 0;
                         cur_n++;
                     }
                     /* Close the runs that did not continue into this row. */

@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "note": "Baselines emitted by the real gfx3d core through tools/host/fixtures/engine3d/harness.c. Regenerate with: python tools/host_engine3d_gate.py --update",
+  "fixtures": {
+    "depth": {
+      "canvas": [
+        64,
+        64
+      ],
+      "tris": 2,
+      "culled": 0,
+      "draws": [
+        1,
+        0
+      ],
+      "culls": [],
+      "overflow": 0,
+      "pixels": {
+        "32,32": [
+          248,
+          84,
+          80
+        ]
+      },
+      "ink_min": 545,
+      "color_any": []
+    },
+    "cull": {
+      "canvas": [
+        64,
+        64
+      ],
+      "tris": 2,
+      "culled": 1,
+      "draws": [
+        0
+      ],
+      "culls": [
+        1
+      ],
+      "overflow": 0,
+      "pixels": {
+        "32,32": [
+          248,
+          84,
+          80
+        ]
+      },
+      "ink_min": 145,
+      "color_any": []
+    },
+    "wire": {
+      "canvas": [
+        64,
+        64
+      ],
+      "tris": 1,
+      "culled": 0,
+      "draws": [
+        0
+      ],
+      "culls": [],
+      "overflow": 0,
+      "pixels": {},
+      "ink_min": 48,
+      "color_any": [
+        [
+          248,
+          252,
+          248
+        ]
+      ]
+    },
+    "overflow": {
+      "canvas": [
+        32,
+        32
+      ],
+      "tris": 1,
+      "culled": 0,
+      "draws": [],
+      "culls": [],
+      "overflow": 1,
+      "pixels": {
+        "16,16": [
+          0,
+          0,
+          0
+        ]
+      },
+      "ink_min": 0,
+      "color_any": []
+    }
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "tag": "power.v1.6.0",
+  "_comment": [
+    "Mock-state fixture for tools/host_power_gate.py. The gate compiles the",
+    "shipped power_commands.c and header_refresh.c against mock headers; Python",
+    "never re-implements the policy. A pass is a board-free pre-gate only."
+  ],
+  "idle_clamp": [
+    { "name": "negative", "seconds": -7, "expected": 0 },
+    { "name": "disabled", "seconds": 0, "expected": 0 },
+    { "name": "normal", "seconds": 60, "expected": 60 },
+    { "name": "max", "seconds": 86400, "expected": 86400 },
+    { "name": "over_max", "seconds": 86401, "expected": 86400 },
+    { "name": "huge", "seconds": 1099511627783, "expected": 86400 }
+  ],
+  "idle_interval": [
+    { "name": "disabled", "timeout": 0, "now_us": 1000000, "last_us": 0, "off": false, "expected": 0 },
+    { "name": "already_off", "timeout": 60, "now_us": 1000000, "last_us": 0, "off": true, "expected": 0 },
+    { "name": "due", "timeout": 60, "now_us": 61000000, "last_us": 0, "off": false, "expected": 1 },
+    { "name": "backwards_clock", "timeout": 60, "now_us": 0, "last_us": 1000000, "off": false, "expected": 1 },
+    { "name": "half_way", "timeout": 60, "now_us": 30000000, "last_us": 0, "off": false, "expected": 30000 },
+    { "name": "near_deadline", "timeout": 60, "now_us": 59000000, "last_us": 0, "off": false, "expected": 1000 },
+    { "name": "clamped_window", "timeout": 86401, "now_us": 0, "last_us": 0, "off": false, "expected": 86400000 }
+  ],
+  "boards": [
+    {
+      "name": "jc1060p470",
+      "wake_gpio": 4,
+      "wake_level": 0,
+      "touch_int_gpio": -1,
+      "keyboard_int_gpio": -1,
+      "deep_mask": "0x000000000000ffffULL",
+      "expect": { "user_armed": true, "touch_armed": false, "keyboard_armed": false, "deep_gpio": true }
+    },
+    {
+      "name": "tab5_st7123",
+      "wake_gpio": -1,
+      "wake_level": 0,
+      "touch_int_gpio": 23,
+      "keyboard_int_gpio": 50,
+      "deep_mask": "0x000000000000ffffULL",
+      "expect": { "user_armed": false, "touch_armed": true, "keyboard_armed": true, "deep_gpio": false }
+    },
+    {
+      "name": "tab5_gt911",
+      "wake_gpio": -1,
+      "wake_level": 0,
+      "touch_int_gpio": -1,
+      "keyboard_int_gpio": 50,
+      "deep_mask": "0x000000000000ffffULL",
+      "expect": { "user_armed": false, "touch_armed": false, "keyboard_armed": true, "deep_gpio": false }
+    },
+    {
+      "name": "no_int",
+      "wake_gpio": -1,
+      "wake_level": 0,
+      "touch_int_gpio": -1,
+      "keyboard_int_gpio": -1,
+      "deep_mask": "0x000000000000ffffULL",
+      "expect": { "user_armed": false, "touch_armed": false, "keyboard_armed": false, "deep_gpio": false }
+    }
+  ],
+  "sleep_cases": [
+    { "name": "timer_armed", "seconds": 60, "expect_timer": true },
+    { "name": "no_timer", "seconds": 0, "expect_timer": false }
+  ],
+  "deepsleep_cases": [
+    { "name": "timer_armed", "seconds": 30, "expect_timer": true },
+    { "name": "no_timer", "seconds": 0, "expect_timer": false }
+  ],
+  "clock_minute": [
+    { "name": "one_second", "seconds_to_next_minute": 1, "expected_max": 1050 },
+    { "name": "half_minute", "seconds_to_next_minute": 30, "expected_max": 30050 },
+    { "name": "full_minute", "seconds_to_next_minute": 60, "expected_max": 60050 }
+  ],
+  "min_checks": 60
+}

@@ -64,6 +64,7 @@
 #include "usb.h"
 #include "windows.h"
 #include "modal.h"
+#include "tui.h"
 #include "ui_test.h"
 #include "icon_splash.h"
 #include "rss_store.h"
@@ -950,6 +951,13 @@ void app_main(void)
     bsp_display_lock(0);
     shell_build_ui();
     bsp_display_unlock();
+
+    /* ONE app-switch path. The modal input hook turns Alt+Tab into a cycle;
+     * the TUI edge-swipe callback calls the very same helper. The switcher
+     * view is drawn by the ONE tui frame renderer. Registration here keeps
+     * tui and modal free of a new build-time dependency. */
+    tui_set_app_switch_handler(modal_session_cycle);
+    modal_set_app_switcher_view(tui_app_switcher_render);
 
     if (display_get_touch_handle() == NULL) {
         shell_record_warningf("init",

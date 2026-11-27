@@ -441,6 +441,17 @@ def _board_worker(label: str, port: str, mods, quick: bool,
                         res.error or "").startswith("PANIC"):
                     tried += 1
                     print("  [RETRY %d/%d] %s" % (tried, attempts, name))
+                    # A timed-out suite can leave the console reader suspended
+                    # (an SDFX/BMPX transfer that was interrupted); retrying on
+                    # that boot only produces marker timeouts in unrelated
+                    # checks. Start the retry from a clean boot instead.
+                    try:
+                        dev.reboot(settle_ms=settle_ms)
+                    except Exception as exc:  # noqa: BLE001
+                        res = SuiteResult(name, 0, 1,
+                                          error="retry reboot failed: %s" % exc)
+                        failed = [name]
+                        break
                     res, failed = _run_one_suite(mod, dev, ctx)
                 if tried > 1 and res.ok:
                     flaky.append(name)

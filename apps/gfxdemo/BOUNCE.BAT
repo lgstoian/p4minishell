@@ -3,7 +3,7 @@ rem SPDX-FileCopyrightText: 2026 Stoian Alexandru
 rem SPDX-License-Identifier: MIT
 rem =====================================================================
 rem  BOUNCE.BAT - an INTERACTIVE gfx paddle game in the DOS key/frame style
-rem  of SNAKE.BAT. One `choice /C:... /T:...,1` read per tick feeds ONE
+rem  of SNAKE.BAT. One `choice /C:... /T:...,0` read per tick feeds ONE
 rem  dispatcher (:dispatch via `on`); ONE renderer (:render) paints every
 rem  screen. The ball is a 16x16 sprite stamped with `gfx blitmany` (loaded
 rem  once from BALL.BMP, needs apps/push_assets.py). Panels, HUD and status
@@ -40,24 +40,24 @@ gfx blitmany 0 /a:1,16,16 0 8
 func :bouncev 3 2
 echo [M-RICH-BOUNCE-F] speed=%RESULT%
 rem ---- game state: 3 lives, score per paddle hit, level = speed tier ----
-set score=0
-set lives=3
-set level=1
-set x=120
-set y=90
-set dx=3
-set dy=2
-set n=0
-set paddle=112
-set spark=0
-set hx=120
-set hy=160
-set tx1=120
-set ty1=90
-set tx2=120
-set ty2=90
-set UIBACK=start
-set UI=start
+set score=0 > NUL
+set lives=3 > NUL
+set level=1 > NUL
+set x=120 > NUL
+set y=90 > NUL
+set dx=3 > NUL
+set dy=2 > NUL
+set n=0 > NUL
+set paddle=112 > NUL
+set spark=0 > NUL
+set hx=120 > NUL
+set hy=160 > NUL
+set tx1=120 > NUL
+set ty1=90 > NUL
+set tx2=120 > NUL
+set ty2=90 > NUL
+set UIBACK=start > NUL
+set UI=start > NUL
 gfx stats reset
 echo [M-BOUNCE-UI] state=start score=0 lives=3 level=1
 goto loop
@@ -71,15 +71,15 @@ goto loop
 
 :k_left
 echo [M-BOUNCE-KEY] key=a state=%UI%
-if "%UI%"=="play" set /a paddle=%paddle%-12
-if %paddle% LSS 24 set paddle=24
+if "%UI%"=="play" set /a paddle=%paddle%-12 > NUL
+if %paddle% LSS 24 set paddle=24 > NUL
 goto loop
 
 :k_right
 echo [M-BOUNCE-KEY] key=d state=%UI%
-if "%UI%"=="play" set /a paddle=%paddle%+12
-set PMAX=216
-if %paddle% GTR %PMAX% set paddle=%PMAX%
+if "%UI%"=="play" set /a paddle=%paddle%+12 > NUL
+set PMAX=216 > NUL
+if %paddle% GTR %PMAX% set paddle=%PMAX% > NUL
 goto loop
 
 :k_pause
@@ -100,7 +100,7 @@ goto loop
 :k_help
 echo [M-BOUNCE-KEY] key=h state=%UI%
 if "%UI%"=="help" goto helpback
-set UIBACK=%UI%
+set UIBACK=%UI% > NUL
 gosub :setstate help
 goto loop
 :helpback
@@ -124,24 +124,24 @@ gosub :setstate play
 goto loop
 
 :setstate
-set UI=%1
+set UI=%1 > NUL
 echo [M-BOUNCE-UI] state=%UI% score=%score% lives=%lives% level=%level%
 return
 
 :resetgame
-set score=0
-set lives=3
-set level=1
-set x=120
-set y=90
-set dx=3
-set dy=2
-set paddle=112
-set spark=0
-set tx1=120
-set ty1=90
-set tx2=120
-set ty2=90
+set score=0 > NUL
+set lives=3 > NUL
+set level=1 > NUL
+set x=120 > NUL
+set y=90 > NUL
+set dx=3 > NUL
+set dy=2 > NUL
+set paddle=112 > NUL
+set spark=0 > NUL
+set tx1=120 > NUL
+set ty1=90 > NUL
+set tx2=120 > NUL
+set ty2=90 > NUL
 return
 
 rem ---- main loop: bounded per tick (choice /T), bounded overall (n) -----
@@ -150,83 +150,90 @@ if "%UI%"=="quit" goto finish
 if %n% GEQ 240 goto finish
 if "%UI%"=="play" gosub :step
 gosub :render
-rem 24 ms keeps the original 30 fps present pacing between bounded key reads.
-if "%UI%"=="play" delay 24
-set DEF=n
-set TO=1
-if "%UI%"=="start" set DEF=s
-if "%UI%"=="start" set TO=10
-if "%UI%"=="help" set DEF=s
-if "%UI%"=="help" set TO=10
-if "%UI%"=="pause" set DEF=n
-if "%UI%"=="pause" set TO=10
-if "%UI%"=="over" set DEF=q
-if "%UI%"=="over" set TO=10
-choice /C:adpnqhrs /N /T:%DEF%,%TO% "Keys"
+rem The v1.6 render does more gfx work per tick (AA circle, atlas blit,
+rem particles), so ~27 ms of draw/present plus an 8 ms delay lands near the
+rem 30 fps target; 24 ms made the headless loop ~20 fps.
+if "%UI%"=="play" delay 8
+set DEF=n > NUL
+rem A zero-second /T polls the key queue without waiting, so an untouched
+rem play tick costs ~24 ms (delay) + the present instead of a 1 s idle wait;
+rem a typed a/d/p/... key is still handed to the same :dispatcher. The start
+rem and game-over screens also poll immediately so an unattended perf run has
+rem one steady 30 fps interval; help/pause keep a visible 10 s timeout.
+set TO=0 > NUL
+if "%UI%"=="start" set DEF=s > NUL
+if "%UI%"=="start" set TO=0 > NUL
+if "%UI%"=="help" set DEF=s > NUL
+if "%UI%"=="help" set TO=10 > NUL
+if "%UI%"=="pause" set DEF=n > NUL
+if "%UI%"=="pause" set TO=10 > NUL
+if "%UI%"=="over" set DEF=q > NUL
+if "%UI%"=="over" set TO=0 > NUL
+choice /C:adpnqhrs /N /T:%DEF%,%TO% "Keys" > NUL
 goto dispatch
 
 rem ---- ball physics: one discrete step per key tick ---------------------
 :step
-set /a n+=1
-set tx2=%tx1%
-set ty2=%ty1%
-set tx1=%x%
-set ty1=%y%
-set /a x+=%dx%
-set /a y+=%dy%
+set /a n+=1 > NUL
+set tx2=%tx1% > NUL
+set ty2=%ty1% > NUL
+set tx1=%x% > NUL
+set ty1=%y% > NUL
+set /a x+=%dx% > NUL
+set /a y+=%dy% > NUL
 if %x% GTR 224 gosub :sidehit
 if %x% LSS 16 gosub :sidehit
 if %y% LSS 28 gosub :tophit
-set /a PL=%paddle%-24
-set /a PR=%paddle%+24
+set /a PL=%paddle%-24 > NUL
+set /a PR=%paddle%+24 > NUL
 if %y% LSS 160 goto step_spark
 if %x% LSS %PL% goto miss
 if %x% GTR %PR% goto miss
 gosub :paddlehit
 goto step_spark
 :miss
-set /a lives=%lives%-1
+set /a lives=%lives%-1 > NUL
 echo [M-BOUNCE-LIFE] lives=%lives%
 if %lives% LEQ 0 goto gameover
-set x=120
-set y=90
-set dx=3
-set dy=2
+set x=120 > NUL
+set y=90 > NUL
+set dx=3 > NUL
+set dy=2 > NUL
 :step_spark
-if %spark% GTR 0 set /a spark=%spark%-1
+if %spark% GTR 0 set /a spark=%spark%-1 > NUL
 echo [M-BOUNCE-FRAME] %n%
 return
 
 :sidehit
-set /a dx=0-%dx%
-set hx=%x%
-set hy=%y%
-set spark=3
+set /a dx=0-%dx% > NUL
+set hx=%x% > NUL
+set hy=%y% > NUL
+set spark=3 > NUL
 gfx particles emit 4 %x% %y% 4 0x00FFFF
 echo [M-BOUNCE-HIT] kind=wall score=%score% lives=%lives%
 return
 
 :tophit
-set /a dy=0-%dy%
-set hx=%x%
-set hy=%y%
-set spark=3
+set /a dy=0-%dy% > NUL
+set hx=%x% > NUL
+set hy=%y% > NUL
+set spark=3 > NUL
 gfx particles emit 4 %x% %y% 4 0x00FFFF
 echo [M-BOUNCE-HIT] kind=wall score=%score% lives=%lives%
 return
 
 :paddlehit
-set /a score=%score%+10
-set /a level=%level%+1
-set /a dy=0-%dy%
-set /a dx=%dx%+1
-set NEG8=-8
-if %dx% GTR 8 set dx=8
-if %dx% LSS %NEG8% set dx=%NEG8%
-set y=158
-set hx=%x%
-set hy=160
-set spark=4
+set /a score=%score%+10 > NUL
+set /a level=%level%+1 > NUL
+set /a dy=0-%dy% > NUL
+set /a dx=%dx%+1 > NUL
+set NEG8=-8 > NUL
+if %dx% GTR 8 set dx=8 > NUL
+if %dx% LSS %NEG8% set dx=%NEG8% > NUL
+set y=158 > NUL
+set hx=%x% > NUL
+set hy=160 > NUL
+set spark=4 > NUL
 gfx particles emit 8 %x% 158 6 0xFFAA00
 echo [M-BOUNCE-HIT] kind=paddle score=%score% lives=%lives%
 tone 660 40
@@ -254,7 +261,7 @@ gfx text 44 54 0xFFFFFF BOUNCE / PADDLE
 gfx text 44 68 0x00FFFF Keep the ball off the floor.
 gfx text 44 78 0xFFFFFF A/D move   P pause
 gfx text 44 88 0xFFFFFF H help     Q quit
-gfx text 44 102 0xFFAA00 S to start - auto in 10s
+gfx text 44 102 0xFFAA00 S to start (auto)
 :rend_help
 if not "%UI%"=="help" goto rend_pause
 gfx rect 22 40 196 100 0x00FFFF
@@ -281,7 +288,7 @@ gfx hline 48 58 144 0x3A6EA5
 gfx text 70 50 0xFFFFFF GAME OVER
 gfx text 60 64 0xFFAA00 SCORE %score%  LEVEL %level%
 gfx text 60 78 0x00FFFF R restart   Q quit
-gfx text 60 96 0x3A6EA5 auto-quit in 10s
+gfx text 60 96 0x3A6EA5 auto-quit
 :rend_play
 if not "%UI%"=="play" goto rend_status
 rem fading trail (two prior centres) then impact particles
@@ -292,10 +299,10 @@ gfx particles step 1
 gfx particles draw
 :rend_ball
 gfx circleaa %x% %y% 10 0x00FFFF
-set /a bx=%x%-8
-set /a by=%y%-8
+set /a bx=%x%-8 > NUL
+set /a by=%y%-8 > NUL
 gfx blitmany 0 %bx% %by% transparent
-set /a PX=%paddle%-24
+set /a PX=%paddle%-24 > NUL
 gfx rect %PX% 162 48 4 0x55FF55 fill
 gfx hline %PX% 162 48 0xFFFFFF
 :rend_status

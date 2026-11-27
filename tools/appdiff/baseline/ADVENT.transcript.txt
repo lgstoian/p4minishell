@@ -7,7 +7,47 @@ score=N
 moves=N
 [M-ADV]
 title: set to 'Adventure'
+[M-RICH-ADV] language tour
+RWORD=lantern
+N
+[M-RICH-ADV-K] hall=north
+[M-RICH-ADV-K] garden=east
+The system cannot find the batch label specified - advscore
+[M-RICH-ADV-F] result=N
+[M-RICH-ADV-S] rev=nretnal count=N pad=lantern...
 room=courtyard
+DOS_THEME=amber
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+[M-DOS-ADVENT] screen=ADVENT-MAP panels=N head="COURTYARD" theme=amber bars=N table=N spark=N status=Y
 moves=N
 ---
 [M-ADV-QUIT]

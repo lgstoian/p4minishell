@@ -1,0 +1,83 @@
+<UserControl x:Class="P4SyncGui.Views.PimView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel>
+        <TextBlock Text="PIM" Style="{StaticResource PageTitle}" />
+        <TextBlock Text="Mirror-directory sync through the bridge `full-image` command (existing pim engine)."
+                   Style="{StaticResource SubTitle}" Margin="0,4,0,18" />
+
+        <Border Background="{DynamicResource CodeBgBrush}" BorderBrush="{DynamicResource WarnBrush}"
+                BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,16"
+                Visibility="{Binding StaleWarningVisibility}"
+                AutomationProperties.Name="Stale manifest warning"
+                AutomationProperties.HelpText="{Binding StaleWarning}">
+            <TextBlock Text="{Binding StaleWarning}" Foreground="{DynamicResource WarnBrush}"
+                       TextWrapping="Wrap" />
+        </Border>
+
+        <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+            <StackPanel>
+                <DockPanel Margin="0,0,0,10">
+                    <TextBlock Text="Mirror directory" DockPanel.Dock="Left" VerticalAlignment="Center"
+                               Margin="0,0,8,0" />
+                    <Button Content="Browse…" DockPanel.Dock="Right" Margin="8,0,0,0"
+                            Command="{Binding BrowseMirrorCommand}" IsEnabled="{Binding App.IsIdle}"
+                            AutomationProperties.Name="Browse PIM mirror directory" />
+                    <TextBox Text="{Binding MirrorFolder, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.Name="PIM mirror directory" />
+                </DockPanel>
+                <DockPanel Margin="0,0,0,10">
+                    <TextBlock Text="Database name" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox Text="{Binding DatabaseName, UpdateSourceTrigger=PropertyChanged}" Width="220"
+                             DockPanel.Dock="Left" AutomationProperties.Name="PIM database name" />
+                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" HorizontalAlignment="Right">
+                        <CheckBox Content="Files" IsChecked="{Binding IncludeFiles}" Margin="0,0,16,0"
+                                  AutomationProperties.Name="Include files in full image" />
+                        <CheckBox Content="Screenshot" IsChecked="{Binding IncludeShot}"
+                                  AutomationProperties.Name="Include screenshot in full image" />
+                    </StackPanel>
+                </DockPanel>
+                <DockPanel>
+                    <Button Content="Build full image" DockPanel.Dock="Left" Style="{StaticResource PrimaryButton}"
+                            Command="{Binding RunCommand}" IsEnabled="{Binding App.IsIdle}"
+                            AutomationProperties.Name="Build the full PIM image" />
+                    <Button Content="Retry clean rebuild" DockPanel.Dock="Left" Margin="8,0,0,0"
+                            Command="{Binding RetryCleanCommand}" IsEnabled="{Binding App.IsIdle}"
+                            AutomationProperties.Name="Rebuild the image from a clean manifest" />
+                    <TextBlock Text="{Binding ManifestPath}" DockPanel.Dock="Right" HorizontalAlignment="Right"
+                               VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}" />
+                </DockPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Style="{StaticResource Card}">
+            <TabControl>
+                <TabItem Header="Contacts">
+                    <ListBox ItemsSource="{Binding Contacts}" MinHeight="180" MaxHeight="320"
+                             AutomationProperties.Name="Contacts from the full image" />
+                </TabItem>
+                <TabItem Header="Calendar">
+                    <ListBox ItemsSource="{Binding Calendar}" MinHeight="180" MaxHeight="320"
+                             AutomationProperties.Name="Calendar entries from the full image" />
+                </TabItem>
+                <TabItem Header="Details">
+                    <ListBox ItemsSource="{Binding Details}" MinHeight="180" MaxHeight="320"
+                             AutomationProperties.Name="Full image detail rows">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="4,3">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="230" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Key}" Foreground="{DynamicResource MutedBrush}" />
+                                    <TextBlock Text="{Binding Value}" Grid.Column="1" TextWrapping="Wrap" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </TabItem>
+            </TabControl>
+        </Border>
+    </StackPanel>
+</UserControl>

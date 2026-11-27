@@ -44,6 +44,11 @@
 
 /** Implemented in host_batch_bridge.c (host-only, not a public firmware API). */
 extern bool host_batch_fs_init(const char *root);
+/** Command-layer facades; firmware declaration lands in command.h via the
+ *  parent wiring. The host router declares them here only until then - no
+ *  semantics are reimplemented on this lane. */
+extern int shell_command_reg(int argc, char **argv);
+extern int shell_command_lib(int argc, char **argv);
 /** `draw`/`tui` verbs drive the ONE pure tui_frame_t cell core in the bridge;
  *  host_tui_dump() prints its `tui dump /a`-style grid after the batch report. */
 extern void host_tui_reset(void);
@@ -137,6 +142,16 @@ static void host_batch_execute_command(char *command)
         shell_command_func(argc, argv);
     } else if (shell_text_equals_ignore_case(first, "trap")) {
         shell_command_trap(argc, argv);
+    } else if (shell_text_equals_ignore_case(first, "try")) {
+        /* `try`/`finally` are the DOS-shaped front doors over the same trap
+         * scope stack; no second dispatcher on this lane either. */
+        shell_command_try(argc, argv);
+    } else if (shell_text_equals_ignore_case(first, "finally")) {
+        shell_command_finally(argc, argv);
+    } else if (shell_text_equals_ignore_case(first, "reg")) {
+        (void)shell_command_reg(argc, argv);
+    } else if (shell_text_equals_ignore_case(first, "lib")) {
+        (void)shell_command_lib(argc, argv);
     } else if (shell_text_equals_ignore_case(first, "str")) {
         shell_command_str(argc, argv);
     } else if (shell_text_equals_ignore_case(first, "map")) {

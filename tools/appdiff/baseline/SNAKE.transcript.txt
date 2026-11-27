@@ -1,6 +1,18 @@
 launch SNAKE
 [M-SNAKE]
 title: set to 'Snake'
+[M-RICH-SNAKE] board language tour
+[M-RICH-SNAKE-F] coord=N
+SHUD=score
+N
+[M-RICH-SNAKE-K] eaten=N   (xN)
+[M-RICH-SNAKE-S] pad=score.....
+DOS_THEME=green
+[M-DOS-SNAKE] screen=SNAKE-ARENA panels=N head="SNAKE" theme=green bars=N table=N spark=N status=Y
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
 len=N
 score=N
 S[N]=N   (xN)
@@ -14,43 +26,7 @@ S[N]=N
 prev=N
 S[N]=N
 prev=N
-S[N]=N
-prev=N
-S[N]=N
-prev=N
-S[N]=N
-prev=N
-S[N]=N
-prev=N
-S[N]=N
-prev=N
-S[N]=N
-prev=N
-S[N]=N
-prev=N
-S[N]=N
-prev=N
-S[N]=N
-prev=N
 col=N
-prev=N
-S[N]=N
-prev=N
-S[N]=N
-prev=N
-S[N]=N
-prev=N
-S[N]=N
-prev=N
-S[N]=N
-prev=N
-S[N]=N
-prev=N
-S[N]=N
-prev=N
-S[N]=N
-prev=N
-S[N]=N
 prev=N
 S[N]=N
 prev=N

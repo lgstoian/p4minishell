@@ -259,6 +259,11 @@ def run(dev, ctx):
             "gfx blitmany 1 /s:2 90 110",
             "gfx blitmany 2 /r:90 200 110",
             "gfx show",
+            # The first present only starts the pacing clock (the sampler
+            # ignores its own first timestamp); a second real present gives
+            # gfx stats one measured frame interval to assert on.
+            "gfx pixel 6 6 0xFFFF00",
+            "gfx show",
         ]
         for op in ops:
             dev.run(op, timeout=15)

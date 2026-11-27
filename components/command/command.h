@@ -191,6 +191,21 @@ void shell_power_set_idle_timeout(int seconds);
 int shell_power_get_idle_timeout(void);
 
 /**
+ * True when light sleep has been requested and the power-management config is
+ * compiled in. False when CONFIG_PM_ENABLE=0 (read-only query; no request is
+ * made here). Used by the `os pwr` facade.
+ */
+bool shell_power_light_sleep_requested(void);
+
+/**
+ * Clamp a 64-bit idle timeout (seconds) into [0,
+ * P4_CONFIG_POWER_IDLE_DISPLAY_MAX_SECS]. Pure; config_cmd.c applies this
+ * before casting to int so a huge CONFIG.SYS DISPLAY_TIMEOUT cannot wrap
+ * negative and accidentally disable idle-off.
+ */
+int shell_power_clamp_idle_seconds(int64_t seconds);
+
+/**
  * Report user input: resets the idle clock and wakes the display if the idle
  * timer had switched it off. Safe from any task.
  */
@@ -309,6 +324,11 @@ void shell_command_beep(int argc, char **argv);
 void shell_command_tone(int argc, char **argv);
 void shell_command_wavplay(int argc, char **argv);
 void shell_command_audio(int argc, char **argv);
+
+/** Additive audio-engine subverbs (mix/sfx/seq/env/gain/meter). Returns false
+ *  for the legacy audio verbs so the existing dispatcher arm still handles
+ *  status/stop/diag/output/mic/volume unchanged. */
+bool shell_command_audio_engine(int argc, char **argv);
 void shell_command_mic(int argc, char **argv);
 
 /* ========================================================================
@@ -581,6 +601,69 @@ int shell_command_html(int argc, char **argv);
  *  Each one delegates to an existing verb handler; no second renderer or
  *  script runtime. Returns an ERRORLEVEL: 0 ok, 1 error, 2 usage. */
 int shell_command_webapp(int argc, char **argv);
+
+/* ========================================================================
+ * `os` DIAGNOSTIC FACADE (pure parse/format, unit + host-gate tested)
+ * ======================================================================== */
+/* OS_PURE_DECL_BEGIN */
+/** Areas of the read-only `os` facade (one per owning subsystem). */
+typedef enum {
+    OS_AREA_PM = 0,     /**< FreeRTOS tasks + `start` pool slots. */
+    OS_AREA_DRV,        /**< board_config / board_caps + GPIO table owner. */
+    OS_AREA_IO,         /**< USB / SD / serial / input devices. */
+    OS_AREA_FS,         /**< Mounted storage capacity. */
+    OS_AREA_NET,        /**< networking host ops + Wi-Fi state. */
+    OS_AREA_MEM,        /**< Heap, DMA pool and himem per-slot bytes. */
+    OS_AREA_DISK,       /**< Storage volumes + disk geometry. */
+    OS_AREA_SEC,        /**< Device lock + PKG trust key. */
+    OS_AREA_PWR,        /**< Read-only power / sleep / battery status. */
+    OS_AREA_VER,        /**< Build / ABI snapshot. */
+    OS_AREA_COUNT,
+    OS_AREA_INVALID = -1
+} os_area_t;
+
+/** Sub-modes accepted by `os <area>` (`ver` takes none). */
+typedef enum {
+    OS_MODE_STATUS = 0, /**< Default status snapshot. */
+    OS_MODE_LIST,       /**< Per-item rows where the owner exposes a list. */
+    OS_MODE_FREE,       /**< Capacity-only rows (fs). */
+    OS_MODE_INVALID = -1
+} os_mode_t;
+
+/** Parse `os <area> [status|list|free] [/b]`. Pure; 0 ok / 2 usage. */
+int command_os_parse(int argc, char **argv, os_area_t *area_out,
+                     os_mode_t *mode_out, bool *bare_out);
+
+/** True when @p mode is valid for @p area. Pure. */
+bool command_os_mode_allows(os_area_t area, os_mode_t mode);
+
+/** Stable machine name for an area ("invalid" for an unknown area). Pure. */
+const char *command_os_area_name(os_area_t area);
+
+/** Status word for a machine-readable line ("ok" / "unavailable"). Pure. */
+const char *command_os_status_name(bool available);
+
+/**
+ * Format one `key=value` line without a trailing newline. A missing accessor
+ * (NULL @p value or @p available false) renders `key=unavailable`, never a
+ * fabricated value; `|`, CR and LF in @p value are sanitized. Pure; returns
+ * the byte count written (0 on bad arguments).
+ */
+size_t command_os_format_field(const char *key, const char *value,
+                               bool available, char *out, size_t out_size);
+
+/** Format `os.<area>.status=ok|unavailable` without a newline. Pure. */
+size_t command_os_format_status(os_area_t area, bool available,
+                                char *out, size_t out_size);
+/* OS_PURE_DECL_END */
+
+/**
+ * `os` — a batch-facing read-only facade over the existing subsystem
+ * accessors. Adds no second driver, registry, socket or dispatcher. Emits
+ * machine-readable `key=value` lines (`/b` keeps them uncoloured). Sets
+ * ERRORLEVEL 0 ok / 1 a subsystem is unavailable / 2 usage.
+ */
+int shell_command_os(int argc, char **argv);
 
 /** Render a page in the blocking HTML surface (the `html` implementation).
  *  @return 0 on a clean render/close, 1 on fetch/parse/render failure. */
@@ -952,6 +1035,21 @@ int shell_command_chat(int argc, char **argv);
  */
 const shell_command_entry_t *epub_commands_get_table(size_t *out_count);
 int shell_command_epub(int argc, char **argv);
+
+/** `video play|status|stop` - bounded frame-sequence playback through the ONE
+ *  imagefile decoder and the existing gfx/TUI surfaces. ERRORLEVEL 0/1/2. */
+int shell_command_video(int argc, char **argv);
+
+/** `gfx3d` verb family - minimal fixed-point 3D engine drawn through the ONE
+ *  gfx surface and one DOS palette. Returns true when handled. */
+bool shell_command_engine3d(int argc, char **argv);
+
+/** `reg [/b] list|get|set|del` - thin facade over the ONE storage_ini core.
+ *  `lib [/b] list|info|load` - shared batch/applib routine library (NOT native
+ *  dynamic linking); load synthesises `call <file.bat>::<routine>`.
+ *  ERRORLEVEL 0 (ok) / 1 (failure) / 2 (usage). */
+int shell_command_reg(int argc, char **argv);
+int shell_command_lib(int argc, char **argv);
 
 /**
  * `rss` verb family (RSS 2.0 / Atom 1.0 / JSON Feed reader).

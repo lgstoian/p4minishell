@@ -24,6 +24,8 @@ from p4test import Checklist
 
 
 NAME = "browser"
+# harness.md §4: UI/heap state from preceding suites contaminates this area; start from a fresh boot.
+NEEDS_CLEAN_BOOT = True
 TAGS = ["browser", "network", "ui"]
 
 IP_RE = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})")

@@ -20,6 +20,14 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/* Pure power-policy helpers owned by components/command/power_commands.c.
+ * Kept as local declarations so the on-target suite can exercise them without
+ * expanding the command.h surface (the host gate compiles the same functions
+ * from the shipped translation unit with mock state). */
+extern int shell_power_clamp_idle_seconds(int64_t seconds);
+extern int shell_power_idle_remaining_ms(int timeout_secs, int64_t now_us,
+                                         int64_t last_activity_us, bool off_by_idle);
+
 void test_power_parse_default(void)
 {
     char *argv[] = { "sleep" };
@@ -51,6 +59,29 @@ void test_power_parse_clamp_and_reject(void)
     TEST_ASSERT_FALSE(shell_power_parse_seconds(2, neg, &secs));
     TEST_ASSERT_FALSE(shell_power_parse_seconds(2, junk, &secs));
     TEST_ASSERT_FALSE(shell_power_parse_seconds(2, trail, &secs));
+
+    /* Idle timeout clamping is the same "typo cannot sleep for days" rule.
+     * Clamping happens before the narrow int cast, so an oversized value from
+     * CONFIG.SYS DISPLAY_TIMEOUT cannot wrap to a negative (and disable it). */
+    TEST_ASSERT_EQUAL_INT(0, shell_power_clamp_idle_seconds(-1));
+    TEST_ASSERT_EQUAL_INT(0, shell_power_clamp_idle_seconds(0));
+    TEST_ASSERT_EQUAL_INT(60, shell_power_clamp_idle_seconds(60));
+    TEST_ASSERT_EQUAL_INT(P4_CONFIG_POWER_IDLE_DISPLAY_MAX_SECS,
+                          shell_power_clamp_idle_seconds(P4_CONFIG_POWER_IDLE_DISPLAY_MAX_SECS + 1));
+    TEST_ASSERT_EQUAL_INT(P4_CONFIG_POWER_IDLE_DISPLAY_MAX_SECS,
+                          shell_power_clamp_idle_seconds(((int64_t)1 << 40) + 7));
+
+    /* Pure idle interval: disabled -> 0, due -> 1, normal -> remaining ms,
+     * and already-off -> 0 (no further idle ticks needed). */
+    TEST_ASSERT_EQUAL_INT(0, shell_power_idle_remaining_ms(0, 1000000, 0, false));
+    TEST_ASSERT_EQUAL_INT(0, shell_power_idle_remaining_ms(60, 1000000, 0, true));
+    TEST_ASSERT_EQUAL_INT(1, shell_power_idle_remaining_ms(60, 61000000, 0, false));
+    TEST_ASSERT_EQUAL_INT(1, shell_power_idle_remaining_ms(60, 0, 1000000, false)); /* backwards clock */
+    TEST_ASSERT_EQUAL_INT(30000, shell_power_idle_remaining_ms(60, 30000000, 0, false));
+    TEST_ASSERT_EQUAL_INT(1000, shell_power_idle_remaining_ms(60, 59000000, 0, false));
+    TEST_ASSERT_EQUAL_INT(P4_CONFIG_POWER_IDLE_DISPLAY_MAX_SECS * 1000,
+                          shell_power_idle_remaining_ms(P4_CONFIG_POWER_IDLE_DISPLAY_MAX_SECS + 99,
+                                                        0, 0, false));
 }
 
 void test_power_wake_cause_strings(void)
@@ -72,6 +103,11 @@ void test_power_deep_wake_gpio_eligibility(void)
     TEST_ASSERT_FALSE(shell_power_deep_wake_gpio_eligible(16));
     TEST_ASSERT_FALSE(shell_power_deep_wake_gpio_eligible(23));
     TEST_ASSERT_FALSE(shell_power_deep_wake_gpio_eligible(50));
+    /* Per-board wake lines: the JC1060P470 user GPIO is an RTC IO; the Tab5
+     * touch (23) and keyboard (50) INTs are outside the RTC domain. */
+    TEST_ASSERT_TRUE(shell_power_deep_wake_gpio_eligible(4));
+    TEST_ASSERT_TRUE(shell_power_deep_wake_gpio_eligible(14));
+    TEST_ASSERT_FALSE(shell_power_deep_wake_gpio_eligible(63));
 }
 
 /* Pack-presence classifier (bugs.md F24). The full-voltage/rail-band values

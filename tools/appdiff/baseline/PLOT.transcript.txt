@@ -1,8 +1,15 @@
 launch PLOT
 [M-PLOT]
+[M-DOS-PLOT] screen=PLOT-HEADLESS panels=N head="NONE" theme=mono bars=N table=N spark=N status=N
 title: set to 'Plot'
 calc.angle=radians
 gfx: canvas NxN (N KB PSRAM)
+[M-RICH-PLOT] gradient backdrop + computed scale
+[M-RICH-PLOT-F] scale=N
+PFUNC=both
+PGRID=N
+PN=N
+PSTEPS=N
 plot: window x=[-N.N, N.N] y=[-N.N, N.N]
 WX=-N.N
 WY=N.N
@@ -100,5 +107,8 @@ WX=N.N
 WY=-N.N
 WX=N
 WY=-N.N
+[M-PLOT-DRAW] func=both grid=N samples=N
+PSTEPS=N
+Plot q (timed out)
 gfx: saved /sdcard/PLOT.BMP (N bytes)
 [M-PLOT-DONE]

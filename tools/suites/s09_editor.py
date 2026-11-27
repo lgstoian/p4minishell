@@ -24,6 +24,8 @@ from p4test.asserts import Checklist
 from p4test.session import PanicError
 
 NAME = "editor"
+# harness.md §4: UI/heap state from preceding suites contaminates this area; start from a fresh boot.
+NEEDS_CLEAN_BOOT = True
 TAGS = ["editor", "slow"]
 OUT_DIR = os.path.join("screenshots", "regression")
 

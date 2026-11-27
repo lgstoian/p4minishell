@@ -76,8 +76,13 @@ def prelude(dev):
     - station disconnected: `wifi disconnect` clears the retry target and sets
       autoretry off, so the reconnect watchdog stops writing into the
       transcript (the header bar with its live link state is masked by the
-      gate anyway).
+      gate anyway);
+    - TUI torn down: a previous app/browser page leaves `tui_page_bg_rect`
+      LVGL rectangles over the transcript (they survive `cls`). `draw close`
+      runs tui_deinit()/tui_bg_clear(), so an idle shot cannot inherit them.
     """
+    sh(dev, "draw fullscreen off", 1.0)
+    sh(dev, "draw close", 1.0)
     sh(dev, "date 01-01-2026", 1.0)
     sh(dev, "time 12:00:00", 1.0)
     sh(dev, "cursor block blink 0", 1.0)
@@ -164,7 +169,12 @@ def state_tui_boxes(dev, out):
     sh(dev, 'draw text 44 4 "1. shell"')
     sh(dev, 'draw text 44 6 "2. editor"')
     shot(dev, "tui-boxes", out)
-    sh(dev, "draw close")
+    sh(dev, "draw close", 2.0)
+    # The TUI label is deleted on close, but the transcript repaint that
+    # follows can land after the next state's capture. Settle and clear once
+    # more so the next pass starts from an empty transcript.
+    sh(dev, "cls", 2.0)
+    dev.read_for(1.0)
 
 
 def state_gfx_demo(dev, out):

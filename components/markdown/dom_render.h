@@ -90,6 +90,10 @@ typedef struct {
     void (*put_ansi)(void *ctx, const char *text);
     /** Optional image loader. Return false to fall back to alt text. */
     bool (*load_image)(void *ctx, const char *src, dom_image_t *out);
+    /** Optional flat pre-pass for images. The browser warms its decoded-image
+     *  cache here so a deeply nested <img> never runs TLS inside the recursive
+     *  renderer (the old depth cap silently dropped those images). */
+    void (*prefetch_images)(void *ctx, const dom_tree_t *tree);
     /** Optional <canvas> bitmap loader (the browser runs the scripts first).
      *  Return false to render the element's fallback content, which is what a
      *  no-JS surface (editor preview, print-to-HTML, EPUB) does. */

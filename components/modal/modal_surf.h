@@ -245,6 +245,7 @@ bool modal_parse_var_arg(const char *arg, const char **name_out);
 
 /* Raw HID key codes used for focus navigation (same values the list surface
  * already interprets: Up 0x52, Down 0x51, Enter 0x28, Esc 0x29). */
+#define MODAL_KEY_TAB       0x2Bu
 #define MODAL_KEY_UP        0x52u
 #define MODAL_KEY_DOWN      0x51u
 #define MODAL_KEY_LEFT      0x50u
@@ -321,6 +322,29 @@ bool modal_session_stack_switch(modal_session_stack_t *st, const char *name);
 /** Focus accessor by from_top index (0 = top). */
 int  modal_session_stack_focus(const modal_session_stack_t *st, int from_top);
 bool modal_session_stack_set_focus(modal_session_stack_t *st, int from_top, int focus);
+
+/* -------------------------------------------------------------------------
+ * MULTITASKING SWITCH POLICY (pure; hardware-free)
+ * -------------------------------------------------------------------------
+ * Both physical inputs reduce to one operation: cycle the mstack by @p step.
+ * Alt+Tab arrives as a raw HID byte pair on the ONE modal input hook; the
+ * bottom-left edge swipe arrives as a pointer vector on the ONE tui touch
+ * callback (its pure predicate lives beside the one tui frame renderer in
+ * tui_frame.h). The predicates below are pure so the host modal gate drives
+ * them with mock codes and the firmware calls the very same functions.
+ */
+#define MODAL_MOD_LEFT_ALT  0x04u   /* HID boot-report modifier bit 2 */
+#define MODAL_MOD_RIGHT_ALT 0x40u   /* HID boot-report modifier bit 6 */
+
+/** True only for Left-Alt+Tab or Right-Alt+Tab (other modifiers are ignored). */
+bool modal_alt_tab(uint8_t key_code, uint8_t modifiers);
+
+/** From-top index a cycle by @p step selects (-1 for an empty stack).
+ *  @p step is reduced modulo the depth, so auto-repeat cannot skip slots. */
+int modal_session_next_index(const modal_session_stack_t *st, int step);
+
+/** Name of the slot selected by modal_session_next_index(); NULL when empty. */
+const char *modal_session_next_name(const modal_session_stack_t *st, int step);
 
 /* -------------------------------------------------------------------------
  * NEW READY-MADE SURFACES (modal_surface_t descriptors in modal_surf.c)

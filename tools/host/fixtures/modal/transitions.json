@@ -1,6 +1,6 @@
 {
-  "tag": "modal-host-v1",
-  "note": "Hardware-free modal state transitions. The gate compiles the REAL components/modal/modal_args.c with a generated C harness and checks these expected results; Python never re-implements the state machine.",
+  "tag": "modal-host-v1-switch",
+  "note": "Hardware-free modal state transitions. The gate compiles the REAL components/modal/modal_args.c with a generated C harness and checks these expected results; Python never re-implements the state machine. v1.6 adds Alt+Tab codes, bottom-left swipe vectors, mstack cycle order and the one tui frame renderer's app switcher.",
   "focus": [
     { "name": "down_moves", "key": "down", "count": 5, "current": 1, "page_step": 5, "changed": true, "next": 2 },
     { "name": "up_moves", "key": "up", "count": 5, "current": 3, "page_step": 5, "changed": true, "next": 2 },
@@ -93,6 +93,93 @@
         { "op": "expect_name", "from_top": 0, "value": "" },
         { "op": "suspend", "expect_ok": false },
         { "op": "resume", "expect_ok": false }
+      ]
+    }
+  ],
+  "input": [
+    { "name": "left_alt_tab", "key": "tab", "mods": 4, "switches": true },
+    { "name": "right_alt_tab", "key": "tab", "mods": 64, "switches": true },
+    { "name": "both_alts_tab", "key": "tab", "mods": 68, "switches": true },
+    { "name": "shift_alt_tab", "key": "tab", "mods": 6, "switches": true },
+    { "name": "ctrl_tab", "key": "tab", "mods": 1, "switches": false },
+    { "name": "plain_tab", "key": "tab", "mods": 0, "switches": false },
+    { "name": "alt_enter", "key": "enter", "mods": 4, "switches": false },
+    { "name": "alt_other", "key": "other", "mods": 4, "switches": false }
+  ],
+  "gestures": [
+    { "name": "bottom_left_diagonal", "x0": 40, "y0": 560, "x1": 700, "y1": 200, "w": 1024, "h": 600, "swipe": true },
+    { "name": "bottom_left_short", "x0": 20, "y0": 580, "x1": 350, "y1": 300, "w": 1024, "h": 600, "swipe": true },
+    { "name": "starts_mid_panel", "x0": 500, "y0": 560, "x1": 900, "y1": 120, "w": 1024, "h": 600, "swipe": false },
+    { "name": "starts_top_left", "x0": 40, "y0": 100, "x1": 700, "y1": 80, "w": 1024, "h": 600, "swipe": false },
+    { "name": "too_short_x", "x0": 40, "y0": 560, "x1": 100, "y1": 200, "w": 1024, "h": 600, "swipe": false },
+    { "name": "not_upwards", "x0": 40, "y0": 560, "x1": 700, "y1": 500, "w": 1024, "h": 600, "swipe": false },
+    { "name": "tiny_panel", "x0": 2, "y0": 20, "x1": 30, "y1": 5, "w": 32, "h": 24, "swipe": false },
+    { "name": "portrait_diagonal", "x0": 30, "y0": 1150, "x1": 600, "y1": 300, "w": 720, "h": 1280, "swipe": true }
+  ],
+  "switch": [
+    {
+      "name": "forward_visits_all_sessions",
+      "sessions": ["notes", "calc", "web"],
+      "step": 1,
+      "expect_next": "notes",
+      "expect_order": ["notes", "web", "calc"]
+    },
+    {
+      "name": "forward_again_wraps",
+      "sessions": ["notes", "calc", "web"],
+      "step": 2,
+      "expect_next": "calc",
+      "expect_order": ["calc", "web", "notes"]
+    },
+    {
+      "name": "backward_to_recent",
+      "sessions": ["a", "b", "c"],
+      "step": -1,
+      "expect_next": "b",
+      "expect_order": ["b", "c", "a"]
+    },
+    {
+      "name": "single_session_stays",
+      "sessions": ["only"],
+      "step": 1,
+      "expect_next": "only",
+      "expect_order": ["only"]
+    }
+  ],
+  "switcher": [
+    {
+      "name": "three_sessions",
+      "names": ["notes", "calc", "web"],
+      "focus": 0,
+      "cells": [
+        { "col": 8, "row": 3, "glyph": "tl", "fg": 7, "bg": 1 },
+        { "col": 71, "row": 3, "glyph": "tr", "fg": 7, "bg": 1 },
+        { "col": 8, "row": 21, "glyph": "bl", "fg": 7, "bg": 1 },
+        { "col": 71, "row": 21, "glyph": "br", "fg": 7, "bg": 1 },
+        { "col": 9, "row": 5, "text": ">", "fg": 14, "bg": 1 },
+        { "col": 9, "row": 6, "text": " ", "fg": 7, "bg": 1 },
+        { "col": 12, "row": 5, "text": "1", "fg": 14, "bg": 1 },
+        { "col": 15, "row": 5, "text": "n", "fg": 14, "bg": 1 },
+        { "col": 15, "row": 6, "text": "c", "fg": 7, "bg": 1 }
+      ]
+    },
+    {
+      "name": "focus_marker_moves",
+      "names": ["alpha", "beta"],
+      "focus": 1,
+      "cells": [
+        { "col": 9, "row": 5, "text": " ", "fg": 7, "bg": 1 },
+        { "col": 9, "row": 6, "text": ">", "fg": 14, "bg": 1 },
+        { "col": 15, "row": 6, "text": "b", "fg": 14, "bg": 1 }
+      ]
+    },
+    {
+      "name": "empty_stack",
+      "names": [],
+      "focus": 0,
+      "cells": [
+        { "col": 11, "row": 5, "text": "(", "fg": 8, "bg": 1 },
+        { "col": 23, "row": 5, "text": ")", "fg": 8, "bg": 1 }
       ]
     }
   ]

@@ -1,0 +1,116 @@
+<UserControl x:Class="P4SyncGui.Views.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel>
+        <TextBlock Text="Settings" Style="{StaticResource PageTitle}" />
+        <TextBlock Text="Bridge location, offline mock mode, theme and OS-managed credentials. Settings are stored under %APPDATA%, never in the repository."
+                   Style="{StaticResource SubTitle}" Margin="0,4,0,18" />
+
+        <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+            <StackPanel>
+                <TextBlock Text="Bridge" Style="{StaticResource SectionTitle}" />
+                <DockPanel Margin="0,0,0,8">
+                    <TextBlock Text="Python executable" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox Text="{Binding PythonPath, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.Name="Python executable" />
+                </DockPanel>
+                <DockPanel Margin="0,0,0,8">
+                    <TextBlock Text="bridge.py path" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <Button Content="Browse…" DockPanel.Dock="Right" Margin="8,0,0,0"
+                            Command="{Binding BrowseBridgeCommand}" AutomationProperties.Name="Browse for bridge.py" />
+                    <TextBox Text="{Binding BridgeScriptPath, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.Name="Bridge script path" />
+                </DockPanel>
+                <TextBlock Text="{Binding ResolvedBridge}" Style="{StaticResource SubTitle}" Margin="0,0,0,10" />
+                <CheckBox Content="Mock mode (launch bridge.py --mock; no board required)"
+                          IsChecked="{Binding MockMode}" AutomationProperties.Name="Enable bridge mock mode" />
+                <TextBlock Text="You can also start the app with: P4SyncGui.exe --mock" Style="{StaticResource SubTitle}"
+                           Margin="22,4,0,0" />
+            </StackPanel>
+        </Border>
+
+        <Grid Margin="0,0,0,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Border Style="{StaticResource Card}" Grid.Column="0" Margin="0,0,8,0">
+                <StackPanel>
+                    <TextBlock Text="Appearance" Style="{StaticResource SectionTitle}" />
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Theme" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <ComboBox ItemsSource="{Binding Themes}" SelectedItem="{Binding Theme}" Width="140"
+                                  AutomationProperties.Name="Theme selection" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}" Grid.Column="1" Margin="8,0,0,0">
+                <StackPanel>
+                    <TextBlock Text="Credential store" Style="{StaticResource SectionTitle}" />
+                    <TextBlock Text="Stored in Windows Credential Manager (DPAPI fallback). Never in settings.json or the repo."
+                               Style="{StaticResource SubTitle}" />
+                    <TextBlock Text="{Binding CredentialUser}" Margin="0,8,0,0" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+            <StackPanel>
+                <TextBlock Text="Credential target" Style="{StaticResource SectionTitle}" />
+                <DockPanel Margin="0,0,0,8">
+                    <TextBlock Text="Target" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox Text="{Binding CredentialTarget, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.Name="Credential target name" />
+                </DockPanel>
+                <Grid Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="220" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="220" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="User" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox x:Name="CredentialUserBox" Grid.Column="1"
+                             AutomationProperties.Name="Credential user name" />
+                    <TextBlock Text="Password" Grid.Column="2" VerticalAlignment="Center" Margin="20,0,8,0" />
+                    <PasswordBox x:Name="CredentialPasswordBox" Grid.Column="3"
+                                 AutomationProperties.Name="Credential password (never displayed)" />
+                </Grid>
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="Save credential" Style="{StaticResource PrimaryButton}"
+                            Click="SaveCredential_Click" AutomationProperties.Name="Save credential in the OS store" />
+                    <Button Content="Delete credential" Margin="8,0,0,0" Command="{Binding DeleteCredentialCommand}"
+                            AutomationProperties.Name="Delete stored credential" />
+                    <TextBlock x:Name="CredentialStatus" Margin="12,0,0,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource MutedBrush}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Style="{StaticResource Card}">
+            <StackPanel>
+                <DockPanel>
+                    <TextBlock Text="Sync folders" Style="{StaticResource SectionTitle}" DockPanel.Dock="Left" />
+                    <Button Content="Save settings" DockPanel.Dock="Right" HorizontalAlignment="Right"
+                            Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}"
+                            AutomationProperties.Name="Save all settings" />
+                </DockPanel>
+                <DockPanel Margin="0,0,0,8">
+                    <TextBlock Text="Local folder" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox Text="{Binding LocalFolder, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.Name="Default local sync folder" />
+                </DockPanel>
+                <DockPanel Margin="0,0,0,8">
+                    <TextBlock Text="Mirror folder" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox Text="{Binding MirrorFolder, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.Name="Default PIM mirror folder" />
+                </DockPanel>
+                <DockPanel>
+                    <TextBlock Text="Remote folder" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox Text="{Binding RemoteFolder, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.Name="Default remote folder" />
+                </DockPanel>
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

@@ -36,6 +36,12 @@ set(HOST_PROD_SRCS
     # command.c so the host lane compiles the real implementation instead of a
     # failure stub; it needs no display, USB or network component.
     "${HOST_COMPONENTS}/command/command_redirect.c"
+    # Thin command-layer facades over existing engines: `reg` uses the ONE
+    # storage_ini core, `lib` synthesises `call <file>::<routine>` for the ONE
+    # batch library-call path. Both are linked on the host lane so the real
+    # interpreter fixtures exercise them; no second dispatcher is introduced.
+    "${HOST_COMPONENTS}/command/reg_commands.c"
+    "${HOST_COMPONENTS}/command/lib_commands.c"
     # The batch verbs under test: the evaluator + `set` helpers and the
     # service/sync cores. Their outside-world contact (SD session, input
     # source, INI registry, console line, header notification) goes through

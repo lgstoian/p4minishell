@@ -244,7 +244,9 @@ static bool config_apply_display_timeout(const char *value)
     if (*end != '\0' || secs < 0) {
         return false;
     }
-    shell_power_set_idle_timeout((int)secs);
+    /* Clamp in 64-bit BEFORE narrowing to the stored int, otherwise an
+     * oversized DISPLAY_TIMEOUT wraps negative and silently disables idle-off. */
+    shell_power_set_idle_timeout(shell_power_clamp_idle_seconds(secs));
     return true;
 }
 

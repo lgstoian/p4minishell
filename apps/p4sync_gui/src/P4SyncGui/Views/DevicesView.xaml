@@ -1,0 +1,49 @@
+<UserControl x:Class="P4SyncGui.Views.DevicesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel>
+        <TextBlock Text="Devices" Style="{StaticResource PageTitle}" />
+        <TextBlock Text="Ports and board slugs come from the bridge `devices` request. Nothing is hardcoded or scanned by the GUI."
+                   Style="{StaticResource SubTitle}" Margin="0,4,0,18" />
+
+        <Border Style="{StaticResource Card}">
+            <StackPanel>
+                <DockPanel Margin="0,0,0,12">
+                    <TextBlock Text="Discovered boards" Style="{StaticResource SectionTitle}" DockPanel.Dock="Left" />
+                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" HorizontalAlignment="Right">
+                        <Button Content="Discover" Command="{Binding RefreshCommand}" IsEnabled="{Binding App.IsIdle}"
+                                Style="{StaticResource PrimaryButton}" AutomationProperties.Name="Discover devices" />
+                    </StackPanel>
+                </DockPanel>
+
+                <ListBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
+                         MinHeight="150" MaxHeight="280" AutomationProperties.Name="Discovered devices">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="4,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="170" />
+                                    <ColumnDefinition Width="160" />
+                                    <ColumnDefinition Width="100" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding Slug}" FontWeight="SemiBold" Grid.Column="0" />
+                                <TextBlock Text="{Binding Port}" Grid.Column="1" Foreground="{DynamicResource MutedBrush}" />
+                                <TextBlock Text="{Binding State}" Grid.Column="2" Foreground="{DynamicResource AccentBrush}" />
+                                <TextBlock Text="{Binding Raw}" Grid.Column="3" Foreground="{DynamicResource MutedBrush}"
+                                           FontSize="10" TextTrimming="CharacterEllipsis" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                    <Button Content="Select this board" Command="{Binding ConnectCommand}"
+                            IsEnabled="{Binding App.IsIdle}" AutomationProperties.Name="Select the highlighted board" />
+                    <TextBlock Text="Selection is used as the `port` argument on every device request."
+                               Style="{StaticResource SubTitle}" Margin="12,0,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

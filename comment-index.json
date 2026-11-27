@@ -423,6 +423,8 @@
         "browser",
         "nativepay",
         "nativeexec",
+        "video",
+        "gfx3d",
         "zip"
       ],
       "rules": [
@@ -619,6 +621,25 @@
       "status": "stable",
       "tests": [
         "test/main/test_gfx.c"
+      ]
+    },
+    "gfx3d": {
+      "domain": "ui",
+      "header": "components/gfx3d/gfx3d.h",
+      "layer": "leaf",
+      "path": "components/gfx3d",
+      "provides": "fixed-point 4x4 math, camera/projection, cull/clip/sort/shade, one-path render",
+      "requires": [
+        "gfx",
+        "p4heap",
+        "ansi"
+      ],
+      "rules": [
+        "ai-context.md#hard-rules"
+      ],
+      "status": "stable",
+      "tests": [
+        "test/main/test_engine3d.c"
       ]
     },
     "header": {
@@ -1299,6 +1320,35 @@
       "status": "stable",
       "tests": [
         "test/main/test_userial.c"
+      ]
+    },
+    "video": {
+      "domain": "media",
+      "header": "components/video/video.h",
+      "layer": "leaf",
+      "path": "components/video",
+      "provides": "timed BMP/PNG/JPEG frame slideshow over the one decoder + one cell sampler",
+      "requires": [
+        "ansi",
+        "applib",
+        "gfx",
+        "imagefile",
+        "p4heap",
+        "shell",
+        "storage",
+        "strutil",
+        "tui",
+        "PRIV_REQUIRES",
+        "fatfs",
+        "heap"
+      ],
+      "rules": [
+        "ai-context.md#module-layering-rules"
+      ],
+      "status": "experimental",
+      "tests": [
+        "test/main/test_video.c",
+        "tools/host_video_gate.py"
       ]
     },
     "windows": {

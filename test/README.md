@@ -12,7 +12,7 @@ Last recorded hardware baseline (v1.4.3): **699 tests, 0 failures, 2 ignored**
 on COM3 and COM6 (before the new trap/native-payload cases). The host lane has
 **375 generated cases** awaiting its next green run; the previously recorded
 285/285 run predates the interpreter-in-host expansion. The current static
-case count is **809** (what `tools/green_guard.py` sees in
+case count is **843** (what `tools/green_guard.py` sees in
 `test/main/test_*.c`: `RUN_TEST` registrations + self-registering `TEST_CASE`s,
 including the v1.6 native-payload/loader, gfx toolkit, TUI frame/widget, modal
 and HTML/JS cases), and the generated host runner expects **375** cases
@@ -202,6 +202,17 @@ serial port:
 - `tools/make_native_payload.py check|selftest` verifies the signed test
   envelope in `tools/host/fixtures/native/` with a throwaway key; no bytes are
   mapped or executed, and the key is never installed on a board.
+- `tools/p4sync_gate.py --check` / `--self-test` — P4Sync's **board-free**
+  CLI/bridge gate (51 checks, 18 red canaries). It runs the real
+  `bridge.py --mock` subprocess and the shipped CLI composition over the
+  **existing** `p4test`/`sdbridge`/`pim_sync` harness (JSON contract, marker
+  and CRC framing, incremental plan, screenshot PNG proof and stale-manifest
+  recovery). No serial port, no firmware build and no board. The companion
+  WPF GUI in `apps/p4sync_gui/` builds and runs 18 console assertions on a
+  `windows-latest` CI job with no NuGet packages. It is a pre-gate, never
+  hardware sign-off (`harness.md` §0/§2.2). See
+  [`tools/p4sync/README.md`](../tools/p4sync/README.md) and
+  [`apps/p4sync_gui/README.md`](../apps/p4sync_gui/README.md).
 - `tools/make_web_screenshots.py --check` regenerates/verifies the four
   functional DOS-style web proofs (`portal`, `dashboard`, `article`, `form`)
   in `screenshots/web/` and `docs/assets/web/`; `--update` rebuilds them and
@@ -218,8 +229,10 @@ serial port:
   assertions and 11 labelled STATIC wiring checks; `--self-test` runs 9 red
   canaries. The wiki PNG is the first 25 rows of a saved fixture, not live HTTPS
   or the 2000-row device page. Live input and glass taps remain DEVICE-ONLY.
-  `python tools/host_all_gates.py` now reports **35/35 gates, 15 canaries**
-  (`browser`/`browser_canary` and `visual`/`visual_canary` included).
+  `python tools/host_all_gates.py` now reports **47/47 gates, 21 canaries**
+  (`browser`/`browser_canary`, `visual`/`visual_canary`,
+  `p4sync`/`p4sync_canary` and the new `os`/`power`/`audio`/`video`/
+  `engine3d` gates plus their canaries included).
 
 All of these are board-free pre-gates only — none signs off hardware, no
 device capture is claimed, and the on-device suites remain authoritative

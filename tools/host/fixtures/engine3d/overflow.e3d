@@ -1,0 +1,15 @@
+# Bounded-buffer proof: face 0 references vertex 9 of a 3-vertex mesh.
+# The engine must refuse the bad index (overflow count 1) and draw nothing,
+# never index past the bounded PSRAM vertex list.
+canvas 32 32
+camera 0 0 -8 0 0 0 0 1 0
+project 90 1 1 1 100
+light 0 0 1 256
+mode solid cull
+mesh bad 12 3
+v -2 -2 0
+v 2 -2 0
+v 0 2 0
+f 0 1 9
+end
+draw bad

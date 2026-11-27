@@ -842,6 +842,17 @@
  *  0x00-0x1F and 0x80-0xFF are empty placeholders. */
 #define P4_CONFIG_GFX_FONT_EXTENDED             1
 
+/* ---- Frame-sequence video (components/video) ----
+ * Bounded playback of on-SD BMP/PNG/JPEG frames through the ONE imagefile
+ * decoder and the existing gfx/TUI surfaces. Fallbacks in video_core.c keep
+ * older builds working; these are the release values. */
+#define P4_CONFIG_VIDEO_MAX_FRAMES               256
+#define P4_CONFIG_VIDEO_FRAME_BUDGET             4096
+#define P4_CONFIG_VIDEO_GFX_MAX_W                320
+#define P4_CONFIG_VIDEO_GFX_MAX_H                240
+#define P4_CONFIG_VIDEO_TUI_COLS                 78
+#define P4_CONFIG_VIDEO_TUI_ROWS                 22
+
 /* ========================================================================
  * KEYBOARD PARAMETERS
  * ======================================================================== */

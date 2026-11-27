@@ -45,6 +45,8 @@ tools/wifi_local.json
 *.log
 # Screenshot captures from the host harness (large BMP/PNG artifacts).
 tools/screenshots/
+# Runtime artifact of the batch registry fixture (recreated on every gate run).
+tools/host/fixtures/batch/REGISTRY.INI
 
 # Release artifacts built by tools/make_release.py (merged bins, source zip,
 # SHA256SUMS) are produced on demand, never committed.

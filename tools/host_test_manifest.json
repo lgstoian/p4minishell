@@ -82,6 +82,7 @@
     "test_assoc.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_audio.c": "peripheral driver component (audio/power/I2C/USB/camera): no host backend",
     "test_breadcrumb.c": "command layer: the breadcrumb formatter lives in components/command",
+    "test_os_facade.c": "command layer: the read-only os facade REQUIRES shell, storage, USB and display; its pure parser/formatter is compiled and driven by tools/host_os_gate.py",
     "test_browser.c": "command layer: REQUIRES storage, display and networking at link time",
     "test_cas.c": "cas: REQUIRES storage and batch (mbedtls is host-capable, storage is not)",
     "test_certs.c": "certs: REQUIRES mbedtls and storage (mbedtls is host-capable, storage is not)",
@@ -124,6 +125,8 @@
     "test_tmgr.c": "command layer: components/command REQUIRES shell, storage, USB and display",
     "test_tui.c": "UI model lives in LVGL-coupled translation units (editor_view.c, tui_fonts.c, header.c)",
     "test_userial.c": "command layer: components/command REQUIRES shell, storage, USB and display",
+    "test_video.c": "video/epub/archive pure cores are compiled and driven by tools/host_video_gate.py; components/video, epub and archive are not staged on the host lane",
+    "test_engine3d.c": "gfx3d pure 3D core is compiled and rendered by tools/host_engine3d_gate.py; components/gfx3d (REQUIRES gfx/p4heap/ansi) is not staged on the host lane",
     "test_wifi_state.c": "networking/radio: REQUIRES ESP-Hosted C6 transport (no emulated radio)",
     "test_shell_prompt.c": "prompt/title/key-wait still live in shell.c; move that block to shell_core.c first",
     "test_shell_debug_log.c": "the ring is host-capable now, but the suite also drives shell_command_debug() (display/disk verbs in shell.c)"

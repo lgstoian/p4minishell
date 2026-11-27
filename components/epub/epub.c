@@ -11,6 +11,7 @@
 
 #include "epub.h"
 #include "epub_internal.h"
+#include "epub_nav_core.h"
 #include "html.h"
 #include "zip.h"
 #include "archive.h"
@@ -100,6 +101,9 @@ static void epub_xml_start(void *user_data, const char *name, const char **atts)
         if (p->epub->spine_count < EPUB_MAX_SPINE) {
             p->current_chapter = &p->epub->spine[p->epub->spine_count++];
             memset(p->current_chapter, 0, sizeof(*p->current_chapter));
+            /* EPUB itemref linear defaults to "yes"; only an explicit "no"
+             * removes the chapter from the reading order. */
+            p->current_chapter->linear = true;
         }
     } else if (strcmp(name, "navMap") == 0) {
         p->in_nav_map = true;
@@ -143,7 +147,7 @@ static void epub_xml_start(void *user_data, const char *name, const char **atts)
             if (strcmp(attr_name, "idref") == 0) {
                 strlcpy(p->current_chapter->id, attr_value, sizeof(p->current_chapter->id));
             } else if (strcmp(attr_name, "linear") == 0) {
-                p->current_chapter->linear = (strcmp(attr_value, "yes") == 0);
+                p->current_chapter->linear = (strcasecmp(attr_value, "no") != 0);
             }
         } else if (p->in_nav_point && p->in_nav_content) {
             if (strcmp(attr_name, "src") == 0) {
@@ -477,37 +481,8 @@ static char *epub_read_item_text(epub_t *epub, const char *href,
     return text;
 }
 
-/** Map each TOC href onto its spine index so `epub toc <n>` can jump, and
- *  give a chapter the TOC label when the OPF had no title for it. */
-static void epub_toc_link_spine(epub_t *epub)
-{
-    for (int i = 0; i < epub->toc_count; i++) {
-        const char *href = epub->toc[i].href;
-
-        while (*href == '.') {
-            href++;
-        }
-        if (*href == '/') {
-            href++;
-        }
-        for (int s = 0; s < epub->spine_count; s++) {
-            const char *spine_href = epub->spine[s].href;
-
-            if (strcasecmp(spine_href, href) == 0 ||
-                (strlen(spine_href) > strlen(href) &&
-                 strcasecmp(spine_href + strlen(spine_href) - strlen(href),
-                            href) == 0)) {
-                epub->toc[i].chapter_index = s;
-                if (epub->spine[s].title[0] == '\0' &&
-                    epub->toc[i].label[0] != '\0') {
-                    strlcpy(epub->spine[s].title, epub->toc[i].label,
-                            sizeof(epub->spine[s].title));
-                }
-                break;
-            }
-        }
-    }
-}
+/* TOC-to-spine linking lives in epub_nav_core.h (one pure implementation,
+ * shared with the host gate and the unit suite). */
 
 /** Load the table of contents: NCX first (EPUB2), then nav.xhtml (EPUB3).
  *
@@ -550,7 +525,8 @@ static void epub_load_toc(epub_t *epub)
         }
     }
     if (epub->toc_count > 0) {
-        epub_toc_link_spine(epub);
+        (void)epub_toc_link_spine(epub->toc, epub->toc_count,
+                                  epub->spine, epub->spine_count);
     }
 }
 
@@ -705,135 +681,39 @@ esp_err_t epub_get_manifest_item(const epub_handle_t *handle, int index,
 
 esp_err_t epub_next_chapter(epub_handle_t *handle)
 {
-    if (!handle || handle->current_spine_index >= handle->spine_count - 1) return ESP_ERR_INVALID_STATE;
-    handle->current_spine_index++;
+    int target;
+
+    if (handle == NULL) return ESP_ERR_INVALID_ARG;
+    target = epub_nav_step(handle->current_spine_index, handle->spine_count, 1);
+    if (target < 0) return ESP_ERR_INVALID_STATE;
+    handle->current_spine_index = target;
     return ESP_OK;
 }
 
 esp_err_t epub_prev_chapter(epub_handle_t *handle)
 {
-    if (!handle || handle->current_spine_index <= 0) return ESP_ERR_INVALID_STATE;
-    handle->current_spine_index--;
+    int target;
+
+    if (handle == NULL) return ESP_ERR_INVALID_ARG;
+    target = epub_nav_step(handle->current_spine_index, handle->spine_count, -1);
+    if (target < 0) return ESP_ERR_INVALID_STATE;
+    handle->current_spine_index = target;
     return ESP_OK;
 }
 
 esp_err_t epub_goto_toc_entry(epub_handle_t *handle, int toc_index)
 {
-    if (!handle || toc_index < 0 || toc_index >= handle->toc_count) return ESP_ERR_INVALID_ARG;
+    int target;
 
-    epub_toc_entry_t *toc = &handle->toc[toc_index];
-    if (toc->chapter_index < 0) return ESP_ERR_INVALID_STATE;
-
-    return epub_set_chapter(handle, toc->chapter_index);
+    if (handle == NULL || toc_index < 0 || toc_index >= handle->toc_count) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    target = epub_toc_target(handle->toc, handle->toc_count,
+                             handle->spine, handle->spine_count, toc_index);
+    if (target < 0) return ESP_ERR_INVALID_STATE;
+    return epub_set_chapter(handle, target);
 }
 
-esp_err_t epub_render_chapter(const epub_handle_t *handle,
-                              char *out_buf,
-                              size_t buf_size,
-                              size_t *out_len)
-{
-    if (!handle || handle->current_spine_index < 0) return ESP_ERR_INVALID_STATE;
-
-    const epub_chapter_t *ch = &handle->spine[handle->current_spine_index];
-    if (!ch || !ch->href[0]) return ESP_ERR_INVALID_STATE;
-
-    /* Build full path to chapter HTML */
-    char chapter_path[EPUB_PATH_MAX];
-    if (!epub_resolve_href(handle->opf_dir, ch->href, chapter_path, sizeof(chapter_path))) {
-        return ESP_FAIL;
-    }
-
-    /* Extract chapter HTML to temp file */
-    zip_entry_t entry;
-    if (zip_find_entry(((epub_t *)handle)->zip_handle, chapter_path, &entry) != ESP_OK) {
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    char tmp_path[256];
-    snprintf(tmp_path, sizeof(tmp_path), "%s/chapter.html", ((epub_t *)handle)->temp_dir);
-    if (zip_extract_entry(((epub_t *)handle)->zip_handle, &entry, tmp_path) != ESP_OK) {
-        return ESP_FAIL;
-    }
-
-    /* Read HTML file */
-    FILE *f = fopen(tmp_path, "r");
-    if (!f) return ESP_FAIL;
-
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (len <= 0 || len > P4_CONFIG_HTML_RENDER_MAX_BYTES) { fclose(f); return ESP_FAIL; }
-
-    char *html = malloc(len + 1);
-    if (!html) { fclose(f); return ESP_ERR_NO_MEM; }
-    size_t read = fread(html, 1, len, f);
-    fclose(f);
-    html[read] = '\0';
-
-    /* Render HTML to ANSI */
-    size_t len_out = html_render_ansi(html, out_buf, buf_size);
-    free(html);
-
-    if (out_len) *out_len = len_out;
-    return (len_out < buf_size || out_buf == NULL) ? ESP_OK : ESP_ERR_NO_MEM;
-}
-
-esp_err_t epub_extract_resource(const epub_handle_t *handle,
-                                const char *href,
-                                const char *dest_path)
-{
-    if (!handle || !href || !dest_path) return ESP_ERR_INVALID_ARG;
-
-    char resource_path[EPUB_PATH_MAX];
-    if (!epub_resolve_href(handle->opf_dir, href, resource_path, sizeof(resource_path))) {
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    void *zip = ((epub_t *)handle)->zip_handle;
-    zip_entry_t entry;
-    if (zip_find_entry(((epub_t *)handle)->zip_handle, resource_path, &entry) != ESP_OK) {
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    return zip_extract_entry(zip, &entry, dest_path);
-}
-
-bool epub_resolve_href(const char *opf_dir, const char *href,
-                       char *out_path, size_t out_size)
-{
-    if (!opf_dir || !href || !out_path) return false;
-
-    if (href[0] == '/') {
-        /* Absolute within archive - not typical for EPUB */
-        return false;
-    }
-
-    char base[EPUB_PATH_MAX];
-    if (opf_dir && opf_dir[0]) {
-        snprintf(base, sizeof(base), "%s/", opf_dir);
-    } else {
-        base[0] = '\0';
-    }
-
-    /* Handle relative paths with ../ etc. */
-    char resolved[EPUB_PATH_MAX];
-    const char *src = href;
-    char *dst = resolved;
-
-    while (*src) {
-        if (src[0] == '.' && src[1] == '.' && (src[2] == '/' || src[2] == '\0')) {
-            /* Go up one directory */
-            char *last_slash = strrchr(resolved, '/');
-            if (last_slash) *last_slash = '\0';
-            src += (src[2] == '/') ? 3 : 2;
-        } else if (src[0] == '.' && (src[1] == '/' || src[1] == '\0')) {
-            src += (src[1] == '/') ? 2 : 1;
-        } else {
-            *dst++ = *src++;
-        }
-    }
-    *dst = '\0';
-
-    snprintf(out_path, out_size, "%s%s", base, resolved);
-    return true;
-}
+/* epub_render_chapter(), epub_extract_resource() and epub_resolve_href() are
+ * defined once, in epub_render.c. Keeping a second copy here used to duplicate
+ * three symbols at link time; the render/resolve path now has one owner. */

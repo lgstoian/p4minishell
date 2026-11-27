@@ -235,6 +235,43 @@ GATES: Tuple[Gate, ...] = (
          ("make_native_payload.py", "verify", "--in",
           "tools/host/fixtures/native/demo.P4X", "--pub",
           "tools/host/fixtures/native/testkey.pub.bin"), "proof"),
+    # P4Sync desktop client: wraps the existing USB harness; no firmware changes.
+    Gate("p4sync", "P4Sync bridge/CLI board-free gate",
+         ("p4sync_gate.py", "--check"), "proof",
+         "JSON bridge + full agent CLI over the one harness; mock mode, "
+         "marker/framing contract and incremental plan - no board required"),
+    Gate("p4sync_canary", "P4Sync guard canary",
+         ("p4sync_gate.py", "--self-test"), "selftest"),
+    # Unified read-only OS subsystem facade (delegates to existing owners).
+    Gate("os", "OS subsystem facade", ("host_os_gate.py", "--check"), "proof",
+         "real pure C facade over existing accessors: pm/drv/io/fs/disk/net/"
+         "mem/sec/ver; explicit unavailable, no second driver"),
+    Gate("os_canary", "OS facade guard canary",
+         ("host_os_gate.py", "--self-test"), "selftest"),
+    # Power/idle policy compiled from shipped sources against mock board state.
+    Gate("power", "Power and sleep policy", ("host_power_gate.py", "--check"),
+         "proof", "real power_commands.c + header_refresh.c: clamp, wake "
+         "arm/disarm balance, idle-off/clock cadence, 4 board profiles"),
+    Gate("power_canary", "Power policy guard canary",
+         ("host_power_gate.py", "--self-test"), "selftest"),
+    # One-codec audio engine: real mixer compiled and rendered offline.
+    Gate("audio", "Unified audio engine", ("host_audio_gate.py", "--check"),
+         "proof", "real audio_engine.c: Q16 mixer, ADSR, sequencer, buses, "
+         "ducking, byte-exact PCM, no second codec"),
+    Gate("audio_canary", "Audio engine guard canary",
+         ("host_audio_gate.py", "--self-test"), "selftest"),
+    # Frame-sequence video / EPUB / archive: real decoder + one sampler.
+    Gate("video", "Video, EPUB and archive cores", ("host_video_gate.py", "--check"),
+         "proof", "one imagefile decoder + one TUI sampler, bounded fps/loop, "
+         "real NCX/nav TOC, single USTAR/CRC core"),
+    Gate("video_canary", "Video gate guard canary",
+         ("host_video_gate.py", "--self-test"), "selftest"),
+    # Fixed-point 3D engine: real gfx3d core rendered through gfx_surface.
+    Gate("engine3d", "Fixed-point 3D engine", ("host_engine3d_gate.py", "--check"),
+         "proof", "real gfx3d core: Q16 math, camera/projection, backface "
+         "cull, depth sort, one gfx_surface raster path, one DOS palette"),
+    Gate("engine3d_canary", "3D engine guard canary",
+         ("host_engine3d_gate.py", "--self-test"), "selftest"),
 )
 GATE_BY_ID: Dict[str, Gate] = {gate.gid: gate for gate in GATES}
 SELFTEST_IDS = tuple(g.gid for g in GATES if g.group == "selftest")

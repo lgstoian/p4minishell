@@ -1,0 +1,206 @@
+{
+  "tag": "os-gate-v1",
+  "cases": [
+    {
+      "name": "pm.status",
+      "argv": ["os", "pm", "status", "/b"],
+      "area": "pm",
+      "mode": "status",
+      "bare": true,
+      "rc": 0,
+      "status": "ok",
+      "fields": [
+        {"key": "os.pm.tasks", "value": "17", "available": true, "expected": "os.pm.tasks=17"},
+        {"key": "os.pm.bg_used", "value": "2", "available": true, "expected": "os.pm.bg_used=2"},
+        {"key": "os.pm.bg_total", "value": "3", "available": true, "expected": "os.pm.bg_total=3"}
+      ]
+    },
+    {
+      "name": "pm.list",
+      "argv": ["os", "PM", "LIST"],
+      "area": "pm",
+      "mode": "list",
+      "bare": false,
+      "rc": 0,
+      "status": "ok",
+      "fields": [
+        {"key": "os.pm.tasks", "value": "21", "available": true, "expected": "os.pm.tasks=21"},
+        {"key": "os.pm.slot", "value": "0=used", "available": true, "expected": "os.pm.slot=0=used"},
+        {"key": "os.pm.slot", "value": "1=free", "available": true, "expected": "os.pm.slot=1=free"}
+      ]
+    },
+    {
+      "name": "drv.status",
+      "argv": ["os", "drv", "status", "/b"],
+      "area": "drv",
+      "mode": "status",
+      "bare": true,
+      "rc": 0,
+      "status": "ok",
+      "fields": [
+        {"key": "os.drv.board", "value": "jc1060p470c", "available": true, "expected": "os.drv.board=jc1060p470c"},
+        {"key": "os.drv.gpio_reserved", "value": "owner=periph_commands (read-only)", "available": true, "expected": "os.drv.gpio_reserved=owner=periph_commands (read-only)"},
+        {"key": "os.drv.camera", "value": "no", "available": true, "expected": "os.drv.camera=no"},
+        {"key": "os.drv.imu", "value": "yes", "available": true, "expected": "os.drv.imu=yes"}
+      ]
+    },
+    {
+      "name": "io.list",
+      "argv": ["os", "io", "list", "/b"],
+      "area": "io",
+      "mode": "list",
+      "bare": true,
+      "rc": 0,
+      "status": "ok",
+      "fields": [
+        {"key": "os.io.sd", "value": "mounted", "available": true, "expected": "os.io.sd=mounted"},
+        {"key": "os.io.userial", "value": "open", "available": true, "expected": "os.io.userial=open"},
+        {"key": "os.io.keyboard", "value": "usb-host", "available": true, "expected": "os.io.keyboard=usb-host"},
+        {"key": "os.io.usb", "value": "0=connected,mounted", "available": true, "expected": "os.io.usb=0=connected,mounted"}
+      ]
+    },
+    {
+      "name": "fs.free",
+      "argv": ["os", "fs", "free", "/b"],
+      "area": "fs",
+      "mode": "free",
+      "bare": true,
+      "rc": 0,
+      "status": "ok",
+      "fields": [
+        {"key": "os.fs.sd", "value": "mounted", "available": true, "expected": "os.fs.sd=mounted"},
+        {"key": "os.fs.free_bytes", "value": "1048576", "available": true, "expected": "os.fs.free_bytes=1048576"},
+        {"key": "os.fs.total_bytes", "value": "4194304", "available": true, "expected": "os.fs.total_bytes=4194304"}
+      ]
+    },
+    {
+      "name": "net.unavailable",
+      "argv": ["os", "net", "status", "/b"],
+      "area": "net",
+      "mode": "status",
+      "bare": true,
+      "rc": 0,
+      "status": "unavailable",
+      "fields": [
+        {"key": "os.net.host_ops", "value": null, "available": false, "expected": "os.net.host_ops=unavailable"},
+        {"key": "os.net.wifi_state", "value": "STA", "available": false, "expected": "os.net.wifi_state=unavailable"},
+        {"key": "os.net.connected", "value": "yes", "available": false, "expected": "os.net.connected=unavailable"}
+      ]
+    },
+    {
+      "name": "mem.status",
+      "argv": ["os", "mem", "status", "/b"],
+      "area": "mem",
+      "mode": "status",
+      "bare": true,
+      "rc": 0,
+      "status": "ok",
+      "fields": [
+        {"key": "os.mem.internal_free", "value": "123456", "available": true, "expected": "os.mem.internal_free=123456"},
+        {"key": "os.mem.psram_free", "value": "4096", "available": true, "expected": "os.mem.psram_free=4096"},
+        {"key": "os.mem.himem", "value": "0=0", "available": true, "expected": "os.mem.himem=0=0"}
+      ]
+    },
+    {
+      "name": "disk.list",
+      "argv": ["os", "disk", "list", "/b"],
+      "area": "disk",
+      "mode": "list",
+      "bare": true,
+      "rc": 0,
+      "status": "ok",
+      "fields": [
+        {"key": "os.disk.sd", "value": "present", "available": true, "expected": "os.disk.sd=present"},
+        {"key": "os.disk.usb", "value": "0=absent", "available": true, "expected": "os.disk.usb=0=absent"}
+      ]
+    },
+    {
+      "name": "sec.status",
+      "argv": ["os", "sec", "status", "/b"],
+      "area": "sec",
+      "mode": "status",
+      "bare": true,
+      "rc": 0,
+      "status": "ok",
+      "fields": [
+        {"key": "os.sec.locked", "value": "no", "available": true, "expected": "os.sec.locked=no"},
+        {"key": "os.sec.private", "value": "allowed", "available": true, "expected": "os.sec.private=allowed"},
+        {"key": "os.sec.pkg_key", "value": "a1b2c3", "available": true, "expected": "os.sec.pkg_key=a1b2c3"}
+      ]
+    },
+    {
+      "name": "pwr.status",
+      "argv": ["os", "pwr", "status", "/b"],
+      "area": "pwr",
+      "mode": "status",
+      "bare": true,
+      "rc": 0,
+      "status": "ok",
+      "fields": [
+        {"key": "os.pwr.pm", "value": "enabled", "available": true, "expected": "os.pwr.pm=enabled"},
+        {"key": "os.pwr.light_sleep", "value": "off", "available": true, "expected": "os.pwr.light_sleep=off"},
+        {"key": "os.pwr.idle_timeout_s", "value": "300", "available": true, "expected": "os.pwr.idle_timeout_s=300"},
+        {"key": "os.pwr.ms_to_idle_off", "value": "120000", "available": true, "expected": "os.pwr.ms_to_idle_off=120000"},
+        {"key": "os.pwr.display", "value": "on", "available": true, "expected": "os.pwr.display=on"},
+        {"key": "os.pwr.battery_mv", "value": "4120", "available": true, "expected": "os.pwr.battery_mv=4120"},
+        {"key": "os.pwr.battery_pct", "value": "87", "available": true, "expected": "os.pwr.battery_pct=87"},
+        {"key": "os.pwr.wifi", "value": "connected", "available": true, "expected": "os.pwr.wifi=connected"},
+        {"key": "os.pwr.wake_gpio", "value": "GPIO12", "available": true, "expected": "os.pwr.wake_gpio=GPIO12"},
+        {"key": "os.pwr.wake_level", "value": "high", "available": true, "expected": "os.pwr.wake_level=high"},
+        {"key": "os.pwr.touch_int_gpio", "value": "GPIO23", "available": true, "expected": "os.pwr.touch_int_gpio=GPIO23"},
+        {"key": "os.pwr.keyboard_int_gpio", "value": "none", "available": true, "expected": "os.pwr.keyboard_int_gpio=none"},
+        {"key": "os.pwr.deep_gpio_eligible", "value": "no", "available": true, "expected": "os.pwr.deep_gpio_eligible=no"},
+        {"key": "os.pwr.wake_cause", "value": "timer", "available": true, "expected": "os.pwr.wake_cause=timer"},
+        {"key": "os.pwr.wake_sources", "value": "timer,GPIO12,touch GPIO23 (deep: timer only)", "available": true, "expected": "os.pwr.wake_sources=timer,GPIO12,touch GPIO23 (deep: timer only)"}
+      ]
+    },
+    {
+      "name": "pwr.battery_unavailable",
+      "argv": ["os", "pwr", "/b"],
+      "area": "pwr",
+      "mode": "status",
+      "bare": true,
+      "rc": 0,
+      "status": "unavailable",
+      "fields": [
+        {"key": "os.pwr.battery_mv", "value": "0", "available": false, "expected": "os.pwr.battery_mv=unavailable"},
+        {"key": "os.pwr.battery_pct", "value": "0", "available": false, "expected": "os.pwr.battery_pct=unavailable"}
+      ]
+    },
+    {
+      "name": "ver",
+      "argv": ["os", "ver", "/b"],
+      "area": "ver",
+      "mode": "status",
+      "bare": true,
+      "rc": 0,
+      "status": "ok",
+      "fields": [
+        {"key": "os.ver.version", "value": "v1.6.0", "available": true, "expected": "os.ver.version=v1.6.0"},
+        {"key": "os.ver.abi", "value": "applib-1", "available": true, "expected": "os.ver.abi=applib-1"},
+        {"key": "os.ver.board", "value": "jc1060p470c", "available": true, "expected": "os.ver.board=jc1060p470c"}
+      ]
+    },
+    {
+      "name": "usage.unknown_area",
+      "argv": ["os", "bogus"],
+      "area": "invalid",
+      "mode": "status",
+      "bare": false,
+      "rc": 2,
+      "status": "ok",
+      "fields": []
+    },
+    {
+      "name": "mode.rejected_net_list",
+      "argv": ["os", "net", "list"],
+      "area": "net",
+      "mode": "list",
+      "bare": false,
+      "rc": 0,
+      "mode_allowed": false,
+      "status": "ok",
+      "fields": []
+    }
+  ]
+}

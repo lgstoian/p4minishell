@@ -99,6 +99,8 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../components/imagefmt
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/db
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/alarm
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/archive
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/video
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/gfx3d
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/usb
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/c6ota
 ${CMAKE_CURRENT_SOURCE_DIR}/../components/camera

@@ -37,8 +37,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "tui.h"    /* tui_cell_t, gfx_surface_t, tui_rgb_to_dos */
-#include "ansi.h"   /* ansi_image_glyph, ANSI_IMAGE_RAMP_LAST: the ONE ramp */
+#include "tui.h"           /* tui_cell_t, gfx_surface_t, tui_rgb_to_dos */
+#include "ansi.h"          /* ansi_image_glyph, ANSI_IMAGE_RAMP_LAST: the ONE ramp */
+#include "ansi_palette.h"  /* SH_BOX_* CP437 glyphs: the ONE box vocabulary */
 
 #ifdef __cplusplus
 extern "C" {
@@ -394,6 +395,123 @@ static inline size_t tui_frame_render_runs(const tui_frame_t *f, int row1,
 }
 
 /* ========================================================================
+ * MULTITASKING: edge-swipe predicate + DOS app switcher frame
+ * ========================================================================
+ * The TUI touch callback already owns press/move/release. It asks THIS pure
+ * predicate whether a stroke was a bottom-left edge swipe, then calls the one
+ * registered session-switch handler. No second gesture engine, and the host
+ * modal gate drives the identical function with mock pointer vectors.
+ */
+
+/**
+ * @brief True for a bottom-left edge swipe: press in the bottom-left quarter
+ * of the panel, then travel right and up past a quarter of each axis.
+ *
+ * Pure: no LVGL, display or allocation. @p w/@p h are logical display pixels.
+ */
+static inline bool tui_edge_swipe_bottom_left(int x0, int y0, int x1, int y1,
+                                               int w, int h)
+{
+    int dx;
+    int dy;
+
+    if (w < 40 || h < 24) {
+        return false;
+    }
+    if (x0 < 0 || x0 > w / 4 || y0 < h * 3 / 4 || y0 >= h) {
+        return false;
+    }
+    dx = x1 - x0;
+    dy = y1 - y0;
+    return dx >= w / 4 && dy <= -h / 4;
+}
+
+/** Bounded ASCII text writer for the switcher; every cell goes through the
+ *  ONE tui_frame_set() cell writer. Pure. */
+static inline void tui_frame_switcher_text(tui_frame_t *f, int col, int row,
+                                            const char *text, int max_chars,
+                                            uint8_t fg, uint8_t bg, uint8_t attr)
+{
+    char ch[2] = { '\0', '\0' };
+    int i = 0;
+
+    if (!tui_frame_valid(f) || text == NULL || max_chars <= 0) return;
+    for (; *text != '\0' && i < max_chars; text++, i++) {
+        ch[0] = *text;
+        tui_frame_set(f, col + i, row, ch, fg, bg, attr);
+    }
+}
+
+/**
+ * @brief Draw the DOS-style app switcher into a frame (1-based, 80x25 box).
+ *
+ * The box is clipped to the bound grid, so a narrower live panel cannot clip
+ * a cell. @p names are in from-top order; @p focus is the from-top index of
+ * the highlighted session. Uses only the one cell writer / one CP437 palette.
+ * Pure; the firmware wrapper in tui.c flushes once through tui_flush().
+ */
+static inline void tui_frame_draw_app_switcher(tui_frame_t *f,
+                                               const char *const *names,
+                                               int count, int focus)
+{
+    const int bx = 8;
+    const int by = 3;
+    const int bw = 64;
+    const int bh = 19;
+    int c;
+    int r;
+    int i;
+    char line[64];
+
+    if (!tui_frame_valid(f)) return;
+
+    /* Box frame: top/bottom rails and both sides, single CP437 line glyphs. */
+    tui_frame_set(f, bx, by, SH_BOX_TL, 7, 1, 0);
+    tui_frame_set(f, bx + bw - 1, by, SH_BOX_TR, 7, 1, 0);
+    tui_frame_set(f, bx, by + bh - 1, SH_BOX_BL, 7, 1, 0);
+    tui_frame_set(f, bx + bw - 1, by + bh - 1, SH_BOX_BR, 7, 1, 0);
+    for (c = bx + 1; c < bx + bw - 1; c++) {
+        tui_frame_set(f, c, by, SH_BOX_H, 7, 1, 0);
+        tui_frame_set(f, c, by + bh - 1, SH_BOX_H, 7, 1, 0);
+    }
+    for (r = by + 1; r < by + bh - 1; r++) {
+        tui_frame_set(f, bx, r, SH_BOX_V, 7, 1, 0);
+        tui_frame_set(f, bx + bw - 1, r, SH_BOX_V, 7, 1, 0);
+    }
+
+    {
+        const char *title = " P4MiniShell APP SWITCHER ";
+        int title_len = (int)strlen(title);
+
+        tui_frame_set(f, bx + 2, by, SH_BOX_L, 7, 1, 0);
+        tui_frame_switcher_text(f, bx + 3, by, title, title_len, 15, 1, 1);
+        tui_frame_set(f, bx + 3 + title_len, by, SH_BOX_R, 7, 1, 0);
+    }
+
+    /* Up to eight sessions: number, name and a bold focus arrow. */
+    for (i = 0; i < 8; i++) {
+        bool focused = (i == focus);
+        uint8_t fg = focused ? 14 : 7;
+        uint8_t attr = focused ? 1 : 0;
+        const char *name = (names != NULL && i < count && names[i] != NULL)
+                           ? names[i] : "";
+
+        r = by + 2 + i;
+        tui_frame_set(f, bx + 1, r, focused ? ">" : " ", fg, 1, attr);
+        snprintf(line, sizeof(line), "%2d  %-32s", i + 1, name);
+        tui_frame_switcher_text(f, bx + 3, r, line, bw - 5, fg, 1, attr);
+    }
+    if (count <= 0) {
+        tui_frame_switcher_text(f, bx + 3, by + 2, "(no sessions)",
+                                bw - 5, 8, 1, 0);
+    }
+
+    tui_frame_switcher_text(f, bx + 2, by + bh - 2,
+                            " Alt+Tab / bottom-left swipe: next app   Esc: close ",
+                            bw - 4, 8, 1, 0);
+}
+
+/* ========================================================================
  * COLOUR: 24-bit / 256 mapped through the ONE DOS palette
  * ======================================================================== */
 
@@ -480,7 +598,10 @@ static inline void tui_sample_image_cells(int x, int y, int w, int h,
             g = ((px >> 5) & 0x3F) << 2;
             b = (px & 0x1F) << 3;
             rgb = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
-            lum = (r * 30 + g * 59 + b * 11) / 100;
+            /* RGB565 white is 248/252/248, not 255/255/255. Normalise by the
+             * weighted maximum a 5/6/5 pixel can hold so white reaches the top
+             * ramp glyph instead of stopping one level short. */
+            lum = (r * 30 + g * 59 + b * 11) * 255 / 25036;
             level = lum * ANSI_IMAGE_RAMP_LAST / 255;
             if (level < 0) level = 0;
             if (level > ANSI_IMAGE_RAMP_LAST) level = ANSI_IMAGE_RAMP_LAST;

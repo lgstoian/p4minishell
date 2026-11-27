@@ -1,3 +1,47 @@
 launch PALMTOP
 [M-PALM]
-title: set to 'Palmtop'
+title: set to 'PalmTop'
+[M-RICH-PALM] conversion language tour
+[M-RICH-PALM-F] cNf=N
+PUNIT=mm
+[M-RICH-PALM-K] c=celsius
+[M-RICH-PALM-K] f=fahrenheit
+[M-RICH-PALM-S] pad=mm......
+DOS_THEME=ice
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PBG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PBG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PBG=N
+PACC=N
+pipe: at most N stages are supported
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PBG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PBG=N
+PACC=N
+[M-DOS-PALMTOP] screen=PALM-DESK panels=N head="PALMTOP" theme=ice bars=N table=Y spark=N status=Y

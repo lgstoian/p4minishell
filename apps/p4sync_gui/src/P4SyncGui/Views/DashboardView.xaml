@@ -1,0 +1,57 @@
+<UserControl x:Class="P4SyncGui.Views.DashboardView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel>
+        <TextBlock Text="Dashboard" Style="{StaticResource PageTitle}" />
+        <TextBlock Text="Read-only `sync status` snapshot: protocol tag, board, SD/lock state, transfer magics and byte limits."
+                   Style="{StaticResource SubTitle}" Margin="0,4,0,18" />
+
+        <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+            <StackPanel>
+                <DockPanel>
+                    <TextBlock Text="Capability handshake" Style="{StaticResource SectionTitle}" DockPanel.Dock="Left" />
+                    <Button Content="Refresh status" DockPanel.Dock="Right" HorizontalAlignment="Right"
+                            Command="{Binding RefreshCommand}" IsEnabled="{Binding App.IsIdle}"
+                            Style="{StaticResource PrimaryButton}" AutomationProperties.Name="Refresh capability snapshot" />
+                </DockPanel>
+                <Border CornerRadius="8" Padding="12,9" Background="{DynamicResource SurfaceAltBrush}">
+                    <TextBlock Text="{Binding VersionBanner}" TextWrapping="Wrap" FontWeight="SemiBold">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{DynamicResource SuccessBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasMismatch}" Value="True">
+                                        <Setter Property="Foreground" Value="{DynamicResource ErrorBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Border>
+                <TextBlock Margin="0,12,0,0" Style="{StaticResource SubTitle}"
+                           Text="A version mismatch refuses every device operation; no framing or capability is guessed." />
+            </StackPanel>
+        </Border>
+
+        <Border Style="{StaticResource Card}">
+            <StackPanel>
+                <TextBlock Text="Snapshot fields" Style="{StaticResource SectionTitle}" />
+                <ListBox ItemsSource="{Binding Snapshot.Capabilities}" MinHeight="120" MaxHeight="360"
+                         AutomationProperties.Name="Capability key and value rows">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="4,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="230" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding Key}" Foreground="{DynamicResource MutedBrush}" Grid.Column="0" />
+                                <TextBlock Text="{Binding Value}" Grid.Column="1" FontWeight="SemiBold" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

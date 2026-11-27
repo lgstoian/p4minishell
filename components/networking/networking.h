@@ -253,6 +253,10 @@ typedef struct {
  */
 esp_err_t networking_http_get(const char *url, networking_http_result_t *result);
 
+/** GET with a caller-supplied body cap (used by the browser's bounded image fetch). */
+esp_err_t networking_http_get_bounded(const char *url, size_t max_bytes,
+                                      networking_http_result_t *result);
+
 /** Free a body returned by `networking_http_get()`. Safe on a zeroed result. */
 void networking_http_result_free(networking_http_result_t *result);
 

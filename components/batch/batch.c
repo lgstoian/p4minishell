@@ -2975,9 +2975,12 @@ void shell_command_choice(int argc, char **argv)
                     default_key = timeout_key;
                     has_timeout_default = true;
 
-                    if (seconds > 0) {
-                        timeout_ms = (uint32_t)seconds * 1000U;
-                    }
+                    /* `/T:c,0` is a non-blocking poll, not "no timeout":
+                     * pdMS_TO_TICKS(0) makes xQueueReceive return immediately
+                     * and we fall through to the /T default key the same tick.
+                     * Leaving the 10 s default here froze tight game loops
+                     * (BOUNCE) that poll keys once per frame. */
+                    timeout_ms = (seconds > 0) ? (uint32_t)seconds * 1000U : 0U;
                 }
                 continue;
             }
@@ -4275,6 +4278,53 @@ void shell_execute_pipe(char *command)
  * ======================================================================== */
 
 /**
+ * Drain one `try`/`finally` scope at a frame unwind point.
+ *
+ * The scope stack lives in the existing trap state (see batch_trap.c), so it
+ * follows the foreground/background slot automatically. Each call pops one
+ * scope LIFO and, when it has a cleanup label, seeks the frame to it through
+ * the same label table and frame seek `goto` uses - no second control-flow
+ * path. A cleanup cannot swallow the code that caused the unwind: the first
+ * call remembers that code and the final call restores it (unless the cleanup
+ * explicitly set a non-zero one). Returns true when another pass is needed.
+ */
+static bool batch_try_unwind_next(shell_batch_frame_t *frame)
+{
+    batch_try_state_t *state = batch_try_state();
+    char cleanup[P4_CONFIG_ENV_NAME_BYTES];
+    long label_pos;
+
+    if (state == NULL || state->depth <= 0) {
+        if (state != NULL && state->unwinding) {
+            batch_set_errorlevel((uint8_t)batch_try_final_errorlevel(
+                state->unwind_errorlevel, batch_get_errorlevel()));
+            state->unwinding = false;
+        }
+        return false;
+    }
+    if (!state->unwinding) {
+        state->unwinding = true;
+        state->unwind_errorlevel = batch_get_errorlevel();
+    }
+    (void)batch_try_pop(state, NULL, 0, cleanup, sizeof(cleanup));
+    if (cleanup[0] == '\0') {
+        return true;
+    }
+    /* The label table stores names without the leading colon, exactly like
+     * the pending-goto slot; reuse that normalisation rather than a new one. */
+    if (cleanup[0] == ':') {
+        memmove(cleanup, cleanup + 1, strlen(cleanup));
+    }
+    label_pos = shell_find_label_pos(frame, cleanup);
+    if (label_pos < 0) {
+        shell_transcript_appendf("finally: label not found - %s\n", cleanup);
+        return true;
+    }
+    shell_frame_seek(frame, label_pos);
+    return true;
+}
+
+/**
  * Run one batch frame from @p path. When @p start_label is non-NULL the frame
  * begins at that `:routine` in the file (a shared-library call made by
  * `call <file.bat>::<routine>`), with an automatic environment scope so the
@@ -4546,6 +4596,11 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
                 shell_frame_seek(frame, shell_label_call_leave(frame));
                 continue;
             }
+            /* `finally` cleanup runs on end-of-frame unwind; each pass pops
+             * one scope and seeks to its label, then EOF is hit again. */
+            if (batch_try_unwind_next(frame)) {
+                continue;
+            }
             break;
         }
 
@@ -4664,6 +4719,12 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
             continue;
         }
         if (s_stop_mode != BATCH_STOP_NONE) {
+            /* `exit /b` also unwinds the frame: drain any `finally` scopes
+             * before the frame returns, preserving the exit ERRORLEVEL. */
+            if (batch_try_unwind_next(frame)) {
+                s_stop_mode = BATCH_STOP_NONE;
+                continue;
+            }
             break;
         }
 
@@ -4680,6 +4741,9 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
             s_goto_pending = false;
             if (shell_in_label_call(frame)) {
                 shell_frame_seek(frame, shell_label_call_leave(frame));
+                continue;
+            }
+            if (batch_try_unwind_next(frame)) {
                 continue;
             }
             break;

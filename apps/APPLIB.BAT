@@ -313,3 +313,18 @@ rem ---- HTTP cookie jar -------------------------------------------------
 httpget /cookie
 echo [M-FEAT-COOKIE]
 goto :eof
+
+rem ---- shared-library facade ------------------------------------------
+rem "DLL" in the `lib` verb means a shared batch/applib routine library,
+rem NEVER native code loading: there is no dlopen, no ELF parser and no
+rem second app runtime. `lib` reads sd:/APPS/LIBS.INI and calls a manifest
+rem target through the ONE `call <file.bat>::<routine>` path (isolated
+rem scope, final ERRORLEVEL propagated), so this file is a working example
+rem of a published library as well as a caller of other routines.
+rem
+rem A bundle advertises a routine with one manifest line, e.g.:
+rem   APPLIB=%APPDRIVE%/APPS/APPLIB.BAT::libinfo
+rem `lib load APPLIB` then runs just :libinfo through that one path.
+:libinfo
+echo [M-LIB-INFO] name=%APPNAME% drive=%APPDRIVE% root=%APPROOT%
+goto :eof

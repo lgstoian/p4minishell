@@ -52,13 +52,22 @@ co-processor for Wi-Fi/BLE reached over a shared SDIO transport.
                  └────────────┘                  └──────────────┘  └────────────┘
 ```
 
+The **P4Sync host companion** (agent CLI + JSON-lines bridge in
+`tools/p4sync/`, Windows WPF client in `apps/p4sync_gui/`) sits in that Host
+tools box: it consumes the same USB-Serial/JTAG harness and adds no firmware,
+serial implementation or second framing engine. The GUI is a JSON client only;
+a board-free gate pass is a pre-gate, never hardware sign-off
+([`tools/p4sync/README.md`](tools/p4sync/README.md),
+[`apps/p4sync_gui/README.md`](apps/p4sync_gui/README.md), `harness.md` §0/§2.2).
+
 The internal container view (one P4, cooperating tasks, one-way dependencies):
 
 ```
   main ─▶ command ─▶ batch ─▶ storage ─▶ shell ─▶ ansi/display/windows/header/keyboard/clock
                                                    ▲            ▲
                        (inverted via registration tables)       │
-     applib · networking · usb · c6ota · alarm · pim · editor · mcp ───┘
+     applib · networking · usb · c6ota · alarm · pim · editor · mcp
+     · gfx3d (leaf/ui) · video (leaf/media) · audio engine · archive · epub ───┘
 ```
 
 The **MCP client** (`components/mcp/`) is a leaf: JSON-RPC over the shared
@@ -84,6 +93,23 @@ existing pane/modal/event state; `components/command/modal_commands.c`
 (`mpick`/`mprog`/`mformx`/`mstack`) reuses the one modal runtime; and
 `webapp` delegates every verb to the existing HTML/CSS/DOM/JS engine. All new
 surface state stays behind those seams (ADR-15..17).
+
+**v1.6 subsystem layer additions.** `components/gfx3d/` is a **leaf/ui**
+consumer of the one `gfx_surface` rasterizer and DOS palette;
+`components/video/` is a **leaf/media** consumer of the one `imagefile` decoder
+and TUI sampler; the audio engine, archive and EPUB cores are leaves over the
+existing codec, USTAR/CRC and ZIP/HTML owners. None requires `command` or
+`main`. The new batch-callable verb bodies live in focused `components/command/`
+sources — `os_commands.c`, `power_commands.c`, `config_cmd.c`,
+`audioengine_commands.c`, `engine3d_commands.c`, `video_commands.c`,
+`reg_commands.c`, `lib_commands.c` and the extended `sync_commands.c` — and
+register through the same inverted `shell_command_ops_t` /
+`batch_command_ops_t` tables as every other family. The `os`, `reg`, `lib`,
+`engine3d` (`gfx3d`), `audioengine` (`audio mix|sfx|…`) and `video` edges are
+therefore downward inversions, never new upward includes, a second dispatcher
+or a second owner. `try`/`finally` reuse the one batch trap scope stack. See
+[`documentation.md`](documentation.md) §Expanded subsystems for each
+facade-to-owner mapping.
 
 **Visual direction (in progress, board-free).** The presentation target is a
 modern take on retro MS-DOS: an 80x25 CP437 cell grid, box-drawn panels, the

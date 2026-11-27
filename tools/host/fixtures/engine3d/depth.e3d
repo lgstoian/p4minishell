@@ -1,0 +1,21 @@
+# Depth proof: two overlapping front faces. Face 0 is near (z=-4, DOS 12),
+# face 1 is far (z=0, DOS 9). The engine must draw the far face first so the
+# near one wins the shared pixels regardless of submission order.
+canvas 64 64
+camera 0 0 -8 0 0 0 0 1 0
+project 90 1 1 1 100
+light 0 0 1 256
+mode solid cull
+mesh quad 12 6
+v -2 -2 -4
+v 2 -2 -4
+v 0 2 -4
+v -2 -2 0
+v 2 -2 0
+v 0 2 0
+c 0 12
+c 1 9
+f 0 1 2
+f 3 4 5
+end
+draw quad

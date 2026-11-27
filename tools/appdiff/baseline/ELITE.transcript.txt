@@ -1,6 +1,14 @@
 launch ELITE
 [M-ELITE]
 title: set to 'Elite'
+[M-RICH-ELITE] market language tour
+[M-RICH-ELITE-K] food=N
+[M-RICH-ELITE-K] textiles=N
+[M-RICH-ELITE-K] computers=N
+GNAME=textiles
+N
+[M-RICH-ELITE-F] cargo=N
+[M-RICH-ELITE-S] vals=N,N,N t=N pad=textiles....
 credits=N
 sys=N
 HOLD[N]=N   (xN)
@@ -14,4 +22,49 @@ sname=Lave
 mult=N
 PRICE[N]=N   (xN)
 [M-ELITE-DOCKED] Lave
+DOS_THEME=amber
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+pipe: at most N stages are supported
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+[M-DOS-ELITE] screen=ELITE-MARKET panels=N head="ELITE" theme=amber bars=N table=Y spark=N status=Y
 [M-ELITE-DONE]

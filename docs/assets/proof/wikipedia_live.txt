@@ -1,14 +1,14 @@
 URL: https://en.wikipedia.org/wiki/ESP32
 
-PS /sdcard> tui.dump cols=80 from=1 to=200
+tui.dump cols=80 from=1 to=200
 001|
 001@1-80:0
 002|
 002@1-80:0
 003|
 003@1-80:0
-004|Toggle the table of contents
-004@1-28:16 29-80:0
+PS /sdcard> 004|[ ]Toggle the table of contents
+004@1-31:16 32-80:0
 005|
 005@1-80:0
 006|
@@ -27,57 +27,57 @@ PS /sdcard> tui.dump cols=80 from=1 to=200
 012@1-5:15 6-80:0
 013|
 013@1-80:0
-014|22 languages
-014@1-12:16 13-80:0
+014|[ ]22 languages
+014@1-15:16 16-80:0
 015|
 015@1-80:0
 016|
 016@1-80:0
 017|
 017@1-80:0
-018|- العربية
+018|- ???????
 018@1-2:0 3-4:16 5-11:11 12-80:0
-019|- Català
+019|- Catal?
 019@1-2:0 3-4:16 5-10:11 11-80:0
-020|- Čeština
+020|- ?e?tina
 020@1-2:0 3-4:16 5-11:11 12-80:0
 021|- Deutsch
 021@1-2:0 3-4:16 5-11:11 12-80:0
-022|- Español
+022|- Espa?ol
 022@1-2:0 3-4:16 5-11:11 12-80:0
 023|- Eesti
 023@1-2:0 3-4:16 5-9:11 10-80:0
-024|- فارسی
+024|- ?????
 024@1-2:0 3-4:16 5-9:11 10-80:0
 025|- Suomi
 025@1-2:0 3-4:16 5-9:11 10-80:0
-026|- Français
+026|- Fran?ais
 026@1-2:0 3-4:16 5-12:11 13-80:0
-027|- עברית
+027|- ?????
 027@1-2:0 3-4:16 5-9:11 10-80:0
-028|- हिन्दी
+028|- ??????
 028@1-2:0 3-4:16 5-10:11 11-80:0
 029|- Bahasa Indonesia
 029@1-2:0 3-4:16 5-20:11 21-80:0
-030|- 日本語
+030|- ???
 030@1-2:0 3-4:16 5-7:11 8-80:0
-031|- 한국어
+031|- ???
 031@1-2:0 3-4:16 5-7:11 8-80:0
 032|- Nederlands
 032@1-2:0 3-4:16 5-14:11 15-80:0
 033|- Polski
 033@1-2:0 3-4:16 5-10:11 11-80:0
-034|- Português
+034|- Portugu?s
 034@1-2:0 3-4:16 5-13:11 14-80:0
-035|- Русский
+035|- ???????
 035@1-2:0 3-4:16 5-11:11 12-80:0
-036|- Türkçe
+036|- T?rk?e
 036@1-2:0 3-4:16 5-10:11 11-80:0
-037|- Українська
+037|- ??????????
 037@1-2:0 3-4:16 5-14:11 15-80:0
-038|- Tiếng Việt
+038|- Ti?ng Vi?t
 038@1-2:0 3-4:16 5-14:11 15-80:0
-039|- 中文
+039|- ??
 039@1-2:0 3-4:16 5-6:11 7-80:0
 040|
 040@1-80:0
@@ -117,8 +117,8 @@ PS /sdcard> tui.dump cols=80 from=1 to=200
 057@1-80:0
 058|
 058@1-80:0
-059|English
-059@1-7:16 8-80:0
+059|[ ]English
+059@1-10:16 11-80:0
 060|
 060@1-80:0
 061|
@@ -169,8 +169,8 @@ PS /sdcard> tui.dump cols=80 from=1 to=200
 083@1-80:0
 084|
 084@1-80:0
-085|Tools
-085@1-5:16 6-80:0
+085|[ ]Tools
+085@1-8:16 9-80:0
 086|
 086@1-80:0
 087|
@@ -361,42 +361,42 @@ PS /sdcard> tui.dump cols=80 from=1 to=200
 179@1-80:0
 180|
 180@1-80:0
-181|Low-cost, low-power SoC microcontrollers with Bluetooth and Wi-Fi
-181@1-65:16 66-80:0
+181|ESP-WROOM-32 module with ESP32-D0WDQ6 chip
+181@1-44:16 45-80:0
 182|
 182@1-80:0
-183|ESP-WROOM-32 module with ESP32-D0WDQ6 chip
-183@1-42:16 43-80:0
-184|
-184@1-80:0
-185|
-185@1-80:0
-186|ESP32is a family of low-cost, energy-efficientmicrocontrollersthat support both
-186@1-46:16 47-62:11 63-79:16 80-80:0
-187|Wi-FiandBluetooth. These chips feature several processing options, including
-187@1-5:11 6-8:16 9-17:11 18-77:16 78-80:0
-188|theTensilicaXtensa LX6 microprocessor available in dual-core and single-core
-188@1-3:16 4-12:11 13-77:16 78-80:0
-189|variants, the Xtensa LX7 dual-core processor, or aRISC-Vmicroprocessor. The
-189@1-50:16 51-56:11 57-76:16 77-80:0
-190|ESP32 incorporates components for wireless data communication such as built-in
-190@1-79:16 80-80:0
-191|antenna switches, an RFbalun, power amplifiers, low-noise receivers, filters,
-191@1-23:16 24-28:11 29-78:16 79-80:0
-192|and power-management modules.
-192@1-29:16 30-80:0
-193|
-193@1-80:0
-194|Typically, the ESP32 is embedded on device-specificprinted circuit boards(PCBs)
-194@1-51:16 52-73:11 74-80:16
-195|or offered as part of development kits that include a variety ofGPIOpins and
-195@1-64:16 65-68:11 69-77:16 78-80:0
-196|connectors, with configurations varying by model and manufacturer. The ESP32
-196@1-77:16 78-80:0
-197|was designed byEspressif Systemsand is manufactured byTSMCusing their 40 nm
-197@1-15:16 16-32:11 33-54:16 55-58:11 59-76:16 77-80:0
-198|process.[2]It is a successor to theESP8266microcontroller.
-198@1-8:16 9-11:11 12-35:16 36-42:11 43-58:16 59-80:0
+183|
+183@1-80:0
+184|ESP32is a family of low-cost, energy-efficientmicrocontrollersthat support both
+184@1-46:16 47-62:11 63-79:16 80-80:0
+185|Wi-FiandBluetooth. These chips feature several processing options, including the
+185@1-5:11 6-8:16 9-17:11 18-80:16
+186|TensilicaXtensa LX6 microprocessor available in dual-core and single-core
+186@1-9:11 10-74:16 75-80:0
+187|variants, the Xtensa LX7 dual-core processor, or aRISC-Vmicroprocessor. The
+187@1-50:16 51-56:11 57-76:16 77-80:0
+188|ESP32 incorporates components for wireless data communication such as built-in
+188@1-79:16 80-80:0
+189|antenna switches, an RFbalun, power amplifiers, low-noise receivers, filters,
+189@1-23:16 24-28:11 29-78:16 79-80:0
+190|and power-management modules.
+190@1-29:16 30-80:0
+191|
+191@1-80:0
+192|Typically, the ESP32 is embedded on device-specificprinted circuit boards(PCBs)
+192@1-51:16 52-73:11 74-80:16
+193|or offered as part of development kits that include a variety ofGPIOpins and
+193@1-64:16 65-68:11 69-77:16 78-80:0
+194|connectors, with configurations varying by model and manufacturer. The ESP32 was
+194@1-80:16
+195|designed byEspressif Systemsand is manufactured byTSMCusing their 40?nm process.
+195@1-11:16 12-28:11 29-50:16 51-54:11 55-80:16
+196|[2]It is a successor to theESP8266microcontroller.
+196@1-3:11 4-27:16 28-34:11 35-50:16 51-80:0
+197|
+197@1-80:0
+198|
+198@1-80:0
 199|
 199@1-80:0
 200|

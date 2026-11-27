@@ -1,0 +1,42 @@
+<Application x:Class="P4SyncGui.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:P4SyncGui.ViewModels"
+             xmlns:views="clr-namespace:P4SyncGui.Views">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/DarkTheme.xaml" />
+                <ResourceDictionary Source="Themes/Styles.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <DataTemplate DataType="{x:Type vm:DevicesViewModel}">
+                <views:DevicesView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:DashboardViewModel}">
+                <views:DashboardView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:FilesViewModel}">
+                <views:FilesView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:ScreenshotViewModel}">
+                <views:ScreenshotView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:PimViewModel}">
+                <views:PimView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:AppsViewModel}">
+                <views:AppsView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:ShellViewModel}">
+                <views:ShellView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:PlanViewModel}">
+                <views:PlanView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+                <views:SettingsView />
+            </DataTemplate>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

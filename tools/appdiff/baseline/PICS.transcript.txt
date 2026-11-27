@@ -1,3 +1,33 @@
 launch PICS
 [M-PICS]
 title: set to 'Pictures'
+DOS_THEME=mono
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PSTYLE=single
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PSTYLE=single
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PSTYLE=single
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PACC=N
+PSTYLE=single
+[M-DOS-PICS] screen=PICS-VIEWER panels=N head="PICS" theme=green bars=N table=N spark=N status=Y

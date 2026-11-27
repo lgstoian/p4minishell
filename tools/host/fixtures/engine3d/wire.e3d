@@ -1,0 +1,14 @@
+# Wireframe proof: a single white (DOS 15) front face. The one gfx line
+# primitive must leave non-black ink, while the interior stays dark.
+canvas 64 64
+camera 0 0 -8 0 0 0 0 1 0
+project 90 1 1 1 100
+light 0 0 1 256
+mode wire cull
+mesh white 15 3
+v -2 -2 0
+v 2 -2 0
+v 0 2 0
+f 0 1 2
+end
+draw white

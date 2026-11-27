@@ -47,6 +47,7 @@ typedef struct {
     char handler[TRAP_DEPTH_MAX][TRAP_NAME_BYTES];
     int events[TRAP_DEPTH_MAX];      /**< BATCH_TRAP_* bit mask per handler. */
     int level;
+    batch_try_state_t try_scopes;    /**< `try`/`finally` scopes, same slot. */
 } trap_bg_state_t;
 
 static trap_bg_state_t *s_trap_bg = NULL;
@@ -65,6 +66,114 @@ static trap_bg_state_t *trap_state(void)
     static trap_bg_state_t fg_wrap;
     return &fg_wrap;
 }
+
+batch_try_state_t *batch_try_state(void)
+{
+    return &trap_state()->try_scopes;
+}
+
+/* ========================================================================
+ * PURE `try` / `finally` SCOPE STACK
+ * ======================================================================== */
+
+void batch_try_state_init(batch_try_state_t *state)
+{
+    if (state != NULL) {
+        memset(state, 0, sizeof(*state));
+    }
+}
+
+bool batch_try_push(batch_try_state_t *state, const char *catch_label)
+{
+    int slot;
+
+    if (state == NULL || catch_label == NULL || catch_label[0] != ':') {
+        return false;
+    }
+    if (state->depth < 0 || state->depth >= BATCH_TRY_SCOPE_MAX) {
+        return false;
+    }
+    slot = state->depth++;
+    snprintf(state->catch_label[slot], TRAP_NAME_BYTES, "%s", catch_label);
+    state->finally_label[slot][0] = '\0';
+    return true;
+}
+
+bool batch_try_set_finally(batch_try_state_t *state, const char *label)
+{
+    int slot;
+
+    if (state == NULL || label == NULL || label[0] != ':' || state->depth <= 0) {
+        return false;
+    }
+    slot = state->depth - 1;
+    snprintf(state->finally_label[slot], TRAP_NAME_BYTES, "%s", label);
+    return true;
+}
+
+bool batch_try_pop(batch_try_state_t *state, char *catch_out, size_t catch_size,
+                   char *finally_out, size_t finally_size)
+{
+    int slot;
+
+    if (state == NULL || state->depth <= 0) {
+        return false;
+    }
+    slot = --state->depth;
+    if (catch_out != NULL && catch_size > 0) {
+        snprintf(catch_out, catch_size, "%s", state->catch_label[slot]);
+    }
+    if (finally_out != NULL && finally_size > 0) {
+        snprintf(finally_out, finally_size, "%s", state->finally_label[slot]);
+    }
+    state->catch_label[slot][0] = '\0';
+    state->finally_label[slot][0] = '\0';
+    return true;
+}
+
+int batch_try_depth(const batch_try_state_t *state)
+{
+    return (state != NULL) ? state->depth : 0;
+}
+
+int batch_try_final_errorlevel(int unwind_code, int cleanup_code)
+{
+    /* A cleanup that did not set a code (0) must never turn a failure into a
+     * success; an explicit non-zero code is the cleanup's own verdict. */
+    return (cleanup_code == 0) ? unwind_code : cleanup_code;
+}
+
+void shell_command_try(int argc, char **argv)
+{
+    if (argc < 2 || argv[1] == NULL || argv[1][0] != ':') {
+        shell_print_usage("Usage: try :handler   open a scoped error handler");
+        batch_set_errorlevel(2);
+        return;
+    }
+    if (!batch_try_push(batch_try_state(), argv[1])) {
+        shell_print_error("try: too many nested scopes (max %d)", BATCH_TRY_SCOPE_MAX);
+        batch_set_errorlevel(1);
+        return;
+    }
+    /* The catch half is the existing one-shot trap; no second handler path. */
+    (void)batch_trap_on_event(BATCH_TRAP_ERRORLEVEL, argv[1]);
+}
+
+void shell_command_finally(int argc, char **argv)
+{
+    if (argc < 2 || argv[1] == NULL || argv[1][0] != ':') {
+        shell_print_usage("Usage: finally :label   cleanup on frame unwind");
+        batch_set_errorlevel(2);
+        return;
+    }
+    if (!batch_try_set_finally(batch_try_state(), argv[1])) {
+        shell_print_error("finally: no active try scope");
+        batch_set_errorlevel(1);
+        return;
+    }
+    batch_set_errorlevel(0);
+}
+
 
 /* ========================================================================
  * EVENT MASK + SHARED FIRE PATH (used by /on, /raise and the frame loop)
@@ -297,4 +406,5 @@ void trap_init(void)
     } else {
         s_trap_bg = calloc(P4_CONFIG_BG_TASKS, sizeof(*s_trap_bg));
     }
+    batch_try_state_init(&trap_state()->try_scopes);
 }

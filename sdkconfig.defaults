@@ -7,6 +7,11 @@ CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 CONFIG_ESP32P4_REV_MIN_100=y
+# The opt-in signed native payload loader (components/nativeexec) needs a
+# writable + executable internal SRAM region. With the IDF default PMP IDRAM
+# split, L2MEM is not MALLOC_CAP_EXEC (DRAM cannot execute, IRAM cannot be
+# written), so the single loader path can never map even a 20-byte payload.
+CONFIG_ESP_SYSTEM_PMP_IDRAM_SPLIT=n
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_SPEED_200M=y
 CONFIG_CACHE_L2_CACHE_256KB=y

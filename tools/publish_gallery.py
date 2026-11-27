@@ -22,6 +22,13 @@ from gallery_audit import GALLERY, audit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Some files under docs/assets/apps are OWNED by a deterministic host proof
+# generator, not by a board capture. A gallery publish must never overwrite
+# them: make_gfx_proof.py --check verifies exact pixel/colour baselines, so a
+# board capture at this path silently broke the host gate. Parent owns the
+# proof; the gallery keeps every other staged capture.
+PROOF_OWNED = frozenset({"gfxtool.png"})
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -39,10 +46,15 @@ def main() -> int:
         print("publish_gallery: staged captures failed the identity audit")
         return rc
 
-    files = sorted(f for f in os.listdir(staged) if f.lower().endswith(".png"))
+    all_files = sorted(f for f in os.listdir(staged) if f.lower().endswith(".png"))
+    skipped = sorted(f for f in all_files if f in PROOF_OWNED)
+    files = [f for f in all_files if f not in PROOF_OWNED]
     if not files:
-        print("publish_gallery: staging folder is empty")
+        print("publish_gallery: staging folder has no publishable captures")
         return 1
+    if skipped:
+        print("publish_gallery: preserving proof-owned file(s): %s"
+              % ", ".join(skipped))
 
     changed = []
     for name in files:

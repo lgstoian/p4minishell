@@ -519,9 +519,20 @@ static bool s_selecting;
 static sel_range_t s_sel;
 static void (*s_link_cb)(const char *url);
 static lv_coord_t s_last_scroll;
+static lv_coord_t s_press_x;
 static lv_coord_t s_press_y;
 static int s_press_acc;
 static bool s_ignore_scroll;
+
+/* App switching: the ONE gesture -> handler seam and the transient switcher
+ * frame. The handler is registered by main (modal_session_cycle); the view is
+ * registered by modal. No tui -> modal build dependency, no second gesture
+ * engine and no second frame renderer. */
+static bool (*s_app_switch_handler)(int step) = NULL;
+static tui_cell_t *s_switcher_snapshot = NULL;  /* frame before the overlay */
+static tui_cell_t *s_switcher_overlay = NULL;   /* frame the overlay drew */
+static bool s_switcher_live = false;
+static bool s_in_switcher_render = false;
 
 bool tui_selection_copy(void);
 void tui_selection_clear(void);
@@ -574,6 +585,68 @@ static void tui_touch_scroll_rows(int rows)
     tui_flush();
 }
 
+void tui_set_app_switch_handler(bool (*handler)(int step))
+{
+    s_app_switch_handler = handler;
+}
+
+/** The overlay only writes its 80x25 box region. If every cell in that region
+ *  still matches what we drew, no app frame has replaced it and the region is
+ *  safe to restore; otherwise the app has already drawn there and wins. */
+static bool tui_switcher_untouched(void)
+{
+    int last_col = s_cols < 71 ? s_cols : 71;
+    int last_row = s_rows < 21 ? s_rows : 21;
+    int row;
+    int col;
+
+    if (s_switcher_overlay == NULL) {
+        return false;
+    }
+    for (row = 3; row <= last_row; row++) {
+        for (col = 8; col <= last_col; col++) {
+            size_t at = (size_t)(row - 1) * s_cols + (size_t)(col - 1);
+
+            if (!tui_frame_cell_eq(&s_cells[at], &s_switcher_overlay[at])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+void tui_app_switcher_render(const char *const *names, int count, int focus)
+{
+    if (!tui_frame_valid(&s_frame)) {
+        return;
+    }
+    if (!s_switcher_live && s_cells != NULL) {
+        size_t bytes = (size_t)s_rows * s_cols * sizeof(tui_cell_t);
+
+        if (s_switcher_snapshot == NULL) {
+            s_switcher_snapshot = p4heap_alloc_psram(bytes);
+        }
+        if (s_switcher_overlay == NULL) {
+            s_switcher_overlay = p4heap_alloc_psram(bytes);
+        }
+        if (s_switcher_snapshot != NULL && s_switcher_overlay != NULL) {
+            memcpy(s_switcher_snapshot, s_cells, bytes);
+            s_switcher_live = true;
+        }
+    }
+    /* One frame, one flush: the overlay is drawn by the same cell renderer
+     * as every other TUI surface, never by a second LVGL object. The guard
+     * stops tui_flush() from immediately restoring the snapshot. */
+    s_in_switcher_render = true;
+    tui_frame_draw_app_switcher(&s_frame, names, count, focus);
+    if (s_switcher_live) {
+        memcpy(s_switcher_overlay, s_cells,
+               (size_t)s_rows * s_cols * sizeof(tui_cell_t));
+    }
+    tui_flush();
+    s_in_switcher_render = false;
+}
+
 static void tui_touch_event_cb(lv_event_t *event)
 {
     lv_event_code_t code = lv_event_get_code(event);
@@ -587,6 +660,7 @@ static void tui_touch_event_cb(lv_event_t *event)
 
     switch (code) {
     case LV_EVENT_PRESSED:
+        s_press_x = p.x;
         s_press_y = p.y;
         s_press_acc = 0;
         s_last_scroll = 0;
@@ -649,6 +723,18 @@ static void tui_touch_event_cb(lv_event_t *event)
     case LV_EVENT_RELEASED:
         if (s_selecting) {
             lv_obj_set_scrollable(s_touch, true);
+        }
+        /* Bottom-left edge swipe: the SAME handler keyboard Alt+Tab calls.
+         * The pure predicate lives beside the one frame renderer, so this is
+         * an extension of the existing press/move/release path, not a second
+         * gesture engine. A selection drag or a scroll never reaches it. */
+        if (!s_selecting && s_app_switch_handler != NULL &&
+            tui_edge_swipe_bottom_left(s_press_x, s_press_y, p.x, p.y,
+                                       (int)windows_get_display_width(),
+                                       (int)windows_get_display_height())) {
+            s_app_switch_handler(1);
+            s_ignore_scroll = true;
+            break;
         }
         s_ignore_scroll = true;   /* ignore the elastic snap-back */
         break;
@@ -986,6 +1072,15 @@ void tui_refresh_fonts(void)
 void tui_deinit(void)
 {
     if (!s_active) return;
+    if (s_switcher_snapshot != NULL) {
+        heap_caps_free(s_switcher_snapshot);
+        s_switcher_snapshot = NULL;
+    }
+    if (s_switcher_overlay != NULL) {
+        heap_caps_free(s_switcher_overlay);
+        s_switcher_overlay = NULL;
+    }
+    s_switcher_live = false;
     lvgl_port_lock(0);
     windows_set_surface_layout_cb(NULL);
     tui_bg_clear();   /* delete background rectangles before their container */
@@ -1007,6 +1102,7 @@ void tui_deinit(void)
     s_sel_layer = NULL;
     s_selecting = false;
     s_last_scroll = 0;
+    s_press_x = 0;
     s_press_y = 0;
     s_press_acc = 0;
     s_ignore_scroll = true;
@@ -1061,6 +1157,17 @@ void tui_new_app_session(void)
     if (!s_active) {
         return;
     }
+    /* A fresh app frame supersedes a transient switcher overlay: drop its
+     * snapshot rather than restoring stale cells over the new app's frame. */
+    if (s_switcher_snapshot != NULL) {
+        heap_caps_free(s_switcher_snapshot);
+        s_switcher_snapshot = NULL;
+    }
+    if (s_switcher_overlay != NULL) {
+        heap_caps_free(s_switcher_overlay);
+        s_switcher_overlay = NULL;
+    }
+    s_switcher_live = false;
     /* A newly launched app owns the whole screen. Clear the page it inherits:
      * the surface is reused (destroying and recreating it flashes), so without
      * this the previous app's cells stay where the new one does not draw - and
@@ -1741,6 +1848,33 @@ void tui_flush(void)
     tui_dirty_t dirty;
 
     if (!s_cells || !s_tui_label || !tui_frame_valid(&s_frame)) return;
+    /* The app switcher is transient: only its box region was overwritten, so
+     * the next REAL app frame restores that region from the pre-overlay copy
+     * (and only if the app has not already drawn there). Cells outside the
+     * box were never touched by the overlay and are left alone. */
+    if (s_switcher_live && !s_in_switcher_render && tui_switcher_untouched()) {
+        int last_col = s_cols < 71 ? s_cols : 71;
+        int last_row = s_rows < 21 ? s_rows : 21;
+
+        for (int row = 3; row <= last_row; row++) {
+            for (int col = 8; col <= last_col; col++) {
+                size_t at = (size_t)(row - 1) * s_cols + (size_t)(col - 1);
+
+                s_cells[at] = s_switcher_snapshot[at];
+            }
+        }
+    }
+    if (s_switcher_live && !s_in_switcher_render) {
+        s_switcher_live = false;
+        if (s_switcher_snapshot != NULL) {
+            heap_caps_free(s_switcher_snapshot);
+            s_switcher_snapshot = NULL;
+        }
+        if (s_switcher_overlay != NULL) {
+            heap_caps_free(s_switcher_overlay);
+            s_switcher_overlay = NULL;
+        }
+    }
     /* Double buffer: diff presented vs working FIRST. A clean frame costs no
      * markup rebuild and no LVGL text set - one present is simply skipped. */
     dirty = tui_frame_diff(&s_frame);

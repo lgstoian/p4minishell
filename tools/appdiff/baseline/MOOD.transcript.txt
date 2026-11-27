@@ -1,4 +1,41 @@
 launch MOOD
 [M-MOOD]
 title: set to 'Mood'
+[M-RICH-MOOD] palette language tour
+[M-RICH-MOOD-K] calm=green
+[M-RICH-MOOD-K] strained=red
+MDW=mood
+[M-RICH-MOOD-F] pct=N
+[M-RICH-MOOD-S] pad=mood....
+DOS_THEME=green
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+SPX=N
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+PFG=N
+PBG=N
+PACC=N
+PSTYLE=double
+[M-DOS-MOOD] screen=MOOD-LIVE panels=N head="MOOD" theme=green bars=N table=N spark=N status=Y
 rgb: LED off

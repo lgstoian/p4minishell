@@ -130,6 +130,36 @@ These are the host-side systems behind [`AGENTS.md`](../AGENTS.md),
   tofu glyph cells, a duplicate-page signature and a clean frame that must be
   accepted). `host_all_gates.py` exposes gate ids `visual` and
   `visual_canary`. See `harness.md` §2.1.
+- `p4sync_gate.py` — P4Sync bridge/CLI **board-free gate, never hardware
+  sign-off**: `--check` drives the real `bridge.py --mock` subprocess (51
+  checks over the JSON contract, marker/framing, incremental plan and the
+  shipped CLI composition) and `--self-test` runs 18 red canaries. It opens no
+  serial port and adds no firmware; gate ids `p4sync`/`p4sync_canary` in
+  `host_all_gates.py`. See [`p4sync/README.md`](p4sync/README.md) §4.
+- `host_os_gate.py` — v1.6 board-free **`os` facade pre-gate, never hardware
+  sign-off**: compiles the pure parse/format region of the shipped
+  `components/command/os_commands.c` with mock accessor snapshots and checks
+  14 cases / 144 assertions over `os pm|drv|io|fs|disk|net|mem|sec|ver|pwr`,
+  the `/b` machine rows and the explicit `unavailable` / ERRORLEVEL contract.
+  `--self-test` runs 4 red canaries. Gate ids `os`/`os_canary`.
+- `host_power_gate.py` — v1.6 board-free **power/sleep pre-gate**: 300 checks
+  across 4 board profiles (stale deepsleep timer, wake-source leakage, honest
+  warnings, `DISPLAY_TIMEOUT` 64-bit clamp); `--self-test` runs 10 red
+  canaries. Gate ids `power`/`power_canary`.
+- `host_audio_gate.py` — v1.6 board-free **audio engine pre-gate**: 99 checks
+  over the deterministic offline PCM of the one Q16 mixer/ADSR/sequencer/SFX/
+  ducking path; `--self-test` runs 12 red canaries. Gate ids
+  `audio`/`audio_canary`.
+- `host_video_gate.py` — v1.6 board-free **video/EPUB/archive pre-gate**: 18
+  assertions over the one `imagefile` decoder, one TUI sampler, pure EPUB
+  nav/TOC core and one USTAR/CRC core; `--self-test` runs 10 red canaries. Gate
+  ids `video`/`video_canary`.
+- `host_engine3d_gate.py` — v1.6 board-free **3D engine pre-gate**: 4 fixtures /
+  41 assertions over the Q16 math and one `gfx_surface` raster path;
+  `--self-test` runs 10 red canaries. Gate ids `engine3d`/`engine3d_canary`.
+
+`python tools/host_all_gates.py` now runs **47 gates / 21 canaries**; a pass is
+a board-free pre-gate only, never hardware sign-off (`harness.md` §0/§2.2).
 
 The p4test runner also treats a zero-assertion `Checklist`/`SuiteResult` as a
 failure at run time, so a suite that asserts nothing can never report green.
@@ -351,7 +381,8 @@ holder per port.
   wiring checks; `--self-test` runs 9 red canaries; `--renderer PATH` overrides
   the ELF. The wiki PNG is a first-25-rows host proof, not live HTTPS or the
   full 2000-row device page; live input and glass taps are DEVICE-ONLY. Gate ids
-  `browser`/`browser_canary` in `host_all_gates.py`. See `harness.md` §2.2.
+  `browser`/`browser_canary` in `host_all_gates.py`. See `harness.md` §2.2 and
+  [`web.md`](../web.md) for the browser tutorial and proof origins.
 - `host_batch_run.py` — host-only **real `.bat` fixture pre-gate, never hardware
   sign-off**: runs `tools/host/fixtures/batch/HELLO.BAT` through the real
   interpreter via the standalone `test/host/main/host_batch_run.c` ELF built by
@@ -434,12 +465,15 @@ holder per port.
 - `pim_sync.py` — serial PIM sync over the `pim` verbs (PIMX framing):
   `pull db <name>|alarms <dir>`, `push`, and `sync` (newer-wins merge by
   UID into a mirror dir of per-`<uid>.vcf`/`<uid>.ics` files).
-- `p4sync/` — P4Sync USB prototype over the shared `p4test` transports
-  (handshake, file push/pull, screenshot; PIM stays with `pim_sync.py`):
-  `python tools/p4sync --port COM3 status|push|pull|shot|full-image`.
-  `full-image --mirror DIR --db NAME [--files DIR] [--shot OUT]` composes one
-  session (handshake + PIM mirror sync reusing `pim_sync` + file provisioning
-  + app inventory + shot + `image.json` manifest), nonzero on first failure.
+- `p4sync/` — P4Sync, the **host-side** desktop companion (agent CLI + JSON
+  bridge) over the shared `p4test`/`sdbridge`/`pim_sync` transports. No new
+  serial code, no second framing engine and **no firmware change**; the
+  firmware's read-only `sync` handshake is reused as-is. Full contract:
+  [`p4sync/README.md`](p4sync/README.md). Board-free verification:
+  `python tools/p4sync_gate.py --check` (51 checks) and `--self-test`
+  (18 canaries). The Windows WPF GUI lives in `apps/p4sync_gui/` and is a
+  JSON-lines client of the bridge, not a second transport
+  ([`apps/p4sync_gui/README.md`](../apps/p4sync_gui/README.md)).
 - `radicale_fixture.py` — local CardDAV bench for `pim net` E2E: `serve`
   runs Radicale with a 3-contact addressbook (`/alice/contacts/`,
   alice/benchpass123, bench-only creds) + self-checks (207 + hrefs); `check`
@@ -464,13 +498,42 @@ holder per port.
   host-side counterpart to `release.md`): `bins` merges bootloader + partition
   table + app from a build dir into one flashable image (esptool `merge_bin`),
   `srczip` archives the committed tree (`git archive`) without the refetchable
-  `managed_components/` and adds `RESTORE.md`, `push <COMx>` sequences
-  the SD pushers (companion → apps → assets → templates → dicts → fonts →
-  pkgs), and `manifest` writes `release/SHA256SUMS`. `all` runs bins + srczip +
-  manifest; `--dry-run` on any subcommand prints the actions. It never flashes
-  and never re-implements a pusher's file list.
+  `managed_components/` and adds `RESTORE.md`, `p4sync` publishes the
+  self-contained Windows x64 GUI plus the Python CLI/bridge and its harness
+  modules into `p4sync-windows-x64-v<version>.zip` (the binary uploaded to the
+  GitHub release), `push <COMx>` sequences the SD pushers (companion → apps →
+  assets → templates → dicts → fonts → pkgs), and `manifest` writes
+  `release/SHA256SUMS`. `all` runs bins + c6 + srczip + p4sync + manifest;
+  `--dry-run` on any subcommand prints the actions. `srczip` verifies that the
+  P4Sync GUI source ships and rejects `bin/`/`obj/`/`build/` outputs under
+  `apps/p4sync_gui/`; the `p4sync` packer similarly refuses credentials,
+  private keys, `__pycache__` and build outputs in the binary bundle. It never
+  flashes and never re-implements a pusher's file list.
 - `newapp.py` — scaffold a native applib app component from the
   `samples/whoami/` template: `python tools/newapp.py <name>`, then follow
   the printed wiring steps (see `tutorial_native.md` §10).
 - `capture_docs.py` — curated public screenshots into `docs/assets/`
   (non-destructive; see `docs/assets/README.md`).
+
+### P4Sync commands (host only, no board required for `--mock`)
+
+```powershell
+python tools/p4sync --mock devices                       # port discovery via board_ports.py
+python tools/p4sync --mock --json status                 # one JSON object, same schema as the bridge
+python tools/p4sync --board jc1060p470c --json shell "dir /b /s /sdcard"
+python tools/p4sync --port COM3 --json plan C:\sync /sdcard --dry-run
+python tools/p4sync --port COM3 --json plan C:\sync /sdcard --apply
+python tools/p4sync --port COM3 pull /sdcard/NOTES.TXT C:\sync\NOTES.TXT
+python tools/p4sync --port COM3 verify /sdcard/NOTES.TXT --crc32 90e37ea3
+python tools/p4sync --port COM3 pkg list
+python tools/p4sync --port COM3 --json full-image --mirror C:\sync --db demo
+python tools/p4sync/bridge.py --mock                      # JSON lines on stdin/stdout for the GUI
+python tools/p4sync_gate.py --check                       # gate; --self-test = red canaries
+```
+
+The CLI and the bridge share one `data` schema; both delegate every device
+byte to the existing harness. Credentials stay in the OS (Windows Credential
+Manager for the GUI), never in the tree. A gate pass is a board-free pre-gate,
+not hardware sign-off; real-board parity still needs `p4test_run.py`. See
+[`p4sync/README.md`](p4sync/README.md) and
+[`apps/p4sync_gui/README.md`](../apps/p4sync_gui/README.md).

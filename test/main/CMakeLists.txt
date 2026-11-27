@@ -4,6 +4,7 @@ idf_component_register(
     SRCS
         test_main.c
         test_breadcrumb.c
+        test_os_facade.c
         test_mcp.c
         test_shell_parser.c
         test_shell_abort.c
@@ -58,6 +59,8 @@ idf_component_register(
         test_pim.c
         test_pim_carddav.c
         test_archive.c
+        test_video.c
+        test_engine3d.c
         test_macro.c
         test_bind.c
         test_trap.c
@@ -108,6 +111,8 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/../components/db"
         "${CMAKE_SOURCE_DIR}/../components/alarm"
         "${CMAKE_SOURCE_DIR}/../components/archive"
+        "${CMAKE_SOURCE_DIR}/../components/video"
+        "${CMAKE_SOURCE_DIR}/../components/gfx3d"
         "${CMAKE_SOURCE_DIR}/../components/modal"
         "${CMAKE_SOURCE_DIR}/../components/tui"
         "${CMAKE_SOURCE_DIR}/../components/markdown"
@@ -141,6 +146,8 @@ idf_component_register(
         db
         alarm
         archive
+        video
+        gfx3d
         modal
         nativepay
         nativeexec

@@ -48,6 +48,8 @@ components/imgdec
   components/mcp
   components/modal
   components/nativepay
+  components/video
+  components/gfx3d
   components/networking
   components/portal
   components/chat

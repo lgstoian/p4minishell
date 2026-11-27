@@ -11,7 +11,7 @@ launch remains opt-in through the app's `.bat` shim.
 
 Usage:
   python tools/make_native_payload.py build --source demo.c --out DEMO.P4X \
-      --key key.priv.pem [--entry 0] [--api console,env] [--check] [--cc cc]
+      --key key.priv.pem [--entry 0] [--api console,env] [--check] [--cc riscv32-esp-elf-gcc]
   python tools/make_native_payload.py build --blob demo.bin --out DEMO.P4X \
       --key key.priv.pem [--entry 0] [--api console,env] [--check]
   python tools/make_native_payload.py check --in DEMO.P4X [--pub key.pub.bin]
@@ -23,6 +23,7 @@ Exit codes: 0 ok / 1 verification or build failure / 2 usage.
 from __future__ import annotations
 
 import argparse
+import glob
 import hashlib
 import os
 import shutil
@@ -221,17 +222,52 @@ def check_blob(blob: bytes, pub: bytes | None = None,
     return 0, info
 
 
+def find_riscv_cc() -> str | None:
+    """Locate the ESP32-P4 RISC-V cross compiler. A host compiler produces
+    x86-64/ARM machine code, which is an illegal instruction on the target:
+    never fall back to `cc` for a payload that is meant to be executed."""
+    env = os.environ.get("RISCV_GCC")
+    if env and shutil.which(env) is not None:
+        return env
+    on_path = shutil.which("riscv32-esp-elf-gcc")
+    if on_path is not None:
+        return on_path
+    if os.name == "nt":
+        base = os.path.join(os.environ.get("USERPROFILE", ""), ".espressif",
+                            "tools", "riscv32-esp-elf")
+    else:
+        base = os.path.join(os.path.expanduser("~"), ".espressif",
+                            "tools", "riscv32-esp-elf")
+    pattern = os.path.join(base, "*", "riscv32-esp-elf", "bin",
+                           "riscv32-esp-elf-gcc" + (".exe" if os.name == "nt" else ""))
+    found = sorted(glob.glob(pattern), reverse=True)
+    return found[0] if found else None
+
+
+def _sibling_tool(compiler: str, name: str) -> str:
+    """Derive objcopy/nm from the selected cross compiler so a RISC-V object
+    is never handed to a host-only binutils."""
+    base = os.path.basename(compiler)
+    if base.startswith("riscv32-esp-elf-gcc"):
+        return os.path.join(os.path.dirname(compiler),
+                            base.replace("riscv32-esp-elf-gcc", "riscv32-esp-elf-" + name))
+    return name
+
+
 def payload_from_source(source: str, cc: str) -> bytes | None:
     """Compile one tiny C file and concatenate its fixed export section + text.
 
     This is intentionally minimal: the source supplies the P4EX export table,
     and entry offsets are known constants because exports are always first.
-    A missing cross toolchain is an explicit error, never a silent fake.
+    The compiler MUST target RV32 (EM_RISCV); a host compiler is an explicit
+    error because its bytes would trap on the board.
     """
-    compiler = cc or os.environ.get("CC") or "cc"
-    if shutil.which(compiler) is None:
-        _err("C compiler '%s' not found; pass --cc or set CC" % compiler)
+    compiler = cc or os.environ.get("CC") or find_riscv_cc()
+    if compiler is None or shutil.which(compiler) is None:
+        _err("no RISC-V cross compiler found; pass --cc <riscv32-esp-elf-gcc> "
+             "or set RISCV_GCC (host `cc` is refused: its code cannot run on ESP32-P4)")
         return None
+    objcopy = _sibling_tool(compiler, "objcopy")
     with tempfile.TemporaryDirectory(prefix="p4native-") as td:
         obj = os.path.join(td, "payload.o")
         exp = os.path.join(td, "exports.bin")
@@ -243,8 +279,17 @@ def payload_from_source(source: str, cc: str) -> bytes | None:
             print(proc.stderr.strip())
             _err("C compilation failed")
             return None
+        # Refuse anything but RISC-V before any bytes reach a signer. ELF
+        # e_machine lives at bytes 18..19; EM_RISCV is 243 (0x00F3).
+        with open(obj, "rb") as fh:
+            elf = fh.read(20)
+        if len(elf) < 20 or elf[:4] != b"\x7fELF" or \
+                struct.unpack_from("<H", elf, 18)[0] != 243:
+            _err("compiler '%s' did not emit a RISC-V object (EM_RISCV=243); "
+                 "refusing a payload the board cannot execute" % compiler)
+            return None
         for section, out in ((".p4ex.exports", exp), (".text", text)):
-            proc = subprocess.run(["objcopy", "--dump-section",
+            proc = subprocess.run([objcopy, "--dump-section",
                                    "%s=%s" % (section, out), obj, obj],
                                   capture_output=True, text=True)
             if proc.returncode != 0:

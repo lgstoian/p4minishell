@@ -1,6 +1,11 @@
 # P4Sync — plan, current state, and lessons applied
 
-Status: **prototype exists** (`tools/p4sync/`), desktop app not started.
+Status: **host/bridge gaps closed; GUI app owned by the GUI agent**
+(`apps/p4sync_gui/**`). The host-side bridge, CLI and protocol are complete in
+`tools/p4sync/`; the firmware is unchanged and the current release under
+hardware test stays compatible. See `tools/p4sync/README.md` for the exact
+CLI/bridge JSON contract and the board-free CI commands.
+
 This document is the planning/scaffolding hand-off. It records what already
 works, what this firmware/harness campaign taught us, and the ordered next
 steps. It is deliberately concrete so the next agent does not re-derive it.
@@ -16,11 +21,16 @@ detection, SDFX push/pull, BMPX screenshot).
 | Piece | File | Notes |
 |-------|------|-------|
 | Client facade | `tools/p4sync/client.py` | `P4SyncClient`: `status()`, `check_status()`, `board_id()`, `display_size()`, `push_file/local`, `pull_file`, `screenshot()`. Handshake tag `p4sync-1`. |
-| CLI | `tools/p4sync/__main__.py` | `status`, `push`, `pull`, `shot`, `full-image`. `full-image` composes handshake + PIM sync + file provisioning + app inventory + screenshot + `image.json`. |
+| CLI | `tools/p4sync/__main__.py` | Every bridge verb as a subcommand with `--json`, `--port`/`--board`, `--mock`, `--timeout`, `--settle`; `shot` stays a backwards-compatible alias of `screenshot`. Non-zero exit when a command's own `ok` verdict is false. |
 | Transport | `tools/p4test/{session,sdbridge,screenshot}.py` | The ONE framing/reader implementation. Reuse; never fork. |
 | PIM engine | `tools/pim_sync.py` | Mirror-dir vCard/iCal merge over `pim` verbs (PIMX). Reused by `full-image`. |
+| Wire contract | `tools/p4sync/protocol.py` | `PROTO_TAG=p4sync-1`, canonical + firmware `sync.*` capability keys, `image.json` schema, stable error codes, pure parsers. |
+| GUI bridge | `tools/p4sync/bridge.py` | JSON-lines stdin/stdout; `devices/status/push/pull/screenshot/full-image/verify/plan/shell/pkg`; progress/log events; `--mock` fixtures. All I/O via `P4SyncClient`. Screenshot returns path + `png_base64`/`sha256`/`size`; full-image detects and rebuilds stale manifests. |
+| Board-free gate | `tools/p4sync_gate.py` | `--check` (51 checks) / `--self-test` (18 red canaries), real bridge subprocess, fake Device sessions, CLI smokes. |
 
 Run: `python tools/p4sync --port COM3 status` (or `full-image --mirror DIR --db NAME`).
+Agent form: `python tools/p4sync --mock --json status` (same data object as the
+bridge). GUI: `python tools/p4sync/bridge.py --mock` speaking JSON lines.
 
 ## 2. Firmware surface it depends on
 
@@ -96,19 +106,20 @@ Define the contract once, versioned, and share it between CLI and desktop:
 
 ## 5. Desktop app roadmap (ordered)
 
-1. **`protocol.py` + capability parsing + `--dry-run` plan output.**
-2. **Incremental file sync** (diff + CRC + resume), driven from one SD session
-   at a time; report bytes/files skipped.
-3. **PIM integration** surfaced as a first-class "Contacts/Calendar" pane over
-   the existing `pim_sync` engine (no new parser).
-4. **Screenshot/notifications view** over BMPX; do not add a second capture path.
-5. **App/package management** that shells out to the existing `pkg` verbs.
-6. **Device discovery**: `tools/board_ports.py` already resolves slugs from
-   `sysinfo`; the app should reuse it (no new port scanner).
-7. **Test ladder for the app**: reuse `tools/unit_run.py`,
-   `tools/p4test_run.py --boards COM3,COM6`, and `tools/chat_test.py`; add a
-   `tools/p4sync/README.md` smoke test that runs the CLI `full-image` against
-   both boards.
+1. DONE — `protocol.py` + capability parsing + `--dry-run` plan output.
+2. DONE — incremental file sync (diff + CRC + resume), one SD session at a
+   time; report bytes/files skipped.
+3. GUI WORK — PIM integration as a "Contacts/Calendar" pane over `pim_sync`
+   (the bridge exposes it through `full-image`).
+4. DONE on the host / GUI WORK — screenshot over the shared BMPX path.
+5. DONE on the host / GUI WORK — `pkg` bridge command maps to the existing
+   firmware verbs (no new dispatcher).
+6. DONE — device discovery reuses `tools/board_ports.py` (no new port scanner).
+7. DONE on the host — `tools/p4sync_gate.py` is the board-free ladder
+   (`--check` 51 checks, `--self-test` 18 red canaries, including CLI smokes and
+   stale-manifest recovery). Board parity still requires the existing hardware
+   suites (`tools/p4test_run.py --boards COM3,COM6`) and a board-run
+   `full-image` rebaseline; the GUI agent owns the app-side tests.
 
 ## 6. Explicit non-goals
 
@@ -126,3 +137,43 @@ Define the contract once, versioned, and share it between CLI and desktop:
 3. Conflict UX: silent newer-wins vs a per-file prompt (headless serial has no
    prompt; the desktop app can).
 4. Multi-device: one at a time (current `Device`) vs paired (focused driver).
+
+---
+
+## 8. Final gap closure (this increment)
+
+Four gaps reported by the host/GUI loop are closed, all inside
+`tools/p4sync/**` and `tools/p4sync_gate.py` (no firmware, no board, no changes
+outside this scope):
+
+1. **PNG preview payload.** `screenshot` writes the PNG once through the
+   existing `p4test.screenshot` path and reads that file back. `data` now has
+   `out`/`path`/`png` (same absolute path), `png_base64` (standard base64, no
+   data URI), `sha256` (64 lowercase hex), `size`/`bytes` (integer length),
+   `width`, `height`. Default path is stable — `p4sync-shot-<port>.png` under
+   `P4SYNC_ARTIFACTS` or `<repo>/.agent/p4sync-artifacts` — instead of a
+   wall-clock temp name. Missing/non-PNG output is `E_IO` (no false payload).
+2. **Stale `image.json` recovery.** `validate_manifest()` rejects the old
+   boolean `shot` toggle and a non-numeric `time`; the bridge additionally
+   checks that a named shot PNG still exists and is a PNG. A stale manifest is
+   removed before the shipped CLI composition runs; recovery reports
+   `stale_manifest`, `rebuilt`, `stale_reason` plus a `warn` log event. An
+   invalid rebuilt manifest is a hard `E_IO`, never a silent green.
+3. **Mock capability completeness.** `MOCK_STATUS` carries `sync.shot_max:
+   1048576`, mapped to `limit.screenshot` by `CAP_ALIASES`. It stays optional
+   (`CAP_OPTIONAL`, not `CAP_KEYS`): real firmware may omit it, but the GUI's
+   strict client check can now be green in mock mode.
+4. **CLI/agent contract.** All ten bridge commands remain CLI subcommands with
+   `--json`, `--port`/`--board`, `--mock`, `--timeout`, `--settle`; `shot`
+   aliases `screenshot`. A command verdict of `ok:false` exits 1.
+
+Verification (Windows, no board): `py_compile` clean; gate `--check` **51 PASS**;
+`--self-test` **18 PASS**; CLI mock smoke for `status`, `shell`, `screenshot`,
+`full-image` (plus `shot` alias) all exit 0 with one JSON object; failed
+`verify` exits 1; `green_guard --strict` reports **809 unity tests, 0 errors,
+0 warnings**. Exact commands are in `README.md` §4.
+
+Remaining limitations: no board was accessed, so real BMPX/PIMX/SDFX parity and
+the hardware `full-image` baseline rebaseline are still outstanding; GUI-side
+code and tests belong to the GUI agent; adding `p4sync_gate.py` to
+`tools/host_all_gates.py` belongs to the parent.

@@ -30,8 +30,19 @@ READ_SECONDS = 240
 
 def run_one(port: str, out: list) -> None:
     print("unit_run: port=%s (resetting)" % port, flush=True)
-    hard_reset(port)
-    ser = open_port(port)
+    try:
+        hard_reset(port)
+        ser = open_port(port)
+    except Exception as exc:
+        # A port that cannot be opened is a FAIL, not a missing result: without
+        # this entry the merged verdict would be computed from the other ports
+        # only and report a false green (observed when a stale process held a
+        # COM port during a two-board run).
+        buf = ["--- %s harness error ---" % port,
+               "  %s: %s" % (type(exc).__name__, exc),
+               "UNIT RESULT %s FAIL" % port]
+        out.append((port, 0, 1, 0, False, buf))
+        return
     ser.timeout = 0.5
     # Read continuously: the OS serial buffer is small, so sleeping through
     # the run loses early suites.

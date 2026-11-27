@@ -34,6 +34,11 @@ static void *s_active_ctx = NULL;
 static EventGroupHandle_t s_active_eg = NULL;
 static SemaphoreHandle_t s_modal_mutex = NULL;
 
+/* The one app-switcher view, installed by main at boot. modal never includes
+ * a tui header: the registration seam keeps the leaf modules unlinked at
+ * build time while both inputs still call the same switch helper below. */
+static void (*s_switcher_view)(const char *const *names, int count, int focus) = NULL;
+
 static bool modal_runtime_lock(void)
 {
     if (s_modal_mutex == NULL) {
@@ -115,13 +120,27 @@ bool modal_runtime_signal(EventBits_t bits)
 bool modal_runtime_handle_usb_key(uint8_t key_code, uint8_t modifiers, char ascii)
 {
     bool consumed = false;
+    bool switch_app = false;
+
     if (!modal_runtime_lock()) {
         return false;
     }
-    if (s_active_surface != NULL && s_active_surface->handle_usb_key != NULL) {
-        consumed = s_active_surface->handle_usb_key(s_active_ctx, key_code, modifiers, ascii);
+    if (s_active_surface != NULL) {
+        /* Alt+Tab is a GLOBAL app-switch chord: it must never leak into the
+         * active surface's own Ctrl/ASCII vocabulary. All three keyboard
+         * sources (USB HID, BLE, Tab5Keyboard) reach this hook through the
+         * shell input path, so there is no second key driver. The cycle runs
+         * after unlocking: modal_session_cycle() takes the same mutex. */
+        if (modal_alt_tab(key_code, modifiers)) {
+            switch_app = true;
+        } else if (s_active_surface->handle_usb_key != NULL) {
+            consumed = s_active_surface->handle_usb_key(s_active_ctx, key_code, modifiers, ascii);
+        }
     }
     modal_runtime_unlock();
+    if (switch_app) {
+        return modal_session_cycle(1);
+    }
     return consumed;
 }
 
@@ -342,6 +361,65 @@ static void session_restore(int from_top)
                          s_sessions.scrim_alpha[idx]);
 }
 
+/**
+ * Keep the parallel screen/context arrays aligned with the slot rotation
+ * performed by modal_session_stack_switch(). The pure stack rotates its own
+ * (name/focus/state) structs left from @p from_top; the hardware-facing
+ * payload follows the same left-shift so each name keeps its own screen,
+ * surface, context and alpha pair. No new state store is introduced.
+ */
+static void session_metadata_rotate(int from_top)
+{
+    int depth = s_sessions.st.depth;
+    int idx = depth - 1 - from_top;
+    int i;
+
+    if (idx < 0 || idx >= depth - 1) {
+        return;
+    }
+    for (i = idx; i < depth - 1; i++) {
+        const modal_surface_t *surface = s_sessions.surface[i];
+        void *ctx = s_sessions.ctx[i];
+        char *screen = s_sessions.screen[i];
+        uint8_t panel = s_sessions.panel_alpha[i];
+        uint8_t scrim = s_sessions.scrim_alpha[i];
+
+        s_sessions.surface[i] = s_sessions.surface[i + 1];
+        s_sessions.ctx[i] = s_sessions.ctx[i + 1];
+        s_sessions.screen[i] = s_sessions.screen[i + 1];
+        s_sessions.panel_alpha[i] = s_sessions.panel_alpha[i + 1];
+        s_sessions.scrim_alpha[i] = s_sessions.scrim_alpha[i + 1];
+
+        s_sessions.surface[i + 1] = surface;
+        s_sessions.ctx[i + 1] = ctx;
+        s_sessions.screen[i + 1] = screen;
+        s_sessions.panel_alpha[i + 1] = panel;
+        s_sessions.scrim_alpha[i + 1] = scrim;
+    }
+}
+
+/** Publish a stack snapshot (collected under the lock) to the one view.
+ *  The view runs AFTER unlocking: tui_flush takes the LVGL lock, so holding
+ *  the modal mutex across it would invert the two lock orders. */
+static void session_publish_view(const char *const *names, int count)
+{
+    if (s_switcher_view != NULL) {
+        s_switcher_view(names, count, 0);
+    }
+}
+
+/** Copy the from-top name order into a caller-owned array (under lock). */
+static void session_collect_names(const char **names, int *count_out)
+{
+    int count = s_sessions.st.depth;
+    int i;
+
+    for (i = 0; i < count; i++) {
+        names[i] = modal_session_stack_name(&s_sessions.st, i);
+    }
+    *count_out = count;
+}
+
 bool modal_session_push(const char *name, const modal_surface_t *surface, void *ctx)
 {
     bool ok = false;
@@ -428,18 +506,80 @@ bool modal_session_resume(void)
 
 bool modal_session_switch(const char *name)
 {
-    bool ok;
+    bool ok = false;
+    int from_top;
+    const char *names[MODAL_SESSION_MAX];
+    int count = 0;
 
     if (!modal_runtime_lock()) {
+        return false;
+    }
+    from_top = modal_session_stack_find(&s_sessions.st, name);
+    session_save_outgoing();
+    ok = modal_session_stack_switch(&s_sessions.st, name);
+    if (ok) {
+        session_metadata_rotate(from_top);
+        session_restore(0);
+        session_collect_names(names, &count);
+    }
+    modal_runtime_unlock();
+    if (ok) {
+        session_publish_view(names, count);
+    }
+    return ok;
+}
+
+bool modal_session_cycle(int step)
+{
+    bool ok = false;
+    int from_top;
+    const char *name;
+    const char *names[MODAL_SESSION_MAX];
+    int count = 0;
+
+    if (!modal_runtime_lock()) {
+        return false;
+    }
+    from_top = modal_session_next_index(&s_sessions.st, step);
+    name = modal_session_stack_name(&s_sessions.st, from_top);
+    if (name == NULL) {
+        modal_runtime_unlock();
         return false;
     }
     session_save_outgoing();
     ok = modal_session_stack_switch(&s_sessions.st, name);
     if (ok) {
+        session_metadata_rotate(from_top);
         session_restore(0);
+        session_collect_names(names, &count);
     }
     modal_runtime_unlock();
+    if (ok) {
+        session_publish_view(names, count);
+    }
     return ok;
+}
+
+const char *modal_session_name_at(int from_top)
+{
+    const char *name;
+
+    if (!modal_runtime_lock()) {
+        return NULL;
+    }
+    name = modal_session_stack_name(&s_sessions.st, from_top);
+    modal_runtime_unlock();
+    return name;
+}
+
+void modal_set_app_switcher_view(void (*view)(const char *const *names,
+                                              int count, int focus))
+{
+    if (!modal_runtime_lock()) {
+        return;
+    }
+    s_switcher_view = view;
+    modal_runtime_unlock();
 }
 
 int modal_session_depth(void)
