@@ -148,8 +148,14 @@ These are the host-side systems behind [`AGENTS.md`](../AGENTS.md),
   canaries. Gate ids `power`/`power_canary`.
 - `host_audio_gate.py` — v1.6 board-free **audio engine pre-gate**: 99 checks
   over the deterministic offline PCM of the one Q16 mixer/ADSR/sequencer/SFX/
-  ducking path; `--self-test` runs 12 red canaries. Gate ids
-  `audio`/`audio_canary`.
+  ducking path, plus host-only miniaudio cross-checks of the PCM baselines and
+  an end-to-end asset conversion into the firmware's accepted WAV format
+  (vendored in `tools/thirdparty/miniaudio`, never in firmware); `--self-test`
+  runs 17 red canaries. Gate ids `audio`/`audio_canary`.
+- `audio_asset_prepare.py` — v1.6 board-free **host audio asset preparation**:
+  decodes WAV/MP3/FLAC with miniaudio, resamples/converts to the firmware's
+  16-bit PCM mono/stereo at 22050/44100 Hz, validates the RIFF/WAVE output and
+  SHA-256, and fails loudly on invalid input.
 - `host_video_gate.py` — v1.6 board-free **video/EPUB/archive pre-gate**: 18
   assertions over the one `imagefile` decoder, one TUI sampler, pure EPUB
   nav/TOC core and one USTAR/CRC core; `--self-test` runs 10 red canaries. Gate

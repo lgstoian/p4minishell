@@ -71,7 +71,8 @@
         { "start": 0, "values": [500, 500, 500, 500], "repeat": 1, "gain": 100, "bus": "sfx", "env": "flat" }
       ],
       "expect_left": [1500, 2500, 3500, 4500],
-      "baseline": "baseline/mix_two_buses.hex"
+      "baseline": "baseline/mix_two_buses.hex",
+      "wav": "wav/mix_two_buses.wav"
     },
     {
       "name": "mix.half_master",
@@ -84,7 +85,8 @@
         { "start": 0, "values": [10000, 10000], "repeat": 1, "gain": 100, "bus": "music", "env": "flat" }
       ],
       "expect_left": [5000, 5000],
-      "baseline": "baseline/mix_half_master.hex"
+      "baseline": "baseline/mix_half_master.hex",
+      "wav": "wav/mix_half_master.wav"
     },
     {
       "name": "clip.saturates",
@@ -98,7 +100,8 @@
         { "start": 0, "values": [30000], "repeat": 1, "gain": 100, "bus": "sfx", "env": "flat" }
       ],
       "expect_left": [32767],
-      "baseline": "baseline/clip_saturates.hex"
+      "baseline": "baseline/clip_saturates.hex",
+      "wav": "wav/clip_saturates.wav"
     },
     {
       "name": "duck.sfx_window",
@@ -112,7 +115,8 @@
         { "start": 2, "values": [10000], "repeat": 2, "gain": 100, "bus": "sfx", "env": "flat" }
       ],
       "expect_left": [10000, 10000, 12500, 12500, 10000, 10000],
-      "baseline": "baseline/duck_sfx_window.hex"
+      "baseline": "baseline/duck_sfx_window.hex",
+      "wav": "wav/duck_sfx_window.wav"
     },
     {
       "name": "env.adsr_probes",

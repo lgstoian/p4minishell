@@ -53,6 +53,10 @@ gates = [
     # The documented auto-LED state machine must not be flattened into one
     # colour (a previous "fix" removed the status signalling feature).
     ('led contract', 'led_contract.py'),
+    # Host-only LUFA HID constants cross-reference: the pinned, attributed
+    # subset validates the shipped USB keyboard/descriptor fixtures. The gate
+    # also proves no LUFA source reached firmware or the ESP-IDF build.
+    ('LUFA HID constants', 'thirdparty/lufa/lufa_hid_gate.py', ['--check']),
 ]
 # The static-DRAM budget gate needs a firmware image; only run it when one has
 # been built, so a fresh checkout (no build/) never fails the host gate.

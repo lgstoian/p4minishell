@@ -11,9 +11,16 @@ meter: every number is a literal fixture expectation transcribed into C and
 asserted against shipped code, natively, with no board, codec or FreeRTOS.
 
 The harness also dumps the rendered stereo PCM so the gate can compare it
-byte-for-byte with the committed ``baseline/*.hex`` files. A wiring audit
-rejects a second codec handle, a duplicated speaker init and a second audio
-task; the engine must feed the ONE existing playback path.
+byte-for-byte with the committed ``baseline/*.hex`` files. Those baselines are
+then cross-checked against WAV fixtures decoded by the vendored, HOST-ONLY
+miniaudio library (``tools/thirdparty/miniaudio``); a mismatch is a gate
+failure. The same miniaudio helper also runs an end-to-end asset-preparation
+check: a 48 kHz/24-bit source is resampled/converted to the exact format the
+firmware's one SD WAV player accepts, then re-decoded and validated against
+``audio_wav_params_ok``; invalid input must fail loudly. miniaudio never enters
+the firmware or ESP-IDF build. A wiring audit rejects a second codec handle, a
+duplicated speaker init, a second audio task and any firmware reference to
+miniaudio; the engine must feed the ONE existing playback path.
 
 A pass is a hardware-free pre-gate only. It says nothing about on-target
 audibility; ``harness.md`` §0 still governs hardware sign-off.
@@ -28,6 +35,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
 import re
@@ -46,12 +54,21 @@ PURE_SRC = AUDIO_DIR / "audio_engine.c"
 EXTRA_INCLUDES = [AUDIO_DIR, ROOT]
 MIN_CHECKS = 40
 RUN_TIMEOUT = 60
+MINIAUDIO_COMPILE_TIMEOUT = 180
+
+THIRDPARTY_DIR = ROOT / "tools" / "thirdparty" / "miniaudio"
+MINIAUDIO_SRC = THIRDPARTY_DIR / "ma_audio_host.c"
+ASSET_FIXTURES = FIXTURE.parent / "assets"
+MINIAUDIO_HEADER = THIRDPARTY_DIR / "miniaudio.h"
+FIXTURE_WAVS = FIXTURE.parent / "wav"
 
 BEGIN = "audio.gate.begin"
 END = "audio.gate.end"
 SUMMARY = "audio.gate.summary"
 CHECK_RE = re.compile(r"^audio\.check\s+([A-Za-z0-9_.]+)\s+(ok|FAIL)$")
 SUMMARY_RE = re.compile(r"^audio\.gate\.summary\s+checks=(\d+)\s+fail=(\d+)$")
+DECODER_RE = re.compile(
+    r"^ma\.decoder channels=(\d+) rate=(\d+) frames=(\d+) bytes=(\d+)$")
 
 BUSES = {"music": "AUDIO_ENGINE_BUS_MUSIC", "sfx": "AUDIO_ENGINE_BUS_SFX"}
 
@@ -109,6 +126,11 @@ def load_fixture(path: Path) -> Dict[str, Any]:
         env = case["channels"][0].get("env")
         if env not in envs:
             raise GateError("mix case %d names unknown env %r" % (i, env))
+        if bool(case.get("baseline")) != bool(case.get("wav")):
+            raise GateError("mix case %d must pair baseline and wav" % i)
+        wav = case.get("wav")
+        if wav is not None and (not isinstance(wav, str) or "/" not in wav):
+            raise GateError("mix case %d has a bad wav path" % i)
     return data
 
 
@@ -554,7 +576,36 @@ def audit_wiring(overrides: Optional[Dict[str, str]] = None) -> List[str]:
                  "audio_engine_bound_checks();"):
         if call not in tests:
             problems.append("on-target audio suite lost %s" % call)
+
+    # miniaudio is a host-only cross-check: it must never reach firmware.
+    firmware = [ROOT / "CMakeLists.txt"]
+    firmware += list((ROOT / "components").rglob("CMakeLists.txt"))
+    firmware += list((ROOT / "main").rglob("CMakeLists.txt"))
+    for src_root in (ROOT / "components", ROOT / "main"):
+        firmware += [p for p in src_root.rglob("*")
+                     if p.is_file() and p.suffix in (".c", ".h", ".cpp")]
+    for path in firmware:
+        if not path.is_file():
+            continue
+        try:
+            body = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "miniaudio" in body:
+            problems.append("miniaudio must stay host-only: %s"
+                            % path.relative_to(ROOT).as_posix())
     return problems
+
+
+def read_baseline(rel: str) -> bytes:
+    expected_path = FIXTURE.parent / rel
+    if not expected_path.is_file():
+        raise GateError("baseline is missing: %s" % rel)
+    try:
+        raw_hex = expected_path.read_text(encoding="utf-8").strip()
+        return bytes.fromhex(raw_hex)
+    except (OSError, ValueError) as exc:
+        raise GateError("baseline unreadable %s: %s" % (rel, exc))
 
 
 def verify_baselines(data: Dict[str, Any], dump_dir: Path) -> None:
@@ -562,14 +613,7 @@ def verify_baselines(data: Dict[str, Any], dump_dir: Path) -> None:
         rel = case.get("baseline")
         if not rel:
             continue
-        expected_path = FIXTURE.parent / rel
-        if not expected_path.is_file():
-            raise GateError("baseline is missing: %s" % rel)
-        try:
-            raw_hex = expected_path.read_text(encoding="utf-8").strip()
-            expected = bytes.fromhex(raw_hex)
-        except (OSError, ValueError) as exc:
-            raise GateError("baseline unreadable %s: %s" % (rel, exc))
+        expected = read_baseline(rel)
         actual_path = dump_dir / (ident(case["name"]) + ".pcm")
         if not actual_path.is_file():
             raise GateError("harness did not dump PCM for %s" % case["name"])
@@ -587,6 +631,159 @@ def verify_baselines(data: Dict[str, Any], dump_dir: Path) -> None:
         if any(v not in range(-32768, 32768) for v in decoded):
             raise GateError("PCM dump has an out-of-range sample for %s"
                             % case["name"])
+
+
+_MINIAUDIO_CACHE: Dict[tuple, Path] = {}
+
+
+def compile_miniaudio_decoder(cc: str, work: Path) -> Path:
+    """Build the host-only miniaudio helper once per process, never in firmware."""
+    if not MINIAUDIO_SRC.is_file() or not MINIAUDIO_HEADER.is_file():
+        raise GateError("vendored miniaudio is missing from tools/thirdparty")
+    key = (cc, MINIAUDIO_SRC.stat().st_mtime_ns,
+           MINIAUDIO_HEADER.stat().st_mtime_ns)
+    cached = _MINIAUDIO_CACHE.get(key)
+    if cached is not None and cached.is_file():
+        return cached
+    work = Path(tempfile.mkdtemp(prefix="audio-miniaudio-"))
+    atexit.register(shutil.rmtree, work, ignore_errors=True)
+    binary = work / ("ma_audio_host.exe" if os.name == "nt"
+                     else "ma_audio_host")
+    cmd = [cc, "-std=gnu99", "-Wall", "-Wextra", "-Werror",
+           "-I" + str(THIRDPARTY_DIR), str(MINIAUDIO_SRC),
+           "-o", str(binary)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              cwd=str(ROOT),
+                              timeout=MINIAUDIO_COMPILE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise GateError("miniaudio decoder compile timed out")
+    if proc.returncode != 0 or not binary.is_file():
+        raise GateError("miniaudio decoder compile failed (rc=%d): %s"
+                        % (proc.returncode,
+                           (proc.stdout + proc.stderr)[-1200:]))
+    _MINIAUDIO_CACHE[key] = binary
+    return binary
+
+
+def verify_miniaudio_wav(data: Dict[str, Any], work: Path, cc: str,
+                         wav_root: Optional[Path] = None,
+                         decoder: Optional[Path] = None) -> int:
+    """Independently decode the WAV fixtures and compare to PCM baselines.
+
+    The WAVs are authored from the literal ``expect_left`` values, not from
+    the baselines. miniaudio must agree with the baselines that the shipped
+    mixer generated; any disagreement makes the gate red.
+    """
+    wav_root = Path(wav_root) if wav_root is not None else FIXTURE_WAVS
+    if decoder is None:
+        decoder = compile_miniaudio_decoder(cc, work)
+    expected_rate = int(data["sample_rate"])
+    checked = 0
+    for case in data["mixes"]:
+        rel = case.get("wav")
+        baseline_rel = case.get("baseline")
+        if not rel or not baseline_rel:
+            continue
+        wav = wav_root / Path(rel).name
+        if not wav.is_file():
+            raise GateError("WAV fixture is missing: %s" % wav)
+        dump = work / (ident(case["name"]) + ".ma.pcm")
+        try:
+            proc = subprocess.run([str(decoder), "decode", str(wav),
+                                   str(dump)],
+                                  capture_output=True, text=True,
+                                  cwd=str(work), timeout=RUN_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise GateError("miniaudio decode timed out for %s" % rel)
+        if proc.returncode != 0 or not dump.is_file():
+            raise GateError("miniaudio decode failed for %s (rc=%d): %s"
+                            % (rel, proc.returncode,
+                               (proc.stdout + proc.stderr)[-600:]))
+        lines = [line.strip() for line in proc.stdout.splitlines()
+                 if line.strip()]
+        match = DECODER_RE.match(lines[-1]) if lines else None
+        if match is None:
+            raise GateError("miniaudio summary malformed for %s: %s"
+                            % (rel, (proc.stdout + proc.stderr)[-400:]))
+        channels, rate, frames, size = (int(part) for part in match.groups())
+        frames_want = int(case["frames"])
+        if (channels, rate, frames, size) != (2, expected_rate, frames_want,
+                                               4 * frames_want):
+            raise GateError("miniaudio format mismatch for %s: %s"
+                            % (rel, match.group(0)))
+        expected = read_baseline(baseline_rel)
+        actual = dump.read_bytes()
+        if actual != expected:
+            raise GateError("miniaudio WAV cross-check mismatch for %s "
+                            "(want %d bytes, got %d)"
+                            % (case["name"], len(expected), len(actual)))
+        checked += 1
+    if checked == 0:
+        raise GateError("vacuous miniaudio cross-check: no WAV fixtures")
+    return checked
+
+
+def load_asset_preparer():
+    """Import the shipped host-side preparation tool by path."""
+    import importlib.util
+
+    path = ROOT / "tools" / "audio_asset_prepare.py"
+    spec = importlib.util.spec_from_file_location("audio_asset_prepare", path)
+    if spec is None or spec.loader is None:
+        raise GateError("audio_asset_prepare.py cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def verify_audio_asset_preparation(work: Path, cc: str, decoder: Path,
+                                   source_root: Optional[Path] = None) -> int:
+    """End-to-end: convert an unplayable source into the firmware's format."""
+    module = load_asset_preparer()
+    root = Path(source_root) if source_root is not None else ASSET_FIXTURES
+    source = root / "src_48k_24b_stereo.wav"
+    if not source.is_file():
+        raise GateError("conversion source fixture is missing: %s" % source)
+    dest = work / "prepared.wav"
+    try:
+        info = module.prepare(source, dest, 22050, 2, cc=cc, work=work,
+                              tool=decoder)
+    except module.PrepareError as exc:
+        raise GateError("audio asset preparation failed: %s" % exc)
+
+    frames = int(info["frames"])
+    want_frames = round(480 * 22050 / 48000)
+    if abs(frames - want_frames) > 2 or (info["rate"], info["channels"]) \
+            != (22050, 2):
+        raise GateError("no real resample/convert happened: %r" % info)
+    # Decoding the prepared WAV again must reproduce the exact PCM we wrote.
+    replay = work / "prepared_replay.pcm"
+    proc = subprocess.run([str(decoder), "decode", str(dest), str(replay)],
+                          capture_output=True, text=True,
+                          cwd=str(work), timeout=RUN_TIMEOUT)
+    if proc.returncode != 0:
+        raise GateError("prepared WAV cannot be decoded: %s" % proc.stderr[-400:])
+    lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    match = DECODER_RE.match(lines[-1]) if lines else None
+    if match is None or tuple(int(p) for p in match.groups()) != \
+            (2, 22050, frames, frames * 4):
+        raise GateError("prepared WAV format is wrong: %s" % proc.stdout[-400:])
+    if replay.read_bytes() != info["pcm"]:
+        raise GateError("prepared WAV PCM changed on re-decode")
+
+    # A non-audio input must be refused loudly, not silently produce silence.
+    invalid = root / "invalid.wav"
+    if not invalid.is_file():
+        raise GateError("invalid audio fixture is missing: %s" % invalid)
+    try:
+        module.prepare(invalid, work / "invalid.wav", 22050, 2, cc=cc,
+                       work=work, tool=decoder)
+    except module.PrepareError:
+        pass
+    else:
+        raise GateError("invalid audio input was accepted by preparation")
+    return 2
 
 
 def run_gate(fixture: Path, cc: str, verbose: bool = False,
@@ -626,6 +823,9 @@ def run_gate(fixture: Path, cc: str, verbose: bool = False,
                                         run.returncode)
         if failures == 0:
             verify_baselines(data, work)
+            decoder = compile_miniaudio_decoder(cc, work)
+            verify_miniaudio_wav(data, work, cc, decoder=decoder)
+            verify_audio_asset_preparation(work, cc, decoder)
         return checks, failures
 
 
@@ -710,6 +910,61 @@ def self_test(cc: str) -> int:
     except GateError as exc:
         print("  clean fixture unexpectedly failed: %s" % exc)
         checks.append(("clean fixture goes green", False))
+
+    # miniaudio cross-check canaries: a corrupt or missing WAV must be red.
+    with tempfile.TemporaryDirectory(prefix="audio-gate-miniaudio-") as tmp:
+        work = Path(tmp)
+        decoder = compile_miniaudio_decoder(cc, work)
+        try:
+            count_wav = verify_miniaudio_wav(data, work, cc, decoder=decoder)
+            checks.append(("miniaudio WAV cross-check green", count_wav > 0))
+        except GateError as exc:
+            print("  miniaudio cross-check unexpectedly failed: %s" % exc)
+            checks.append(("miniaudio WAV cross-check green", False))
+        corrupted = work / "corrupt"
+        corrupted.mkdir()
+        for case in data["mixes"]:
+            rel = case.get("wav")
+            if not rel:
+                continue
+            raw = bytearray((FIXTURE.parent / rel).read_bytes())
+            raw[-1] ^= 0xFF
+            (corrupted / Path(rel).name).write_bytes(raw)
+        try:
+            verify_miniaudio_wav(data, work, cc, wav_root=corrupted,
+                                 decoder=decoder)
+            caught = False
+        except GateError:
+            caught = True
+        checks.append(("corrupt WAV goes red", caught))
+        missing = work / "missing"
+        missing.mkdir()
+        try:
+            verify_miniaudio_wav(data, work, cc, wav_root=missing,
+                                 decoder=decoder)
+            caught = False
+        except GateError:
+            caught = True
+        checks.append(("missing WAV goes red", caught))
+
+        try:
+            asset_checks = verify_audio_asset_preparation(work, cc, decoder)
+            checks.append(("audio asset conversion green", asset_checks == 2))
+        except GateError as exc:
+            print("  asset conversion unexpectedly failed: %s" % exc)
+            checks.append(("audio asset conversion green", False))
+        truncated = work / "truncated_assets"
+        truncated.mkdir()
+        src = (ASSET_FIXTURES / "src_48k_24b_stereo.wav").read_bytes()
+        (truncated / "src_48k_24b_stereo.wav").write_bytes(src[:100])
+        (truncated / "invalid.wav").write_bytes(b"not audio\n")
+        try:
+            verify_audio_asset_preparation(work, cc, decoder,
+                                           source_root=truncated)
+            caught = False
+        except GateError:
+            caught = True
+        checks.append(("truncated source goes red", caught))
 
     for name, ok in checks:
         print("  [%s] %s" % ("PASS" if ok else "FAIL", name))

@@ -272,6 +272,19 @@ GATES: Tuple[Gate, ...] = (
          "cull, depth sort, one gfx_surface raster path, one DOS palette"),
     Gate("engine3d_canary", "3D engine guard canary",
          ("host_engine3d_gate.py", "--self-test"), "selftest"),
+    # Host-only LUFA adaptation: verbatim named constants + the canonical boot
+    # descriptor IDEA re-expressed as our own pure helper. The gcc-built check
+    # compiles the shipped decoder, so real generated descriptors are decoded
+    # by production code. LUFA is AVR8-only: no second USB stack in firmware.
+    Gate("lufa", "LUFA HID fixtures vs shipped decoder",
+         ("thirdparty/lufa/lufa_hid_gate.py", "--check"), "proof",
+         "generated canonical mouse/keyboard descriptors decoded by "
+         "components/usb/usb_hid_layout.c; usb.c key/modifier codes and "
+         "test/main/test_usb_hid_layout.c fixtures cross-checked; host-only"),
+    Gate("lufa_canary", "LUFA HID guard canary",
+         ("thirdparty/lufa/lufa_hid_gate.py", "--self-test"), "selftest",
+         "four tamper cases (key code, item type, button count, axis width) "
+         "must all go red"),
 )
 GATE_BY_ID: Dict[str, Gate] = {gate.gid: gate for gate in GATES}
 SELFTEST_IDS = tuple(g.gid for g in GATES if g.group == "selftest")
