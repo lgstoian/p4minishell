@@ -91,8 +91,21 @@ None. Existing batch verbs, app layouts and firmware behaviour are preserved.
   11/11; PageUp/PageDown proven with pixel diffs; appdiff 15 apps / 0 diffs;
   20/20 boots with 0 panics; 15-minute dogfood 7/7 on both boards; gallery and
   live Wikipedia proof published.
-- **Full-tier result:** see the final verbatim gate log recorded in the
-  release commit and `release.md`.
+- **Full-tier result:** the last completed run returned `RESULT OK` with
+  every suite passing on both boards and no board-differential failures. One
+  suite (`apps_gallery` on COM3) passed on its second attempt: MOOD's real SD
+  writes put `[M-MOOD-TREND]` at ~100 s, beyond the old 45 s step timeout, so
+  the step/watchdog budget was calibrated (180 s / 420 s) without changing any
+  marker, PNG or shell assertion. That calibration has **not** been re-proven
+  by a completed clean run.
+- **Screenshot determinism:** the root cause (capture must real-hard-reset
+  before both passes) is fixed in the capture path and one 11-frame run was
+  observed, but the `--update` rebaseline plus two plain verification passes
+  were **not** completed. Do not claim this gate green from those runs.
+- **Security trade-off:** `CONFIG_ESP_SYSTEM_PMP_IDRAM_SPLIT=n` is required for
+  a writable+executable internal region under IDF 5.5.5, so internal SRAM is
+  RWX (weakened W^X). Mitigations: ECDSA verification before execution, a fixed
+  ABI with no relocation, and the `.bat` shim as the only front door.
 - A host pass is never hardware sign-off.
 
 ## P4Sync binary

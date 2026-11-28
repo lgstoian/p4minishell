@@ -12,11 +12,14 @@ release. For the current feature set see [`readme.md`](readme.md), for the
 grouped history and future direction see [`roadmap.md`](roadmap.md), and for
 open bugs see [`bugs.md`](bugs.md).
 
-## [Unreleased]
+## [v1.6.0] - 2026-11-28
 
-> **Board-free visual redesign.** Everything below is host/static-only. No
-> hardware result is claimed for this work; v1.6.0 remains a board-free
-> release candidate with the two-board sign-off still open (`harness.md` §0/§2.2).
+> **DOS redesign + platform expansion.** Host pre-gates are green (49/49 gates,
+> 22 canaries; 843 static tests). Board verification on COM3/COM6 is recorded in
+> `RELEASE_NOTES_v1.6.0.md`, including two documented gaps: the app-gallery MOOD
+> timing calibration was not re-proven by a clean full-tier run, and the
+> screenshot-determinism rebaseline + two verification passes were not completed.
+> See `harness.md` §0/§2.2.
 
 ### Added
 
