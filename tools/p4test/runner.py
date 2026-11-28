@@ -321,7 +321,9 @@ def run_suites(mods, port: Optional[str], quick: bool = False,
             # that wedged the worker likewise leaves the board unusable. Other
             # suites share the boot: a hard reset per area cost ~8 min/board
             # and caught nothing the declared flag does not already cover.
-            if index and (dirty or needs_clean_boot(mod)):
+            # Honour a declaration even for the first suite: a board left in a
+            # modal/page by a PREVIOUS run is not a clean boot.
+            if dirty or needs_clean_boot(mod):
                 try:
                     print("  [REBOOT] before %s (%s)" % (
                         name, "declared NEEDS_CLEAN_BOOT" if needs_clean_boot(mod)
@@ -416,7 +418,9 @@ def _board_worker(label: str, port: str, mods, quick: bool,
                 # or its failures cascade into unrelated areas. Other suites
                 # share the boot; a hard reset for every one cost ~8 min/board
                 # and caught nothing the declaration does not already cover.
-                if index and (dirty or needs_clean_boot(mod)):
+                # Honour a declaration even for the first suite: a board left
+                # in a modal/page by a PREVIOUS run is not a clean boot.
+                if dirty or needs_clean_boot(mod):
                     try:
                         print("  [REBOOT] before %s (%s)" % (
                             name, "declared NEEDS_CLEAN_BOOT"

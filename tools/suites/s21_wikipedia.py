@@ -212,7 +212,7 @@ def _live(dev, c, ctx):
         c.check("live clock ready for TLS", False,
                 "clock did not synchronize; HTTPS certificate validation would fail")
         dev.run("wifi disconnect", timeout=20)
-        dev.run("wifi forget", timeout=15)
+        dev.run("wifi forget all", timeout=15)
         return
 
     dev.run("browser cache clear", timeout=20)
@@ -284,7 +284,7 @@ def _live(dev, c, ctx):
 
     if ssid:
         dev.run("wifi disconnect", timeout=20)
-        dev.run("wifi forget", timeout=15)
+        dev.run("wifi forget all", timeout=15)
 
 
 def run(dev, ctx):
@@ -314,3 +314,4 @@ def run(dev, ctx):
         c.check("live Wikipedia leg completed", False, str(exc))
 
     return c
+

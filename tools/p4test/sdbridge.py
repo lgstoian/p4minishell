@@ -223,15 +223,19 @@ def pull_file(dev: DeviceSession, remote: str, timeout: float = 120.0) -> bytes:
     Resync with a break and retry once before declaring the transfer failed.
     """
     last_error = ""
-    for attempt in range(2):
+    for attempt in range(4):
         dev.reset_input()
         dev.write(("send %s\r\n" % remote).encode())
         prelude = dev.read_until(b"SDFX", timeout)
         if b"SDFX" not in prelude:
             last_error = "send %s: no SDFX frame (%r)" % (remote, prelude[-160:])
-            if attempt == 0:
+            if attempt + 1 < 4:
+                # A `send` queued while the worker was still painting can be
+                # eaten by the app's modal. Break it, let the console settle,
+                # then retry; a genuine missing file still fails after 4.
                 dev.write(b"\x03\r\n")
-                dev.read_for(1.0)
+                dev.read_for(1.5)
+                time.sleep(0.5)
                 continue
             raise P4Error(last_error)
         size = struct.unpack("<I", dev.read_exact(4, 15.0))[0]
@@ -246,9 +250,10 @@ def pull_file(dev: DeviceSession, remote: str, timeout: float = 120.0) -> bytes:
         if TX_DONE not in tail:
             last_error = ("send %s: no TX DONE after %d bytes (%r)"
                           % (remote, size, tail[-120:]))
-            if attempt == 0:
+            if attempt + 1 < 4:
                 dev.write(b"\x03\r\n")
-                dev.read_for(1.0)
+                dev.read_for(1.5)
+                time.sleep(0.5)
                 continue
             raise P4Error(last_error)
         return payload

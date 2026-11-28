@@ -118,11 +118,12 @@ static inline bool epub_href_match(const char *left, const char *right)
 
 /**
  * Link each TOC entry to its spine index and give an untitled chapter the TOC
- * label. Unlinked entries keep chapter_index = -1 (never a bogus 0). Pure.
+ * label. Unlinked entries keep chapter_index = -1 (never a bogus 0). The spine
+ * is mutable because an untitled chapter adopts the TOC label.
  * @return the number of links established.
  */
 static inline int epub_toc_link_spine(epub_toc_entry_t *toc, int toc_count,
-                                      const epub_chapter_t *spine,
+                                      epub_chapter_t *spine,
                                       int spine_count)
 {
     int linked = 0;

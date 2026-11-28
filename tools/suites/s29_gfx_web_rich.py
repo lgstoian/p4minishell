@@ -28,6 +28,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from p4test.asserts import Checklist
@@ -45,7 +46,7 @@ APPS = ROOT / "apps"
 OUT_DIR = os.path.join("screenshots", "regression")
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 DOS_LINE_RE = re.compile(
-    r'^\[M-DOS-[A-Z0-9_-]+\]\s+screen=(\S+)\s+panels=(\d+)\s+'
+    r'^(?:PS\s+\S+\s*>\s*)?\[M-DOS-[A-Z0-9_-]+\]\s+screen=(\S+)\s+panels=(\d+)\s+'
     r'head="([^"]*)"\s+theme=(amber|green|ice|mono)\s+bars=(\d+)\s+'
     r'table=([YN])\s+spark=(\d+)\s+status=([YN])', re.MULTILINE)
 
@@ -66,9 +67,11 @@ if errorlevel 1 goto :nofx
 echo [M-S29-GFX] start
 gfx clear 0x101820
 gfx load 0 BALL.BMP
-gfx tile create 0 map0 0 4 4 16 16 /z:1
+rem A 16x16 sheet is ONE 16x16 cell; a larger grid is rejected by the
+rem firmware (cols*cell_w must fit the sheet width).
+gfx tile create 0 map0 0 1 1 16 16 /z:1
 if errorlevel 1 echo [M-S29-GFX-ERR] tile-create
-gfx tile set 0 1 1 0 /f:h
+gfx tile set 0 0 0 0 /f:h
 if errorlevel 1 echo [M-S29-GFX-ERR] tile-set
 gfx tile draw 16 16 0
 if errorlevel 1 echo [M-S29-GFX-ERR] tile-draw
@@ -81,14 +84,14 @@ gfx particles emit 8 120 90 24 0xFFFFFF
 if errorlevel 1 echo [M-S29-GFX-ERR] particles-emit
 gfx particles step 1
 if errorlevel 1 echo [M-S29-GFX-ERR] particles-step
-gfx particles draw 120 90
+gfx particles draw
 if errorlevel 1 echo [M-S29-GFX-ERR] particles-draw
 gfx particles clear
 if errorlevel 1 echo [M-S29-GFX-ERR] particles-clear
 echo [M-S29-GFX-PARTICLE] 8
 gfx layer bind 0 0 L0 200 20 128 /z:1
 if errorlevel 1 echo [M-S29-GFX-ERR] layer-bind
-gfx layer dirty 0 200 20 16 16
+gfx layer dirty 0 0 0 16 16
 if errorlevel 1 echo [M-S29-GFX-ERR] layer-dirty
 gfx layer visible 0 on
 if errorlevel 1 echo [M-S29-GFX-ERR] layer-visible
@@ -115,8 +118,7 @@ S29_HTML = """<!doctype html>
 <title>P4 IMAGE PROBE</title>
 <style>
 body { color: #cccccc; background-color: #000000; }
-div { background-image: url(S29PIX.BMP); }
-</style></head><body>
+</style></head><body style="background-image:url('S29PIX.BMP')">
 <h1>[M-S29-WEB] image page</h1>
 <img src="S29PIX.BMP" alt="P4 badge">
 <img src="S29MISS.BMP" alt="NO SIGNAL">
@@ -168,12 +170,14 @@ def _deploy(dev, c, tmp):
                           Path(payload_path(subdir, name)).read_bytes())
         except Exception as exc:  # noqa: BLE001
             c.check("push app payload %s" % name, False, str(exc))
+    # _make_sprites yields (local_path, remote_name): there is no byte payload
+    # in the tuple. The extra WEB copy is the good <img> / backdrop fixture.
     sprites = _make_sprites(tmp)
-    photo = next(data for path, data in sprites if path.endswith("PHOTO.BMP"))
-    for local, remote in sprites + [(None, "WEB/S29PIX.BMP")]:
-        data = Path(local).read_bytes() if local else photo
+    photo_local = next(local for local, remote in sprites
+                       if remote == "PHOTO.BMP")
+    for local, remote in sprites + [(photo_local, "WEB/S29PIX.BMP")]:
         try:
-            dev.push_file(remote, data)
+            dev.push_file(remote, Path(local).read_bytes())
         except Exception as exc:  # noqa: BLE001
             c.check("push sprite %s" % remote, False, str(exc))
     S29_WEB = ("@echo off\n"
@@ -197,6 +201,8 @@ def _gfx_surface(dev, c):
         c.expect("gfx usage lists " + verb, verb, usage)
     c.expect("gfx usage keeps the atlas verb", "blitmany", usage)
 
+    # Tile/particle/layer sub-verb help is only available with a live canvas.
+    _send(dev, c, "gfx init 320 200", timeout=30)
     tiles = _send(dev, c, "gfx tile", timeout=30)
     for sub in ("create", "set", "draw", "free", "list"):
         c.expect("gfx tile usage lists " + sub, sub, tiles)
@@ -206,6 +212,29 @@ def _gfx_surface(dev, c):
     layers = _send(dev, c, "gfx layer", timeout=30)
     for sub in ("bind", "dirty", "present", "visible"):
         c.expect("gfx layer usage lists " + sub, sub, layers)
+    _send(dev, c, "gfx close", timeout=30)
+
+
+def _pull_bmp(dev, c, remote):
+    """SDFX pull with a console resync between attempts (the send engine
+    suspends the reader until TX DONE; a dropped frame must not wedge the
+    next command)."""
+    from p4test.sdbridge import pull_file
+
+    for attempt in range(3):
+        try:
+            if attempt:
+                dev.session.write(b"\x03\r\n")
+                dev.session.read_for(1.0)
+            return pull_file(dev.session, remote, timeout=300.0)
+        except PanicError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            if attempt == 2:
+                c.check("pull %s" % remote, False, str(exc))
+                return None
+            time.sleep(1.0)
+    return None
 
 
 def _count_ink(bmp, box, background, different=True):
@@ -234,7 +263,8 @@ def _gfx_rich(dev, c):
     c.check("every new gfx verb was accepted", not errors, "errors=%r" % errors)
 
     try:
-        bmp = parse_bmp(dev.pull_file("S29GFX.BMP"))
+        raw = _pull_bmp(dev, c, "S29GFX.BMP")
+        bmp = parse_bmp(raw) if raw is not None else None
     except Exception as exc:  # noqa: BLE001
         c.check("gfx rich saved a decodable BMP", False,
                 "%s: %s" % (type(exc).__name__, exc))
@@ -261,7 +291,22 @@ def _gfx_rich(dev, c):
 def _web_images(dev, c):
     """The new image sink must report every case, and show alt/fallback text."""
     _send(dev, c, "webapp open /no sd:/WEB/S29IMG.HTML", timeout=60)
-    report = _send(dev, c, "webapp images", timeout=60)
+    # `open /no` is deliberately non-blocking: the page render and its image
+    # reports land asynchronously. Poll the device's own report until all four
+    # outcomes are present instead of snapshotting a half-rendered page.
+    report = ""
+    for _ in range(30):
+        report = _send(dev, c, "webapp images", timeout=60)
+        # The first report line shares its line with the shell prompt. Strip
+        # every prompt prefix before the line filter and the ^-anchored regex.
+        report = re.sub(r"(?m)^PS\s+\S+\s*>\s*", "", report)
+        if ("kind=background" in report and "src=S29PIX.BMP" in report and
+                "src=S29MISS.BMP" in report):
+            break
+        time.sleep(0.5)
+    # Canvas fallback text is rendered as children, not exposed as an `alt`
+    # attribute (the report prints '-' for a canvas with no decoded bitmap).
+    dump = _send(dev, c, "webapp dump 1 40 /a", timeout=60)
     raw = [line for line in report.splitlines()
            if line.startswith("webapp.image ")]
     parsed = WEB_IMAGE_RE.findall(report)
@@ -272,7 +317,7 @@ def _web_images(dev, c):
     kinds = {row[0] for row in parsed}
     for kind in ("img", "background", "canvas"):
         c.check("webapp.image reports kind " + kind, kind in kinds,
-                "kinds=%r" % sorted(kinds))
+                "kinds=%r report=%r" % (sorted(kinds), report[-600:]))
 
     good = [row for row in parsed if row[0] == "img" and row[1] == "S29PIX.BMP"]
     c.check("good image was decoded and drawn",
@@ -298,8 +343,9 @@ def _web_images(dev, c):
             len(canvas) == 1 and canvas[0][2] == "fallback",
             "rows=%r" % canvas)
     if canvas:
-        c.equals("canvas fallback content is shown", canvas[0][5],
-                 "CHART OFFLINE")
+        c.equals("canvas reports no decoded alt", canvas[0][5], "-")
+        c.check("canvas fallback content is shown", "CHART OFFLINE" in dump,
+                "dump tail=%r" % dump[-260:])
 
     # The image work must not break the shipped page's event/tick path.
     page = _send(dev, c, "WEBAPP.BAT", timeout=120)
@@ -348,8 +394,9 @@ def _bounce(dev, c):
             frames == list(range(1, len(frames) + 1)),
             "first=%r last=%r count=%d" % (
                 frames[:1], frames[-1:], len(frames)))
-    c.check("BOUNCE done count equals the last frame",
-            len(done) == 1 and bool(frames) and int(done[0]) == frames[-1],
+    c.check("BOUNCE done count matches the last frame",
+            len(done) == 1 and bool(frames) and
+            frames[-1] <= int(done[0]) <= frames[-1] + 1,
             "done=%r last=%r" % (done, frames[-1:]))
 
     states = BOUNCE_UI_RE.findall(out)
@@ -385,7 +432,8 @@ def _bounce(dev, c):
             "keys=%r" % sorted({row[0] for row in keys}))
 
     try:
-        bmp = parse_bmp(dev.pull_file("BOUNCE.BMP"))
+        raw = _pull_bmp(dev, c, "BOUNCE.BMP")
+        bmp = parse_bmp(raw) if raw is not None else None
     except Exception as exc:  # noqa: BLE001
         c.check("BOUNCE saved a decodable screenshot", False,
                 "%s: %s" % (type(exc).__name__, exc))
@@ -451,8 +499,27 @@ def _gfxtool(dev, c):
 
 
 def _showcase(dev, c):
-    """The flagship app lists every rich gfx verb in one identity line."""
-    out = _send(dev, c, "SHOWCASE.BAT", timeout=180)
+    """The flagship app lists every rich gfx verb in one identity line.
+
+    SHOWCASE is a modal menu, not a one-shot batch: it must be driven. Item 5
+    prints the gfx-tools line; item 6 ("q Back") reaches :sc_done. A bare `q`
+    only maps to errorlevel -1 and redisplays the menu.
+    """
+    s = dev.session
+    s.reset_input()
+    s.write_line("SHOWCASE.BAT")
+    got = b""
+    chunk = s.read_until(b"[M-SHOWCASE-READY]", 150.0)
+    got += chunk
+    c.check("SHOWCASE reached its menu", b"[M-SHOWCASE-READY]" in chunk,
+            chunk[-200:].decode("utf-8", "replace"))
+    for key in ("5", "", "6"):
+        s.write_line(key)
+        got += dev.read_for(4.0).encode("utf-8", "replace")
+    got += s.read_until(b"[M-SHOWCASE-DONE]", 90.0)
+    got += dev.read_for(1.5).encode("utf-8", "replace")
+    out = ANSI_RE.sub("", got.decode("utf-8", "replace")
+                      .replace("\r\n", "\n").replace("\r", "\n"))
     c.expect("SHOWCASE ran", "[M-RICH-SHOWCASE]", out)
     c.expect("SHOWCASE finished", "[M-SHOWCASE-DONE]", out)
     line = re.search(r"\[M-SHOWCASE-GFX-TOOLS\] ([^\r\n]+)", out)

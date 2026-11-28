@@ -215,6 +215,13 @@ def run(dev, ctx):
 
     dev.run("del /f HTTPFIX.TXT", timeout=30)
     dev.run("del /f HTTPCOOK.TXT", timeout=30)
+    # Stop the server AND forget the saved station: a bare disconnect leaves
+    # the reconnect watchdog free to re-associate and httpd writing "listening"
+    # lines into later suites' transcripts. Those background lines can split a
+    # marker such as [M-CONTROL-DONE] and make a healthy app look wedged.
+    dev.run("httpd stop", timeout=20)
     dev.run("wifi disconnect", timeout=20)
+    dev.run("wifi forget all", timeout=15)
 
     return c
+

@@ -47,7 +47,7 @@ def _join(dev: Device, ssid: str, password: str) -> str:
 
 
 def _leave(dev: Device) -> None:
-    for cmd in ("chat peer off", "wifi disconnect", "wifi forget"):
+    for cmd in ("chat peer off", "wifi disconnect", "wifi forget all"):
         try:
             dev.run(cmd, timeout=15)
         except Exception:
@@ -123,3 +123,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

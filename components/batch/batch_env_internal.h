@@ -109,6 +109,10 @@ typedef struct shell_batch_frame {
     size_t ram_pos;
     /** setlocal scopes opened by this frame, unwound when it returns. */
     int setlocal_depth;
+    /** Frame-local slots already used when this batch file started. Slots
+     *  created while it runs are released when the file returns, so a long
+     *  sweep of apps cannot exhaust the 32-slot pool. */
+    uint32_t frame_slots_on_entry;
     /** Nested `call :label` scopes (`call_resume_pos` / argument saves). */
     shell_label_call_t label_calls[P4_CONFIG_BATCH_DEPTH_MAX + 2];
     int label_call_depth;
@@ -252,6 +256,10 @@ shell_env_var_t *batch_bg_overlay(bool create);
 
 /** Count in-use slots in one class (for the `slots` report). */
 size_t shell_env_class_used(shell_env_class_t class_tag);
+/** Used-slot bitmap for the frame-local class (one bit per slot). */
+uint32_t shell_env_frame_local_used_mask(void);
+/** Release frame-local slots that are used now but were free in @p before. */
+void shell_env_release_new_frame_locals(uint32_t before);
 
 /** Budget class a new variable name routes to (frame-local/array/global). */
 shell_env_class_t shell_env_route_class(const char *normalized);

@@ -106,6 +106,44 @@ def _shell_echo(dev, tag="P4APPOK"):
         return False
 
 
+def _ensure_shell(dev, c, label, extra_quit=()):
+    """Return True only when the SHELL answers, recovering a wedged console.
+
+    A menu app that still owns the worker (an exit key swallowed by a late
+    modal) eats the next marker-synchronised command, and every later `dev.run`
+    then times out on the stale prompt. A foreground break is enough for SET;
+    a hard reset is the last resort. The real shell echo is the only pass
+    signal, so a recovered console is proven, never assumed.
+    """
+    if _shell_echo(dev):
+        return True
+    for _ in range(3):
+        for line in extra_quit:
+            try:
+                dev.session.write_line(line)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            dev.session.write(b"\x03\r\n")
+        except Exception:  # noqa: BLE001
+            pass
+        dev.session.read_for(1.0)
+        if _shell_echo(dev):
+            c.note("%s: recovered the shell with a foreground break" % label)
+            return True
+    try:
+        dev.reboot(settle_ms=1500)
+        if _shell_echo(dev):
+            c.note("%s: recovered the shell with a hard reset" % label)
+            return True
+    except PanicError:
+        raise
+    except Exception:  # noqa: BLE001
+        pass
+    c.check("%s returned to the shell" % label, False, "shell did not answer")
+    return False
+
+
 def _wait(session, marker, timeout=45.0):
     """Wait for one marker; the session keeps the tail for the next wait."""
     got = session.read_until(marker.encode(), timeout)
@@ -857,27 +895,29 @@ def _companion_deep(dev, c):
     set_ok = _wait(s, "[M-SET]", 40)
     set_stage = "main menu"
     if set_ok:
-        def _advance(marker, tries=3):
+        def _advance(marker, tries=6, wait=8.0):
             """Dismiss a pending dialog with `ok` until `marker` shows. The
             waits keep their leftovers, so the marker emitted after a
-            dismissal is not lost."""
+            dismissal is not lost. Short, frequent retries matter on the Tab5:
+            a dialog that opens later than the first wait otherwise swallows
+            no key and the app sits on it until the next (long) probe."""
             for _ in range(tries):
-                if _wait(s, marker, 12):
+                if _wait(s, marker, wait):
                     return True
                 s.write_line("ok")
-            return _wait(s, marker, 12)
+            return _wait(s, marker, wait)
 
-        s.read_for(4.0)
+        s.read_for(6.0)  # COM6 paints the Settings menu more slowly
         set_stage = "brightness"
         s.write_line("1")               # Set brightness -> ask value
         s.read_for(3.0)
         s.write_line("63")
-        s.read_for(4.0)
+        s.read_for(6.0)
         set_ok = _advance("[M-SET]")    # dismiss Saved dialog -> Settings menu
         if set_ok:
             # Theme: enter, set amber, dismiss, Theme Back -> Settings.
             set_stage = "theme open"
-            tail = _press(s, "6", "[M-SET-THEME]", settle=3.0)
+            tail = _press(s, "6", "[M-SET-THEME]", settle=5.0)
             set_ok = b"[M-SET-THEME]" in tail
             if set_ok:
                 set_stage = "theme saved"
@@ -889,13 +929,13 @@ def _companion_deep(dev, c):
                     set_ok = _advance("[M-SET-THEME]")
                     if set_ok:
                         set_stage = "theme back"
-                        tail = _press(s, "6", "[M-SET]", settle=3.0)  # Theme Back
+                        tail = _press(s, "6", "[M-SET]", settle=5.0)  # Theme Back
                         set_ok = b"[M-SET]" in tail
     c.check("SET deep (brightness/theme)", set_ok, "" if set_ok else set_stage)
     if set_ok:
         # Leave SET before running shell commands (the menu owns the worker).
         set_stage = "exit"
-        tail = _press(s, "13", "[M-SET-BACK]", settle=3.0)
+        tail = _press(s, "13", "[M-SET-BACK]", settle=5.0)
         set_ok = b"[M-SET-BACK]" in tail
         c.check("SET deep exit", set_ok, "" if set_ok else set_stage)
     if set_ok:
@@ -913,21 +953,28 @@ def _companion_deep(dev, c):
         rot_ok = False
     else:
         s.read_for(4.0)
-        tail = _press(s, "3", "[M-SET-ROTATE]", settle=3.0)
+        tail = _press(s, "3", "[M-SET-ROTATE]", settle=5.0)
         rot_ok = b"[M-SET-ROTATE]" in tail
         if rot_ok:
-            tail = _press(s, "5", "[M-SET]", settle=3.0)  # Back
+            tail = _press(s, "5", "[M-SET]", settle=5.0)  # Back
             rot_ok = b"[M-SET]" in tail
         if rot_ok:
-            tail = _press(s, "13", "[M-SET-BACK]", settle=3.0)  # exit
+            tail = _press(s, "13", "[M-SET-BACK]", settle=5.0)  # exit
             rot_ok = b"[M-SET-BACK]" in tail
     c.check("SET rotate submenu", rot_ok, "")
+    # The exit key can be swallowed while a dialog is still painting. Prove the
+    # shell owns the worker before issuing marker-synced `config` commands.
+    rot_shell = _ensure_shell(dev, c, "SET rotate walk", extra_quit=("13",))
 
     # Rotation persistence round-trip (90 then back to 0).
-    for value in ("90", "0"):
-        _run(dev, c, "config ROTATE", "config ROTATE %s" % value, timeout=20)
-        out = _run(dev, c, "config ROTATE /b", "config ROTATE /b", timeout=15)
-        c.expect("rotation persisted %s" % value, value, out)
+    if rot_shell:
+        for value in ("90", "0"):
+            _run(dev, c, "config ROTATE", "config ROTATE %s" % value, timeout=20)
+            out = _run(dev, c, "config ROTATE /b", "config ROTATE /b", timeout=15)
+            c.expect("rotation persisted %s" % value, value, out)
+    else:
+        c.check("rotation persistence leg reachable", False,
+                "SET still owns the command worker")
 
     # Quick settings form: re-enter SET (the rotate walk above exited it),
     # accept the prefilled values, dismiss the "Quick settings applied."
@@ -953,10 +1000,15 @@ def _companion_deep(dev, c):
         s.write_line("ok")          # dismiss "Quick settings applied."
         set_stage = "quick settings exit"
         s.read_for(3.0)
-        tail = _press(s, "13", "[M-SET-BACK]", settle=3.0, timeout=20.0)
+        tail = _press(s, "13", "[M-SET-BACK]", settle=5.0, timeout=20.0)
         quick_ok = b"[M-SET-BACK]" in tail or _shell_echo(dev)
     c.check("SET quick settings form", quick_ok,
             "" if quick_ok else set_stage)
+    if quick_ok:
+        # The "applied" and "back" dialogs each consume one line; confirm the
+        # shell is back before any marker-synced query.
+        quick_ok = _ensure_shell(dev, c, "SET quick settings",
+                                 extra_quit=("ok", "13"))
     if quick_ok:
         out = _run(dev, c, "quick brightness", "config BRIGHTNESS /b", timeout=15)
         c.expect("quick brightness 50", "50", out)
@@ -1083,7 +1135,10 @@ def run(dev, ctx):
     _diag(dev, c)
     _drive(dev, c, *DRIVE[1])    # COMPANION smoke + screenshot
     _companion_deep(dev, c)
-    _services(dev, c)
+    # Services use marker-synced `service install` calls; a foreground app left
+    # holding the worker would swallow the marker and wedge the rest of the run.
+    if _ensure_shell(dev, c, "before resident services", extra_quit=("13", "ok")):
+        _services(dev, c)
 
     if quick:
         c.note("quick mode: no extra long-app interaction")

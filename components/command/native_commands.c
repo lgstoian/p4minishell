@@ -245,23 +245,36 @@ static const native_exec_api_t s_native_api = {
     native_api_time_ms
 };
 
-int native_commands_init(void)
+/** Re-read the ONE `p4sign` trust key immediately before any native front
+ *  door is used. Boot installs it once, but `pkg key install|clear` can change
+ *  the NVS value while the shell is running; without this sync a freshly
+ *  installed key was reported as "not ready" until the next reboot (and a
+ *  cleared key stayed trusted for the rest of the session). Both outcomes are
+ *  wrong, and the second is a security defect, so every entry point refreshes
+ *  trust from the single store instead of caching it forever. */
+static void native_trust_sync(void)
 {
-    static const native_pay_crypto_ops_t ops = {
-        native_sha256_spans,
-        native_ecdsa_verify_p256
-    };
     uint8_t pub[NATIVE_PAY_PUBKEY_BYTES];
 
-    /* Hooks are installed even when no key exists: the verifier then remains
-     * explicitly "not ready", never an implicit pass. */
-    native_pay_set_crypto_ops(&ops);
     if (pkg_sign_pubkey_load(pub) == 0) {
         native_pay_set_trusted_key(pub);
     } else {
         native_pay_set_trusted_key(NULL);
     }
     memset(pub, 0, sizeof(pub));
+}
+
+int native_commands_init(void)
+{
+    static const native_pay_crypto_ops_t ops = {
+        native_sha256_spans,
+        native_ecdsa_verify_p256
+    };
+
+    /* Hooks are installed even when no key exists: the verifier then remains
+     * explicitly "not ready", never an implicit pass. */
+    native_pay_set_crypto_ops(&ops);
+    native_trust_sync();
 
     native_exec_set_map_ops(native_map_payload, native_unmap_payload);
     native_exec_set_api(&s_native_api);
@@ -349,8 +362,11 @@ static int native_run_app(const char *app, bool verify_only,
     uint8_t *buf = NULL;
     size_t len = 0u;
     native_exec_plan_t plan;
-    int rc = native_read_envelope(app, &buf, &len);
+    int rc;
     int entry_rc;
+
+    native_trust_sync(); /* honour pkg key install/clear without a reboot */
+    rc = native_read_envelope(app, &buf, &len);
 
     if (rc != 0) {
         shell_transcript_appendf_ansi(
@@ -400,6 +416,7 @@ static const char *native_yes_no(bool value)
 
 static void native_print_info(void)
 {
+    native_trust_sync(); /* the info surface must agree with the live NVS key */
     shell_transcript_appendf_ansi(
         SH_HEAD "native: signed payload loader\n" SH_RST);
     shell_transcript_appendf_ansi(

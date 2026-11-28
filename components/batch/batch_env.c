@@ -403,6 +403,42 @@ static shell_env_var_t *shell_env_find_free_slot_class(shell_env_class_t class_t
     return NULL;
 }
 
+uint32_t shell_env_frame_local_used_mask(void)
+{
+    uint32_t mask = 0;
+    size_t i;
+
+    batch_shared_take();
+    if (shell_env_class_is_active(SHELL_CLASS_FRAME_LOCAL)) {
+        for (i = 0; i < s_class_budget[SHELL_CLASS_FRAME_LOCAL]; i++) {
+            size_t index = s_class_start[SHELL_CLASS_FRAME_LOCAL] + i;
+            if (s_shell_env_vars[index].used) {
+                mask |= (uint32_t)1u << i;
+            }
+        }
+    }
+    batch_shared_give();
+    return mask;
+}
+
+void shell_env_release_new_frame_locals(uint32_t before)
+{
+    size_t i;
+
+    if (!shell_env_class_is_active(SHELL_CLASS_FRAME_LOCAL)) {
+        return;
+    }
+    batch_shared_take();
+    for (i = 0; i < s_class_budget[SHELL_CLASS_FRAME_LOCAL]; i++) {
+        size_t index = s_class_start[SHELL_CLASS_FRAME_LOCAL] + i;
+        uint32_t bit = (uint32_t)1u << i;
+        if (s_shell_env_vars[index].used && (before & bit) == 0u) {
+            memset(&s_shell_env_vars[index], 0, sizeof(s_shell_env_vars[index]));
+        }
+    }
+    batch_shared_give();
+}
+
 /* Determine the appropriate class for a new variable being set. Frame-local
  * scope (call/gosub active) routes to SHELL_CLASS_FRAME_LOCAL. Array-element
  * names route to SHELL_CLASS_ARRAY. Everything else is a global. The first

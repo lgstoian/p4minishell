@@ -4401,6 +4401,7 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
     frame->ram_len = 0;
     frame->ram_pos = 0;
     frame->setlocal_depth = 0;
+    frame->frame_slots_on_entry = 0u;
 
     error = shell_sd_begin(&session);
     if (error != ESP_OK) {
@@ -4524,6 +4525,7 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
     /* Remember the caller's setlocal depth so any scope this file opens and
      * forgets to close is unwound when the frame returns. */
     setlocal_depth_on_entry = s_setlocal_depth;
+    frame->frame_slots_on_entry = shell_env_frame_local_used_mask();
 
     /* A library call (`call file.bat::routine`) starts at a labelled routine
      * in an external file. Seek to the label so the frame loop begins there;
@@ -4779,6 +4781,11 @@ static esp_err_t shell_batch_run_internal(const char *path, const char *start_la
     /* Discard any setlocal scope this file left open, restoring the caller's
      * environment and releasing the snapshots. */
     shell_setlocal_unwind_to(setlocal_depth_on_entry);
+    /* Frame-local names are scoped to this batch file, not to the worker for
+     * ever. Release everything this file created so a long sweep of apps
+     * cannot exhaust the fixed 32-slot class pool. Variables set by `call
+     * :label` / `func` stay visible until the file returns. */
+    shell_env_release_new_frame_locals(frame->frame_slots_on_entry);
 
     /* A pending `goto` / `goto :eof` belongs to this frame only: labels are
      * resolved against this file's label table. Once the frame returns the

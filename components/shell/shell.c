@@ -646,11 +646,26 @@ static void shell_async_transcript_schedule_text(const char *text)
          * append path is NULL-safe, so the output still lands. */
         if (windows_get_transcript() == NULL) {
             shell_async_transcript_flush_cb(NULL);
-        } else if (lv_async_call(shell_async_transcript_flush_cb, NULL) != LV_RESULT_OK) {
-            portENTER_CRITICAL(&s_async_transcript_lock);
-            s_async_transcript_flush_queued = false;
-            portEXIT_CRITICAL(&s_async_transcript_lock);
-            ESP_LOGW(SHELL_TAG, "Failed to queue transcript flush");
+        } else {
+            /* This helper runs on the command worker (and on HID/event tasks),
+             * not on the LVGL task. lv_async_call() creates a one-shot timer
+             * and mutates LVGL's global timer list; with CONFIG_LV_OS_NONE the
+             * lv_lock() inside it is a no-op. Without the port mutex a concurrent
+             * lv_timer_handler can walk a half-updated list and later jump
+             * through a freed callback (F53: MEPC 0xcececece). The port mutex is
+             * recursive, so an LVGL-task caller stays safe. */
+            bool queued = false;
+            if (lvgl_port_lock(portMAX_DELAY)) {
+                queued = (lv_async_call(shell_async_transcript_flush_cb, NULL)
+                          == LV_RESULT_OK);
+                lvgl_port_unlock();
+            }
+            if (!queued) {
+                portENTER_CRITICAL(&s_async_transcript_lock);
+                s_async_transcript_flush_queued = false;
+                portEXIT_CRITICAL(&s_async_transcript_lock);
+                ESP_LOGW(SHELL_TAG, "Failed to queue transcript flush");
+            }
         }
     }
 }
@@ -4064,8 +4079,16 @@ void shell_usb_keyboard_input(uint8_t key_code, uint8_t modifiers, bool pressed)
     ctx->key_code = key_code;
     ctx->modifiers = modifiers;
 
-    /* Dispatch to LVGL task via async call */
-    if (lv_async_call(shell_usb_keyboard_inject_cb, ctx) != LV_RESULT_OK) {
+    /* Dispatch to LVGL task via async call. This runs on the USB HID/event
+     * task, so the timer-list mutation must be serialised against
+     * lv_timer_handler() exactly like every other lv_async_call from a foreign
+     * task (F53: MEPC 0xcececece). */
+    bool queued = false;
+    if (lvgl_port_lock(portMAX_DELAY)) {
+        queued = (lv_async_call(shell_usb_keyboard_inject_cb, ctx) == LV_RESULT_OK);
+        lvgl_port_unlock();
+    }
+    if (!queued) {
         free(ctx);
     }
 }

@@ -179,6 +179,7 @@ def run(dev, ctx):
     # -- cleanup ------------------------------------------------------------
     dev.run("httpd stop", timeout=20)
     dev.run("wifi disconnect", timeout=20)
-    dev.run("wifi forget", timeout=15)
+    dev.run("wifi forget all", timeout=15)
 
     return c
+

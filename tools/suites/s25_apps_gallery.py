@@ -150,15 +150,26 @@ SPECS = [
          shot=("file", "ADVENT.BMP"), quit=["quit"], end="[M-ADV-QUIT]"),
     dict(app="snake", cmd="launch SNAKE", start="[M-SNAKE]",
          prompt="Move?",
-         # Drive enough steps for a real snake before the snapshot: one key
-         # left a 3-cell stub that looked like a broken render in v1.4.3.
-         pre=[(1.2, "s", None), (1.0, "s", None)],
+         # SNAKE's choice has a 1 s default timeout: any pre-key delay lets the
+         # demo advance (or exit) before the snapshot key, so send `p` as soon
+         # as the Move? prompt is observed (the snap branch waits for it).
          shot=("snap", "p", "[M-SNAKE-SNAP]", "SNAKE.BMP"),
          quit=["q"], end="[M-SNAKE-DONE]"),
     dict(app="mood", cmd="launch MOOD", start="[M-MOOD]",
          pre=[(1.0, "1", "[M-MOOD-TREND]")],
-         shot=("file", "MOOD_TREND.BMP"), quit=["ok", "6", "6"],
-         quit_settle=1.5, end_shell=True),
+         # MOOD takes five real samples, each with a slow SD `mem >` write and
+         # a 2 s delay; on a busy card [M-MOOD-TREND] lands ~100 s after launch
+         # and the app's documented worst case is 216 s. A 45 s step timeout or
+         # a 180 s drive budget mis-fires on a healthy board, so both are
+         # calibrated here - no marker, image or shell assertion is relaxed.
+         step_timeout=180.0, drive_budget=420.0,
+         # [M-MOOD-TREND] is printed BEFORE the "Sampling done." dialog opens;
+         # a single early `ok` is swallowed by the shell and the app then sits
+         # in the undismissed dialog. Send two `ok`s with a longer settle so
+         # one lands on the dialog whenever it opens, then select Back. Extra
+         # lines after the app exits are harmless.
+         shot=("file", "MOOD_TREND.BMP"), quit=["ok", "ok", "6", "6"],
+         quit_settle=4.0, end_shell=True),
 
     # ---- canvas apps: use the BMP the app saves off its frame loop ------
     dict(app="bounce", cmd="launch BOUNCE", start="[M-BOUNCE]",
@@ -239,9 +250,9 @@ def _log(text):
     print("  [gallery] %s" % text, flush=True)
 
 
-def _run(dev, c, label, cmd, timeout=60.0):
+def _run(dev, c, label, cmd, timeout=60.0, settle=0.5):
     try:
-        return dev.run(cmd, timeout=timeout)
+        return dev.run(cmd, timeout=timeout, settle=settle)
     except PanicError:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -289,11 +300,15 @@ def _make_sprites(tmp):
 def _deploy(dev, c, tmp):
     # A flapping hosted Wi-Fi link emits `eh_host_feat_rpc: no response` lines
     # asynchronously; they corrupt the in-flight BMPX screenshot frames. The
-    # gallery is entirely local, so disconnect before driving any app.
-    try:
-        dev.run("wifi disconnect", timeout=20)
-    except Exception:  # noqa: BLE001 - already disconnected is fine
-        pass
+    # gallery is entirely local, so tear the link down completely: a bare
+    # disconnect leaves the saved profile armed, and the reconnect watchdog
+    # re-associates mid-sweep with `wifi`/`httpd` lines that split raw markers
+    # such as [M-CONTROL-DONE] and make a healthy app look wedged.
+    for cmd in ("httpd stop", "wifi forget all", "wifi disconnect"):
+        try:
+            dev.run(cmd, timeout=20)
+        except Exception:  # noqa: BLE001 - already idle is fine
+            pass
     _log("deploying the reference bundle")
     for name in ("APPS", "WEB", "EMOJI", "DOCS", "TEMPLATES", "DICTS",
                  "NOTES", "tmp"):
@@ -466,18 +481,28 @@ def _pull_bmp(dev, c, remote):
     keeps a correct screen from failing on the write/pull race (SNAKE's capture
     came back missing once in a full sweep).
     """
+    from p4test.sdbridge import pull_file as sdfx_pull
+
     data = None
-    for attempt in range(2):
+    for attempt in range(3):
+        # A 1.8 MB PLOT_SCREEN.BMP can spend longer than the generic 120 s
+        # window in the send engine under load. Give the transfer a real
+        # budget, and resync the console after a failed attempt: a `send`
+        # command still queued behind a busy worker leaves the reader
+        # suspended and makes the next `del`/command eat its marker.
         try:
-            data = dev.pull_file(remote)
+            if attempt:
+                dev.session.write(b"\x03\r\n")
+                dev.session.read_for(1.0)
+            data = sdfx_pull(dev.session, remote, timeout=300.0)
             break
         except PanicError:
             raise
         except Exception as exc:  # noqa: BLE001
-            if attempt == 1:
+            if attempt == 2:
                 c.note("pull %s failed: %s" % (remote, exc))
                 return None
-            time.sleep(1.0)
+            time.sleep(1.5)
     try:
         return parse_bmp(data)
     except Exception as exc:  # noqa: BLE001
@@ -512,6 +537,15 @@ def _drive(dev, c, spec, want):
     identity_ok = True
     shot = spec.get("shot")
     visual = app not in NON_VISUAL
+
+    # Each app must start with the REAL shell owning the command worker. A
+    # previous app's swallowed exit key can leave a modal holding the worker;
+    # waiting for this app's start marker then matches stale bytes and the app
+    # never actually runs, so its done marker can never arrive. Recovery is
+    # reported, never assumed (foreground break, then hard reset).
+    if not _ensure_shell(dev, c, app):
+        c.check("%s started from the shell" % app, False, "shell unavailable")
+        return False
 
     # Delete the app's own snapshot first so a stale file can never be taken
     # for this run's capture (a failed delete is reported by the pull gate).
@@ -589,12 +623,14 @@ def _drive(dev, c, spec, want):
         source = "app snapshot " + remote
 
     done = spec.get("done")
+    done_seen = True
     if done:
-        got = _read_until(s, done, spec.get("done_timeout", 240.0))
+        got = _read_until(s, done, spec.get("done_timeout", 90.0))
         seen = done.encode() in got
         c.check("%s reached its done marker %s" % (app, done),
                 seen, _tail(got))
         identity_ok = identity_ok and seen
+        done_seen = seen
 
     # --- Quit before pulling an app-written BMP ----------------------------
     exited = True
@@ -629,7 +665,10 @@ def _drive(dev, c, spec, want):
     if visual and isinstance(shot, tuple) and shot[0] in ("file", "snap"):
         remote = shot[-1]
         _run(dev, c, app + " settle", "delay 300", timeout=20)
-        if bmp is None:
+        if bmp is None and done_seen:
+            # A failed done marker means the app may still own the worker;
+            # a 1.8 MB SDFX pull can then stall for minutes. Report the
+            # identity failure and move on instead of hanging the sweep.
             bmp = _pull_bmp(dev, c, remote)
         _run(dev, c, app + " cleanup snapshot", "del /f %s" % remote,
              timeout=20)
@@ -741,12 +780,15 @@ def run(dev, ctx):
             _log("driving %s" % spec["app"])
             started = time.time()
             ok = _drive(dev, c, spec, want)
-            if time.time() - started > 180.0:
+            budget = spec.get("drive_budget", 180.0)
+            if time.time() - started > budget:
                 # A wedged app otherwise costs dozens of 20s timeouts and can
                 # stall a whole sweep for an hour. Fail it explicitly and reset
-                # before the next app, instead of grinding on.
-                c.check("%s drive bounded to 180s" % spec["app"], False,
-                        "%.0fs" % (time.time() - started))
+                # before the next app, instead of grinding on. MOOD declares a
+                # larger budget because five slow SD samples are its normal
+                # path; every marker/image/shell assertion still runs.
+                c.check("%s drive bounded to %.0fs" % (spec["app"], budget),
+                        False, "%.0fs" % (time.time() - started))
                 dev.reboot(settle_ms=8000)
                 continue
             if not ok:
@@ -784,3 +826,5 @@ def run(dev, ctx):
         _cleanup(dev, c)
 
     return c
+
+
