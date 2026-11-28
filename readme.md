@@ -807,6 +807,8 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
 | [p4sync.md](p4sync.md) | P4Sync user guide: capabilities, CLI/bridge usage, Windows 11 GUI with screenshots of all nine pages |
 | [tools/p4sync/README.md](tools/p4sync/README.md) | P4Sync agent CLI + JSON bridge over the existing USB harness (commands, contract, board-free gate) |
 | [apps/p4sync_gui/README.md](apps/p4sync_gui/README.md) | Windows 11 / WPF desktop companion: pages, mock mode, credentials, build/tests |
+| [tools/thirdparty/miniaudio/README.md](tools/thirdparty/miniaudio/README.md) | Host-only miniaudio v0.11.26 (MIT-0/public domain) used for firmware-ready WAV asset preparation |
+| [tools/thirdparty/lufa/README.md](tools/thirdparty/lufa/README.md) | Host-only LUFA HID constants/checker validating our real USB descriptors; full licence notice |
 | [PORTING.md](PORTING.md) | Board profiles (`boards/`) and bring-up checklist |
 | [schematics.md](schematics.md) | Per-board hardware reference: pinouts, buses, power tree, expander maps |
 | [docs/apps.md](docs/apps.md) | Reference app gallery: each app's distinct DOS screen and proof origin |
@@ -857,7 +859,7 @@ of truth is `sdkconfig.defaults`). Adding a board is documented in
   `gallery_audit.py`, `gallery_audit_selftest.py`) and the visual proof gates
   (`python tools/make_web_screenshots.py --check`,
   `python tools/visual_proof_gate.py --check` / `--self-test`).
-  `python tools/host_all_gates.py` runs 47 gates / 21 canaries; a pass is never
+  `python tools/host_all_gates.py` runs 49 gates / 22 canaries; a pass is never
   hardware sign-off (`harness.md` §0/§2.2); the app transcript goldens await a
   board rebaseline.
 

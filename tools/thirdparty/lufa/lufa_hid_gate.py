@@ -59,7 +59,10 @@ def static_guards() -> Tuple[int, List[str]]:
     if not LICENCE.is_file():
         lines.append("FAIL missing vendored LICENSE.txt")
         return 1, lines
-    data = LICENCE.read_bytes()
+    # Compare canonical LF content: a checkout on Windows may materialise the
+    # verbatim upstream file with CRLF, which changes the raw blob SHA without
+    # changing a single licence byte.
+    data = LICENCE.read_bytes().replace(b"\r\n", b"\n")
     blob = git_blob_sha1(data)
     if blob != UPSTREAM_LICENCE_BLOB_SHA1:
         lines.append("FAIL LICENSE.txt blob sha %s != upstream %s"

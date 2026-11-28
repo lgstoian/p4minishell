@@ -190,6 +190,72 @@ The co-processor firmware this project ships is built from its own
 - **FreeRTOS**, **lwIP**, **FatFs**, **mbedTLS**, and **protobuf-c** are
   provided through ESP-IDF and keep their upstream licenses.
 
+### Host-only vendored verification libraries
+
+These two libraries are used only by host tools and gates. Neither is part of
+the firmware or the ESP-IDF build, and neither adds a second decoder or USB
+stack to the device.
+
+| Vendored path | Upstream | Licence | What was taken |
+|---------------|----------|---------|----------------|
+| `tools/thirdparty/miniaudio/` | [miniaudio](https://github.com/mackron/miniaudio) v0.11.26, tag `0.11.26`, commit `877ea4a7c2601c7b0f2a44e83dfac42e6470fea6` | Dual: Public Domain (Unlicense) **or** MIT No Attribution (MIT-0); we take MIT-0. `LICENSE` states `Copyright 2025 David Reid`; the notice inside `miniaudio.h` states `Copyright 2026 David Reid`. Both verbatim texts ship in `tools/thirdparty/miniaudio/`; blob SHAs `2f9423addfe68aa01449ba885d56d832f04b5e8e` (LICENSE) and `b8f61372d97c88b54b97227a5d1d60902726b8e4` (miniaudio.h) were verified against the upstream repository. | The single-header decoder plus a small host helper, compiled only by `tools/host_audio_gate.py` and `tools/audio_asset_prepare.py` to decode WAV/MP3/FLAC assets and cross-check PCM baselines. Not in `components/`, `main/`, any firmware CMake, or `test/`. |
+| `tools/thirdparty/lufa/` | [LUFA](https://github.com/abcminiuser/lufa) development build `LUFA_VERSION_STRING "210130"`, commit `90d65ba059d91078a34b9c26c8772ee14b556a13` | LUFA's modified MIT terms, © 2021 Dean Camera. Full text ships verbatim at `tools/thirdparty/lufa/LICENSE.txt`; upstream blob SHA `f63a25f81e33e40029dadc349fc82d6eeea8b28b` verified. This is **not** plain MIT and is **not** SPDX `MIT-advertising` (that text differs), so no SPDX identifier was assumed. | A verbatim subset of named HID constants from `HIDReportData.h`/`HIDClassCommon.h`, plus two small pure descriptor builders re-expressed in our style. Compiled by `tools/thirdparty/lufa/lufa_hid_fixture_check.c` to validate the real HID keyboard constants in `components/usb/usb.c` and the descriptor fixtures in `test/main/test_usb_hid_layout.c`. LUFA is an AVR8 USB stack: no driver, parser, demo or bootloader source is vendored, and nothing LUFA is in firmware or the ESP-IDF build — no second USB stack. |
+
+LUFA's terms require its copyright notice, permission notice and warranty
+disclaimer to appear in supporting documentation. The full verbatim text is
+reproduced at [`tools/thirdparty/lufa/LICENSE.txt`](tools/thirdparty/lufa/LICENSE.txt)
+(and in `tools/thirdparty/lufa/README.md`); the exact notice is:
+
+```text
+                  LUFA Library
+        Copyright (C) Dean Camera, 2021.
+
+     dean [at] fourwalledcubicle [dot] com
+                www.lufa-lib.org
+
+
+Permission to use, copy, modify, and distribute this software
+and its documentation for any purpose is hereby granted without
+fee, provided that the above copyright notice appear in all
+copies and that both that the copyright notice and this
+permission notice and warranty disclaimer appear in supporting
+documentation, and that the name of the author not be used in
+advertising or publicity pertaining to distribution of the
+software without specific, written prior permission.
+
+The author disclaims all warranties with regard to this
+software, including all implied warranties of merchantability
+and fitness.  In no event shall the author be liable for any
+special, indirect or consequential damages or any damages
+whatsoever resulting from loss of use, data or profits, whether
+in an action of contract, negligence or other tortious action,
+arising out of or in connection with the use or performance of
+this software.
+```
+
+The MIT-0 alternative notice accepted for miniaudio reads:
+
+```text
+ALTERNATIVE 2 - MIT No Attribution
+===============================================================================
+Copyright 2025 David Reid
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ### Bundled assets
 
 | Asset | License |

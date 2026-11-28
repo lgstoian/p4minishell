@@ -20,6 +20,13 @@ open bugs see [`bugs.md`](bugs.md).
 
 ### Added
 
+- **Host-only third-party verification.** LUFA-derived HID constants and two
+  pure descriptor builders now validate the real USB/HID descriptors
+  (`lufa`/`lufa_canary` gates); miniaudio powers `tools/audio_asset_prepare.py`
+  and an end-to-end WAV cross-check in `host_audio_gate.py` (17 canaries).
+  Both are attributed in `licence.md`, host-only, and add no second firmware
+  decoder or USB stack.
+
 - **P4Sync CLI/bridge/GUI integrated into release.** The host-side P4Sync
   agent CLI (`python tools/p4sync ... [--json]`) and the JSON-lines bridge
   (`tools/p4sync/bridge.py`) now ship as a first-class release surface: they
@@ -169,7 +176,7 @@ open bugs see [`bugs.md`](bugs.md).
 ### Verified (host-only, no hardware)
 
 - **v1.6.0 subsystem gates (board-free, never sign-off).**
-  `python tools/host_all_gates.py`: **47/47 gates PASS (21 canaries)** — the
+  `python tools/host_all_gates.py`: **49/49 gates PASS (22 canaries)** — the
   new `os` (14 cases / 144 checks + 4 canaries), `power` (300 checks, 4 board
   profiles, 10 canaries), `audio` (99 checks, 12 canaries), `video` (18
   assertions, 10 canaries) and `engine3d` (4 fixtures, 41 assertions, 10
@@ -179,8 +186,8 @@ open bugs see [`bugs.md`](bugs.md).
   0 errors, 0 warnings**; `comment_index.py` and `breadcrumbs.py`: 0 errors.
   **Hardware sign-off is pending** on COM3/COM6 for v1.6.0; every one of these
   is a board-free pre-gate, never a board result.
-- `python tools/host_all_gates.py`: **47/47 board-free gates PASS**
-  (21 canaries), including `visual`, `visual_canary`, the browser gate and
+- `python tools/host_all_gates.py`: **49/49 board-free gates PASS**
+  (22 canaries), including `visual`, `visual_canary`, the browser gate and
   the new `p4sync`/`p4sync_canary` gates (51 P4Sync checks, 18 canaries).
   `python tools/p4sync_gate.py --check`: 51 PASS; `--self-test`: 18 PASS.
   On Windows, `dotnet build apps/p4sync_gui/P4SyncGui.sln -c Release` is

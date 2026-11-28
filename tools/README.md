@@ -164,7 +164,7 @@ These are the host-side systems behind [`AGENTS.md`](../AGENTS.md),
   41 assertions over the Q16 math and one `gfx_surface` raster path;
   `--self-test` runs 10 red canaries. Gate ids `engine3d`/`engine3d_canary`.
 
-`python tools/host_all_gates.py` now runs **47 gates / 21 canaries**; a pass is
+`python tools/host_all_gates.py` now runs **49 gates / 22 canaries**; a pass is
 a board-free pre-gate only, never hardware sign-off (`harness.md` §0/§2.2).
 
 The p4test runner also treats a zero-assertion `Checklist`/`SuiteResult` as a

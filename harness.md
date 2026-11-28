@@ -133,7 +133,7 @@ fixtures (the ESP32 wiki proof plus the four DOS pages): 271 assertions against
 exact baselines captured from that renderer, plus 11 labelled STATIC wiring
 checks; `--self-test` runs 9 red canaries. It proves no device behaviour:
 live HTTPS, the full 2000-row page, real LVGL input and glass taps remain
-DEVICE-ONLY. `host_all_gates.py` now runs **47 gates / 21 canaries** (the new gate ids are
+DEVICE-ONLY. `host_all_gates.py` now runs **49 gates / 22 canaries** (the new gate ids are
 `os`, `power`, `audio`, `video` and `engine3d` plus their `*_canary` ids,
 alongside `batch`, `browser`, `visual` and `p4sync`/`p4sync_canary`). A pass is
 a board-free pre-gate only, never hardware sign-off (§0).

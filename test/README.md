@@ -229,7 +229,7 @@ serial port:
   assertions and 11 labelled STATIC wiring checks; `--self-test` runs 9 red
   canaries. The wiki PNG is the first 25 rows of a saved fixture, not live HTTPS
   or the 2000-row device page. Live input and glass taps remain DEVICE-ONLY.
-  `python tools/host_all_gates.py` now reports **47/47 gates, 21 canaries**
+  `python tools/host_all_gates.py` now reports **49/49 gates, 22 canaries**
   (`browser`/`browser_canary`, `visual`/`visual_canary`,
   `p4sync`/`p4sync_canary` and the new `os`/`power`/`audio`/`video`/
   `engine3d` gates plus their canaries included).

@@ -92,7 +92,7 @@ last campaign:
    python tools/host_audio_gate.py --check       # audio engine: 99 checks, +12 canaries
    python tools/host_video_gate.py --check       # video/EPUB/archive: 18 assertions, +10 canaries
    python tools/host_engine3d_gate.py --check    # 3D engine: 4 fixtures / 41 assertions, +10 canaries
-   python tools/host_all_gates.py                # 47 gates / 21 canaries, board-free
+   python tools/host_all_gates.py                # 49 gates / 22 canaries, board-free
    ```
 
    These v1.6 host gates and the visual proof gates compile or drive shipped
@@ -159,7 +159,7 @@ a raw serial port.
 |---|------|---------|----------------|
 | 0 | Static gates | `python tools/p4test_run.py --static` | green guard + comment index + breadcrumbs all OK |
 | 0b | Host unit lane (pre-gate) | `python3 tools/host_gen_runner.py --check && python3 tools/host_unit_run.py --static && python3 tools/host_unit_run.py --build` | up to date, manifest OK, 0 failures. Needs Linux/WSL2; **never** a substitute for step 2 |
-| 0c | v1.6 host gates + app/browser/visual pre-gates | `python tools/host_batch_run.py --check`, `host_webapp_gate.py --check`, `host_browser_gate.py --check`, `host_tui_gate.py --check`, `host_modal_gate.py --check`, `gfx_toolkit_test.py --host`, `host_apps_gate.py --check`, `host_all_gates.py` (incl. `browser`/`browser_canary`, `visual`/`visual_canary`) | 34 apps (incl. flagship), 679 host assertions PASS, 45 honest SKIPs; `host_all_gates.py` 47/47 gates (21 canaries, incl. `p4sync`, `os`, `power`, `audio`, `video`, `engine3d` and their canaries); webapp gate 8 fixtures / 432 assertions, browser gate 5 fixtures / 271 assertions; no serial port, no hardware sign-off |
+| 0c | v1.6 host gates + app/browser/visual pre-gates | `python tools/host_batch_run.py --check`, `host_webapp_gate.py --check`, `host_browser_gate.py --check`, `host_tui_gate.py --check`, `host_modal_gate.py --check`, `gfx_toolkit_test.py --host`, `host_apps_gate.py --check`, `host_all_gates.py` (incl. `browser`/`browser_canary`, `visual`/`visual_canary`) | 34 apps (incl. flagship), 679 host assertions PASS, 45 honest SKIPs; `host_all_gates.py` 49/49 gates (22 canaries, incl. `p4sync`, `os`, `power`, `audio`, `video`, `engine3d`, `lufa` and their canaries); webapp gate 8 fixtures / 432 assertions, browser gate 5 fixtures / 271 assertions; no serial port, no hardware sign-off |
 | 0d | Visual proof gates (pre-gate) | `python tools/make_web_screenshots.py --check`, `python tools/visual_proof_gate.py --check`, `python tools/visual_proof_gate.py --self-test` | DOS palette, CP437 box borders, ink bands, distinct screen signatures, red canaries all pass; host proofs only, no device capture or hardware sign-off |
 | 0e | P4Sync CLI/bridge + GUI (pre-gate) | `python tools/p4sync_gate.py --check`, `python tools/p4sync_gate.py --self-test`; on Windows `dotnet build apps/p4sync_gui/P4SyncGui.sln -c Release` and `dotnet run --project apps/p4sync_gui/tests/P4SyncBridge.Tests` | 51 bridge/CLI checks + 18 red canaries; GUI build 0 warnings/0 errors, 18 console assertions; no serial port, no board, no firmware change |
 | 1 | Static checks | `python -m compileall tools apps` | no errors |
@@ -375,7 +375,7 @@ Release is ready when **all** boxes below are true:
       section updated; `bugs.md` header current.
 - [ ] Zero build warnings on both boards (firmware + `test/`).
 - [ ] Unit suite green on both boards; `test/README.md` count refreshed.
-- [ ] v1.6 host gates green: `host_all_gates.py` **47/47 gates, 21 canaries**
+- [ ] v1.6 host gates green: `host_all_gates.py` **49/49 gates, 22 canaries**
       (batch/webapp/browser/tui/modal/gfx/apps/p4sync **plus** `os`, `power`,
       `audio`, `video`, `engine3d` and their canaries; 34 apps incl. the
       flagship; GUI build + 18 console assertions on Windows).
